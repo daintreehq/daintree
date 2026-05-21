@@ -24,12 +24,12 @@ describe("useMenuActions", () => {
     vi.clearAllMocks();
   });
 
-  it("ignores malformed non-string menu actions without throwing", async () => {
-    let handler: ((action: string) => void) | undefined;
+  const setup = () => {
+    let handler: ((payload: { actionId: string; args?: unknown }) => void) | undefined;
     Object.defineProperty(window, "electron", {
       value: {
         app: {
-          onMenuAction: (cb: (action: string) => void) => {
+          onMenuAction: (cb: (payload: { actionId: string; args?: unknown }) => void) => {
             handler = cb;
             return () => {};
           },
@@ -39,135 +39,54 @@ describe("useMenuActions", () => {
       writable: true,
     });
 
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
+    renderHook(() => useMenuActions());
 
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
-    );
+    return {
+      get handler() {
+        return handler;
+      },
+    };
+  };
 
-    expect(handler).toBeTruthy();
+  it("ignores malformed non-object payloads without throwing", async () => {
+    const { handler } = setup();
+
     await expect(async () => {
-      await handler?.(null as unknown as string);
+      await handler?.(null as unknown as { actionId: string });
     }).not.toThrow();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("dispatches nav.quickSwitcher when open-quick-switcher action is received", async () => {
-    let handler: ((action: string) => Promise<void>) | undefined;
-    Object.defineProperty(window, "electron", {
-      value: {
-        app: {
-          onMenuAction: (cb: (action: string) => Promise<void>) => {
-            handler = cb;
-            return () => {};
-          },
-        },
-      },
-      configurable: true,
-      writable: true,
-    });
+  it("dispatches directly when payload has actionId and no args", async () => {
+    const { handler } = setup();
 
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
-
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
-    );
-
-    await handler?.("open-quick-switcher");
-    expect(dispatchMock).toHaveBeenCalledWith("nav.quickSwitcher", undefined, { source: "menu" });
+    await handler?.({ actionId: "terminal.new" });
+    expect(dispatchMock).toHaveBeenCalledWith("terminal.new", undefined, { source: "menu" });
   });
 
-  it("dispatches action.palette.open when open-action-palette action is received", async () => {
-    let handler: ((action: string) => Promise<void>) | undefined;
-    Object.defineProperty(window, "electron", {
-      value: {
-        app: {
-          onMenuAction: (cb: (action: string) => Promise<void>) => {
-            handler = cb;
-            return () => {};
-          },
-        },
-      },
-      configurable: true,
-      writable: true,
-    });
+  it("dispatches directly when payload has actionId and args", async () => {
+    const { handler } = setup();
 
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
-
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
+    await handler?.({ actionId: "agent.launch", args: { agentId: "codex" } });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "codex" },
+      { source: "menu" }
     );
-
-    await handler?.("open-action-palette");
-    expect(dispatchMock).toHaveBeenCalledWith("action.palette.open", undefined, { source: "menu" });
   });
 
-  it("dispatches project.cloneRepo when clone-repo action is received", async () => {
-    let handler: ((action: string) => Promise<void>) | undefined;
-    Object.defineProperty(window, "electron", {
-      value: {
-        app: {
-          onMenuAction: (cb: (action: string) => Promise<void>) => {
-            handler = cb;
-            return () => {};
-          },
-        },
-      },
-      configurable: true,
-      writable: true,
-    });
+  it("dispatches plugin action IDs directly", async () => {
+    const { handler } = setup();
 
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
-    );
-
-    await handler?.("clone-repo");
-    expect(dispatchMock).toHaveBeenCalledWith("project.cloneRepo", undefined, { source: "menu" });
+    await handler?.({ actionId: "plugin.foo.bar" });
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.foo.bar", undefined, { source: "menu" });
   });
 
-  it("dispatches terminal focus actions from main-process key fallbacks", async () => {
-    let handler: ((action: string) => Promise<void>) | undefined;
-    Object.defineProperty(window, "electron", {
-      value: {
-        app: {
-          onMenuAction: (cb: (action: string) => Promise<void>) => {
-            handler = cb;
-            return () => {};
-          },
-        },
-      },
-      configurable: true,
-      writable: true,
-    });
+  it("dispatches terminal focus-next action from main-process shortcut", async () => {
+    const { handler } = setup();
 
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
-    );
-
-    await handler?.("focus-next-terminal");
-    await handler?.("focus-previous-terminal");
+    await handler?.({ actionId: "terminal.focusNext" });
+    await handler?.({ actionId: "terminal.focusPrevious" });
 
     expect(dispatchMock).toHaveBeenNthCalledWith(1, "terminal.focusNext", undefined, {
       source: "menu",
@@ -177,14 +96,25 @@ describe("useMenuActions", () => {
     });
   });
 
-  it("does not leak unhandled rejection when action dispatch throws", async () => {
-    let handler: ((action: string) => Promise<void>) | undefined;
+  it("does not leak unhandled rejection when dispatch throws", async () => {
+    const { handler } = setup();
+
+    dispatchMock.mockRejectedValueOnce(new Error("dispatch exploded"));
+
+    await expect(async () => {
+      await handler?.({ actionId: "terminal.new" });
+    }).not.toThrow();
+  });
+
+  it("unsubscribes on unmount", () => {
+    let unsubscribed = false;
     Object.defineProperty(window, "electron", {
       value: {
         app: {
-          onMenuAction: (cb: (action: string) => Promise<void>) => {
-            handler = cb;
-            return () => {};
+          onMenuAction: () => {
+            return () => {
+              unsubscribed = true;
+            };
           },
         },
       },
@@ -192,20 +122,8 @@ describe("useMenuActions", () => {
       writable: true,
     });
 
-    dispatchMock.mockRejectedValueOnce(new Error("dispatch exploded"));
-
-    renderHook(() =>
-      useMenuActions({
-        onOpenSettings: vi.fn(),
-        onToggleSidebar: vi.fn(),
-
-        onLaunchAgent: vi.fn(),
-        defaultCwd: "/tmp",
-      })
-    );
-
-    await expect(async () => {
-      await handler?.("new-terminal");
-    }).not.toThrow();
+    const { unmount } = renderHook(() => useMenuActions());
+    unmount();
+    expect(unsubscribed).toBe(true);
   });
 });

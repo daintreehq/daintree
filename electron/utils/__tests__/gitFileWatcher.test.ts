@@ -133,12 +133,13 @@ describe("GitFileWatcher", () => {
     expect(watchedPaths).toContain(pathJoin(gitDir, "logs"));
     expect(watchedPaths.filter((path) => path === gitDir)).toHaveLength(1);
 
-    expect(watchedPaths).not.toContain(pathJoin(gitDir, "index"));
+    // HEAD and the branch ref are watched through the gitDir / refs/heads
+    // directory watchers, never as standalone fs.watch handles per file.
     expect(watchedPaths).not.toContain(pathJoin(gitDir, "HEAD"));
     expect(watchedPaths).not.toContain(pathJoin(gitDir, "refs", "heads", "main"));
   });
 
-  it("does not trigger on index changes (avoids git-status feedback loop)", async () => {
+  it("triggers on index changes so external `git add` surfaces without waiting for a poll", async () => {
     const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
     const gitWatcher = new GitFileWatcher({
@@ -159,14 +160,16 @@ describe("GitFileWatcher", () => {
       | undefined;
     expect(dotGitCallback).toBeDefined();
 
-    dotGitCallback?.("rename", "index");
+    // index.lock → index is the atomic-rename pattern git uses for index
+    // writes. Both events debounce into a single onChange call.
     dotGitCallback?.("rename", "index.lock");
+    dotGitCallback?.("rename", "index");
     await vi.advanceTimersByTimeAsync(250);
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
 
     dotGitCallback?.("rename", "HEAD");
     await vi.advanceTimersByTimeAsync(200);
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it("filters unrelated directory events and debounces matching events", async () => {

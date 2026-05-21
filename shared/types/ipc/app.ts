@@ -97,6 +97,25 @@ export interface ProjectStateRecovery {
   quarantinedPath: string;
 }
 
+/** Describes a crash-loop state file that was quarantined due to corruption */
+export interface CrashLoopStateRecovery {
+  quarantinedPath: string;
+}
+
+/**
+ * Combined cold-start payload — collapses the three independent IPC round-trips
+ * the renderer used to fire on mount (`crash-recovery:get-pending`,
+ * `crash-recovery:get-config`, `app:hydrate`) into one. The `terminalConfig`
+ * already present in `HydrateResult` also obsoletes the separate
+ * `terminal-config:get` invoked by `usePanelStoreBootstrap`.
+ */
+export interface BootResult extends HydrateResult {
+  /** Pending crash recovery state, or null when there is no crash to recover from. */
+  crashPending: import("./crashRecovery.js").PendingCrash | null;
+  /** Live crash recovery configuration (auto-restore toggle, thresholds). */
+  crashConfig: import("./crashRecovery.js").CrashRecoveryConfig;
+}
+
 /** Result from app hydration */
 export interface HydrateResult {
   appState: AppState;
@@ -105,6 +124,13 @@ export interface HydrateResult {
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
+  /**
+   * True when the app is running with ANGLE/Vulkan fallback rendering after a
+   * prior GPU crash (the `gpu-angle-fallback.flag` file exists in userData).
+   * Surfaced so the renderer can show a Tier 2 inline warning explaining the
+   * degraded backend; re-enabling hardware acceleration clears the flag.
+   */
+  gpuAngleFallbackActive: boolean;
   safeMode: boolean;
   /**
    * True when running inside an MSIX/AppX (Microsoft Store) container, where
@@ -114,10 +140,25 @@ export interface HydrateResult {
   isWindowsStore: boolean;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
+  /**
+   * Per-panel quarantine entries surfaced when safe mode is active. Each entry
+   * is a panel the suspect ledger has flagged on enough consecutive crashed
+   * boots to cross the quarantine threshold; those panels are skipped from
+   * restore while the rest of the saved session is preserved. Empty array (or
+   * absent) when no panels are quarantined.
+   */
+  quarantinedPanels?: import("./crashRecovery.js").QuarantinedPanelSummary[];
   /** Consecutive recent unclean launches counted by the crash-loop guard. */
   crashCount?: number;
   /** Timestamp (ms since epoch) of the most recent unclean launch prior to this boot. */
   lastCrashAt?: number;
   settingsRecovery?: SettingsRecovery | null;
   projectStateRecovery?: ProjectStateRecovery | null;
+  /**
+   * Populated only when the crash-loop state file was corrupt AND the boot
+   * also tripped safe mode — the renderer banner gates on `safeMode === true`
+   * to avoid surfacing a silent reset that didn't affect the user. Silent
+   * corruption with no safe-mode trip is log-only.
+   */
+  crashLoopStateRecovery?: CrashLoopStateRecovery | null;
 }

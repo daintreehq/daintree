@@ -41,7 +41,7 @@ describe("PRIntegrationService", () => {
   let callbacks: PRIntegrationCallbacks;
   interface PullRequestServiceLike {
     initialize(rootPath: string): void;
-    start(): Promise<void>;
+    start(startupDelayMs?: number): Promise<void>;
     stop(): void;
     reset(): void;
     refresh(): Promise<void>;
@@ -50,6 +50,7 @@ describe("PRIntegrationService", () => {
       candidateCount: number;
       resolvedCount: number;
       isEnabled: boolean;
+      detectionStateTripped: boolean;
     };
   }
 
@@ -69,6 +70,7 @@ describe("PRIntegrationService", () => {
         candidateCount: 0,
         resolvedCount: 0,
         isEnabled: true,
+        detectionStateTripped: false,
       })),
     };
   });
@@ -109,6 +111,62 @@ describe("PRIntegrationService", () => {
     expect(updateCalls[1][1]).toMatchObject({ worktreeId: "wt-linked", isMainWorktree: false });
   });
 
+  describe("forwards canonical owner/repo (#8452)", () => {
+    it("threads owner/repo from a non-GitHub sys:pr:detected event to onPRDetected", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:pr:detected", {
+        worktreeId: "wt-1",
+        prNumber: 1234,
+        prUrl: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+        prState: "open",
+        prTitle: "Add widget",
+        branchName: "feature/widget",
+        providerId: "acme.gitlab",
+        owner: "acme-corp",
+        repo: "my-project",
+        timestamp: Date.now(),
+      });
+
+      expect(callbacks.onPRDetected).toHaveBeenCalledWith(
+        "wt-1",
+        expect.objectContaining({
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+          prNumber: 1234,
+        })
+      );
+    });
+
+    it("threads owner/repo from a non-GitHub sys:issue:detected event to onIssueDetected", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:issue:detected", {
+        worktreeId: "wt-2",
+        issueNumber: 88,
+        issueTitle: "Widget request",
+        branchName: "feature/widget",
+        providerId: "acme.gitlab",
+        owner: "acme-corp",
+        repo: "my-project",
+        timestamp: Date.now(),
+      });
+
+      expect(callbacks.onIssueDetected).toHaveBeenCalledWith(
+        "wt-2",
+        expect.objectContaining({
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+          issueNumber: 88,
+        })
+      );
+    });
+  });
+
   describe("getStatus", () => {
     it("maps PullRequestService status to PRServiceStatus shape", () => {
       prServiceMock.getStatus = vi.fn(() => ({
@@ -116,6 +174,7 @@ describe("PRIntegrationService", () => {
         candidateCount: 7,
         resolvedCount: 3,
         isEnabled: true,
+        detectionStateTripped: false,
       }));
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
@@ -130,12 +189,13 @@ describe("PRIntegrationService", () => {
       });
     });
 
-    it("reports circuitBreakerTripped when service is disabled", () => {
+    it("reports circuitBreakerTripped when the breaker has tripped", () => {
       prServiceMock.getStatus = vi.fn(() => ({
         isPolling: false,
         candidateCount: 0,
         resolvedCount: 0,
         isEnabled: false,
+        detectionStateTripped: true,
       }));
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
@@ -143,6 +203,51 @@ describe("PRIntegrationService", () => {
 
       expect(status.circuitBreakerTripped).toBe(true);
       expect(status.isRunning).toBe(false);
+    });
+
+    it("does NOT report circuitBreakerTripped during a rate-limit pause (isEnabled false, breaker not tripped)", () => {
+      // A 429 sets nextRetryAt (isEnabled → false) but never trips the
+      // 3-error breaker, so the badge "detection paused" signal must stay off.
+      prServiceMock.getStatus = vi.fn(() => ({
+        isPolling: true,
+        candidateCount: 2,
+        resolvedCount: 1,
+        isEnabled: false,
+        detectionStateTripped: false,
+      }));
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+
+      const status = service.getStatus();
+
+      expect(status.circuitBreakerTripped).toBe(false);
+    });
+  });
+
+  describe("onDetectionStateChanged", () => {
+    it("invokes the callback with the tripped flag from sys:pr:detection-state", async () => {
+      const onDetectionStateChanged = vi.fn();
+      const service = new PRIntegrationService(prServiceMock, eventBus, {
+        ...callbacks,
+        onDetectionStateChanged,
+      });
+
+      await service.initialize("/repo", () => []);
+
+      eventBus.emit("sys:pr:detection-state", { tripped: true, timestamp: Date.now() });
+      expect(onDetectionStateChanged).toHaveBeenCalledWith(true);
+
+      eventBus.emit("sys:pr:detection-state", { tripped: false, timestamp: Date.now() });
+      expect(onDetectionStateChanged).toHaveBeenCalledWith(false);
+      expect(onDetectionStateChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not throw when the optional callback is omitted", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", () => []);
+
+      expect(() =>
+        eventBus.emit("sys:pr:detection-state", { tripped: true, timestamp: Date.now() })
+      ).not.toThrow();
     });
   });
 
@@ -181,29 +286,35 @@ describe("PRIntegrationService", () => {
       expect(prServiceMock.stop).toHaveBeenCalledTimes(1);
     });
 
-    it("resume() starts the underlying service", () => {
+    it("resume() starts the underlying service with no startup jitter", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
       service.resume();
       expect(prServiceMock.start).toHaveBeenCalledTimes(1);
+      // Focus-restore is not a crash-recovery path — jitter is skipped.
+      expect(prServiceMock.start).toHaveBeenCalledWith(0);
     });
   });
 
-  describe("updateToken", () => {
+  describe("updateForgeCredentials", () => {
     beforeEach(() => {
       vi.mocked(GitHubAuth.setMemoryToken).mockClear();
     });
 
-    it("sets memory token and refreshes when token is truthy", () => {
+    it("sets memory token and refreshes when credentials are truthy", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateToken("ghp_abc123", "/repo");
+      service.updateForgeCredentials(
+        "builtin.github",
+        { kind: "bearer", value: "ghp_abc123" },
+        "/repo"
+      );
 
       expect(GitHubAuth.setMemoryToken).toHaveBeenCalledWith("ghp_abc123");
       expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
       expect(prServiceMock.reset).not.toHaveBeenCalled();
     });
 
-    it("resets and reinitializes when token is null and path is provided", () => {
+    it("resets and reinitializes when credentials is null and path is provided", () => {
       const callOrder: string[] = [];
       prServiceMock.reset = vi.fn(() => callOrder.push("reset"));
       prServiceMock.initialize = vi.fn(() => callOrder.push("initialize"));
@@ -212,7 +323,7 @@ describe("PRIntegrationService", () => {
       });
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateToken(null, "/repo");
+      service.updateForgeCredentials("builtin.github", null, "/repo");
 
       expect(GitHubAuth.setMemoryToken).toHaveBeenCalledWith(null);
       expect(prServiceMock.refresh).not.toHaveBeenCalled();
@@ -220,15 +331,39 @@ describe("PRIntegrationService", () => {
       expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
     });
 
-    it("only clears the memory token and resets when token and path are null", () => {
+    it("only clears the memory token and resets when credentials and path are null", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateToken(null, null);
+      service.updateForgeCredentials("builtin.github", null, null);
 
       expect(GitHubAuth.setMemoryToken).toHaveBeenCalledWith(null);
       expect(prServiceMock.reset).toHaveBeenCalledTimes(1);
       expect(prServiceMock.initialize).not.toHaveBeenCalled();
       expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("does not mutate auth state for unknown providerId", () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+
+      service.updateForgeCredentials("builtin.unknown", { kind: "bearer", value: "abc" }, "/repo");
+
+      expect(GitHubAuth.setMemoryToken).not.toHaveBeenCalled();
+      // Still refreshes since credentials is truthy
+      expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not alter GitHub auth for non-bearer credentials", () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+
+      service.updateForgeCredentials(
+        "builtin.github",
+        { kind: "basic", value: "dXNlcjpwYXNz" },
+        "/repo"
+      );
+
+      // Non-bearer is silently ignored — GitHub only supports bearer tokens
+      expect(GitHubAuth.setMemoryToken).not.toHaveBeenCalled();
+      expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
     });
   });
 });

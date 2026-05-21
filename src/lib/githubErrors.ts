@@ -14,3 +14,11 @@ export function isTransientNetworkError(msg: string | null | undefined): boolean
     msg.startsWith("Cannot reach GitHub.") || msg.startsWith("GitHub is temporarily unavailable.")
   );
 }
+
+export function isRateLimitError(msg: string | null | undefined): boolean {
+  if (!msg) return false;
+  return (
+    msg.startsWith("GitHub rate limit exceeded.") ||
+    msg.startsWith("GitHub secondary rate limit triggered.")
+  );
+}

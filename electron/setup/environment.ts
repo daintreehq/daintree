@@ -23,7 +23,6 @@ import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
-import fixPath from "fix-path";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 
 export let exposeGc: (() => void) | undefined;
@@ -35,17 +34,19 @@ try {
   // GC exposure not available — non-critical
 }
 
-if (app.isPackaged) {
-  fixPath();
-}
-
 // In development, use a separate userData directory so the dev instance
 // doesn't conflict with the production app's single-instance lock or storage.
 // Skip when --user-data-dir is explicitly set (e.g. E2E tests) so that
 // each test run gets its own isolated data directory.
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
-  app.setPath("userData", path.join(app.getPath("appData"), "daintree-dev"));
+  const devUserDataDir = process.env.DAINTREE_DEV_USER_DATA_DIR?.trim();
+  app.setPath(
+    "userData",
+    devUserDataDir && path.isAbsolute(devUserDataDir)
+      ? devUserDataDir
+      : path.join(app.getPath("appData"), "daintree-dev")
+  );
 }
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks
@@ -128,6 +129,22 @@ function getGpuTileMemoryCapMb(): string {
 }
 
 app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb());
+
+// Lift Chromium's 16-active-WebGL-context per-renderer ceiling so the terminal pool
+// can keep more xterm panes on the WebGL renderer before LRU eviction drops them to
+// DOM. Scales with system RAM on the same tiers as the tile-memory budget above.
+// Each xterm WebGL context is small (no 3D geometry, no MSAA) so headroom for 24-32
+// is safe within the raised tile budget. Memory-pressure context loss is still
+// possible at the OS/GPU-budget level (Chromium 465176577) — the existing
+// TerminalWebGLManager circuit breaker handles that path independently.
+function getMaxWebGLContexts(): string {
+  const totalMem = os.totalmem();
+  if (totalMem <= 8 * 1024 ** 3) return "24";
+  if (totalMem <= 16 * 1024 ** 3) return "28";
+  return "32";
+}
+
+app.commandLine.appendSwitch("max-active-webgl-contexts", getMaxWebGLContexts());
 
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();
@@ -445,7 +462,27 @@ function resolvePathViaShellProbe(): Promise<string | null> {
   return probe;
 }
 
+// Module-level singleton for the outer refreshPath() Promise. Concurrent
+// callers (the early kick-off, CliAvailabilityService, SystemHealthCheck)
+// all share one in-flight refresh — without this the inner shellProbePromise
+// dedup helps but Promise.race + timeout state is still per-call. Cleared on
+// settlement so a subsequent caller can retry after a transient failure.
+let pathRefreshPromise: Promise<void> | null = null;
+
 export async function refreshPath(): Promise<void> {
+  if (pathRefreshPromise) return pathRefreshPromise;
+
+  const promise = runRefreshPath();
+  pathRefreshPromise = promise;
+  promise.finally(() => {
+    if (pathRefreshPromise === promise) {
+      pathRefreshPromise = null;
+    }
+  });
+  return promise;
+}
+
+async function runRefreshPath(): Promise<void> {
   let timeoutId: NodeJS.Timeout | undefined;
   let shellEnvFailed = false;
   // Guards against late inner-IIFE writes to process.env.PATH after the
@@ -534,6 +571,24 @@ export async function refreshPath(): Promise<void> {
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
+}
+
+// One-shot startup gate: kicked off as the first async work in
+// app.whenReady() so the shell probe runs concurrently with the rest of
+// startup. The PtyClient creation site awaits this before spawning the PTY
+// host so node-pty sees the user's full PATH. Unlike `pathRefreshPromise`,
+// this stays set after settlement — awaiting a settled Promise is a no-op,
+// and second-window startup must not trigger a fresh shell probe.
+let earlyPathRefreshPromise: Promise<void> | null = null;
+
+export function kickOffEarlyPathRefresh(): Promise<void> {
+  if (earlyPathRefreshPromise) return earlyPathRefreshPromise;
+  earlyPathRefreshPromise = refreshPath();
+  return earlyPathRefreshPromise;
+}
+
+export function getEarlyPathRefreshPromise(): Promise<void> | null {
+  return earlyPathRefreshPromise;
 }
 
 export const isDemoMode = !app.isPackaged && process.argv.includes("--demo-mode");

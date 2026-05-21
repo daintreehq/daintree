@@ -1,21 +1,61 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { freshnessOpacityClass, formatTimeSince, freshnessSuffix } from "../FreshnessUtils";
+import { render } from "@testing-library/react";
+import {
+  freshnessClass,
+  FreshnessGlyph,
+  formatTimeSince,
+  freshnessSuffix,
+  badgeFreshnessSuffix,
+} from "../FreshnessUtils";
 
-describe("freshnessOpacityClass", () => {
+describe("freshnessClass", () => {
   it("returns empty string for fresh level", () => {
-    expect(freshnessOpacityClass("fresh")).toBe("");
+    expect(freshnessClass("fresh")).toBe("");
   });
 
   it("returns opacity-75 for aging level", () => {
-    expect(freshnessOpacityClass("aging")).toBe("opacity-75");
+    expect(freshnessClass("aging")).toBe("opacity-75");
   });
 
-  it("returns opacity-60 for stale-disk level", () => {
-    expect(freshnessOpacityClass("stale-disk")).toBe("opacity-60");
+  it("returns border-l-2 border-border-default italic for stale-disk level, not opacity", () => {
+    const result = freshnessClass("stale-disk");
+    expect(result).toBe("border-l-2 border-border-default italic");
+    expect(result).not.toMatch(/\bopacity-/);
   });
 
-  it("returns opacity-50 for errored level", () => {
-    expect(freshnessOpacityClass("errored")).toBe("opacity-50");
+  it("returns border-l-2 border-border-default italic for errored level, not opacity", () => {
+    const result = freshnessClass("errored");
+    expect(result).toBe("border-l-2 border-border-default italic");
+    expect(result).not.toMatch(/\bopacity-/);
+  });
+});
+
+describe("FreshnessGlyph", () => {
+  it("renders nothing for fresh level", () => {
+    const { container } = render(<FreshnessGlyph level="fresh" />);
+    expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("renders a clock glyph for aging level (issue #8180 — replaces opacity dim)", () => {
+    const { container } = render(<FreshnessGlyph level="aging" />);
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+  });
+
+  it("renders a clock glyph for stale-disk level", () => {
+    const { container } = render(<FreshnessGlyph level="stale-disk" />);
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+  });
+
+  it("renders nothing for errored level (covered by GitHubStatusIndicator)", () => {
+    const { container } = render(<FreshnessGlyph level="errored" />);
+    expect(container.querySelector("svg")).toBeNull();
   });
 });
 
@@ -78,5 +118,42 @@ describe("freshnessSuffix", () => {
 
   it("returns error message for errored level", () => {
     expect(freshnessSuffix("errored", null, now)).toBe(" · couldn't reach GitHub");
+  });
+});
+
+describe("badgeFreshnessSuffix", () => {
+  const now = 10_000_000_000;
+
+  it("returns empty string for undefined cause", () => {
+    expect(badgeFreshnessSuffix(undefined, null, now)).toBe("");
+  });
+
+  it("returns aging suffix with time for stale cause", () => {
+    const suffix = badgeFreshnessSuffix("stale", now - 120_000, now);
+    expect(suffix).toContain("updated");
+    expect(suffix).toContain("2m ago");
+  });
+
+  it("returns rate limited suffix without reset time when resetAt is null", () => {
+    const suffix = badgeFreshnessSuffix("rate-limit", null, now, null);
+    expect(suffix).toBe(" · rate limited");
+  });
+
+  it("returns rate limited suffix without reset time when resetAt is in the past", () => {
+    const suffix = badgeFreshnessSuffix("rate-limit", null, now, now - 1000);
+    expect(suffix).toBe(" · rate limited");
+  });
+
+  it("returns rate limited suffix with retry time when resetAt is in the future", () => {
+    // 1 hour from now
+    const resetAt = now + 3_600_000;
+    const suffix = badgeFreshnessSuffix("rate-limit", null, now, resetAt);
+    expect(suffix).toContain("rate limited");
+    expect(suffix).toContain("retry at");
+  });
+
+  it("returns circuit-breaker suffix", () => {
+    const suffix = badgeFreshnessSuffix("circuit-breaker", null, now);
+    expect(suffix).toBe(" · data may be stale — PR detection paused");
   });
 });

@@ -71,6 +71,12 @@ export function useIdleTerminalNotifications(): void {
         priority: "high",
         duration: 0,
         actions: [closeAction, dismissAction],
+        // Single-project notifications carry projectId so the "Mute project"
+        // affordance routes correctly; multi-project omits it to avoid muting
+        // an unrelated project.
+        context: single
+          ? { eventKind: "completed", projectId: single.projectId }
+          : { eventKind: "completed" },
         coalesce: {
           key: "idle-terminal-notify:projects",
           windowMs: 30_000,

@@ -8,7 +8,7 @@ export function RecipeRunnerEmpty({ onCreate }: RecipeRunnerEmptyProps) {
   return (
     <div className="flex flex-col items-center gap-3 py-6">
       <p className="text-xs text-text-muted">
-        Recipes let you launch multi-terminal workflows with a single click
+        Launch agents, dev servers, and terminals together with one click
       </p>
       <button
         type="button"
@@ -20,7 +20,7 @@ export function RecipeRunnerEmpty({ onCreate }: RecipeRunnerEmptyProps) {
           aria-hidden
         />
         <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
-          Create new recipe…
+          Create your first recipe
         </span>
       </button>
     </div>

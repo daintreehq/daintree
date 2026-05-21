@@ -131,8 +131,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description: "Remove a project from the list",
     category: "project",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Removes a project from the list. Worktrees on disk remain but the project entry is lost.",
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
@@ -178,38 +180,46 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.getAll", () => ({
     id: "project.getAll",
     title: "List Projects",
-    description: "Get all projects",
+    description:
+      "List every project registered in Daintree, open or not. Takes no args. Returns { projects } — an array of project records with id, name, path, and metadata. Never errors; returns an empty array when no projects are registered. Do NOT use this just to find the active project — call `project.getCurrent`, which returns only the one currently open.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ projects: z.array(z.unknown()) }),
     run: async () => {
-      return await projectClient.getAll();
+      const result = await projectClient.getAll();
+      return { projects: result };
     },
   }));
 
   actions.set("project.getCurrent", () => ({
     id: "project.getCurrent",
     title: "Get Current Project",
-    description: "Get the current active project",
+    description:
+      "Get the project currently open in the active window. Takes no args. Returns { project } — the active project record (id, name, path, metadata), or null when no project is open. Never errors. Do NOT use `project.getAll` for this — that lists every registered project; this returns only the active one.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ project: z.unknown().nullable() }),
     run: async () => {
-      return await projectClient.getCurrent();
+      const result = await projectClient.getCurrent();
+      return { project: result };
     },
   }));
 
   actions.set("project.getSettings", () => ({
     id: "project.getSettings",
     title: "Get Project Settings",
-    description: "Get a project's settings",
+    description:
+      "Read a project's persisted settings (notification overrides, runner config, worktree path pattern, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns the settings object as an open-ended key/value map. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({}).catchall(z.unknown()),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
@@ -285,6 +295,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           message: "Project notifications muted",
           priority: "high",
           duration: 5000,
+          // One-shot Undo confirmation; mute is reversible from the project's
+          // notification settings tab, so the 5s Undo window plus the settings
+          // surface make inbox persistence redundant.
+          transient: true,
           action: {
             label: "Undo",
             onClick: async () => {
@@ -301,6 +315,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           },
         });
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Failed to mute notifications",
@@ -372,6 +387,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           message: `Silenced ${label}${scopeSuffix}`,
           priority: "high",
           duration: 5000,
+          // One-shot Undo confirmation; silenced kinds are reversible from
+          // notification settings, so the 5s Undo plus the settings surface
+          // make inbox persistence redundant.
+          transient: true,
           action: {
             label: "Undo",
             onClick: async () => {
@@ -400,6 +419,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           },
         });
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Failed to silence notifications",
@@ -414,29 +434,34 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.detectRunners", () => ({
     id: "project.detectRunners",
     title: "Detect Runners",
-    description: "Detect runnable commands for a project",
+    description:
+      "Detect runnable commands (test/lint/build/dev scripts) for a project by inspecting its manifest files. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { runners } — an array of { id, name, command }. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({ runners: z.array(z.unknown()) }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
       if (!resolvedProjectId) throw new Error("No active project");
-      return await projectClient.detectRunners(resolvedProjectId);
+      const result = await projectClient.detectRunners(resolvedProjectId);
+      return { runners: result };
     },
   }));
 
   actions.set("project.getStats", () => ({
     id: "project.getStats",
     title: "Get Project Stats",
-    description: "Get project statistics",
+    description:
+      "Get aggregate statistics for a project (commit/issue/PR counts and activity). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns an open-ended stats object. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
+    resultSchema: z.object({}).catchall(z.unknown()),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;

@@ -98,7 +98,7 @@ describe("OAuthLoopbackService", () => {
         "https://auth.example.com/authorize?client_id=abc&response_type=code",
         "test-panel"
       );
-      expect(result).toBeNull();
+      expect(result).toEqual({ success: false, cause: "server-error" });
       expect(shell.openExternal).not.toHaveBeenCalled();
     });
 
@@ -137,15 +137,16 @@ describe("OAuthLoopbackService", () => {
 
       // The promise should resolve with the original callback URL + captured params
       const result = await loopbackPromise;
-      expect(result).not.toBeNull();
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error("expected success");
 
-      const resultUrl = new URL(result!.callbackUrl);
+      const resultUrl = new URL(result.callbackUrl);
       expect(resultUrl.origin).toBe("http://localhost:3000");
       expect(resultUrl.pathname).toBe("/auth/callback");
       expect(resultUrl.searchParams.get("code")).toBe("AUTH_CODE_123");
       expect(resultUrl.searchParams.get("state")).toBe("xyz123");
-      expect(result!.loopbackRedirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/);
-      expect(result!.originalRedirectUri).toBe("http://localhost:3000/auth/callback");
+      expect(result.loopbackRedirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/);
+      expect(result.originalRedirectUri).toBe("http://localhost:3000/auth/callback");
     });
 
     it("handles OAuth error responses from the IdP", async () => {
@@ -172,9 +173,10 @@ describe("OAuthLoopbackService", () => {
 
       // Should still resolve — the app handles the error params
       const result = await loopbackPromise;
-      expect(result).not.toBeNull();
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error("expected success");
 
-      const resultUrl = new URL(result!.callbackUrl);
+      const resultUrl = new URL(result.callbackUrl);
       expect(resultUrl.searchParams.get("error")).toBe("access_denied");
       expect(resultUrl.searchParams.get("error_description")).toBe("User cancelled");
     });
@@ -227,7 +229,7 @@ describe("OAuthLoopbackService", () => {
       // Clean up — cancel so the promise resolves
       cancelOAuthLoopback("test-panel");
       const result = await loopbackPromise;
-      expect(result).toBeNull();
+      expect(result).toEqual({ success: false, cause: "cancelled" });
     });
 
     it("cancels a previous flow when starting a new one for the same panel", async () => {
@@ -243,14 +245,14 @@ describe("OAuthLoopbackService", () => {
       // Start a second flow for the same panel — should cancel the first
       const secondPromise = startOAuthLoopback(authUrl, "test-panel");
 
-      // First should resolve as null (cancelled)
+      // First should resolve as cancelled
       const firstResult = await firstPromise;
-      expect(firstResult).toBeNull();
+      expect(firstResult).toEqual({ success: false, cause: "cancelled" });
 
       // Clean up second
       cancelOAuthLoopback("test-panel");
       const secondResult = await secondPromise;
-      expect(secondResult).toBeNull();
+      expect(secondResult).toEqual({ success: false, cause: "cancelled" });
     });
 
     it("allows concurrent flows on different panels", async () => {
@@ -281,8 +283,12 @@ describe("OAuthLoopbackService", () => {
       const resultA = await promiseA;
       const resultB = await promiseB;
 
-      expect(new URL(resultA!.callbackUrl).searchParams.get("code")).toBe("CODE_A");
-      expect(new URL(resultB!.callbackUrl).searchParams.get("code")).toBe("CODE_B");
+      expect(resultA.success).toBe(true);
+      expect(resultB.success).toBe(true);
+      if (!resultA.success || !resultB.success) throw new Error("expected success");
+
+      expect(new URL(resultA.callbackUrl).searchParams.get("code")).toBe("CODE_A");
+      expect(new URL(resultB.callbackUrl).searchParams.get("code")).toBe("CODE_B");
     });
 
     it("resolves null on cancel", async () => {
@@ -297,7 +303,7 @@ describe("OAuthLoopbackService", () => {
 
       cancelOAuthLoopback("test-panel");
       const result = await promise;
-      expect(result).toBeNull();
+      expect(result).toEqual({ success: false, cause: "cancelled" });
     });
   });
 });

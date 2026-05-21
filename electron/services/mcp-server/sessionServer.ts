@@ -43,12 +43,21 @@ import {
   MCP_DEDUP_ALLOWLIST,
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
+  MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
+  SESSION_BINDING_GONE,
   buildToolError,
   buildMcpErrorPayload,
 } from "./shared.js";
-import { buildDedupKey, readDedupCache, type CallToolResultLike } from "./sessionDedup.js";
+import { SessionBindingError } from "./rendererBridge.js";
+import {
+  buildDedupKey,
+  canonicalArgsHash,
+  readDedupCache,
+  type CallToolResultLike,
+} from "./sessionDedup.js";
 import {
   shouldExposeTool,
   isTierPermitted,
@@ -82,6 +91,7 @@ export interface SessionServerDeps {
     durationMs: number;
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
+    bannerSuppressed?: boolean;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   getFullToolSurface: () => boolean;
@@ -103,6 +113,31 @@ export interface SessionServerDeps {
      */
     targetTier: "workbench" | "action" | "system" | null;
   }) => void;
+  /**
+   * Feed a denial into the abuse policy — both 401s and tier-mismatches
+   * share the same per-session sliding-window counter. Returns
+   * `{ tripped: true }` when the threshold is exceeded. Implemented by
+   * httpLifecycle; absent in test fixtures that don't wire the policy.
+   */
+  recordDenial?: (sessionId: string, kind: "auth401" | "tierMismatch") => { tripped: boolean };
+  /**
+   * Optional renderer notifier fired when a session is revoked by the abuse
+   * policy. Follows the same pinned-WebContents pattern as
+   * `notifyTierMismatch` so only help-session bearers surface the
+   * notification. External / api-key sessions have no associated UI so the
+   * callback is a no-op.
+   */
+  notifySessionRevoked?: (payload: {
+    sessionId: string;
+    denialKind: string;
+    /** Saved before revokeSession clears the map, so the callback can route. */
+    pinnedWebContentsId?: number;
+  }) => void;
+  /**
+   * Remove a session from the abuse policy state so a reconnected session
+   * doesn't inherit stale counters. Called after revokeSession and drain().
+   */
+  clearDenialState?: (sessionId: string) => void;
 }
 
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
@@ -115,13 +150,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     getCachedManifest,
     getFullToolSurface,
     notifyTierMismatch,
+    recordDenial,
+    notifySessionRevoked,
+    clearDenialState,
   } = deps;
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
     {
       capabilities: {
-        tools: {},
+        // `listChanged: true` is required for clients to process the
+        // `notifications/tools/list_changed` we send when a session's tier
+        // elevates or decays (#8462). Must be declared at construction —
+        // the SDK rejects post-connect capability registration in ^1.20+.
+        tools: { listChanged: true },
         resources: { subscribe: true, listChanged: false },
         prompts: {},
       },
@@ -136,12 +178,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       .filter((entry) => shouldExposeTool(entry, tier, fullToolSurface))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
+        const _meta =
+          entry.examples && entry.examples.length > 0 ? { examples: entry.examples } : undefined;
         return {
           name: entry.id,
           description: entry.description,
           inputSchema: buildToolInputSchema(entry),
           annotations: buildAnnotations(entry),
           ...(outputSchema ? { outputSchema } : {}),
+          ...(_meta ? { _meta } : {}),
         };
       });
 
@@ -155,7 +200,94 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const tier = sessionStore.getTier(sessionId);
     const fullToolSurface = getFullToolSurface();
 
+    // Layered authorization (#8442):
+    //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
+    //      membership stays the default. The "Always allow" project setting
+    //      elevates the session tier so this check passes for everything
+    //      below the chosen tier.
+    //   2. Per-`(sessionId, toolId)` grant cache — the "Approve once" flow
+    //      mints time-bounded grants that authorise a single tool without
+    //      elevating the whole session. If the static check denies but a
+    //      live grant exists, the dispatch proceeds and the grant's TTL
+    //      is refreshed on success.
+    //
+    // The order means that a session whose static tier already permits the
+    // action never consults the grant cache — grants are an additive layer,
+    // never required when the floor already grants access.
+    let grantIssuedAt: number | undefined;
     if (!isTierPermitted(tier, actionId, fullToolSurface)) {
+      const grant = sessionStore.grantCache.check(sessionId, actionId);
+      if (!grant.granted) {
+        // Increment first, then ask the cache whether to suppress. The
+        // post-increment count reflects "this denial counted"; the cache's
+        // threshold compares against that. With threshold=2 the 1st and
+        // 2nd denials fire the banner and the 3rd+ are suppressed.
+        sessionStore.grantCache.incrementDenial(sessionId, actionId);
+        const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
+        try {
+          appendAuditRecord({
+            toolId: actionId,
+            sessionId,
+            tier,
+            args,
+            durationMs: Date.now() - startedAt,
+            outcome: { kind: "unauthorized" },
+            bannerSuppressed: suppressBanner ? true : undefined,
+          });
+        } catch (err) {
+          console.error("[MCP] Failed to append audit record:", err);
+        }
+        if (notifyTierMismatch && !suppressBanner) {
+          try {
+            notifyTierMismatch({
+              sessionId,
+              toolId: actionId,
+              tier,
+              targetTier: minimumPermittingTier(actionId),
+            });
+          } catch (err) {
+            console.error("[MCP] Failed to notify tier-mismatch:", err);
+          }
+        }
+        if (recordDenial) {
+          const result = recordDenial(sessionId, "tierMismatch");
+          if (result.tripped) {
+            const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
+            sessionStore.revokeSession(sessionId);
+            clearDenialState?.(sessionId);
+            if (notifySessionRevoked) {
+              try {
+                notifySessionRevoked({
+                  sessionId,
+                  denialKind: "tierMismatch",
+                  pinnedWebContentsId: pinnedId,
+                });
+              } catch (err) {
+                console.error("[MCP] Failed to notify session-revoked:", err);
+              }
+            }
+          }
+        }
+        return buildToolError({
+          code: TIER_NOT_PERMITTED_CODE,
+          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        });
+      }
+      // Grant authorised the call. Capture the `issuedAt` token so the
+      // post-dispatch refresh can verify the entry wasn't revoked and
+      // re-issued under us (race guard, lesson #2243).
+      grantIssuedAt = grant.issuedAt;
+    }
+
+    // Runaway-loop guard (#8468): charge one token against the
+    // per-`(session, toolId)` bucket before dedup or dispatch. Placed
+    // after the tier/grant check (an unauthorized call shouldn't consume
+    // tokens) and before dedup (a tight loop replaying the same dedup key
+    // must still be bounded — dedup is an idempotency guard, not a
+    // rate-limit bypass). Rejection is an explicit retriable tool-error
+    // with a `retryAfter` hint, never a silent skip.
+    const rateLimit = sessionStore.consumeRateLimitToken(sessionId, actionId);
+    if (!rateLimit.allowed) {
       try {
         appendAuditRecord({
           toolId: actionId,
@@ -163,26 +295,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           tier,
           args,
           durationMs: Date.now() - startedAt,
-          outcome: { kind: "unauthorized" },
+          outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
         });
       } catch (err) {
         console.error("[MCP] Failed to append audit record:", err);
       }
-      if (notifyTierMismatch) {
-        try {
-          notifyTierMismatch({
-            sessionId,
-            toolId: actionId,
-            tier,
-            targetTier: minimumPermittingTier(actionId),
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to notify tier-mismatch:", err);
-        }
-      }
       return buildToolError({
-        code: TIER_NOT_PERMITTED_CODE,
-        message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        code: MCP_RATE_LIMITED_CODE,
+        message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
+        details: { retryAfter: rateLimit.retryAfter },
       });
     }
 
@@ -192,13 +313,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Keyed by `requestKey` if the caller supplied one, otherwise a hash of
     // `(actionId, args)`. See #7531.
     let dedupKey: string | undefined;
+    let argsHash: string | undefined;
     if (MCP_DEDUP_ALLOWLIST.has(actionId)) {
       dedupKey = buildDedupKey(actionId, requestKey, args);
+      argsHash = canonicalArgsHash(actionId, args);
 
       const resultCache = sessionStore.dedupResultCache.get(sessionId);
       if (resultCache) {
-        const cached = readDedupCache(resultCache, dedupKey, Date.now());
-        if (cached) {
+        const cachedEntry = readDedupCache(resultCache, dedupKey, Date.now());
+        if (cachedEntry) {
+          if (cachedEntry.argsHash !== argsHash) {
+            try {
+              appendAuditRecord({
+                toolId: actionId,
+                sessionId,
+                tier,
+                args,
+                durationMs: Date.now() - startedAt,
+                outcome: { kind: "collision" },
+              });
+            } catch (err) {
+              console.error("[MCP] Failed to append audit record:", err);
+            }
+            return buildToolError({
+              code: MCP_DEDUP_KEY_COLLISION_CODE,
+              message:
+                "Idempotency key collision: the same requestKey was used with different arguments.",
+              details: { actionId, requestKey },
+            });
+          }
           try {
             appendAuditRecord({
               toolId: actionId,
@@ -211,13 +354,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           } catch (err) {
             console.error("[MCP] Failed to append audit record:", err);
           }
-          return cached;
+          return cachedEntry.result;
         }
       }
 
       const inFlightForSession = sessionStore.dedupInFlight.get(sessionId);
-      const sharedPromise = inFlightForSession?.get(dedupKey);
-      if (sharedPromise) {
+      const sharedEntry = inFlightForSession?.get(dedupKey);
+      if (sharedEntry) {
+        if (sharedEntry.argsHash !== argsHash) {
+          try {
+            appendAuditRecord({
+              toolId: actionId,
+              sessionId,
+              tier,
+              args,
+              durationMs: Date.now() - startedAt,
+              outcome: { kind: "collision" },
+            });
+          } catch (err) {
+            console.error("[MCP] Failed to append audit record:", err);
+          }
+          return buildToolError({
+            code: MCP_DEDUP_KEY_COLLISION_CODE,
+            message:
+              "Idempotency key collision: the same requestKey was used with different arguments.",
+            details: { actionId, requestKey },
+          });
+        }
         try {
           appendAuditRecord({
             toolId: actionId,
@@ -230,7 +393,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
         }
-        return await sharedPromise;
+        return await sharedEntry.promise;
       }
     }
 
@@ -257,6 +420,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           try {
             const result = await waitUntilIdle(args, extra.signal);
             outcome = { kind: "result", value: { ok: true, result } };
+            // Mirror the post-dispatch grant refresh in the main path:
+            // when the call was authorized by a grant, extend the TTL
+            // window and reset the idle timer on success. `waitUntilIdle`
+            // can run up to 30 minutes (longer than the 15-min grant
+            // window), so this is the only block that prevents the grant
+            // from silently aging out during a long wait (#8442).
+            if (grantIssuedAt !== undefined) {
+              sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
             return {
               content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
               structuredContent: result as unknown as Record<string, unknown>,
@@ -315,6 +492,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
         } catch (err) {
           outcome = { kind: "throw", error: err };
+          if (err instanceof SessionBindingError) {
+            return buildToolError({
+              code: SESSION_BINDING_GONE,
+              message: err.message,
+            });
+          }
           return buildToolError({
             code: EXECUTION_ERROR_CODE,
             message: formatErrorMessage(err, "Action dispatch failed"),
@@ -322,6 +505,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         if (outcome.value.ok) {
+          // Sliding-TTL refresh: a successful dispatch through a grant
+          // extends its window AND resets the session idle timer. Without
+          // resetting the idle timer, a 15-min grant could be silently
+          // truncated by a 30-min idle reaper that started before the
+          // grant was issued (#8442). The `grantIssuedAt` token guards
+          // against a revoke-and-reissue race (#2243): if the entry was
+          // replaced mid-dispatch, `refresh` is a silent no-op.
+          if (grantIssuedAt !== undefined) {
+            sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+            if (sessionStore.sessions.has(sessionId)) {
+              sessionStore.resetIdleTimer(sessionId);
+            } else if (sessionStore.httpSessions.has(sessionId)) {
+              sessionStore.resetHttpIdleTimer(sessionId);
+            }
+          }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
           return {
             content: [
@@ -367,7 +565,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       const ownedInFlight = inFlight;
       const cleanupKey = dedupKey;
-      ownedInFlight.set(cleanupKey, dispatchPromise);
+      const ownedArgsHash = argsHash!;
+      ownedInFlight.set(cleanupKey, { promise: dispatchPromise, argsHash: ownedArgsHash });
 
       dispatchPromise.then(
         (result) => {
@@ -393,6 +592,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             cache.set(cleanupKey, {
               result,
               expiresAt: Date.now() + MCP_DEDUP_TTL_MS,
+              argsHash: ownedArgsHash,
             });
             // FIFO-evict the oldest entries when the per-session cap is
             // exceeded. Map iteration is insertion-order, so the first key
@@ -871,10 +1071,11 @@ async function runElicitationConfirmation(
   | { kind: "throw"; error: unknown }
 > {
   const argsSummary = summarizeMcpArgs(args);
+  const rationaleLine = entry.dangerRationale ? `\n${entry.dangerRationale}\n` : "";
   const message =
     argsSummary && argsSummary !== "{}"
-      ? `Confirm ${entry.title}: ${entry.description}\n\nArguments: ${argsSummary}`
-      : `Confirm ${entry.title}: ${entry.description}`;
+      ? `Confirm ${entry.title}: ${entry.description}${rationaleLine}\nArguments: ${argsSummary}`
+      : `Confirm ${entry.title}: ${entry.description}${rationaleLine}`;
 
   let result;
   try {

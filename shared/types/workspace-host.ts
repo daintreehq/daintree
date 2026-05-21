@@ -15,15 +15,19 @@ import type {
   BranchInfo,
   CreateWorktreeOptions,
   FileChangeDetail,
+  RepoState,
   WorktreeChanges,
 } from "./git.js";
 import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
 } from "./worktree.js";
+import type { Credentials } from "./forge.js";
 import type { GitHubPRCIStatus } from "./github.js";
+import type { PluginWorktreeLinked } from "./plugin.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -34,6 +38,23 @@ import type {
 import type { ProjectPulse, PulseRangeDays } from "./pulse.js";
 
 export type { BranchInfo, CreateWorktreeOptions } from "./git.js";
+
+/**
+ * Host-minted version stamp for worktree state events.
+ *
+ * `epoch` is a UUID regenerated each time the workspace-host process starts —
+ * it identifies a single host run and is compared by identity only (UUIDv4
+ * strings carry no meaningful ordering). `seq` is a monotonic counter within an
+ * epoch. The renderer compares stamps by checking epoch equality first: a
+ * differing epoch means the host restarted, so the event is always accepted and
+ * the renderer re-hydrates from a fresh snapshot. Within the same epoch, the
+ * higher `seq` wins. This replaces the renderer-minted counter that could not
+ * see a host-restart boundary (#8403).
+ */
+export interface WorktreeEventVersion {
+  epoch: string;
+  seq: number;
+}
 
 /** Pull request service status */
 export interface PRServiceStatus {
@@ -90,10 +111,16 @@ export interface WorktreeSnapshot {
   worktreeChanges?: WorktreeChanges | null;
   worktreeId: string;
   timestamp?: number;
-  /** Task ID for task-scoped worktree orchestration */
-  taskId?: string;
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /**
+   * Per-phase teardown results, accumulated across a multi-phase teardown run
+   * (resource-teardown then teardown). Distinct from `lifecycleStatus`, which
+   * only reflects the last-active phase — a later phase no longer overwrites an
+   * earlier phase's outcome here. Omitted when no teardown has run.
+   */
+  lifecyclePhaseResults?: WorktreeLifecyclePhaseResult[];
 
   /** Whether a plan file (TODO.md, PLAN.md, etc.) exists in the worktree root */
   hasPlanFile?: boolean;
@@ -107,12 +134,27 @@ export interface WorktreeSnapshot {
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
 
+  /** Name of the base branch (e.g. "develop") for divergence display */
+  baseBranchName?: string | null;
+
+  /** Commits the worktree branch is ahead of the base branch */
+  baseAheadCount?: number | null;
+
+  /** Commits the worktree branch is behind the base branch */
+  baseBehindCount?: number | null;
+
+  /** True when the upstream tracking branch and base branch point to the same commit */
+  baseMatchesUpstream?: boolean;
+
   /**
    * Epoch ms of the last successful background `git fetch` for this worktree's
    * repo. Mirrored from `RepoFetchCoordinator` so siblings sharing a commondir
    * see the same timestamp. `null` until the first success lands.
    */
   lastFetchedAt?: number | null;
+
+  /** Epoch ms of the last completed git status check for this worktree. */
+  lastGitStatusCheckedAt?: number;
 
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
@@ -125,6 +167,14 @@ export interface WorktreeSnapshot {
 
   /** True when origin's fetch URL points at github.com (HTTPS or SSH form). */
   isGitHubRemote?: boolean;
+
+  /**
+   * Provider-agnostic projection of the worktree's linked forge resources
+   * (issue and/or PR). Populated by PRIntegrationService through the forge
+   * provider. Replaces the legacy flat `prNumber` / `prState` / `issueNumber`
+   * / `issueTitle` fields, which remain populated for backward compatibility.
+   */
+  linked?: PluginWorktreeLinked | null;
 
   /** Resource status from the last manual status check */
   resourceStatus?: WorktreeResourceStatus;
@@ -170,12 +220,25 @@ export interface WorktreeSnapshot {
 
   /** User dismissed the WSL git suggestion banner without opting in. */
   wslGitDismissed?: boolean;
+
+  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
+  repoState?: RepoState;
+
+  /** Whether this worktree is in detached HEAD state. Mirrors the Worktree field. */
+  isDetached?: boolean;
+
+  /** HEAD commit hash (only populated when in detached HEAD state). */
+  head?: string;
 }
 
 /** Monitor configuration for polling intervals */
 export interface MonitorConfig {
   pollIntervalActive?: number;
   pollIntervalBackground?: number;
+  /** FetchScheduler focused (isCurrent) fetch interval (ms) */
+  fetchIntervalActiveMs?: number;
+  /** FetchScheduler background (non-current) fetch interval (ms) */
+  fetchIntervalBackgroundMs?: number;
   adaptiveBackoff?: boolean;
   pollIntervalMax?: number;
   circuitBreakerThreshold?: number;
@@ -201,6 +264,32 @@ export type WorkspaceHostRequest =
        * decisions so the host can apply them when constructing monitors.
        */
       wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>;
+      /**
+       * Per-project `forgeProviderOverride` setting (#8111). The host can't
+       * read `projectStore` directly — its main-process bindings would crash
+       * the UtilityProcess (#8316). Plumbed through with the initial load so
+       * `PullRequestService` can resolve the right provider without
+       * importing `ProjectStore`.
+       */
+      forgeProviderOverride?: string | null;
+      /**
+       * Global `forgeDefaultProviderId` setting (#8110). Same rationale as
+       * `forgeProviderOverride` — `electron-store` is main-process-only.
+       */
+      forgeDefaultProviderId?: string | null;
+      /**
+       * Selected git remote name (`forgeRemote`, #8456). The host resolves the
+       * provider against this remote's URL rather than always `origin`, so a
+       * project that pushes PRs to `upstream` resolves correctly. Plumbed in
+       * for the same main-process-only reason as the fields above.
+       */
+      forgeRemote?: string | null;
+    }
+  | {
+      type: "update-forge-settings";
+      forgeProviderOverride: string | null;
+      forgeDefaultProviderId: string | null;
+      forgeRemote: string | null;
     }
   | {
       type: "sync";
@@ -305,10 +394,8 @@ export type WorkspaceHostRequest =
       envKey: string;
     }
   | { type: "has-resource-config"; requestId: string; rootPath: string }
-  // Direct renderer port attachment (port transferred via postMessage transfer list)
-  | { type: "attach-renderer-port" }
-  // GitHub token propagation
-  | { type: "update-github-token"; token: string | null }
+  // Forge credential propagation
+  | { type: "update-forge-credentials"; providerId: string; credentials: Credentials | null }
   // Project environment variable propagation
   | { type: "update-project-env"; vars: Record<string, string> }
   // File tree operations
@@ -359,7 +446,19 @@ export type WorkspaceHostEvent =
   | { type: "update-monitor-config-result"; requestId: string; success: boolean; error?: string }
   | { type: "project-switch-result"; requestId: string; success: boolean }
   // Worktree query responses
-  | { type: "all-states"; requestId: string; states: WorktreeSnapshot[] }
+  | {
+      type: "all-states";
+      requestId: string;
+      states: WorktreeSnapshot[];
+      epoch: string;
+      seq: number;
+      // Epoch-scoped mutation IDs the host has successfully acknowledged so
+      // the renderer can prune outbox entries that landed before a crash
+      // (#8405). Optional in the event union for compatibility with hosts
+      // that predate this field; the port `get-all-states` response always
+      // includes it.
+      lastAcknowledgedMutationIds?: string[];
+    }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
   // Worktree operation responses
   | { type: "set-active-result"; requestId: string; success: boolean }
@@ -389,14 +488,30 @@ export type WorkspaceHostEvent =
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)
-  | { type: "worktree-update"; worktree: WorktreeSnapshot }
-  | { type: "worktree-removed"; worktreeId: string }
+  | { type: "worktree-update"; worktree: WorktreeSnapshot; epoch: string; seq: number }
+  | { type: "worktree-removed"; worktreeId: string; epoch: string; seq: number }
+  // Per-worktree lifecycle setup failure surfaced to the renderer's error
+  // banner. Emitted from sites that previously swallowed errors to
+  // `console.warn` (the `createWorktree` async tail and the
+  // `switchWorktreeEnvironment` catch). The main-process router translates
+  // this into a `notifyError` with `context.worktreeId` so the failure shows
+  // on the matching worktree card alongside the lifecycle status.
+  | {
+      type: "lifecycle-setup-error";
+      worktreeId: string;
+      message: string;
+      details?: string;
+    }
   // Linux-only: fired once per host-process lifetime when the recursive file
   // watcher hits the inotify watch limit (ENOSPC).
   | { type: "inotify-limit-reached" }
   // macOS-only: fired once per host-process lifetime when the recursive file
   // watcher hits the FSEvents file descriptor ceiling (EMFILE).
   | { type: "emfile-limit-reached" }
+  // Fired when a previously-degraded recursive watcher successfully re-arms.
+  // Clears the one-shot degradation guards so a later relapse can re-signal,
+  // and hides the persistent degraded indicator in the renderer.
+  | { type: "watcher-recovered" }
   // PR events
   | {
       type: "pr-detected";
@@ -410,8 +525,26 @@ export type WorkspaceHostEvent =
       issueTitle?: string;
       prLastUpdatedAt?: number;
       issueLastUpdatedAt?: number;
+      /** Branch the lookup was initiated against — receiver drops the overlay if the worktree's branch has since changed. */
+      branchName?: string;
+      /** Provider that resolved the PR (e.g. `"daintree.github.github"`). */
+      providerId?: string;
+      /** Provider-agnostic linked projection (dual-shipped alongside legacy fields during migration). */
+      linked?: PluginWorktreeLinked | null;
     }
-  | { type: "pr-cleared"; worktreeId: string }
+  | {
+      type: "pr-cleared";
+      worktreeId: string;
+      /** Branch the clear was initiated against — receiver drops the overlay if the worktree's branch has since changed. */
+      branchName?: string;
+      /** Provider whose linkage was cleared. */
+      providerId?: string;
+    }
+  | {
+      /** Service-wide PR detection circuit breaker tripped (paused) or recovered. */
+      type: "pr-detection-state";
+      tripped: boolean;
+    }
   // Issue events
   | {
       type: "issue-detected";
@@ -419,19 +552,36 @@ export type WorkspaceHostEvent =
       issueNumber: number;
       issueTitle: string;
       issueLastUpdatedAt?: number;
+      /** Branch the lookup was initiated against — receiver drops the overlay if the worktree's branch has since changed. */
+      branchName?: string;
+      /** Provider that resolved the issue (e.g. `"daintree.github.github"`). */
+      providerId?: string;
+      /** Provider-agnostic linked projection (dual-shipped alongside legacy fields during migration). */
+      linked?: PluginWorktreeLinked | null;
     }
   | {
       type: "issue-not-found";
       worktreeId: string;
       issueNumber: number;
     }
-  // GitHub rate-limit state observed in the workspace-host utility process.
-  // The main process applies this to its own `GitHubRateLimitService`
-  // singleton so that main-process callers (IPC handlers, toolbar
-  // countdown) see limits triggered by PullRequestService polling too.
+  // Forge provider rate-limit state observed in the workspace-host utility
+  // process. The main process routes to the appropriate rate-limit handler
+  // by providerId — GitHub's handler updates `gitHubRateLimitService` so
+  // main-process callers (IPC handlers, toolbar countdown) see limits
+  // triggered by PullRequestService polling too.
   | {
-      type: "github-rate-limit-changed";
-      state: import("./ipc/github.js").GitHubRateLimitPayload;
+      type: "forge-rate-limit-changed";
+      providerId: string;
+      state: import("./forge.js").RateLimitInfo;
+    }
+  // Forge provider token-health state observed in the workspace-host utility
+  // process. Forward-compat: the main process keys it by providerId and
+  // broadcasts `forge:token-health-changed`. No provider implementation emits
+  // this yet — GitHub token health still flows over the legacy GitHub path.
+  | {
+      type: "forge-token-health-changed";
+      providerId: string;
+      isUnhealthy: boolean;
     }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }

@@ -115,10 +115,14 @@ test.describe.serial("Multi-window isolation", () => {
     const app = ctx!.app;
 
     await focusWindow(app, window1Id, window1Page);
-    const panel1 = await spawnTerminalAndVerify(window1Page);
+    const panel1 = await spawnTerminalAndVerify(window1Page, undefined, {
+      waitForInitialOutput: false,
+    });
 
     await focusWindow(app, window2.windowId, window2Page);
-    const panel2 = await spawnTerminalAndVerify(window2Page);
+    const panel2 = await spawnTerminalAndVerify(window2Page, undefined, {
+      waitForInitialOutput: false,
+    });
 
     const nonceA = `mw-a-${randomUUID()}`;
     const nonceB = `mw-b-${randomUUID()}`;
@@ -202,7 +206,9 @@ test.describe.serial("Multi-window isolation", () => {
     await focusWindow(app, window2.windowId, window2Page);
 
     const survivorNonce = `mw-survive-${randomUUID()}`;
-    const survivorPanel = await spawnTerminalAndVerify(window2Page);
+    const survivorPanel = await spawnTerminalAndVerify(window2Page, undefined, {
+      waitForInitialOutput: false,
+    });
     await runTerminalCommand(window2Page, survivorPanel, `echo ${survivorNonce}`);
     await waitForTerminalText(survivorPanel, survivorNonce, T_LONG);
 

@@ -32,8 +32,14 @@ import {
   attachRendererConsoleCapture,
   detachRendererConsoleCapture,
 } from "./rendererConsoleCapture.js";
-import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
+import {
+  freezeWebContents,
+  unfreezeWebContents,
+  throttleCpuWebContents,
+  unthrottleCpuWebContents,
+} from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
+import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
   endWindowRecreating,
@@ -50,25 +56,60 @@ const CRASH_LOOP_THRESHOLD = 3;
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
 /**
- * Maximum time to wait for the incoming view's renderer to signal
- * `APP_VIEW_PAINTED` before unconditionally tearing down the outgoing
- * view. Three seconds keeps a slow renderer from leaving the outgoing
- * view attached indefinitely on a stuck or crashed cold start, while
- * comfortably covering the realistic worst case (~1s on cold disk).
+ * Soft paint-gate timeout (ms). At this point the gate logs that the
+ * incoming view is taking longer than the typical cold start, but the
+ * outgoing view stays attached so the user never sees an unfinished
+ * frame. Crossing this bound is observable but never user-visible.
  */
-const PAINT_GATE_TIMEOUT_MS = 3_000;
+const DEFAULT_PAINT_GATE_TIMEOUT_MS = 3_000;
+/**
+ * Hard paint-gate timeout (ms). Last-resort ceiling — assumes the
+ * incoming renderer is stuck or crashed and forcibly detaches the
+ * outgoing view. Generous enough that legitimately slow cold starts
+ * (low memory, thermal throttling) finish via the signal path instead.
+ */
+const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 8_000;
+/**
+ * Period between renderer-memory samples for cached (non-active) views. 30 s
+ * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
+ * call (5–50 ms per invocation) out of the budget that would risk main-thread
+ * jank. The sampler is silent telemetry only — no behaviour change.
+ */
+const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
 type ViewState = "loading" | "active" | "cached";
+
+type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
 
 interface PaintGate {
   webContentsId: number;
   /**
-   * The view that was active when the gate opened — still attached during the
-   * wait. Resize events must reach it too so visible bounds stay in sync.
+   * The view that was visible when the gate opened — still attached during the
+   * wait. This may be a registered project view or the unbound welcome view on
+   * first-run/project-picker windows. Resize events must reach it too so
+   * visible bounds stay in sync.
    */
-  outgoingEntry: ViewEntry | null;
-  timeout: ReturnType<typeof setTimeout>;
-  resolve: (reason: "signal" | "timeout" | "cancelled") => void;
+  outgoingView: WebContentsView | null;
+  /**
+   * Project id for the outgoing view when it is a registered project view.
+   * Unbound welcome views have no project id and are never LRU candidates.
+   */
+  outgoingProjectId: string | null;
+  /**
+   * Soft timer — fires `onSoftTimeout` but does NOT resolve the gate. The
+   * outgoing view stays attached so the soft tail is invisible to the user.
+   */
+  softTimeout: ReturnType<typeof setTimeout>;
+  /**
+   * Hard timer — resolves the gate as `"hard-timeout"`, signalling the
+   * caller to detach the outgoing view as a last resort.
+   */
+  hardTimeout: ReturnType<typeof setTimeout>;
+  /**
+   * Settle the gate. Clears both timers, clears `pendingPaintGate`, and
+   * resolves the outer promise. Idempotent — repeat calls no-op.
+   */
+  resolve: (reason: PaintGateOutcome) => void;
 }
 
 type EvictionReason = "lru" | "pressure" | "limit-change";
@@ -93,7 +134,7 @@ export interface ProjectViewManagerOptions {
    * Called when a view transitions from active to cached with its webContents.id.
    * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
    * be closed so messages don't accumulate in a renderer that Chromium may freeze
-   * after backgroundThrottling is enabled. Reactivation re-brokers a fresh port.
+   * after CPU throttling lands. Reactivation re-brokers a fresh port.
    */
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
@@ -103,11 +144,19 @@ export interface ProjectViewManagerOptions {
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
   /**
-   * Override the paint-gate fallback timeout (default 3000 ms). Lower values
-   * are useful in tests so the cold-start swap proceeds without waiting on
-   * a real renderer paint signal.
+   * Override the soft paint-gate timeout (default 3000 ms). Crossing this
+   * bound only logs `projectview.paintgate.softtimeout` — the outgoing view
+   * stays attached. Lower values are useful in tests to exercise the
+   * soft-timeout warning path without forcing a real cold start.
    */
   paintGateTimeoutMs?: number;
+  /**
+   * Override the hard paint-gate timeout (default 8000 ms). At this bound
+   * the outgoing view is forcibly detached as a last resort. Lower values
+   * are useful in tests to drive both the hard-timeout warning and the
+   * fall-through deactivation deterministically.
+   */
+  paintGateHardTimeoutMs?: number;
 }
 
 export class ProjectViewManager {
@@ -130,7 +179,18 @@ export class ProjectViewManager {
   private efficiencyFreezeEnabled = false;
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
   private pendingPaintGate: PaintGate | null = null;
-  private paintGateTimeoutMs = PAINT_GATE_TIMEOUT_MS;
+  private paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
+  private paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
+  // One-shot focus intent consumed by the next switchTo for this projectId.
+  // Lives on the instance (not module) so multi-window does not cross-leak.
+  // Cleared after delivery or discard so a later unrelated switch can't
+  // re-trigger a stale focus jump (#4670 lesson).
+  private pendingFocusIntent: {
+    projectId: string;
+    intent: "focus-next-waiting";
+  } | null = null;
+  private disposed = false;
+  private cachedMemoryTimerCleanup: (() => void) | null = null;
 
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
@@ -147,6 +207,9 @@ export class ProjectViewManager {
     if (opts.paintGateTimeoutMs != null) {
       this.paintGateTimeoutMs = Math.max(0, opts.paintGateTimeoutMs);
     }
+    if (opts.paintGateHardTimeoutMs != null) {
+      this.paintGateHardTimeoutMs = Math.max(0, opts.paintGateHardTimeoutMs);
+    }
 
     // Single resize handler that always updates the active view's bounds.
     // Before registerInitialView() is called, falls back to the first child view
@@ -161,9 +224,9 @@ export class ProjectViewManager {
       if (view) {
         (view as WebContentsView).setBounds({ x: 0, y: 0, width, height });
       }
-      const outgoing = this.pendingPaintGate?.outgoingEntry;
-      if (outgoing && !outgoing.view.webContents.isDestroyed() && outgoing.view !== view) {
-        outgoing.view.setBounds({ x: 0, y: 0, width, height });
+      const outgoing = this.pendingPaintGate?.outgoingView;
+      if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
+        outgoing.setBounds({ x: 0, y: 0, width, height });
       }
     };
     win.on("resize", this.resizeHandler);
@@ -171,6 +234,23 @@ export class ProjectViewManager {
     win.on("unmaximize", this.resizeHandler);
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
+
+    // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
+    // synchronously on the first aligned tick BEFORE installing the recurring
+    // `setInterval`. If the first tick throws, the recurring interval is never
+    // installed and all subsequent sampling is silently lost. Any uncaught throw
+    // also reaches `uncaughtException`. Sampling failures are pure telemetry
+    // and must never destabilise the manager.
+    this.cachedMemoryTimerCleanup = setAlignedInterval(() => {
+      if (this.disposed) return;
+      try {
+        this.sampleCachedViewMemory();
+      } catch (error) {
+        logWarn("projectview.cached-memory.error", {
+          error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
+        });
+      }
+    }, CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
   }
 
   /**
@@ -220,6 +300,14 @@ export class ProjectViewManager {
     if (this.activeProjectId === projectId) {
       const existing = this.views.get(projectId);
       if (existing) {
+        // Consume any pending intent so it doesn't leak into a later switch.
+        // The renderer-side global action short-circuits same-project locally,
+        // so reaching here with an intent is unusual but possible (e.g. two
+        // concurrent switchTo calls); deliver immediately rather than drop.
+        const activeIntent = this.consumePendingFocusIntent(projectId);
+        if (activeIntent) {
+          this.deliverFocusIntent(existing.view, activeIntent);
+        }
         return { view: existing.view, isNew: false };
       }
     }
@@ -227,6 +315,8 @@ export class ProjectViewManager {
     // Snapshot previous state for rollback
     const previousProjectId = this.activeProjectId;
     const previousEntry = previousProjectId ? (this.views.get(previousProjectId) ?? null) : null;
+    const unboundOutgoingView = previousEntry ? null : this.getUnboundOutgoingView();
+    const outgoingView = previousEntry?.view ?? unboundOutgoingView;
 
     // Try to activate cached view (fast path — already painted, no skeleton gate needed)
     const cached = this.views.get(projectId);
@@ -243,14 +333,29 @@ export class ProjectViewManager {
       // observable at the project level. Consumed on read to fire only once per
       // eviction → return cycle.
       const evictedAt = this.evictionTimestamps.get(projectId);
+      // `activateView` re-attaches the already-painted renderer; `notifyViewPainted`
+      // is one-shot per V8 context and will not re-fire, so the synchronous
+      // attach window is the only measurable "made visible" delta available.
+      // Lower bound (DOM attach, not GPU paint) but consistent across cache hits.
+      const warmStart = performance.now();
+      this.activateView(cached);
+      const visibleMs = Math.round(performance.now() - warmStart);
       if (evictedAt !== undefined) {
         logInfo("projectview.revival", {
           projectId,
           timeSinceEvictionMs: Date.now() - evictedAt,
+          visibleMs,
         });
         this.evictionTimestamps.delete(projectId);
       }
-      this.activateView(cached);
+      logInfo("projectview.warm-swap", {
+        projectId,
+        visibleMs,
+      });
+      const cachedIntent = this.consumePendingFocusIntent(projectId);
+      if (cachedIntent) {
+        this.deliverFocusIntent(cached.view, cachedIntent);
+      }
       return { view: cached.view, isNew: false };
     }
 
@@ -288,8 +393,14 @@ export class ProjectViewManager {
 
     // Insert incoming view BEHIND the outgoing view (index 0). Chromium's
     // `WebContentsView` child stack is z-ordered last-on-top, so this keeps
-    // the outgoing view visually on top while the incoming view boots.
-    this.win.contentView.addChildView(view, 0);
+    // the outgoing view visually on top while the incoming view boots. On a
+    // true first-run window the outgoing view is the unbound welcome view, not
+    // a registered project entry; it still needs the same anti-flash bridge.
+    if (outgoingView) {
+      this.win.contentView.addChildView(view, 0);
+    } else {
+      this.win.contentView.addChildView(view);
+    }
     this.updateViewBounds(view);
     this.activeProjectId = projectId;
     entry.state = "active";
@@ -299,29 +410,53 @@ export class ProjectViewManager {
     // `did-finish-load`) is captured instead of dropped. The renderer fires
     // `APP_VIEW_PAINTED` once per V8 context and never retries — without
     // pre-arming, every fast cold switch would fall through to the timeout.
-    const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry);
+    //
+    // Capture both bounds at call time so the warning logs reflect the
+    // value actually used by the in-flight gate even if the setters fire
+    // a profile push between gate creation and log emission.
+    const softMs = this.paintGateTimeoutMs;
+    const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+    const paintGatePromise = this.waitForPaint(
+      view.webContents.id,
+      outgoingView,
+      previousEntry?.projectId ?? null,
+      () => {
+        // Soft timeout: outgoing stays attached, gate keeps waiting. Logging
+        // only — the user never sees an unfinished frame on the soft path.
+        logWarn("projectview.paintgate.softtimeout", {
+          projectId,
+          waitedMs: softMs,
+        });
+      }
+    );
 
-    let visibleAt = 0;
+    let visibleAt: number;
     try {
       // Load the renderer with projectId context
       await this.loadView(view, projectId);
 
       // Wait for the renderer to confirm React has committed its first
       // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
-      // `notifyViewPainted`). Bounded by `PAINT_GATE_TIMEOUT_MS` so a stuck
-      // renderer cannot leave the outgoing view attached forever.
+      // `notifyViewPainted`). Two-phase: the soft timeout above is observable
+      // but never user-visible; only the hard timeout below detaches the
+      // outgoing view as a last resort when the renderer is stuck or crashed.
       const gateResult = await paintGatePromise;
       visibleAt = performance.now();
-      if (gateResult === "timeout") {
-        logWarn("projectview.paintgate.timeout", {
+      if (gateResult === "hard-timeout") {
+        logWarn("projectview.paintgate.hardtimeout", {
           projectId,
-          waitedMs: this.paintGateTimeoutMs,
+          waitedMs: hardMs,
         });
       }
 
-      // Paint signal received (or timed out) — safe to detach the outgoing view.
+      // Paint signal received (or hard timeout reached) — detach the
+      // outgoing view. On hard timeout the incoming frame may be blank,
+      // but the renderer has had its full grace period and holding the
+      // outgoing view longer can't recover a stuck renderer.
       if (previousEntry && this.activeProjectId === projectId) {
         this.deactivateEntry(previousEntry);
+      } else if (unboundOutgoingView && this.activeProjectId === projectId) {
+        this.detachUnboundOutgoingView(unboundOutgoingView);
       }
 
       logInfo("projectview.coldstart", {
@@ -330,13 +465,29 @@ export class ProjectViewManager {
         visibleMs: Math.round(visibleAt - coldStartAt),
         paintGateOutcome: gateResult,
       });
+
+      // Deliver pending focus intent only when the renderer has confirmed
+      // first paint. On hard timeout the renderer may be stuck or
+      // unresponsive — dropping the intent is safer than firing into a
+      // partially-mounted view (the subscriber is registered before
+      // `notifyViewPainted`, but a hard timeout means we have no positive
+      // evidence of that). The intent is always consumed (cleared)
+      // regardless of outcome to prevent a later unrelated switch from
+      // picking up a stale focus.
+      const coldIntent = this.consumePendingFocusIntent(projectId);
+      if (coldIntent && gateResult === "signal") {
+        this.deliverFocusIntent(view, coldIntent);
+      }
     } catch (loadError) {
       // Cold-start failed before the swap happened — outgoing view is still
       // attached and visible. Tear down the failed incoming view, restore the
       // previous app-view registration (`registerAppView` was overwritten to
       // point at the failed view), and let the still-attached outgoing view
       // resume as the active view.
-      this.clearPaintGate("cancelled");
+      this.clearPaintGate();
+      // Discard any pending focus intent for the failed projectId so a later
+      // unrelated switch can't pick it up.
+      this.consumePendingFocusIntent(projectId);
       this.cleanupEntry(projectId);
 
       this.activeProjectId = previousProjectId;
@@ -347,6 +498,11 @@ export class ProjectViewManager {
         registerAppView(this.win, previousEntry.view);
         previousEntry.state = "active";
         previousEntry.lastUsed = Date.now();
+      } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
+        // Same rollback requirement for first-run/unbound windows: the visible
+        // welcome view is not a project entry, but IPC helpers still need
+        // getAppWebContents() to resolve to it after a failed first switch.
+        registerAppView(this.win, unboundOutgoingView);
       }
 
       notifyError(loadError, { source: "project-switch" });
@@ -367,31 +523,61 @@ export class ProjectViewManager {
 
   /**
    * Resolve when the renderer with `webContentsId` posts `APP_VIEW_PAINTED`
-   * via {@link signalViewPainted}, or when `PAINT_GATE_TIMEOUT_MS` elapses,
-   * or when a superseding switch cancels the gate. Only one paint gate is
-   * tracked at a time — opening a new gate cancels any prior pending one.
+   * via {@link signalViewPainted}, when the hard timeout elapses, or when a
+   * superseding switch cancels the gate. Only one paint gate is tracked at
+   * a time — opening a new gate cancels any prior pending one.
+   *
+   * Two-phase timing:
+   *   - Soft (`paintGateTimeoutMs`): fires `onSoftTimeout` for observability.
+   *     The gate stays open and the outgoing view stays attached.
+   *   - Hard (`paintGateHardTimeoutMs`): resolves the gate as
+   *     `"hard-timeout"`, prompting the caller to detach the outgoing view.
+   *
+   * Both timer values are captured at gate creation. A later
+   * `setPaintGateTimeoutMs` / `setPaintGateHardTimeoutMs` call updates the
+   * fields but does NOT retime an in-flight gate.
    */
   private waitForPaint(
     webContentsId: number,
-    outgoingEntry: ViewEntry | null
-  ): Promise<"signal" | "timeout" | "cancelled"> {
+    outgoingView: WebContentsView | null,
+    outgoingProjectId: string | null,
+    onSoftTimeout?: () => void
+  ): Promise<PaintGateOutcome> {
     // Cancel any prior gate from a previous switch attempt. Should not
     // normally occur (switchChain serializes), but guards against re-entry
     // from rollback paths.
-    this.clearPaintGate("cancelled");
+    this.clearPaintGate();
 
-    return new Promise((resolveOuter) => {
+    const softMs = this.paintGateTimeoutMs;
+    // Guarantee hard >= soft at gate-creation time so the soft callback
+    // always fires before the hard fall-through, regardless of how the two
+    // setters are ordered by the resource-profile push.
+    const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+
+    return new Promise<PaintGateOutcome>((resolveOuter) => {
+      let settled = false;
       const gate: PaintGate = {
         webContentsId,
-        outgoingEntry,
-        timeout: setTimeout(() => {
-          if (this.pendingPaintGate === gate) {
-            this.pendingPaintGate = null;
-            resolveOuter("timeout");
+        outgoingView,
+        outgoingProjectId,
+        softTimeout: setTimeout(() => {
+          // Soft tail: log only. Keep waiting for either the paint signal
+          // or the hard timeout — DO NOT resolve.
+          if (this.pendingPaintGate !== gate) return;
+          try {
+            onSoftTimeout?.();
+          } catch (err) {
+            console.error("[ProjectViewManager] paint-gate soft callback threw:", err);
           }
-        }, this.paintGateTimeoutMs),
+        }, softMs),
+        hardTimeout: setTimeout(() => {
+          gate.resolve("hard-timeout");
+        }, hardMs),
         resolve: (reason) => {
-          clearTimeout(gate.timeout);
+          if (settled) return;
+          settled = true;
+          clearTimeout(gate.softTimeout);
+          clearTimeout(gate.hardTimeout);
           if (this.pendingPaintGate === gate) {
             this.pendingPaintGate = null;
           }
@@ -402,12 +588,10 @@ export class ProjectViewManager {
     });
   }
 
-  private clearPaintGate(reason: "signal" | "timeout" | "cancelled"): void {
+  private clearPaintGate(): void {
     const gate = this.pendingPaintGate;
     if (!gate) return;
-    this.pendingPaintGate = null;
-    clearTimeout(gate.timeout);
-    gate.resolve(reason);
+    gate.resolve("cancelled");
   }
 
   /**
@@ -421,6 +605,31 @@ export class ProjectViewManager {
     if (!gate) return;
     if (gate.webContentsId !== webContentsId) return;
     gate.resolve("signal");
+  }
+
+  /**
+   * Record a one-shot focus intent to deliver to the renderer after the next
+   * switch to `projectId` activates. Consumed exactly once: on cold-start
+   * activation (after the paint gate resolves with "signal") or immediately
+   * after a cached-view reactivation. Discarded on timeout/cancel/error so a
+   * later unrelated switch can't trigger a stale focus jump.
+   */
+  setPendingFocusIntent(projectId: string, intent: "focus-next-waiting"): void {
+    this.pendingFocusIntent = { projectId, intent };
+  }
+
+  private consumePendingFocusIntent(projectId: string): "focus-next-waiting" | null {
+    const pending = this.pendingFocusIntent;
+    if (!pending) return null;
+    this.pendingFocusIntent = null;
+    if (pending.projectId !== projectId) return null;
+    return pending.intent;
+  }
+
+  private deliverFocusIntent(view: WebContentsView, intent: "focus-next-waiting"): void {
+    if (view.webContents.isDestroyed()) return;
+    // Targeted send to the specific incoming view — never broadcast (#4641, #5010).
+    view.webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, { intent });
   }
 
   getActiveProjectId(): string | null {
@@ -448,6 +657,26 @@ export class ProjectViewManager {
     const safe = Number.isFinite(n) ? n : 1;
     this.maxCachedViews = Math.max(1, Math.min(5, safe));
     this.evictStaleViews("limit-change");
+  }
+
+  /**
+   * Set the soft paint-gate timeout (ms). Does NOT retime an in-flight
+   * gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setPaintGateTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.paintGateTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard paint-gate timeout (ms). Does NOT retime an in-flight
+   * gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setPaintGateHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.paintGateHardTimeoutMs = ms;
   }
 
   /**
@@ -518,6 +747,13 @@ export class ProjectViewManager {
   }
 
   dispose(): void {
+    this.disposed = true;
+
+    if (this.cachedMemoryTimerCleanup) {
+      this.cachedMemoryTimerCleanup();
+      this.cachedMemoryTimerCleanup = null;
+    }
+
     // Remove window-level listeners
     if (this.resizeHandler) {
       this.win.removeListener("resize", this.resizeHandler);
@@ -534,7 +770,7 @@ export class ProjectViewManager {
     }
     this.efficiencyFreezeEnabled = false;
 
-    this.clearPaintGate("cancelled");
+    this.clearPaintGate();
     for (const projectId of Array.from(this.views.keys())) {
       this.cleanupEntry(projectId);
     }
@@ -567,17 +803,23 @@ export class ProjectViewManager {
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
       const cachedWcId = current.view.webContents.id;
-      // Close live producer ports BEFORE enabling background throttling. Once
-      // throttled, Chromium can freeze the renderer after ~5 min hidden or
-      // under memory pressure; any messages still posted by main/utility
-      // processes accumulate in the frozen renderer's task queue (no native
+      // Close live producer ports BEFORE applying CPU throttle. Once throttled,
+      // Chromium can freeze the renderer after ~5 min hidden or under memory
+      // pressure; any messages still posted by main/utility processes
+      // accumulate in the frozen renderer's task queue (no native
       // backpressure). Reactivation re-brokers a fresh port via activateView.
       try {
         this.onViewCached?.(cachedWcId);
       } catch (error) {
         console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
       }
-      current.view.webContents.setBackgroundThrottling(true);
+      // Use CDP Emulation.setCPUThrottlingRate (per-renderer) instead of
+      // WebContents.setBackgroundThrottling — the latter is window-wide in
+      // Electron 28+, so the active view's setBackgroundThrottling(false)
+      // silently un-throttled every cached sibling (#8599). CPU throttling
+      // keeps the event loop and MessagePort dispatch alive while slowing
+      // V8/Blink CPU time for this single renderer.
+      void throttleCpuWebContents(current.view.webContents);
 
       // Flush pending DOMStorage writes (synchronous — view stays alive in
       // cache, so data loss is not a concern)
@@ -625,10 +867,10 @@ export class ProjectViewManager {
   private activateView(entry: ViewEntry): void {
     registerAppView(this.win, entry.view);
 
-    // Defensive unfreeze BEFORE setBackgroundThrottling(false): efficiency
-    // transitions and view activations are async, so an activating view may
-    // still be frozen even if we've left efficiency in the meantime. Chromium
-    // does not auto-resume on focus or re-attach — explicit "active" required.
+    // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
+    // view activations are async, so an activating view may still be frozen
+    // even if we've left efficiency in the meantime. Chromium does not
+    // auto-resume on focus or re-attach — explicit "active" required.
     // Fire-and-forget: there is a sub-millisecond window between addChildView
     // making the view visible and Chromium processing the "active" CDP command.
     // Awaiting would force activateView to be async and ripple through all
@@ -638,9 +880,11 @@ export class ProjectViewManager {
       void unfreezeWebContents(entry.view.webContents);
     }
 
-    // Restore full priority before making visible
+    // Restore full CPU rate before making visible. Uses
+    // Emulation.setCPUThrottlingRate (per-renderer) — see deactivateEntry for
+    // why setBackgroundThrottling is unsuitable (window-wide in Electron 28+).
     if (!entry.view.webContents.isDestroyed()) {
-      entry.view.webContents.setBackgroundThrottling(false);
+      void unthrottleCpuWebContents(entry.view.webContents);
     }
 
     this.win.contentView.addChildView(entry.view);
@@ -654,6 +898,44 @@ export class ProjectViewManager {
     entry.state = "active";
     entry.lastUsed = Date.now();
     this.activeProjectId = entry.projectId;
+  }
+
+  private getUnboundOutgoingView(): WebContentsView | null {
+    if (this.win.isDestroyed()) return null;
+    const candidate = this.win.contentView.children[0] as WebContentsView | undefined;
+    if (!candidate?.webContents || candidate.webContents.isDestroyed()) return null;
+    if (this.webContentsToProject.has(candidate.webContents.id)) return null;
+    return candidate;
+  }
+
+  private detachUnboundOutgoingView(view: WebContentsView): void {
+    if (!this.win.isDestroyed()) {
+      try {
+        this.win.contentView.removeChildView(view);
+      } catch {
+        // The welcome view may already have been detached by window teardown.
+      }
+    }
+
+    const wc = view.webContents;
+    const wcId = wc.id;
+    if (this.windowRegistry) {
+      this.windowRegistry.unregisterAppViewWebContents(this.win.id, wcId);
+    }
+    forgetBlinkSample(wcId);
+    forgetEluSample(wcId);
+
+    try {
+      this.onViewEvicted?.(wcId);
+    } catch (error) {
+      console.error("[ProjectViewManager] onViewEvicted threw for unbound view:", error);
+    }
+
+    if (!wc.isDestroyed()) {
+      detachRendererConsoleCapture(wc);
+      unregisterWebContents(wc);
+      wc.close();
+    }
   }
 
   private createView(_projectId: string): WebContentsView {
@@ -820,10 +1102,9 @@ export class ProjectViewManager {
         !input.alt;
       if (isTerminalFocusShortcut) {
         event.preventDefault();
-        wc.send(
-          CHANNELS.MENU_ACTION,
-          input.shift ? "focus-previous-terminal" : "focus-next-terminal"
-        );
+        wc.send(CHANNELS.MENU_ACTION, {
+          actionId: input.shift ? "terminal.focusPrevious" : "terminal.focusNext",
+        });
         return;
       }
 
@@ -899,9 +1180,14 @@ export class ProjectViewManager {
           if (crashEntry?.projectPath) {
             params.set("project", path.basename(crashEntry.projectPath));
           }
-          const backupTimestamp = getCrashRecoveryService().getLastBackupTimestamp();
+          const recoverySvc = getCrashRecoveryService();
+          const backupTimestamp = recoverySvc.getLastBackupTimestamp();
           if (backupTimestamp !== null) {
             params.set("backupTimestamp", String(backupTimestamp));
+          }
+          const panelCount = recoverySvc.getBackupPanelCount();
+          if (panelCount !== null) {
+            params.set("panelCount", String(panelCount));
           }
           if (process.env.NODE_ENV === "development") {
             wc.loadURL(`${getDevServerUrl()}/recovery.html?${params}`);
@@ -1066,10 +1352,11 @@ export class ProjectViewManager {
     }
 
     // Build pid → privateBytes index from the synchronous app.getAppMetrics()
-    // snapshot. Joined per-view via `webContents.getOSProcessId()` so eviction
-    // can prefer the largest renderer first instead of pure LRU. Views without
-    // a measured pid (process not yet spawned, or metrics missing) sort below
-    // measured ones via the 0 fallback, preserving LRU as the final tiebreak.
+    // snapshot. Joined per-view via `webContents.getOSProcessId()` so the
+    // eviction log line can record each evicted view's footprint. Memory size
+    // does not drive eviction order — the largest renderer is typically the
+    // project the user has been working in, so size-first ordering destroys
+    // the most valuable view. Eviction is pure LRU (see #8602).
     const memoryByPid = new Map<number, number>();
     try {
       for (const proc of app.getAppMetrics()) {
@@ -1079,7 +1366,8 @@ export class ProjectViewManager {
         }
       }
     } catch {
-      // app.getAppMetrics() throwing is non-fatal — fall back to pure LRU below.
+      // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
+      // from the eviction log line below.
     }
     const memoryFor = (entry: ViewEntry): number => {
       const wc = entry.view.webContents;
@@ -1091,16 +1379,20 @@ export class ProjectViewManager {
       return memoryByPid.get(pid) ?? 0;
     };
 
+    // Outgoing view of an open paint gate is still on-screen and serving as
+    // the anti-flash bridge — treat it as non-evictable, same as the active
+    // view. Without this, a setCachedViewLimit(1) call landing mid-gate
+    // (e.g. an efficiency-profile transition firing during a slow cold
+    // start) would evict the outgoing view and expose the unpainted
+    // incoming frame, re-creating the exact flash this gate prevents.
+    const gateOutgoingProjectId = this.pendingPaintGate?.outgoingProjectId ?? null;
+
     const evictable = Array.from(this.views.entries())
-      .filter(([id]) => id !== this.activeProjectId)
-      // Largest privateBytes first; LRU (oldest first) as tiebreaker so the
-      // existing limit-change/lru ordering still holds when memory data is
-      // unavailable for both candidates.
-      .sort(([, a], [, b]) => {
-        const memDelta = memoryFor(b) - memoryFor(a);
-        if (memDelta !== 0) return memDelta;
-        return a.lastUsed - b.lastUsed;
-      });
+      .filter(([id]) => id !== this.activeProjectId && id !== gateOutgoingProjectId)
+      // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
+      // distinct millisecond timestamps so equal-lastUsed ties don't arise
+      // in practice; Array.sort stability handles them deterministically.
+      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
 
     // Partition: evict views without active agents first, only fall back to
     // active-agent views when safe candidates are exhausted. This keeps memory
@@ -1134,6 +1426,54 @@ export class ProjectViewManager {
       logInfo("projectview.eviction", ctx);
       this.evictionTimestamps.set(projectId, Date.now());
       this.cleanupEntry(projectId);
+    }
+  }
+
+  /**
+   * Periodic renderer-memory sample for cached (non-active) project views.
+   * Silent telemetry only — emits one `projectview.cached-memory` event per
+   * cached view per tick so the keep-warm cost is observable in logs without
+   * any user-visible behaviour change. Skips when the cache holds only the
+   * active view (or fewer) so a single-project session generates no events.
+   */
+  private sampleCachedViewMemory(): void {
+    if (this.views.size <= 1) return;
+    const activeProjectId = this.activeProjectId;
+
+    const memoryByPid = new Map<number, number>();
+    try {
+      for (const proc of app.getAppMetrics()) {
+        const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        if (typeof kb === "number" && kb > 0) {
+          memoryByPid.set(proc.pid, kb);
+        }
+      }
+    } catch {
+      // app.getAppMetrics() throwing is non-fatal — skip this tick.
+      return;
+    }
+
+    for (const [projectId, entry] of this.views) {
+      if (projectId === activeProjectId) continue;
+      // Per-view try/catch keeps a TOCTOU-killed renderer (or any other
+      // per-view glitch) from skipping the rest of the cache in this tick.
+      try {
+        const wc = entry.view.webContents;
+        if (wc.isDestroyed()) continue;
+        const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+        if (typeof getPid !== "function") continue;
+        const pid = getPid.call(wc);
+        if (typeof pid !== "number" || pid <= 0) continue;
+        const memoryKb = memoryByPid.get(pid);
+        if (typeof memoryKb !== "number" || memoryKb <= 0) continue;
+        logInfo("projectview.cached-memory", {
+          projectId,
+          memoryKb,
+          pid,
+        });
+      } catch {
+        // Telemetry only — skip this view and continue with the rest.
+      }
     }
   }
 

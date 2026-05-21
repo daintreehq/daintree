@@ -107,7 +107,8 @@ interface ForgeProviderImpl {
   buildIssueUrl(repo: RepoRef, number: number): string;
   buildPRUrl(repo: RepoRef, number: number): string;
 
-  // Optional capabilities — host checks via `in` operator at runtime.
+  // Optional capabilities — host checks via a truthiness guard at runtime
+  // (`if (provider.reviews)`), not the `in` operator; see Capability discovery.
   reviews?: ReviewCapability;
   approvals?: ApprovalCapability;
   releases?: ReleaseCapability;
@@ -220,6 +221,14 @@ interface RateLimitInfo {
 ```
 
 Plugins parse their own transport (GraphQL `rateLimit` node for GitHub) and populate this shape. The host renders the rate-limit indicator from this projection.
+
+### Batching as the Quota-Reduction Strategy
+
+GitHub's GraphQL endpoint does not support ETag conditional requests — that's a REST-only header — so providers cannot rely on `If-None-Match` to cheaply confirm "nothing changed." The primary lever for reducing per-poll quota burn is **batching**: collapsing N round-trips into one aliased query when the host has a list of identifiers to resolve.
+
+The optional `findPRsByBranches(repo, branches): Map<string, PR | null>` capability on `ForgeProviderImpl` is the canonical example. `PullRequestService.checkForPRs` polls many worktree branches at once; with the capability present, the GitHub plugin issues one aliased `repository { pullRequests(headRefName: ...) }` block per branch in chunks (default 20) instead of one search query per branch. The host probes for the capability via a truthiness guard, calls it when present, and falls back to per-branch `findPRByBranch` when the batched call throws so a single transient chunk error doesn't blank every row's PR state.
+
+Other forge providers can omit the capability — the host degrades gracefully — or implement it natively (GitLab's REST `/projects/:id/merge_requests?source_branch[]=...` accepts repeated query params for the same effect).
 
 ## Worktree Snapshot: Breaking Change
 

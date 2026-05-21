@@ -68,7 +68,7 @@ describe("color system contract", () => {
 
   it("uses only exported theme-style color utilities in renderer source", () => {
     const utilityRegex =
-      /\b(?:bg|text|border|ring|outline|placeholder|fill|stroke)-((?:daintree|surface|text|accent|status|activity|category|github|overlay|scrim|state|server|terminal|cat|filter)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
+      /\b(?:bg|text|border|ring|outline|placeholder|fill|stroke)-((?:daintree|surface|text|accent|status|activity|category|pr|overlay|scrim|state|server|terminal|cat|filter)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
 
     const missing = new Map<string, string[]>();
 
@@ -106,6 +106,29 @@ describe("color system contract", () => {
   it("exports --color-accent-primary-foreground mapped to --theme-accent-foreground", () => {
     expect(indexCss).toMatch(
       /--color-accent-primary-foreground:\s*var\(--theme-accent-foreground\)/
+    );
+  });
+
+  it("defines --dock-shadow with alpha-pinned relative color (visible on light themes)", () => {
+    // Regression for #8156: color-mix multiplied --theme-shadow-color's own
+    // alpha (0.12 on light themes) toward transparent, making the dock shadow
+    // effectively invisible. Relative color syntax strips the input alpha and
+    // pins it at a visible value across all 14 themes.
+    expect(indexCss).toMatch(
+      /--dock-shadow:\s*0 -2px 12px rgb\(from var\(--theme-shadow-color\) r g b \/ 0\.35\)/
+    );
+    expect(indexCss).not.toMatch(/--dock-shadow:[^;]*color-mix/);
+  });
+
+  it("declares the waiting dock-item state tokens consumed by docked items", () => {
+    // Regression for #8156: DockedTerminalItem/DockedTabGroup read these tokens
+    // for the waiting-agent highlight, but they were never declared, so the
+    // waiting state was visually identical to idle on every theme.
+    expect(indexCss).toMatch(
+      /--dock-item-bg-waiting:\s*color-mix\(in oklab, var\(--color-activity-waiting\) 10%, transparent\)/
+    );
+    expect(indexCss).toMatch(
+      /--dock-item-border-waiting:\s*rgb\(from var\(--color-activity-waiting\) r g b \/ 0\.3\)/
     );
   });
 

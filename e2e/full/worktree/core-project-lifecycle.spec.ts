@@ -177,7 +177,7 @@ test.describe.serial("Core: Project Lifecycle", () => {
     await removeItem.click();
 
     // Confirm removal
-    const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
+    const dialog = window.getByRole("alertdialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await dialog.getByRole("button", { name: "Remove project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });

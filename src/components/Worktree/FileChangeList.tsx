@@ -44,6 +44,7 @@ interface FileChangeListProps {
   maxVisible?: number;
   rootPath: string;
   groupByFolder?: boolean;
+  isStale?: boolean;
 }
 
 function splitPath(filePath: string): { dir: string; base: string } {
@@ -83,6 +84,7 @@ export function FileChangeList({
   maxVisible = 8,
   rootPath,
   groupByFolder = false,
+  isStale = false,
 }: FileChangeListProps) {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
 
@@ -234,7 +236,13 @@ export function FileChangeList({
   if (groupByFolder && groupedChanges.length > 0) {
     return (
       <>
-        <div className="space-y-3 w-full max-h-64 overflow-y-auto overscroll-contain">
+        <div
+          className={cn(
+            "space-y-3 w-full max-h-64 overflow-y-auto overscroll-contain",
+            isStale && "surface-stale"
+          )}
+          aria-busy={isStale || undefined}
+        >
           {groupedChanges.map((group) => (
             <div key={group.dir}>
               <div className="flex items-center gap-1.5 text-[11px] text-daintree-text/40 mb-1">
@@ -273,7 +281,13 @@ export function FileChangeList({
 
   return (
     <>
-      <div className="flex flex-col gap-0.5 w-full max-h-64 overflow-y-auto overscroll-contain">
+      <div
+        className={cn(
+          "flex flex-col gap-0.5 w-full max-h-64 overflow-y-auto overscroll-contain",
+          isStale && "surface-stale"
+        )}
+        aria-busy={isStale || undefined}
+      >
         {visibleChanges.map((change) => renderFileItem(change, true))}
 
         {remainingCount > 0 && (

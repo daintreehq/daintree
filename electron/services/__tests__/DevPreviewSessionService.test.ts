@@ -359,8 +359,50 @@ describe("DevPreviewSessionService", () => {
     });
   });
 
-  it("treats HTTP 5xx responses as ready once the server is reachable", async () => {
-    mockHttpResponse(500);
+  it("transitions to running from the assigned URL when no URL is printed", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+    expect(started.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await vi.waitFor(() => {
+      const updated = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(updated.status).toBe("running");
+      expect(updated.url).toBe(started.assignedUrl);
+    });
+  });
+
+  it("does not treat HTTP 5xx responses as ready", async () => {
+    vi.useFakeTimers();
+    mockHttpResponse(503);
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+
+    const during = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(during.status).toBe("starting");
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(after.status).toBe("error");
+  });
+
+  it("treats HTTP 4xx responses as ready (server is reachable)", async () => {
+    mockHttpResponse(404);
 
     const started = await service.ensure(baseRequest);
     expect(started.terminalId).toBeTruthy();
@@ -699,12 +741,14 @@ describe("DevPreviewSessionService", () => {
 
   it("detects URL via proactive startup replay on first spawn", async () => {
     vi.useFakeTimers();
+    mockHttpError();
 
     const started = await service.ensure(baseRequest);
     expect(started.status).toBe("starting");
     expect(started.terminalId).toBeTruthy();
 
     ptyClient.replayHistoryAsync.mockImplementation(async (id: string) => {
+      mockHttpResponse(200);
       ptyClient.emitData(id, "ready at http://localhost:4173\n");
       return 1;
     });
@@ -747,6 +791,7 @@ describe("DevPreviewSessionService", () => {
 
   it("cancels startup replay timer on restart and schedules new one", async () => {
     vi.useFakeTimers();
+    mockHttpError();
 
     const started = await service.ensure(baseRequest);
     expect(started.terminalId).toBeTruthy();

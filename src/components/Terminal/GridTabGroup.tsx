@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { logError } from "@/utils/logger";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -15,106 +16,33 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 export interface GridTabGroupProps {
   group: TabGroup;
-  panels: TerminalInstance[];
   focusedId: string | null;
   gridPanelCount?: number;
   gridCols?: number;
   isMaximized?: boolean;
 }
 
-/**
- * Custom comparator for GridTabGroup's React.memo wrapper.
- *
- * Compares panel rendering fields used by the tabs useMemo, isGroupFocused,
- * and getGroupAmbientAgentState. Skips callback props (none on this component).
- * The group.activeTabId is NOT compared because the component subscribes to it
- * via Zustand store selector instead.
- */
-export function gridTabGroupPropsAreEqual(
-  prev: GridTabGroupProps,
-  next: GridTabGroupProps
-): boolean {
-  // Scalar props
-  if (
-    prev.focusedId !== next.focusedId ||
-    prev.gridPanelCount !== next.gridPanelCount ||
-    prev.gridCols !== next.gridCols ||
-    prev.isMaximized !== next.isMaximized
-  ) {
-    return false;
-  }
-
-  // Group: fast-path reference check, then field-level
-  if (prev.group !== next.group) {
-    const a = prev.group;
-    const b = next.group;
-    if (a.id !== b.id || a.location !== b.location || a.worktreeId !== b.worktreeId) {
-      return false;
-    }
-    // Compare panelIds (ordered)
-    if (a.panelIds.length !== b.panelIds.length) return false;
-    for (let i = 0; i < a.panelIds.length; i++) {
-      if (a.panelIds[i] !== b.panelIds[i]) return false;
-    }
-  }
-
-  // Panels: compare length, then element-by-element on all render-relevant fields.
-  // Must include the full set that GridPanel/buildPanelProps uses, not just tab-label
-  // fields, because the active panel is passed as `terminal` to GridPanel.
-  const prevPanels = prev.panels;
-  const nextPanels = next.panels;
-  if (prevPanels !== nextPanels) {
-    if (prevPanels.length !== nextPanels.length) return false;
-    for (let i = 0; i < prevPanels.length; i++) {
-      const a = prevPanels[i]!;
-      const b = nextPanels[i]!;
-      if (a !== b) {
-        if (
-          a.id !== b.id ||
-          a.title !== b.title ||
-          a.worktreeId !== b.worktreeId ||
-          a.kind !== b.kind ||
-          a.launchAgentId !== b.launchAgentId ||
-          a.detectedAgentId !== b.detectedAgentId ||
-          a.everDetectedAgent !== b.everDetectedAgent ||
-          a.runtimeIdentity !== b.runtimeIdentity ||
-          a.cwd !== b.cwd ||
-          a.agentState !== b.agentState ||
-          a.activityHeadline !== b.activityHeadline ||
-          a.activityStatus !== b.activityStatus ||
-          a.activityType !== b.activityType ||
-          a.lastCommand !== b.lastCommand ||
-          a.flowStatus !== b.flowStatus ||
-          a.restartKey !== b.restartKey ||
-          a.restartError !== b.restartError ||
-          a.reconnectError !== b.reconnectError ||
-          a.spawnError !== b.spawnError ||
-          a.detectedProcessId !== b.detectedProcessId ||
-          a.agentLaunchFlags !== b.agentLaunchFlags ||
-          a.browserUrl !== b.browserUrl ||
-          a.isRestarting !== b.isRestarting ||
-          a.runtimeStatus !== b.runtimeStatus ||
-          a.isInputLocked !== b.isInputLocked
-        ) {
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
 export const GridTabGroup = React.memo(function GridTabGroup({
   group,
-  panels,
   focusedId,
   gridPanelCount,
   gridCols,
   isMaximized = false,
 }: GridTabGroupProps) {
+  // Subscribe to this group's panels keyed by `group.panelIds`. `useShallow`
+  // does element-by-element identity comparison on the resolved array, so
+  // updates to unrelated panels don't trigger a re-render here.
+  const panels = usePanelStore(
+    useShallow((state) =>
+      group.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((p): p is TerminalInstance => p !== undefined)
+    )
+  );
+
   const setFocused = usePanelStore((state) => state.setFocused);
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
+  const stampLastActive = usePanelStore((state) => state.stampLastActive);
   const setMaximizedId = usePanelStore((state) => state.setMaximizedId);
   const trashPanel = usePanelStore((state) => state.trashPanel);
   const addPanel = usePanelStore((state) => state.addPanel);
@@ -260,14 +188,29 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       // This prevents single-click from activating focus/maximize mode
       if (isGroupFocused) {
         setFocused(tabId);
+      } else {
+        // The focus path stamps lastActiveAt via setFocused. When the group is
+        // unfocused, tab-switching is still user intent to view this panel —
+        // stamp explicitly so the restore predicate (issue #8703) sees the
+        // last-clicked tab as the worktree's recent panel even if the user
+        // quits before clicking the body to claim focus.
+        stampLastActive(tabId);
       }
       // If this group is maximized, update maximizedId to the new tab
-      // so "Exit Focus" works correctly
+      // so "Restore" (maximize toggle) works correctly
       if (isMaximized) {
         setMaximizedId(tabId);
       }
     },
-    [group.id, setActiveTab, setFocused, isGroupFocused, isMaximized, setMaximizedId]
+    [
+      group.id,
+      setActiveTab,
+      setFocused,
+      stampLastActive,
+      isGroupFocused,
+      isMaximized,
+      setMaximizedId,
+    ]
   );
 
   // Handle tab rename
@@ -326,7 +269,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   return (
     <GridPanel
-      terminal={activePanel}
+      terminalId={activePanel.id}
       isFocused={isFocused}
       isMaximized={isMaximized}
       gridPanelCount={gridPanelCount}
@@ -341,4 +284,4 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       onTabReorder={handleTabReorder}
     />
   );
-}, gridTabGroupPropsAreEqual);
+});

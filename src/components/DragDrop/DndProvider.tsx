@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
 } from "react";
 import {
   DndContext,
@@ -26,9 +27,11 @@ import {
   type DragOverEvent,
   type CollisionDetection,
   type Modifier,
+  type Active,
   type Announcements,
   type MeasuringConfiguration,
   type MouseSensorOptions,
+  type Over,
   type ScreenReaderInstructions,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
@@ -201,7 +204,7 @@ function getDragLabel(data: unknown): string {
  * `worktree-sort-{id}` for the sortable handle and `worktree-drop-{id}` for
  * the row's drop target — both should announce the same human-readable label.
  */
-function getOverDragLabel(over: { id: string | number; data: { current: unknown } }): string {
+function getOverDragLabel(over: Over): string {
   const sortDragId = parseWorktreeSortDragId(over.id);
   if (sortDragId) return resolveWorktreeLabel(sortDragId);
   if (typeof over.id === "string" && over.id.startsWith("worktree-drop-")) {
@@ -227,30 +230,69 @@ const dragScreenReaderInstructions: ScreenReaderInstructions = {
     "To pick up a draggable item, press Space or Enter. While dragging, use the arrow keys to move. Press Space or Enter again to drop, or Escape to cancel.",
 };
 
-const dragAnnouncements: Announcements = {
-  onDragStart({ active }) {
-    return `Picked up ${getDragLabel(active.data.current)}`;
-  },
-  onDragOver({ active, over }) {
-    const label = getDragLabel(active.data.current);
-    if (over) {
-      const overLabel = getOverDragLabel(over);
-      return `${label} is over ${overLabel}`;
-    }
-    return `${label} is no longer over a droppable area`;
-  },
-  onDragEnd({ active, over }) {
-    const label = getDragLabel(active.data.current);
-    if (over) {
+export interface DragAnnouncementRefs {
+  isKeyboardDragRef: MutableRefObject<boolean>;
+  pinnedTotalRef: MutableRefObject<number | null>;
+}
+
+/**
+ * Build the dnd-kit `Announcements` object for the global drag surface.
+ *
+ * `pinnedTotalRef` is populated at pickup by the sibling
+ * `DragAnnouncementMonitor` so the drop string's denominator survives
+ * mid-drag filter mutations. The factory is exported pure so unit tests can
+ * drive the lifecycle with controlled refs and label resolvers.
+ *
+ * Pointer drags suppress `onDragOver` (return `undefined`) so the polite
+ * live region isn't flooded — the visual placeholder already conveys hover
+ * state, and dnd-kit's measuring loop fires `onDragOver` at the
+ * `MEASURING_CONFIG.frequency` cadence. Keyboard drags keep the running
+ * "X is over Y" prose since the user has no visual cursor to track.
+ *
+ * **Read order matters.** `DragAnnouncementMonitor` and dnd-kit's internal
+ * `Accessibility` component both register via `useDndMonitor`, and dnd-kit
+ * dispatches to listeners in insertion order. The monitor's `useEffect`
+ * runs first (children before sibling render output in the DndContext tree),
+ * so it must NOT clear refs at `onDragEnd` / `onDragCancel` — `Accessibility`
+ * reads them second to build the announcement string. The monitor clears
+ * refs at the top of the *next* `onDragStart` instead.
+ */
+export function createDragAnnouncements(
+  refs: DragAnnouncementRefs,
+  resolveActiveLabel: (active: Active) => string,
+  resolveOverLabel: (over: Over) => string
+): Announcements {
+  return {
+    onDragStart({ active }) {
+      return `Picked up ${resolveActiveLabel(active)}. Press arrow keys to move, Space to drop, Escape to cancel.`;
+    },
+    onDragOver({ active, over }) {
+      if (!refs.isKeyboardDragRef.current) return undefined;
+      const label = resolveActiveLabel(active);
+      if (over) {
+        return `${label} is over ${resolveOverLabel(over)}`;
+      }
+      return `${label} is no longer over a droppable area`;
+    },
+    onDragEnd({ active, over }) {
+      const label = resolveActiveLabel(active);
+      if (!over) {
+        return `${label} returned to its original position`;
+      }
+      const overData = over.data.current as { sortable?: { index?: number } } | undefined;
+      const destIndex = overData?.sortable?.index;
+      const total = refs.pinnedTotalRef.current;
+      if (typeof destIndex === "number" && total !== null && total > 0) {
+        return `Dropped ${label} at position ${destIndex + 1} of ${total}`;
+      }
       return `Dropped ${label}`;
-    }
-    return `${label} returned to its original position`;
-  },
-  onDragCancel({ active }) {
-    const label = getDragLabel(active.data.current);
-    return `Drag cancelled. ${label} returned to its original position`;
-  },
-};
+    },
+    onDragCancel({ active }) {
+      const label = resolveActiveLabel(active);
+      return `Drag cancelled. ${label} returned to its original position`;
+    },
+  };
+}
 
 function isWorktreeDragData(
   data: DragData | WorktreeDragData | undefined
@@ -274,6 +316,45 @@ function getEventCoordinates(event: Event): { x: number; y: number } | null {
   }
   const pointerEvent = event as PointerEvent;
   return { x: pointerEvent.clientX, y: pointerEvent.clientY };
+}
+
+// Inner component that uses useDndMonitor to pin drag state for the
+// announcement factory (must be inside DndContext). Detects the activator
+// modality (pointer vs keyboard) — Announcements callbacks only receive
+// `{active, over}`, so the keyboard flag has to be plumbed in via refs.
+function DragAnnouncementMonitor({ refs }: { refs: DragAnnouncementRefs }) {
+  const { isKeyboardDragRef, pinnedTotalRef } = refs;
+  useDndMonitor({
+    onDragStart({ activatorEvent, active }) {
+      // Clear leftover state from the previous drag at the top of the next
+      // pickup, NOT in onDragEnd/onDragCancel. The reason is listener order:
+      // this monitor registers via useDndMonitor before dnd-kit's internal
+      // Accessibility component, and dnd-kit iterates listeners in insertion
+      // order. Clearing at end/cancel would zero the refs before the
+      // Accessibility component reads them to build the announcement, so the
+      // "Dropped X at position N of T" copy would never fire.
+      isKeyboardDragRef.current =
+        typeof KeyboardEvent !== "undefined" && activatorEvent instanceof KeyboardEvent;
+
+      const data = active.data.current as
+        | {
+            dragStartOrder?: unknown[];
+            sortable?: { items?: unknown[] };
+          }
+        | undefined;
+      const sortableTotal = data?.sortable?.items?.length;
+      const dragOrderTotal = Array.isArray(data?.dragStartOrder)
+        ? data.dragStartOrder.length
+        : undefined;
+      pinnedTotalRef.current =
+        typeof sortableTotal === "number"
+          ? sortableTotal
+          : typeof dragOrderTotal === "number"
+            ? dragOrderTotal
+            : null;
+    },
+  });
+  return null;
 }
 
 // Inner component that uses useDndMonitor to track cursor position (must be inside DndContext)
@@ -390,6 +471,25 @@ export function DndProvider({ children }: DndProviderProps) {
   const [isWorktreeSortActive, setIsWorktreeSortActive] = useState(false);
   const [activeSortWorktree, setActiveSortWorktree] = useState<WorktreeSnapshot | null>(null);
 
+  // Refs pinned by `DragAnnouncementMonitor` at pickup and read by the
+  // memoized `dragAnnouncements` factory. Identity is stable for the
+  // provider's lifetime so the `useMemo` below can use an empty dep list.
+  const isKeyboardDragRef = useRef(false);
+  const pinnedTotalRef = useRef<number | null>(null);
+  const announcementRefs = useMemo<DragAnnouncementRefs>(
+    () => ({ isKeyboardDragRef, pinnedTotalRef }),
+    []
+  );
+  const dragAnnouncements = useMemo(
+    () =>
+      createDragAnnouncements(
+        announcementRefs,
+        (a) => getDragLabel(a.data.current),
+        getOverDragLabel
+      ),
+    [announcementRefs]
+  );
+
   // Ref to track overContainer for stable collision detection (avoids infinite loops)
   const overContainerRef = useRef<"grid" | "dock" | null>(null);
   useEffect(() => {
@@ -406,6 +506,12 @@ export function DndProvider({ children }: DndProviderProps) {
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
   const stabilizationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dockRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  // Snapshot of the worktree-sort drag data pinned at pickup. The virtualized
+  // sidebar can unmount the source row's useSortable hook once it scrolls
+  // outside Virtuoso's overscan window, dropping active.data.current to
+  // undefined before handleDragEnd fires.
+  const activeWorktreeSortDataRef = useRef<Record<string, unknown> | null>(null);
 
   const [isCancelDrop, setIsCancelDrop] = useState(false);
 
@@ -424,6 +530,27 @@ export function DndProvider({ children }: DndProviderProps) {
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
+  );
+
+  // dnd-kit's defaults (threshold 0.2/0.2, acceleration 10) make the sortable
+  // sidebar autoscroll fire as soon as the pointer drifts ~20% from an edge,
+  // which feels slippery in a tall list. Override with a tight vertical band
+  // and disable horizontal autoscroll (always accidental in a vertical
+  // sidebar). Halve acceleration under reduced-motion since CSS reduced-motion
+  // doesn't affect JS-driven autoscroll. Threshold is fractional (0–1) ×
+  // container size in dnd-kit 6, so 0.08 ≈ a 40px band on a ~500px viewport.
+  // canScroll restricts to vertically-overflowing ancestors only: defensive
+  // against a future horizontally-scrollable ancestor, which would otherwise
+  // hit Infinity speed inside dnd-kit's getScrollDirectionAndSpeed via the
+  // `acceleration * abs(delta / threshold.width)` divide-by-zero path.
+  const prefersReducedMotion = useReducedMotion();
+  const autoScroll = useMemo(
+    () => ({
+      threshold: { x: 0, y: 0.08 },
+      acceleration: prefersReducedMotion ? 5 : 10,
+      canScroll: (el: Element) => el.scrollHeight > el.clientHeight,
+    }),
+    [prefersReducedMotion]
   );
 
   const panelsById = usePanelStore((state) => state.panelsById);
@@ -452,6 +579,9 @@ export function DndProvider({ children }: DndProviderProps) {
 
     // Skip terminal-specific logic for worktree-sort drags
     if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+      // Pin a snapshot so handleDragEnd survives Virtuoso unmounting the
+      // source row when it scrolls outside the overscan window mid-drag.
+      activeWorktreeSortDataRef.current = active.data.current as Record<string, unknown>;
       setActiveId(dragId);
       setIsWorktreeSortActive(true);
       const worktreeId = parseWorktreeSortDragId(dragId);
@@ -575,9 +705,15 @@ export function DndProvider({ children }: DndProviderProps) {
     (event: DragEndEvent) => {
       const { active, over } = event;
 
-      // Handle worktree-sort drags before any terminal logic
-      const activeRawData = active.data.current as Record<string, unknown> | undefined;
+      // Handle worktree-sort drags before any terminal logic. The snapshot ref
+      // is the canonical source — active.data.current can be undefined once
+      // the source row unmounts outside Virtuoso's overscan window.
+      const liveActiveData = active.data.current as Record<string, unknown> | undefined;
+      const activeRawData =
+        activeWorktreeSortDataRef.current ??
+        (isWorktreeSortDragData(liveActiveData) ? liveActiveData : undefined);
       if (isWorktreeSortDragData(activeRawData)) {
+        activeWorktreeSortDataRef.current = null;
         setActiveId(null);
         setActiveData(null);
         setIsWorktreeSortActive(false);
@@ -971,7 +1107,15 @@ export function DndProvider({ children }: DndProviderProps) {
         return true;
       }
 
-      if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+      // Worktree-sort drags own their own drop logic in handleDragEnd; let
+      // every drop through. Also check the snapshot ref: if Virtuoso has
+      // unmounted the source row, active.data.current is undefined but the
+      // ref still holds the original drag data — converting to cancel here
+      // would lose the reorder entirely.
+      if (
+        activeWorktreeSortDataRef.current !== null ||
+        isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)
+      ) {
         return false;
       }
 
@@ -1033,7 +1177,9 @@ export function DndProvider({ children }: DndProviderProps) {
   const handleDragCancel = useCallback(() => {
     // Skip terminal unlock for worktree-sort drags (no lock was acquired)
     const isWorktreeSort = activeId ? parseWorktreeSortDragId(activeId) !== null : false;
-    if (!isWorktreeSort) {
+    if (isWorktreeSort) {
+      activeWorktreeSortDataRef.current = null;
+    } else {
       const terminalId =
         activeData?.terminal?.id ??
         (activeId ? (parseAccordionDragId(activeId) ?? activeId) : null);
@@ -1140,6 +1286,7 @@ export function DndProvider({ children }: DndProviderProps) {
       cancelDrop={cancelDrop}
       collisionDetection={collisionDetection}
       measuring={MEASURING_CONFIG}
+      autoScroll={autoScroll}
       accessibility={{
         announcements: dragAnnouncements,
         screenReaderInstructions: dragScreenReaderInstructions,
@@ -1148,6 +1295,7 @@ export function DndProvider({ children }: DndProviderProps) {
       <DndPlaceholderContext.Provider value={placeholderContextValue}>
         {children}
       </DndPlaceholderContext.Provider>
+      <DragAnnouncementMonitor refs={announcementRefs} />
       <DragOverlayWithCursorTracking
         activeTerminal={activeTerminal}
         activeWorktree={activeSortWorktree}

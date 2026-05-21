@@ -2,10 +2,11 @@ import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
 
 /**
- * Serializer input: `PtyPanelData` plus the legacy `createdAt` field, which is
- * persisted but intentionally not declared on the shared variant interface.
+ * Serializer input: `PtyPanelData` plus the legacy `createdAt` and
+ * `lastActiveAt` fields, which are persisted but intentionally not declared
+ * on the shared variant interface.
  */
-type PtySerializeInput = PtyPanelData & { createdAt?: number };
+type PtySerializeInput = PtyPanelData & { createdAt?: number; lastActiveAt?: number };
 
 export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
   return {
@@ -27,5 +28,6 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     // indicator on the next reload (issue #5832).
     ...(t.agentState && t.agentState !== "directing" && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
+    ...(t.lastActiveAt !== undefined && { lastActiveAt: t.lastActiveAt }),
   };
 }

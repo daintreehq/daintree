@@ -187,7 +187,7 @@ export function useRecipeRunner({
         : null;
       return {
         issueNumber: worktreeData?.issueNumber,
-        prNumber: worktreeData?.prNumber,
+        prNumber: worktreeData?.linked?.pr?.ref.number,
         worktreePath: cwd,
         branchName: worktreeData?.branch,
       };

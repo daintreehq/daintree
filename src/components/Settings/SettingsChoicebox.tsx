@@ -17,6 +17,7 @@ interface SettingsChoiceboxProps<T extends string = string> extends Omit<
   label?: string;
   description?: ReactNode;
   error?: string;
+  touched?: boolean;
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
@@ -40,6 +41,7 @@ export function SettingsChoicebox<T extends string = string>({
   label,
   description,
   error,
+  touched = true,
   isModified,
   onReset,
   resetAriaLabel,
@@ -56,9 +58,10 @@ export function SettingsChoicebox<T extends string = string>({
   const descriptionId = useId();
   const errorId = useId();
   const showReset = isModified && onReset && !disabled;
+  const isError = !!error && touched;
 
   const describedBy =
-    [error ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
+    [isError ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
     undefined;
 
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
@@ -169,7 +172,7 @@ export function SettingsChoicebox<T extends string = string>({
         role="radiogroup"
         aria-labelledby={label && labelId}
         aria-describedby={describedBy}
-        aria-invalid={error ? true : undefined}
+        aria-invalid={isError ? true : undefined}
         className={cn("flex gap-2", {
           "grid grid-cols-2": columns === 2,
           "grid grid-cols-3": columns === 3,
@@ -222,7 +225,7 @@ export function SettingsChoicebox<T extends string = string>({
           {description}
         </p>
       )}
-      {error && (
+      {isError && (
         <p id={errorId} className="text-xs text-status-error">
           {error}
         </p>

@@ -99,4 +99,17 @@ describe("useCopyWithFeedback", () => {
     });
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
   });
+
+  // Regression guard: the hook is a general-purpose clipboard primitive shared
+  // by crash-report and stack-trace copy paths. Paste-jacking sanitization
+  // belongs at the install-command boundary (CopyableCommand), not here —
+  // stripping newlines from a multi-line crash report would mangle it.
+  it("preserves newlines and tabs in multi-line content (does not sanitize)", async () => {
+    const { result } = renderHook(() => useCopyWithFeedback());
+    const crashReport = "## Crash Report\nDaintree 1.0.0\n\tstack:\n\t  at foo";
+    await act(async () => {
+      await result.current.copy(crashReport);
+    });
+    expect(writeText).toHaveBeenCalledWith(crashReport);
+  });
 });

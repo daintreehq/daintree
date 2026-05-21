@@ -45,12 +45,15 @@ function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): Notificat
     seenAsToast: true,
     summarized: false,
     countable: true,
+    archivedAt: null,
     ...overrides,
   };
 }
 
 function setEntries(entries: NotificationHistoryEntry[]) {
-  const unreadCount = entries.filter((e) => !e.seenAsToast && e.countable !== false).length;
+  const unreadCount = entries.filter(
+    (e) => !e.seenAsToast && e.countable !== false && !e.archivedAt
+  ).length;
   useNotificationHistoryStore.setState({ entries, unreadCount });
 }
 
@@ -2247,5 +2250,216 @@ describe("NotificationCenter — keyboard navigation", () => {
 
     fireEvent.keyDown(list, { key: "e" });
     expect(useNotificationHistoryStore.getState().entries.length).toBe(2);
+  });
+});
+
+describe("archived tab and 'e' archive keybinding", () => {
+  function getRows(container: HTMLElement) {
+    return Array.from(container.querySelectorAll('[role="listitem"]')) as HTMLElement[];
+  }
+
+  it("'e' archives the focused row without destroying the entry", async () => {
+    setEntries([
+      makeEntry({ id: "a", message: "Keep" }),
+      makeEntry({ id: "b", message: "Archive me" }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[1]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+
+    // The All view filters archived entries out, so the row disappears.
+    await waitFor(() => {
+      expect(getRows(container)).toHaveLength(1);
+    });
+    // But the underlying entry survives — it moved to the Archived tab.
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(2);
+    const archived = entries.find((e) => e.id === "b")!;
+    expect(archived.archivedAt).not.toBeNull();
+    expect(archived.seenAsToast).toBe(true);
+  });
+
+  it("'e' on a thread archives every non-archived entry in the thread", async () => {
+    setEntries([
+      makeEntry({ id: "t1", message: "first", correlationId: "thread" }),
+      makeEntry({ id: "t2", message: "second", correlationId: "thread" }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.find((e) => e.id === "t1")!.archivedAt).not.toBeNull();
+    expect(entries.find((e) => e.id === "t2")!.archivedAt).not.toBeNull();
+  });
+
+  it("All view hides archived entries", () => {
+    setEntries([
+      makeEntry({ id: "live", message: "Live entry" }),
+      makeEntry({ id: "done", message: "Archived entry", archivedAt: Date.now() }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByText("Live entry")).not.toBeNull();
+    expect(screen.queryByText("Archived entry")).toBeNull();
+  });
+
+  it("Archived tab shows only archived entries", () => {
+    setEntries([
+      makeEntry({ id: "live", message: "Live entry" }),
+      makeEntry({ id: "done", message: "Archived entry", archivedAt: Date.now() }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.queryByText("Archived entry")).not.toBeNull();
+    expect(screen.queryByText("Live entry")).toBeNull();
+  });
+
+  it("Unread tab hides archived entries", () => {
+    setEntries([
+      makeEntry({ id: "unread", message: "Unread live", seenAsToast: false }),
+      makeEntry({
+        id: "archived-unread",
+        message: "Archived ignored",
+        seenAsToast: false,
+        archivedAt: Date.now(),
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Unread" }));
+    expect(screen.queryByText("Unread live")).not.toBeNull();
+    expect(screen.queryByText("Archived ignored")).toBeNull();
+  });
+
+  it("Archived tab does not render the Needs attention pinned section", () => {
+    setEntries([
+      makeEntry({
+        id: "err",
+        type: "error",
+        message: "Pinned error",
+        seenAsToast: false,
+      }),
+      makeEntry({
+        id: "done",
+        message: "Archived entry",
+        archivedAt: Date.now(),
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(container.querySelector('[data-testid="needs-attention-section"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(container.querySelector('[data-testid="needs-attention-section"]')).toBeNull();
+  });
+
+  it("Archived tab shows the empty state when no archived entries exist", () => {
+    setEntries([makeEntry({ id: "live", message: "Live" })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.queryByText("No archived notifications")).not.toBeNull();
+  });
+
+  it("'e' in the Archived tab permanently deletes the focused entry", async () => {
+    setEntries([
+      makeEntry({ id: "live", message: "Live entry" }),
+      makeEntry({ id: "done", message: "Archived entry", archivedAt: Date.now() }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+
+    // Archived entry is gone from store entirely.
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.find((e) => e.id === "done")).toBeUndefined();
+    expect(entries.find((e) => e.id === "live")).not.toBeUndefined();
+  });
+
+  it("the Archived button is not rendered when there are zero entries", () => {
+    setEntries([]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Archived" })).toBeNull();
+  });
+
+  it("'e' on an archived thread does not destroy live entries sharing the correlationId", async () => {
+    setEntries([
+      makeEntry({
+        id: "live",
+        message: "Active partner",
+        correlationId: "panel-1",
+        archivedAt: null,
+        seenAsToast: false,
+      }),
+      makeEntry({
+        id: "arch-a",
+        message: "Done A",
+        correlationId: "panel-1",
+        archivedAt: Date.now(),
+      }),
+      makeEntry({
+        id: "arch-b",
+        message: "Done B",
+        correlationId: "panel-1",
+        archivedAt: Date.now(),
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+
+    // The live entry must survive — pressing 'e' on the archived thread must
+    // not call dismissByCorrelationId across the correlationId boundary.
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.find((e) => e.id === "live")).not.toBeUndefined();
+  });
+
+  it("Mark all read excludes archived entries from its undo set", () => {
+    setEntries([
+      makeEntry({ id: "live-unread", message: "Live unread", seenAsToast: false }),
+      makeEntry({
+        id: "archived-unread",
+        message: "Archived unread",
+        seenAsToast: false,
+        archivedAt: Date.now(),
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    const archived = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.id === "archived-unread");
+    // Archived entry's seenAsToast must stay false — it's done, not unread.
+    expect(archived!.seenAsToast).toBe(false);
+    // The toast message should report only the live unread count.
+    expect(vi.mocked(notifyLib.notify)).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Marked 1 as read" })
+    );
   });
 });

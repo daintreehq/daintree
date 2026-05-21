@@ -310,6 +310,29 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().conversationTouched).toBe(false);
   });
 
+  it("setTerminal initializes preferredAgentId from the bound agent when none is set", async () => {
+    installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    expect(store.getState().preferredAgentId).toBeNull();
+
+    store.getState().setTerminal("term-1", "codex", null);
+    expect(store.getState().preferredAgentId).toBe("codex");
+  });
+
+  it("setTerminal preserves an explicit preferredAgentId across a re-bind (issue #8353)", async () => {
+    installLocalStorage({});
+
+    const { useHelpPanelStore: store } = await import("../helpPanelStore");
+    store.getState().setPreferredAgent("claude");
+
+    // A live terminal re-binds (resume/reconnect) to a different agent —
+    // the user's explicit choice must survive, not get clobbered.
+    store.getState().setTerminal("term-1", "codex", null);
+    expect(store.getState().preferredAgentId).toBe("claude");
+    expect(store.getState().agentId).toBe("codex");
+  });
+
   it("clearTerminal resets conversationTouched to false", async () => {
     installLocalStorage({});
 

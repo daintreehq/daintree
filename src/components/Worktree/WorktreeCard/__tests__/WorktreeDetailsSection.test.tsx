@@ -336,7 +336,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
   });
 });
 
-describe("WorktreeDetailsSection activity indicator", () => {
+describe("WorktreeDetailsSection commit chip (collapsed row)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
@@ -346,46 +346,73 @@ describe("WorktreeDetailsSection activity indicator", () => {
     vi.useRealTimers();
   });
 
-  it("renders 'No activity' placeholder when lastActivityTimestamp is null", () => {
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.getByText("No activity")).toBeDefined();
-  });
-
-  it("renders the activity dot and time ago when timestamp is present", () => {
-    const worktree: WorktreeState = {
-      ...baseWorktree,
-      lastActivityTimestamp: Date.now(),
+  function withCommit(
+    overrides: Partial<WorktreeChanges>,
+    lastActivityTimestamp: number | null = null
+  ): WorktreeState {
+    return {
+      ...withChanges({
+        lastCommitTimestampMs: Date.now() - 120_000,
+        lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+        lastCommitMessage: "fix: stuff",
+        ...overrides,
+      }),
+      lastActivityTimestamp,
     };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.queryByText("No activity")).toBeNull();
-    // LiveTimeAgo renders "now" for a just-now timestamp
-    expect(screen.getByText("now")).toBeDefined();
+  }
+
+  it("renders the commit time but never an avatar in the row", () => {
+    const { container } = renderSection({ worktree: withCommit({}), hasChanges: false });
+    expect(container.textContent).toContain("2m");
+    // The committer's face lives in the hover tooltip, not the row.
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByLabelText("Last commit by Jane Doe")).toBeDefined();
   });
 
-  it("renders hollow ring and time label for decayed timestamp", () => {
-    const worktree: WorktreeState = {
-      ...baseWorktree,
-      lastActivityTimestamp: Date.now() - 120_000, // 2 minutes ago — past DECAY_DURATION (90s)
-    };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.queryByText("No activity")).toBeNull();
-    // LiveTimeAgo renders a time label like "2m"
-    expect(screen.getByText("2m")).toBeDefined();
+  it("labels the chip generically when the author is absent", () => {
+    renderSection({ worktree: withCommit({ lastCommitAuthor: undefined }), hasChanges: false });
+    expect(screen.getByLabelText("Last commit")).toBeDefined();
   });
 
-  it("collapsed view shows 'No activity' when expanded view shows worktree details without activity section", () => {
-    // The expanded view (WorktreeDetails) already gates the activity section
-    // on showTime && lastActivityTimestamp (line 81). Verify the collapsed
-    // view handles the null case distinctly.
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
-    renderSection({ worktree, hasChanges: false });
-    expect(screen.getByText("No activity")).toBeDefined();
+  it("renders the activity dot when lastActivityTimestamp is recent", () => {
+    renderSection({ worktree: withCommit({}, Date.now()), hasChanges: false });
+    const chip = screen.getByLabelText("Last commit by Jane Doe");
+    expect(chip.querySelector("div[aria-hidden='true']")).not.toBeNull();
   });
 
-  it("null timestamp worktree does not render an ActivityLight dot", () => {
-    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
+  it("omits the activity dot when there is no activity timestamp", () => {
+    renderSection({ worktree: withCommit({}, null), hasChanges: false });
+    const chip = screen.getByLabelText("Last commit by Jane Doe");
+    expect(chip.querySelector("div[aria-hidden='true']")).toBeNull();
+    expect(chip.textContent).toContain("2m");
+  });
+
+  it("never paints an agent icon in the row, even for an agent committer", () => {
+    const worktree = withCommit({
+      lastCommitAuthor: { name: "Codex", email: "noreply@codex.openai.com" },
+    });
     const { container } = renderSection({ worktree, hasChanges: false });
-    expect(container.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("omits the chip entirely when lastCommitTimestampMs is absent", () => {
+    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: Date.now() };
+    renderSection({ worktree, hasChanges: false });
+    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+  });
+
+  it("omits the chip when lastCommitTimestampMs is NaN", () => {
+    const { container } = renderSection({
+      worktree: withCommit({ lastCommitTimestampMs: Number.NaN }),
+      hasChanges: false,
+    });
+    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+    expect(container.textContent).not.toContain("NaN");
+  });
+
+  it("removes the standalone 'No activity' placeholder", () => {
+    renderSection({ worktree: withCommit({}), hasChanges: false });
+    expect(screen.queryByText("No activity")).toBeNull();
   });
 });

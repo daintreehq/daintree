@@ -1,4 +1,3 @@
-import type { AgentRoutingConfig } from "../types/agentSettings.js";
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
 
 export interface AgentHelpConfig {
@@ -402,11 +401,6 @@ export interface AgentConfig {
    * (`curl`, `powershell`); unknown keys are surfaced verbatim by the UI.
    */
   update?: Partial<Record<keyof AgentPackages | "curl" | "powershell" | (string & {}), string>>;
-  /**
-   * Routing configuration for intelligent agent dispatch.
-   * Used by orchestrators to select the best agent for a given task.
-   */
-  routing?: AgentRoutingConfig;
   /**
    * Approximate context window size in tokens for this agent's model.
    * Used to warn when context usage is high.

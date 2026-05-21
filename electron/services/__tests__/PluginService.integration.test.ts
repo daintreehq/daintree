@@ -31,11 +31,18 @@ import { randomUUID } from "crypto";
  *   produces a distinct URL and re-executes module-level side effects.
  */
 
+const storeState = new Map<string, unknown>();
 vi.mock("electron", () => ({
   app: { getVersion: vi.fn(() => "0.0.0") },
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
+}));
+vi.mock("../../store.js", () => ({
+  store: {
+    get: (key: string) => storeState.get(key),
+    set: (key: string, value: unknown) => storeState.set(key, value),
+  },
 }));
 
 import { PluginService } from "../PluginService.js";
@@ -49,6 +56,18 @@ import {
   getToolbarButtonConfig,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { clearPluginMenuRegistry, getPluginMenuItems } from "../pluginMenuRegistry.js";
+import {
+  clearForgeProviderRegistry,
+  getRegisteredForgeProviders,
+  listMatchingProviders,
+} from "../forgeProviderRegistry.js";
+import {
+  clearFileDecorationImplRegistry,
+  clearFileDecorationRegistry,
+  getFileDecorationImpls,
+  getRegisteredFileDecorationProviders,
+} from "../fileDecorationRegistry.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -69,6 +88,10 @@ type PluginManifestShape = {
     panels?: unknown[];
     toolbarButtons?: unknown[];
     menuItems?: unknown[];
+    views?: unknown[];
+    mcpServers?: unknown[];
+    forgeProviders?: unknown[];
+    fileDecorationProviders?: unknown[];
   };
 };
 
@@ -113,6 +136,10 @@ afterEach(async () => {
     clearPanelKindRegistry();
     clearToolbarButtonRegistry();
     clearPluginMenuRegistry();
+    clearForgeProviderRegistry();
+    clearFileDecorationRegistry();
+    clearFileDecorationImplRegistry();
+    storeState.clear();
     for (const key of globalMarkers) {
       delete (globalThis as Record<string, unknown>)[key];
     }
@@ -363,6 +390,301 @@ describe("PluginService integration — menu item contributions", () => {
         location: "terminal",
       },
     });
+  });
+});
+
+describe("PluginService integration — forge provider contributions", () => {
+  it("registers a manifest forgeProviders entry and unregisters it on unload", async () => {
+    await writePlugin("acme.forge-plugin", {
+      name: "acme.forge-plugin",
+      version: "1.0.0",
+      contributes: {
+        forgeProviders: [
+          {
+            id: "github",
+            name: "GitHub",
+            matches: ["github.com"],
+            capabilities: ["issues", "pulls"],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const registered = getRegisteredForgeProviders();
+    expect(registered).toHaveLength(1);
+    expect(registered[0]).toEqual({
+      pluginId: "acme.forge-plugin",
+      contribution: {
+        id: "github",
+        name: "GitHub",
+        matches: ["github.com"],
+        capabilities: ["issues", "pulls"],
+      },
+    });
+
+    const matches = listMatchingProviders("https://github.com/owner/repo.git");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].pluginId).toBe("acme.forge-plugin");
+
+    service.unloadPlugin("acme.forge-plugin");
+
+    expect(getRegisteredForgeProviders()).toHaveLength(0);
+    expect(listMatchingProviders("https://github.com/owner/repo.git")).toEqual([]);
+  });
+
+  it("registers multiple forgeProviders entries from one manifest", async () => {
+    await writePlugin("acme.multi-forge", {
+      name: "acme.multi-forge",
+      version: "1.0.0",
+      contributes: {
+        forgeProviders: [
+          { id: "primary", name: "Primary", matches: ["primary.example"] },
+          { id: "secondary", name: "Secondary", matches: ["secondary.example"] },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(getRegisteredForgeProviders()).toHaveLength(2);
+    expect(listMatchingProviders("https://primary.example/repo")).toHaveLength(1);
+    expect(listMatchingProviders("https://secondary.example/repo")).toHaveLength(1);
+  });
+});
+
+describe("PluginService integration — file decoration provider contributions", () => {
+  it("registers a manifest fileDecorationProviders entry and unregisters it on unload", async () => {
+    await writePlugin("acme.decor-plugin", {
+      name: "acme.decor-plugin",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const registered = getRegisteredFileDecorationProviders();
+    expect(registered).toEqual([
+      {
+        pluginId: "acme.decor-plugin",
+        contribution: { id: "badges", scopes: ["my-scope:*"] },
+      },
+    ]);
+
+    service.unloadPlugin("acme.decor-plugin");
+    expect(getRegisteredFileDecorationProviders()).toEqual([]);
+  });
+
+  it("serves a non-GitHub plugin's decorations opaquely and broadcasts invalidation", async () => {
+    // This is the acceptance proof: the host wires through a fake plugin's
+    // decorations with zero knowledge of what they represent (no review
+    // threads, no GitHub) and rebroadcasts its invalidation signal.
+    const pluginDir = await writePlugin("acme.decor-plugin", {
+      name: "acme.decor-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  const dispose = host.registerFileDecorationProvider({ id: "badges" }, {
+    async provideDecorations(scope, paths) {
+      const out = {};
+      for (const p of paths) out[p] = { badge: "★", tooltip: "fake:" + scope };
+      return out;
+    },
+  });
+  host.invalidateFileDecorations("my-scope:/x", ["a.ts"]);
+  return dispose;
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.decor-plugin",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const impls = getFileDecorationImpls("my-scope:/x");
+    expect(impls).toHaveLength(1);
+    expect(impls[0]).toMatchObject({
+      pluginId: "acme.decor-plugin",
+      contributionId: "badges",
+    });
+
+    const decorations = await impls[0].impl.provideDecorations("my-scope:/x", ["a.ts", "b.ts"]);
+    expect(decorations).toEqual({
+      "a.ts": { badge: "★", tooltip: "fake:my-scope:/x" },
+      "b.ts": { badge: "★", tooltip: "fake:my-scope:/x" },
+    });
+
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:decorations-changed",
+      payload: { scope: "my-scope:/x", paths: ["a.ts"] },
+    });
+
+    service.unloadPlugin("acme.decor-plugin");
+    expect(getFileDecorationImpls("my-scope:/x")).toEqual([]);
+  });
+
+  it("rejects registering a provider id not declared in the manifest", async () => {
+    const pluginDir = await writePlugin("acme.bad-decor", {
+      name: "acme.bad-decor",
+      version: "1.0.0",
+    });
+    const markerKey = makeMarkerKey();
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  try {
+    host.registerFileDecorationProvider({ id: "undeclared" }, { async provideDecorations() { return {}; } });
+  } catch (err) {
+    globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
+  }
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.bad-decor",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "declared", scopes: ["s:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(String(readMarker(markerKey))).toContain("is not declared in contributes");
+    expect(getFileDecorationImpls("s:/x")).toEqual([]);
+  });
+
+  it("rejects invalidating a scope not covered by declared scopes", async () => {
+    const pluginDir = await writePlugin("acme.scope-guard", {
+      name: "acme.scope-guard",
+      version: "1.0.0",
+    });
+    const markerKey = makeMarkerKey();
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  try {
+    host.invalidateFileDecorations("other:/x");
+  } catch (err) {
+    globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
+  }
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.scope-guard",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "d", scopes: ["allowed:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(String(readMarker(markerKey))).toContain("is not covered by any declared");
+  });
+
+  it("broadcasts a decorations-changed event for each declared scope on unload", async () => {
+    await writePlugin("acme.unload-decor", {
+      name: "acme.unload-decor",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["scope-a:*", "scope-b:*"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.unload-decor");
+
+    const decorationBroadcasts = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) =>
+          c[0] === "events:push" &&
+          (c[1] as { name?: string }).name === "plugin:decorations-changed"
+      )
+      .map((c) => (c[1] as { payload: { scope: string } }).payload.scope);
+    expect(new Set(decorationBroadcasts)).toEqual(new Set(["scope-a:*", "scope-b:*"]));
+    expect(getFileDecorationImpls("scope-a:/x")).toEqual([]);
+  });
+
+  it("invalidateFileDecorations is a silent no-op after the plugin unloads", async () => {
+    const pluginDir = await writePlugin("acme.post-unload", {
+      name: "acme.post-unload",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    // Stash the host so the test can call invalidate AFTER unload — the true
+    // post-activation path the no-op guard protects.
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  globalThis.__postUnloadHost = host;
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.post-unload",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "d", scopes: ["live:*"] }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    const host = (globalThis as Record<string, unknown>).__postUnloadHost as {
+      invalidateFileDecorations: (scope: string) => void;
+    };
+    service.unloadPlugin("acme.post-unload");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    expect(() => host.invalidateFileDecorations("live:/x")).not.toThrow();
+    const after = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) => (c[1] as { name?: string } | undefined)?.name === "plugin:decorations-changed"
+      );
+    expect(after).toEqual([]);
+    delete (globalThis as Record<string, unknown>).__postUnloadHost;
   });
 });
 
@@ -731,5 +1053,155 @@ describe("PluginService integration — full contribution fan-out", () => {
       },
     ]);
     expect(readMarker(markerKey)).toBe(1);
+  });
+});
+
+describe("PluginService integration — built-in plugin loading", () => {
+  let builtinDir: string;
+
+  async function writeBuiltinPlugin(
+    pluginDirName: string,
+    manifest: PluginManifestShape
+  ): Promise<string> {
+    const dir = path.join(builtinDir, pluginDirName);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+    return dir;
+  }
+
+  beforeEach(async () => {
+    builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-int-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(builtinDir, { recursive: true, force: true });
+  });
+
+  it("loads contributions from both built-in and user directories into the real registries", async () => {
+    await writeBuiltinPlugin("daintree.builtin-panels", {
+      name: "daintree.builtin-panels",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
+      },
+    });
+    await writePlugin("acme.user-panels", {
+      name: "acme.user-panels",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "side", name: "Side", iconId: "box", color: "#def" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(getPanelKindConfig("daintree.builtin-panels.main")?.extensionId).toBe(
+      "daintree.builtin-panels"
+    );
+    expect(getPanelKindConfig("acme.user-panels.side")?.extensionId).toBe("acme.user-panels");
+
+    const plugins = service.listPlugins();
+    expect(plugins.find((p) => p.manifest.name === "daintree.builtin-panels")?.isBuiltin).toBe(
+      true
+    );
+    expect(plugins.find((p) => p.manifest.name === "acme.user-panels")?.isBuiltin).toBe(false);
+  });
+
+  it("does not register contributions for a disabled built-in", async () => {
+    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled"] });
+    await writeBuiltinPlugin("daintree.disabled", {
+      name: "daintree.disabled",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "x", name: "X", iconId: "eye", color: "#000" }],
+        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "daintree.disabled.act" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(getPanelKindConfig("daintree.disabled.x")).toBeUndefined();
+    expect(getToolbarButtonConfig("plugin.daintree.disabled.b")).toBeUndefined();
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("activates a built-in plugin's main entry through the standard lifecycle", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writeBuiltinPlugin("daintree.activate-test", {
+      name: "daintree.activate-test",
+      version: "1.0.0",
+    });
+    const mainFile = await writeMainFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "daintree.activate-test",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(readMarker(markerKey)).toBe(1);
+    expect(service.listPlugins()[0].isBuiltin).toBe(true);
+  });
+
+  it("does not execute the main entry of a disabled built-in", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writeBuiltinPlugin("daintree.disabled-main", {
+      name: "daintree.disabled-main",
+      version: "1.0.0",
+    });
+    const mainFile = await writeMainFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "daintree.disabled-main",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled-main"] });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(readMarker(markerKey)).toBeUndefined();
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("loads remaining built-ins and user plugins when one built-in has a malformed manifest", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const badDir = path.join(builtinDir, "broken");
+      await fs.mkdir(badDir, { recursive: true });
+      await fs.writeFile(path.join(badDir, "plugin.json"), "{not json");
+
+      await writeBuiltinPlugin("daintree.good-builtin", {
+        name: "daintree.good-builtin",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "ok", name: "Ok", iconId: "i", color: "#abc" }],
+        },
+      });
+      await writePlugin("acme.good-user", {
+        name: "acme.good-user",
+        version: "1.0.0",
+      });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      const names = service.listPlugins().map((p) => p.manifest.name);
+      expect(names).toEqual(expect.arrayContaining(["daintree.good-builtin", "acme.good-user"]));
+      expect(names).toHaveLength(2);
+      expect(getPanelKindConfig("daintree.good-builtin.ok")).toBeDefined();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

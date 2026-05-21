@@ -23,6 +23,7 @@ function emit(
     timestamp: Date.now(),
     category: "test",
     durationMs: 1,
+    danger: "safe",
     ...overrides,
   };
   events.emit("action:dispatched", payload);
@@ -77,6 +78,7 @@ describe("ActionBreadcrumbService", () => {
         actionId: "injected",
         category: "x",
         source: "user",
+        danger: "safe" as const,
         durationMs: 0,
         timestamp: 0,
         count: 1,
@@ -206,6 +208,136 @@ describe("ActionBreadcrumbService", () => {
       });
       expect(() => emit({ actionId: "foo" })).not.toThrow();
       expect(service.getRecentActions()).toHaveLength(1);
+    });
+  });
+
+  describe("priority eviction", () => {
+    it("evicts newest safe entry when a confirm entry arrives into a full ring", () => {
+      // Fill the ring with 50 distinct safe entries
+      for (let i = 0; i < 50; i++) {
+        emit({ actionId: `safe.${i}`, danger: "safe", timestamp: Date.now() + i * 1000 });
+      }
+      const before = service.getRecentActions();
+      expect(before).toHaveLength(50);
+      expect(before[0]!.actionId).toBe("safe.0");
+
+      // One confirm entry arrives — should evict the newest safe
+      emit({ actionId: "dangerous.op", danger: "confirm", timestamp: Date.now() + 50_000 });
+
+      const after = service.getRecentActions();
+      expect(after).toHaveLength(50);
+      // Oldest safe should still be present
+      expect(after[0]!.actionId).toBe("safe.0");
+      // The confirm entry should be at the end
+      expect(after[49]!.actionId).toBe("dangerous.op");
+      expect(after[49]!.danger).toBe("confirm");
+      // The newest safe (safe.49) should be gone
+      const safe49 = after.find((e) => e.actionId === "safe.49");
+      expect(safe49).toBeUndefined();
+    });
+
+    it("drops a safe entry when the ring is full of confirm entries", () => {
+      // Fill the ring with 50 distinct confirm entries
+      for (let i = 0; i < 50; i++) {
+        emit({ actionId: `confirm.${i}`, danger: "confirm", timestamp: Date.now() + i * 1000 });
+      }
+      const before = service.getRecentActions();
+      expect(before).toHaveLength(50);
+      expect(before.every((e) => e.danger === "confirm")).toBe(true);
+
+      // One safe entry arrives — should be dropped
+      emit({ actionId: "safe.noise", danger: "safe", timestamp: Date.now() + 50_000 });
+
+      const after = service.getRecentActions();
+      expect(after).toHaveLength(50);
+      expect(after.every((e) => e.danger === "confirm")).toBe(true);
+      expect(after.find((e) => e.actionId === "safe.noise")).toBeUndefined();
+    });
+
+    it("preserves FIFO when ring is full of same-tier entries (confirm on confirm)", () => {
+      // Fill the ring with 50 distinct confirm entries
+      for (let i = 0; i < 50; i++) {
+        emit({ actionId: `confirm.${i}`, danger: "confirm", timestamp: Date.now() + i * 1000 });
+      }
+
+      // One more confirm — oldest should be evicted (standard FIFO)
+      emit({ actionId: "confirm.50", danger: "confirm", timestamp: Date.now() + 50_000 });
+
+      const after = service.getRecentActions();
+      expect(after).toHaveLength(50);
+      expect(after[0]!.actionId).toBe("confirm.1");
+      expect(after[49]!.actionId).toBe("confirm.50");
+    });
+
+    it("records danger field on breadcrumb entries", () => {
+      emit({ actionId: "worktree.delete", danger: "confirm" });
+      const recent = service.getRecentActions();
+      expect(recent[0]!.danger).toBe("confirm");
+    });
+
+    it("never evicts a higher-priority entry from a mixed ring (FIFO fix regression)", () => {
+      // One confirm at index 0 (e.g., worktree.delete early in session),
+      // 49 safe entries filling the rest.
+      emit({ actionId: "worktree.delete", danger: "confirm", timestamp: 1 });
+      for (let i = 0; i < 49; i++) {
+        emit({ actionId: `safe.${i}`, danger: "safe", timestamp: 2 + i * 1000 });
+      }
+      expect(service.getRecentActions()).toHaveLength(50);
+      expect(service.getRecentActions()[0]!.actionId).toBe("worktree.delete");
+
+      // Incoming safe — must NOT evict the confirm entry via FIFO shift.
+      emit({ actionId: "safe.49", danger: "safe", timestamp: 60_000 });
+
+      const after = service.getRecentActions();
+      expect(after).toHaveLength(50);
+      expect(after[0]!.actionId).toBe("worktree.delete");
+      expect(after[0]!.danger).toBe("confirm");
+    });
+
+    it("treats restricted as higher priority than confirm", () => {
+      // Fill with 50 confirm entries
+      for (let i = 0; i < 50; i++) {
+        emit({ actionId: `confirm.${i}`, danger: "confirm", timestamp: Date.now() + i * 1000 });
+      }
+      // A restricted entry arrives — should evict the newest confirm
+      emit({ actionId: "restricted.op", danger: "restricted", timestamp: Date.now() + 50_000 });
+
+      const after = service.getRecentActions();
+      expect(after).toHaveLength(50);
+      expect(after[49]!.actionId).toBe("restricted.op");
+      expect(after[49]!.danger).toBe("restricted");
+    });
+  });
+
+  describe("confirmed", () => {
+    it("stores confirmed:true in the breadcrumb and forwards it to Sentry", () => {
+      emit({ actionId: "worktree.delete", confirmed: true });
+      const recent = service.getRecentActions();
+      expect(recent[0]!.confirmed).toBe(true);
+      expect(addBreadcrumbMock).toHaveBeenCalledTimes(1);
+      expect(addBreadcrumbMock.mock.calls[0]![0].confirmed).toBe(true);
+    });
+
+    it("stores confirmed:false — not dropped by truthiness", () => {
+      emit({ actionId: "worktree.delete", confirmed: false });
+      const recent = service.getRecentActions();
+      expect(recent[0]!.confirmed).toBe(false);
+    });
+
+    it("keeps confirmed absent when not provided", () => {
+      emit({ actionId: "safe.action" });
+      const recent = service.getRecentActions();
+      expect(recent[0]!.confirmed).toBeUndefined();
+    });
+
+    it("does not dedup same actionId with different confirmed values", () => {
+      const t = 10_000;
+      emit({ actionId: "worktree.delete", timestamp: t, confirmed: true });
+      emit({ actionId: "worktree.delete", timestamp: t + 50, confirmed: false });
+      const recent = service.getRecentActions();
+      expect(recent).toHaveLength(2);
+      expect(recent[0]!.confirmed).toBe(true);
+      expect(recent[1]!.confirmed).toBe(false);
     });
   });
 });

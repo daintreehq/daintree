@@ -7,6 +7,25 @@
   var exitCode = params.get("exitCode") || "—";
   var project = params.get("project") || "";
   var backupTimestamp = params.get("backupTimestamp");
+  var panelCountParam = params.get("panelCount");
+
+  function parsePanelCount(raw) {
+    if (raw === null || raw === "") return null;
+    var n = Number(raw);
+    if (!isFinite(n) || n < 0 || Math.floor(n) !== n) return null;
+    return n;
+  }
+
+  function parseBackupTimestamp(raw) {
+    if (raw === null) return null;
+    var ts = Number(raw);
+    // 8.64e15 is the ECMAScript Date max; beyond it toLocaleString returns "Invalid Date"
+    if (!isFinite(ts) || ts <= 0 || ts > 8640000000000000) return null;
+    return ts;
+  }
+
+  var panelCount = parsePanelCount(panelCountParam);
+  var backupTimestampValue = parseBackupTimestamp(backupTimestamp);
 
   var COPY = {
     oom: {
@@ -72,18 +91,17 @@
   }
 
   var backupEl = document.getElementById("backup-line");
-  if (backupEl && backupTimestamp) {
-    var ts = Number(backupTimestamp);
-    // 8.64e15 is the ECMAScript Date max; beyond it toLocaleString returns "Invalid Date"
-    if (isFinite(ts) && ts > 0 && ts <= 8640000000000000) {
-      try {
-        var formatted = new Date(ts).toLocaleString();
-        backupEl.textContent = "A workspace backup is available from " + formatted + ".";
-        backupEl.style.display = "";
-      } catch (_err) {
-        // Ignore formatting errors — leave line hidden
-      }
+  var backupFormatted = null;
+  if (backupTimestampValue !== null) {
+    try {
+      backupFormatted = new Date(backupTimestampValue).toLocaleString();
+    } catch (_err) {
+      backupFormatted = null;
     }
+  }
+  if (backupEl && backupFormatted) {
+    backupEl.textContent = "A workspace backup is available from " + backupFormatted + ".";
+    backupEl.style.display = "";
   }
 
   var detailsEl = document.getElementById("crash-details");
@@ -93,7 +111,14 @@
 
   var api = window.electron;
   var statusEl = document.getElementById("status");
-  var buttonIds = ["btn-reload", "btn-reset", "btn-export-diagnostics", "btn-open-logs"];
+  var buttonIds = [
+    "btn-reload",
+    "btn-reset",
+    "btn-export-diagnostics",
+    "btn-open-logs",
+    "btn-reset-confirm",
+    "btn-reset-cancel",
+  ];
 
   function setStatus(message, isError) {
     if (!statusEl) return;
@@ -112,20 +137,26 @@
     if (!api || !api.recovery) return;
     setAllButtonsDisabled(true);
     setStatus(pendingMessage, false);
-    promiseFactory()
-      .then(function (result) {
-        setStatus(
-          typeof successMessage === "function" ? successMessage(result) : successMessage,
-          false
-        );
-      })
-      .catch(function (err) {
-        var message = err && err.message ? err.message : String(err);
-        setStatus(failurePrefix + ": " + message, true);
-      })
-      .finally(function () {
-        setAllButtonsDisabled(false);
-      });
+    try {
+      promiseFactory()
+        .then(function (result) {
+          setStatus(
+            typeof successMessage === "function" ? successMessage(result) : successMessage,
+            false
+          );
+        })
+        .catch(function (err) {
+          var message = err && err.message ? err.message : String(err);
+          setStatus(failurePrefix + ": " + message, true);
+        })
+        .finally(function () {
+          setAllButtonsDisabled(false);
+        });
+    } catch (err) {
+      setAllButtonsDisabled(false);
+      var message = err && err.message ? err.message : String(err);
+      setStatus(failurePrefix + ": " + message, true);
+    }
   }
 
   document.getElementById("btn-reload").addEventListener("click", function () {
@@ -134,11 +165,87 @@
     }
   });
 
-  document.getElementById("btn-reset").addEventListener("click", function () {
-    if (api && api.recovery) {
-      api.recovery.resetAndReload();
+  var resetTriggerBtn = document.getElementById("btn-reset");
+  var resetConfirmSection = document.getElementById("reset-confirm-section");
+  var resetConfirmBtn = document.getElementById("btn-reset-confirm");
+  var resetCancelBtn = document.getElementById("btn-reset-cancel");
+  var resetDescEl = document.getElementById("reset-confirm-description");
+  var resetDetailEl = document.getElementById("reset-confirm-detail");
+
+  function pluralize(n, singular, plural) {
+    return n === 1 ? singular : plural;
+  }
+
+  function buildResetPreview() {
+    if (resetDescEl) {
+      var parts = ["This will clear all open sessions and reset sidebar and panel layout."];
+      if (panelCount !== null && panelCount > 0) {
+        parts.push(
+          "You have " +
+            panelCount +
+            " open " +
+            pluralize(panelCount, "session", "sessions") +
+            " that won't be recoverable after reset."
+        );
+      }
+      resetDescEl.textContent = parts.join(" ");
     }
-  });
+    if (resetDetailEl && backupFormatted) {
+      resetDetailEl.textContent =
+        "A workspace backup from " +
+        backupFormatted +
+        " will be detached and won't auto-restore after reset.";
+      resetDetailEl.style.display = "";
+    }
+  }
+
+  function openResetConfirm() {
+    if (!resetConfirmSection || !resetTriggerBtn) return;
+    buildResetPreview();
+    resetConfirmSection.removeAttribute("inert");
+    resetConfirmSection.classList.add("open");
+    resetTriggerBtn.setAttribute("aria-expanded", "true");
+    if (resetCancelBtn) {
+      resetCancelBtn.focus();
+    }
+  }
+
+  function closeResetConfirm() {
+    if (!resetConfirmSection || !resetTriggerBtn) return;
+    resetConfirmSection.classList.remove("open");
+    resetConfirmSection.setAttribute("inert", "");
+    resetTriggerBtn.setAttribute("aria-expanded", "false");
+    resetTriggerBtn.focus();
+  }
+
+  if (resetTriggerBtn) {
+    resetTriggerBtn.addEventListener("click", openResetConfirm);
+  }
+
+  if (resetCancelBtn) {
+    resetCancelBtn.addEventListener("click", closeResetConfirm);
+  }
+
+  if (resetConfirmBtn) {
+    resetConfirmBtn.addEventListener("click", function () {
+      if (!api || !api.recovery) return;
+      setAllButtonsDisabled(true);
+      setStatus("Resetting workspace…", false);
+      function handleResetFailure(err) {
+        setAllButtonsDisabled(false);
+        var message = err && err.message ? err.message : String(err);
+        setStatus("Failed to reset workspace: " + message, true);
+      }
+      try {
+        var result = api.recovery.resetAndReload();
+        if (result && typeof result.then === "function") {
+          result.catch(handleResetFailure);
+        }
+      } catch (err) {
+        handleResetFailure(err);
+      }
+    });
+  }
 
   var exportBtn = document.getElementById("btn-export-diagnostics");
   if (exportBtn) {
@@ -149,7 +256,7 @@
           return api.recovery.exportDiagnostics();
         },
         function (saved) {
-          return saved ? "Diagnostics saved." : "Save cancelled.";
+          return saved ? "Diagnostics saved" : "Save cancelled";
         },
         "Failed to export diagnostics"
       );
@@ -164,7 +271,7 @@
         function () {
           return api.recovery.openLogs();
         },
-        "Logs opened.",
+        "Logs opened",
         "Failed to open logs"
       );
     });

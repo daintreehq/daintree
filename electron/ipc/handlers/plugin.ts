@@ -12,6 +12,12 @@ import {
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
+import {
+  getRegisteredForgeProviders,
+  type RegisteredForgeProvider,
+} from "../../services/forgeProviderRegistry.js";
+import { getFileDecorationImpls } from "../../services/fileDecorationRegistry.js";
+import type { FileDecoration } from "../../../shared/types/forge.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
   LoadedPluginInfo,
@@ -96,6 +102,121 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
   return getPluginPanelKinds();
 }
 
+async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
+  return getRegisteredForgeProviders();
+}
+
+/**
+ * Per-provider budget for a single `provideDecorations` call. A provider that
+ * never settles its promise would otherwise hang the whole IPC invocation
+ * (and the renderer's pull) indefinitely — `Promise.allSettled` only handles
+ * rejection, not a promise that simply never resolves. On expiry the slow
+ * provider is treated like a rejecting one (skipped + logged); healthy
+ * providers for the same scope are unaffected.
+ */
+const DECORATION_PROVIDER_TIMEOUT_MS = 3000;
+
+const DECORATION_TIMEOUT = Symbol("decoration-timeout");
+
+/**
+ * A non-empty string is "present" for merge purposes. Empty string counts as
+ * absent so it can't block a later provider from supplying a real value.
+ */
+function presentString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Resolve per-file decorations for `scope` over the given `paths` by invoking
+ * every plugin impl whose declared scopes match. Results merge with
+ * first-writer-wins semantics per field (badge/tooltip/color independently):
+ * the first provider in plugin load order that returns a non-empty value for a
+ * field on a path keeps it. The host treats every decoration opaquely — it
+ * never inspects what a badge means. A provider that throws, rejects, or
+ * exceeds {@link DECORATION_PROVIDER_TIMEOUT_MS} is skipped (logged) so one
+ * bad plugin can't blank or stall the whole row. Only the requested paths are
+ * returned — a provider that decorates unrequested paths can't leak them.
+ */
+async function handleFileDecorationsGet(
+  scope: string,
+  paths: string[]
+): Promise<Record<string, FileDecoration>> {
+  if (typeof scope !== "string" || scope.length === 0) return {};
+  if (!Array.isArray(paths) || paths.length === 0) return {};
+  const cleanPaths = [
+    ...new Set(paths.filter((p): p is string => typeof p === "string" && p.length > 0)),
+  ];
+  if (cleanPaths.length === 0) return {};
+  const requested = new Set(cleanPaths);
+
+  const impls = getFileDecorationImpls(scope);
+  if (impls.length === 0) return {};
+
+  const merged: Record<string, FileDecoration> = {};
+  const results = await Promise.allSettled(
+    impls.map(({ impl }) =>
+      Promise.race([
+        impl.provideDecorations(scope, cleanPaths),
+        new Promise<typeof DECORATION_TIMEOUT>((resolve) =>
+          setTimeout(() => resolve(DECORATION_TIMEOUT), DECORATION_PROVIDER_TIMEOUT_MS)
+        ),
+      ])
+    )
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const { pluginId, contributionId } = impls[i];
+    if (r.status === "rejected") {
+      console.warn(
+        `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
+        r.reason
+      );
+      continue;
+    }
+    if (r.value === DECORATION_TIMEOUT) {
+      console.warn(
+        `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms for scope "${scope}"`
+      );
+      continue;
+    }
+    if (!r.value || typeof r.value !== "object") continue;
+    for (const [path, decoration] of Object.entries(r.value)) {
+      // Enforce the requested-paths contract at the host boundary so a
+      // misbehaving provider can't widen the result set.
+      if (!requested.has(path)) continue;
+      if (!decoration || typeof decoration !== "object") continue;
+      const target = merged[path] ?? (merged[path] = {});
+      if (target.badge === undefined) {
+        const badge = presentString(decoration.badge);
+        if (badge !== undefined) target.badge = badge;
+      }
+      if (target.tooltip === undefined) {
+        const tooltip = presentString(decoration.tooltip);
+        if (tooltip !== undefined) target.tooltip = tooltip;
+      }
+      if (target.color === undefined) {
+        const color = presentString(decoration.color);
+        if (color !== undefined) target.color = color;
+      }
+    }
+  }
+
+  // Drop paths that ended up with no fields (a provider returned an entry but
+  // every field was empty) so the renderer's "decorated?" check stays cheap.
+  for (const [path, decoration] of Object.entries(merged)) {
+    if (
+      decoration.badge === undefined &&
+      decoration.tooltip === undefined &&
+      decoration.color === undefined
+    ) {
+      delete merged[path];
+    }
+  }
+
+  return merged;
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -107,6 +228,8 @@ export const pluginNamespace = defineIpcNamespace({
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
+    getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
+    getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
   },
 });
 

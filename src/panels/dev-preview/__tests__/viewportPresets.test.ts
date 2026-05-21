@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { ViewportPresetId } from "@shared/types/panel";
 
-import { VIEWPORT_PRESET_LIST, VIEWPORT_PRESETS, getViewportPreset } from "../viewportPresets";
+import {
+  VIEWPORT_PRESET_LIST,
+  VIEWPORT_PRESETS,
+  getViewportPreset,
+  getEffectiveViewportSize,
+  computeFitScale,
+} from "../viewportPresets";
 
 describe("VIEWPORT_PRESETS", () => {
   it("renders smallest-to-largest in the chip row order", () => {
@@ -63,5 +69,37 @@ describe("getViewportPreset", () => {
   it("falls back to iphone when given a stale persisted id", () => {
     const stale = "nokia" as unknown as ViewportPresetId;
     expect(getViewportPreset(stale)).toBe(VIEWPORT_PRESETS.iphone);
+  });
+});
+
+describe("getEffectiveViewportSize", () => {
+  it("returns preset dimensions when not rotated", () => {
+    expect(getEffectiveViewportSize("ipad", false)).toEqual({ width: 820, height: 1180 });
+  });
+
+  it("swaps width and height when rotated to landscape", () => {
+    expect(getEffectiveViewportSize("ipad", true)).toEqual({ width: 1180, height: 820 });
+    expect(getEffectiveViewportSize("galaxy", true)).toEqual({ width: 780, height: 360 });
+  });
+});
+
+describe("computeFitScale", () => {
+  it("scales a tall viewport down to fit the limiting dimension", () => {
+    // iPad portrait 820×1180 in a 900×800 pane — height is the constraint
+    expect(computeFitScale(900, 800, 820, 1180)).toBeCloseTo(800 / 1180, 5);
+  });
+
+  it("scales a wide viewport down when width is the constraint", () => {
+    // iPad landscape 1180×820 in a narrow 300×1200 pane — width is the constraint
+    expect(computeFitScale(300, 1200, 1180, 820)).toBeCloseTo(300 / 1180, 5);
+  });
+
+  it("never upscales a small viewport (caps at 1)", () => {
+    // Galaxy 360×780 in a huge 1920×1200 pane stays device-accurate
+    expect(computeFitScale(1920, 1200, 360, 780)).toBe(1);
+  });
+
+  it("returns 1 when the container has not been measured yet", () => {
+    expect(computeFitScale(0, 0, 820, 1180)).toBe(1);
   });
 });

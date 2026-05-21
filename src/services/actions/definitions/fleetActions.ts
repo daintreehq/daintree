@@ -81,6 +81,14 @@ function requestConfirmation(kind: FleetPendingActionKind, targets: TerminalInst
   });
 }
 
+/**
+ * Module-level re-entrancy flag for `fleet.retryFailures`. A fast double-
+ * click on the banner's "Retry failed" button would otherwise dispatch
+ * two concurrent broadcasts against the same target set; for payloads
+ * ending in `\r` that double-executes the command in every pane.
+ */
+let retryInFlight = false;
+
 function clearPendingIf(kind: FleetPendingActionKind): void {
   const pending = useFleetPendingActionStore.getState().pending;
   if (pending && pending.kind === kind) {
@@ -198,6 +206,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Restarts every armed agent terminal. All scrollback and session state are lost.",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
@@ -223,6 +233,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Removes every armed terminal panel. All scrollback and session state are lost.",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
@@ -248,6 +260,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Moves every armed terminal to trash. Scrollback is lost for each trashed terminal.",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
@@ -293,7 +307,13 @@ export function registerFleetActions(actions: ActionRegistry): void {
     run: async () => {
       const flag = useFleetScopeFlagStore.getState();
       if (!flag.isHydrated || flag.mode !== "scoped") return;
-      useWorktreeSelectionStore.getState().exitFleetScope();
+      // Read the live token synchronously at dispatch time and pass it
+      // through. `exitFleetScope` re-validates it against the store before any
+      // async work, so a scope torn down between this read and the call is a
+      // structural no-op rather than a misfired restore.
+      const token = useWorktreeSelectionStore.getState()._fleetScopeToken;
+      if (token === null) return;
+      useWorktreeSelectionStore.getState().exitFleetScope(token);
     },
   }));
 
@@ -307,14 +327,36 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Re-entrancy guard: a fast double-click on "Retry failed" would
+      // otherwise dispatch two concurrent broadcasts against the same
+      // target set before either's dismissId loop runs — for command-
+      // terminating payloads (`"make deploy\r"`) that double-executes
+      // the command.
+      if (retryInFlight) return;
       const { failedIds, payload } = useFleetFailureStore.getState();
       if (payload == null || failedIds.size === 0) return;
       // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
       const targets = Array.from(failedIds);
-      const result = await broadcastFleetLiteralPaste(payload, targets);
-      const stillFailed = new Set(result.failedIds);
-      for (const id of targets) {
-        if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+      retryInFlight = true;
+      try {
+        const result = await broadcastFleetLiteralPaste(payload, targets);
+        // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
+        // keep firing into the same dead pipes. The retry chip clears for them
+        // too — the user already saw them once; surfacing the same id again
+        // after we've stopped including it in broadcasts would be noise.
+        if (result.permanentlyFailedIds.length > 0) {
+          const arming = useFleetArmingStore.getState();
+          for (const id of result.permanentlyFailedIds) {
+            arming.disarmId(id);
+            useFleetFailureStore.getState().dismissId(id);
+          }
+        }
+        const stillFailed = new Set(result.transientlyFailedIds);
+        for (const id of targets) {
+          if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+        }
+      } finally {
+        retryInFlight = false;
       }
     },
   }));
@@ -412,6 +454,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
           priority: "low",
         });
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't save fleet",
@@ -442,7 +485,20 @@ export function registerFleetActions(actions: ActionRegistry): void {
         const scope = (current.fleetSavedScopes ?? []).find((s) => s.id === id);
         if (!scope) return;
         applySavedScope(scope);
+
+        const now = Date.now();
+        scope.lastUsedAt = now;
+        scope.usageHistory = [...(scope.usageHistory ?? []), now].slice(-20);
+
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        projectClient.saveSettings(projectId, current).catch((err) => {
+          console.warn("Failed to persist fleet recency stamp:", err);
+        });
+        if (useProjectSettingsStore.getState().projectId === projectId) {
+          useProjectSettingsStore.getState().setSettings(current);
+        }
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't recall fleet",
@@ -461,6 +517,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Permanently deletes a saved fleet. The named fleet configuration cannot be recovered.",
     argsSchema: idArgSchema,
     run: async (args: unknown) => {
       const { id } = idArgSchema.parse(args);
@@ -479,6 +537,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
           useProjectSettingsStore.getState().setSettings(nextSettings);
         }
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't delete fleet",

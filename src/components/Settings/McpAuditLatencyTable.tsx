@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { McpAuditRecord } from "@shared/types";
@@ -12,11 +12,21 @@ interface McpAuditLatencyTableProps {
   includeRecord?: (record: McpAuditRecord) => boolean;
 }
 
-interface ToolStats {
-  toolId: string;
-  count: number;
+interface ToolLatencyBlock {
   p50: number;
   p95: number;
+  count: number;
+}
+
+interface ToolLatencyStats {
+  toolId: string;
+  success: ToolLatencyBlock;
+  failed: ToolLatencyBlock;
+}
+
+interface SloBand {
+  label: string;
+  className: string;
 }
 
 /**
@@ -33,34 +43,71 @@ function percentile(sortedAsc: number[], p: number): number {
   return lower + f * (upper - lower);
 }
 
+function computeBlock(durations: number[]): ToolLatencyBlock {
+  if (durations.length === 0) return { p50: 0, p95: 0, count: 0 };
+  const sorted = [...durations].sort((a, b) => a - b);
+  return {
+    p50: Math.round(percentile(sorted, 0.5)),
+    p95: Math.round(percentile(sorted, 0.95)),
+    count: sorted.length,
+  };
+}
+
+function sloBand(p95: number): SloBand {
+  if (p95 <= 0) return { label: "", className: "" };
+  if (p95 < 200) return { label: "Instant", className: "text-status-success" };
+  if (p95 < 1000) return { label: "Fast", className: "text-status-success" };
+  if (p95 <= 5000) return { label: "Standard", className: "text-status-warning" };
+  return { label: "Slow", className: "text-status-danger" };
+}
+
 export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatencyTableProps) {
   const [isOpen, setIsOpen] = useState(true);
 
-  const stats = useMemo<ToolStats[]>(() => {
-    // Only success records meaningfully reflect tool latency. Errors and
-    // unauthorized results often short-circuit before the work runs and
-    // would skew p50/p95 downward.
-    const buckets = new Map<string, number[]>();
+  const stats = useMemo<ToolLatencyStats[]>(() => {
+    const successBuckets = new Map<string, number[]>();
+    const failedBuckets = new Map<string, number[]>();
     for (const record of records) {
       if (includeRecord && !includeRecord(record)) continue;
-      if (record.result !== "success") continue;
-      const list = buckets.get(record.toolId);
+      const map = record.result === "success" ? successBuckets : failedBuckets;
+      const list = map.get(record.toolId);
       if (list) list.push(record.durationMs);
-      else buckets.set(record.toolId, [record.durationMs]);
+      else map.set(record.toolId, [record.durationMs]);
     }
-    const out: ToolStats[] = [];
-    for (const [toolId, durations] of buckets) {
-      const sorted = [...durations].sort((a, b) => a - b);
+    const allToolIds = new Set([...successBuckets.keys(), ...failedBuckets.keys()]);
+    const out: ToolLatencyStats[] = [];
+    for (const toolId of allToolIds) {
       out.push({
         toolId,
-        count: sorted.length,
-        p50: Math.round(percentile(sorted, 0.5)),
-        p95: Math.round(percentile(sorted, 0.95)),
+        success: computeBlock(successBuckets.get(toolId) ?? []),
+        failed: computeBlock(failedBuckets.get(toolId) ?? []),
       });
     }
-    out.sort((a, b) => b.p95 - a.p95);
+    out.sort(
+      (a, b) => Math.max(b.success.p95, b.failed.p95) - Math.max(a.success.p95, a.failed.p95)
+    );
     return out;
   }, [records, includeRecord]);
+
+  const hasRecords = stats.length > 0;
+
+  const renderBlock = (block: ToolLatencyBlock, blockLabel: string) => {
+    if (block.count === 0) return null;
+    const band = sloBand(block.p95);
+    return (
+      <tr className="text-daintree-text/70">
+        <td className="py-1 pl-6 pr-2 text-[10px] text-daintree-text/50 truncate">{blockLabel}</td>
+        <td className="py-1 px-2 text-right text-daintree-text/50 tabular-nums">{block.count}</td>
+        <td className="py-1 px-2 text-right tabular-nums">{block.p50}ms</td>
+        <td className="py-1 pl-2 text-right tabular-nums">
+          {block.p95}ms
+          {band.label && (
+            <span className={cn("ml-1.5 text-[10px]", band.className)}>{band.label}</span>
+          )}
+        </td>
+      </tr>
+    );
+  };
 
   return (
     <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
@@ -82,34 +129,38 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
           />
           <span>
             Latency by tool
-            {stats.length > 0 && (
-              <span className="text-daintree-text/50"> ({stats.length} tools)</span>
-            )}
+            {hasRecords && <span className="text-daintree-text/50"> ({stats.length} tools)</span>}
           </span>
         </span>
       </button>
       {isOpen && (
         <div className="px-3 pb-3 pt-1">
-          {stats.length === 0 ? (
-            <p className="text-xs text-daintree-text/50">No successful dispatches recorded yet.</p>
+          {!hasRecords ? (
+            <p className="text-xs text-daintree-text/50">No dispatches recorded yet.</p>
           ) : (
             <table className="w-full table-fixed text-xs font-mono tabular-nums">
               <thead>
                 <tr className="text-daintree-text/50">
                   <th className="text-left font-medium py-1 pr-2 truncate">Tool</th>
-                  <th className="text-right font-medium py-1 px-2 w-14">n</th>
-                  <th className="text-right font-medium py-1 px-2 w-20">p50</th>
-                  <th className="text-right font-medium py-1 pl-2 w-20">p95</th>
+                  <th className="text-right font-medium py-1 px-2 w-12">n</th>
+                  <th className="text-right font-medium py-1 px-2 w-18">p50</th>
+                  <th className="text-right font-medium py-1 pl-2 w-30">p95</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-daintree-border">
+              <tbody className="divide-y divide-daintree-border/50">
                 {stats.map((row) => (
-                  <tr key={row.toolId} className="text-daintree-text/80">
-                    <td className="py-1 pr-2 truncate">{row.toolId}</td>
-                    <td className="py-1 px-2 text-right text-daintree-text/60">{row.count}</td>
-                    <td className="py-1 px-2 text-right">{row.p50}ms</td>
-                    <td className="py-1 pl-2 text-right">{row.p95}ms</td>
-                  </tr>
+                  <React.Fragment key={row.toolId}>
+                    <tr className="text-daintree-text/80">
+                      <td className="py-1 pr-2 truncate font-medium">{row.toolId}</td>
+                      <td className="py-1 px-2 text-right text-daintree-text/60 tabular-nums">
+                        {row.success.count + row.failed.count}
+                      </td>
+                      <td />
+                      <td />
+                    </tr>
+                    {renderBlock(row.success, "success")}
+                    {renderBlock(row.failed, "failed")}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

@@ -123,6 +123,7 @@ describe("agentActions adversarial", () => {
     expect(actions.has("agent.claude")).toBe(true);
     expect(actions.has("agent.codex")).toBe(true);
     expect(actions.has("agent.terminal")).toBe(true);
+    expect(actions.has("agent.browser")).toBe(true);
   });
 
   it("each generated agent.<id> launches its own agent id (no closure capture bug)", async () => {
@@ -132,6 +133,7 @@ describe("agentActions adversarial", () => {
     await callAction(actions, "agent.claude");
     await callAction(actions, "agent.codex");
     await callAction(actions, "agent.terminal");
+    await callAction(actions, "agent.browser");
 
     expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(1, "claude", {
       location: undefined,
@@ -142,6 +144,37 @@ describe("agentActions adversarial", () => {
       spawnedBy: undefined,
     });
     expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(3, "terminal", {
+      location: undefined,
+      spawnedBy: undefined,
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(4, "browser", {
+      location: undefined,
+      spawnedBy: undefined,
+    });
+  });
+
+  it("shortcut launch actions accept omitted args through ActionService dispatch", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const terminal = await service.dispatch("agent.terminal", undefined, { source: "keybinding" });
+    const browser = await service.dispatch("agent.browser", undefined, { source: "keybinding" });
+
+    expect(terminal.ok).toBe(true);
+    expect(browser.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(1, "terminal", {
+      location: undefined,
+      spawnedBy: undefined,
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenNthCalledWith(2, "browser", {
       location: undefined,
       spawnedBy: undefined,
     });

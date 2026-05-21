@@ -11,6 +11,7 @@ const shared = vi.hoisted(() => {
   return {
     forkMock: vi.fn(),
     appMock,
+    trackEventMock: vi.fn(),
   };
 });
 
@@ -20,6 +21,10 @@ vi.mock("electron", () => ({
   },
   UtilityProcess: EventEmitter,
   app: shared.appMock,
+}));
+
+vi.mock("../TelemetryService.js", () => ({
+  trackEvent: shared.trackEventMock,
 }));
 
 interface MockChild extends EventEmitter {
@@ -48,6 +53,11 @@ describe("MainProcessWatchdogClient", () => {
     vi.useFakeTimers();
     vi.resetModules();
     vi.clearAllMocks();
+    // Drain any lingering mockReturnValueOnce queue from prior tests —
+    // `clearAllMocks()` resets call history but not queued implementations,
+    // so a previous test's unconsumed queue can hijack the next constructor's
+    // fork() and attach the exit handler to a stale child.
+    shared.forkMock.mockReset();
     mockChild = createMockChild();
     shared.forkMock.mockReturnValue(mockChild);
     ({ MainProcessWatchdogClient: WatchdogClient } =
@@ -164,37 +174,37 @@ describe("MainProcessWatchdogClient", () => {
   });
 
   it("schedules a restart with backoff when the watchdog exits unexpectedly", () => {
-    new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 3 });
+    new WatchdogClient({ mainPid: 4242 });
     expect(shared.forkMock).toHaveBeenCalledTimes(1);
 
     // Simulate a crash.
     mockChild.emit("exit", 1);
 
-    // Advance past the maximum cap (10s) so the timer always fires regardless
-    // of jitter — fork must be called again.
+    // Advance past the maximum cap (5s for the watchdog) so the timer always
+    // fires regardless of jitter — fork must be called again.
     const nextChild = createMockChild();
     shared.forkMock.mockReturnValue(nextChild);
-    vi.advanceTimersByTime(11_000);
+    vi.advanceTimersByTime(6_000);
 
     expect(shared.forkMock).toHaveBeenCalledTimes(2);
   });
 
-  it("stops restarting after maxRestartAttempts (deadlock detection becomes inactive)", () => {
-    new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 2 });
+  it("stops restarting after the sliding-window crash threshold (deadlock detection becomes inactive)", () => {
+    new WatchdogClient({ mainPid: 4242 });
 
-    // Simulate repeated crashes — track when each new child appears so we
-    // can attach the next exit emission to it.
+    // Simulate 3 crashes within the window — the 3rd must hit the cap.
     let currentChild = mockChild;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const next = createMockChild();
       shared.forkMock.mockReturnValueOnce(next);
       currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(11_000);
+      vi.advanceTimersByTime(6_000);
       currentChild = next;
     }
 
-    // Initial fork + 2 restart attempts = 3 total. The 4th is suppressed.
-    expect(shared.forkMock.mock.calls.length).toBeLessThanOrEqual(3);
+    // Initial fork + 2 restart attempts = 3 total. The 3rd crash trips
+    // CRASH_THRESHOLD and no further fork is scheduled.
+    expect(shared.forkMock.mock.calls.length).toBe(3);
   });
 
   it("does not throw if postMessage fails (channel torn down)", () => {
@@ -232,7 +242,7 @@ describe("MainProcessWatchdogClient", () => {
   });
 
   it("a watchdog that crashes during sleep restarts in paused state (sleep sent after arming ping)", () => {
-    const client = new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 3 });
+    const client = new WatchdogClient({ mainPid: 4242 });
     client.pause();
 
     // Simulate the watchdog crashing during sleep.
@@ -241,7 +251,7 @@ describe("MainProcessWatchdogClient", () => {
     mockChild.emit("exit", 1);
 
     // Drive the restart timer past the cap so the new fork happens.
-    vi.advanceTimersByTime(11_000);
+    vi.advanceTimersByTime(6_000);
     expect(shared.forkMock).toHaveBeenCalledTimes(2);
 
     // The replacement child must have received both an arming ping AND a
@@ -279,34 +289,196 @@ describe("MainProcessWatchdogClient", () => {
     next.dispose();
   });
 
-  it("restartAttempts resets after the watchdog stays alive long enough to be considered stable", () => {
-    new WatchdogClient({ mainPid: 4242, maxRestartAttempts: 2 });
+  it("clears the crash window after STABILITY_TIMEOUT_MS of clean running", () => {
+    new WatchdogClient({ mainPid: 4242 });
 
-    // Crash once → restart triggered, attempts=1.
+    // Two crashes in quick succession.
+    let currentChild = mockChild;
+    for (let i = 0; i < 2; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    expect(shared.forkMock).toHaveBeenCalledTimes(3);
+
+    // 5 minutes of clean running clears the window via the stability timer.
+    vi.advanceTimersByTime(300_000);
+
+    // 3 more crashes should be tolerated — the window has reset, so the
+    // first two restart while the third trips the threshold again.
+    for (let i = 0; i < 3; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Initial fork + 2 + 2 = 5 (the 3rd post-reset crash trips CRASH_THRESHOLD).
+    expect(shared.forkMock.mock.calls.length).toBe(5);
+  });
+
+  it("does not clear the crash window on successful fork (defeats fast crash→fork→crash loops)", () => {
+    // Before this fix, a brief 31s of uptime cleared `restartAttempts`,
+    // letting a "crash every 35s" loop run forever. The sliding window only
+    // clears via the stability timer firing after a full clean stretch —
+    // a successful fork alone must NOT reset it.
+    new WatchdogClient({ mainPid: 4242 });
+
+    let currentChild = mockChild;
+    for (let i = 0; i < 4; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      // Advance just past the backoff cap (5s) so each fork happens but not
+      // long enough for the 5-minute stability timer to fire.
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Initial fork + 2 restart attempts = 3 total. The 3rd crash trips
+    // the cap; no 4th fork happens despite each fork having "succeeded".
+    expect(shared.forkMock.mock.calls.length).toBe(3);
+  });
+
+  it("sliding window decays — crashes older than RAPID_CRASH_WINDOW_MS are dropped", () => {
+    new WatchdogClient({ mainPid: 4242 });
+
+    // First crash.
     let currentChild = mockChild;
     let next = createMockChild();
     shared.forkMock.mockReturnValueOnce(next);
     currentChild.emit("exit", 1);
-    vi.advanceTimersByTime(11_000);
+    vi.advanceTimersByTime(6_000);
     currentChild = next;
     expect(shared.forkMock).toHaveBeenCalledTimes(2);
 
-    // Advance past the stability reset window so restartAttempts goes back to 0.
-    vi.advanceTimersByTime(31_000);
+    // Wait past the 5-minute window so the old crash decays out on the
+    // next trim — but the stability timer also clears the array, so this
+    // exercises the trim path. Step the clock incrementally so the
+    // stability timer fires at 300s and clears the array.
+    vi.advanceTimersByTime(310_000);
 
-    // Two more crashes should now be tolerated (counter has reset).
+    // Three more crashes — the prior crash is out of the window AND was
+    // cleared by the stability timer, so the third trips the threshold.
+    for (let i = 0; i < 3; i++) {
+      next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Initial + 1 + 2 = 4 forks. The 3rd crash post-reset trips the cap.
+    expect(shared.forkMock.mock.calls.length).toBe(4);
+  });
+
+  it("sliding window trims crashes older than RAPID_CRASH_WINDOW_MS without relying on the stability timer", () => {
+    // Isolates the per-crash filter trim from the stability timer's bulk
+    // clear. After a single crash, advance past the window but stop short
+    // of `STABILITY_TIMEOUT_MS` to keep the stability timer pending — the
+    // next crash must observe an empty window via the filter, not the
+    // timer. Both knobs happen to be 300s in this codebase, so we use a
+    // first crash that's well inside the window, then a brief restart, so
+    // the stability timer is restarted by the new fork and never fires.
+    new WatchdogClient({ mainPid: 4242 });
+
+    let currentChild = mockChild;
+    // First crash — schedules a restart and a fresh stability timer.
+    let next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    currentChild.emit("exit", 1);
+    vi.advanceTimersByTime(6_000);
+    currentChild = next;
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+
+    // Crash again at t≈12s — second crash in window.
     next = createMockChild();
     shared.forkMock.mockReturnValueOnce(next);
     currentChild.emit("exit", 1);
-    vi.advanceTimersByTime(11_000);
+    vi.advanceTimersByTime(6_000);
     currentChild = next;
     expect(shared.forkMock).toHaveBeenCalledTimes(3);
 
-    next = createMockChild();
-    shared.forkMock.mockReturnValueOnce(next);
-    currentChild.emit("exit", 1);
-    vi.advanceTimersByTime(11_000);
-    expect(shared.forkMock).toHaveBeenCalledTimes(4);
+    // Advance past RAPID_CRASH_WINDOW_MS (300s) so the prior two crash
+    // timestamps decay out of the filter. The stability timer restarts on
+    // every fork, so it last started at t≈18s and would fire at t≈318s.
+    // Stop just before that.
+    vi.advanceTimersByTime(295_000);
+
+    // Now crash 3 more times. If trimming works, each crash starts a fresh
+    // window, so we get 2 more restarts before the 3rd hits the cap.
+    for (let i = 0; i < 3; i++) {
+      next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Initial(1) + 2 + 2 = 5. If trimming were broken, the first post-decay
+    // crash would land as the 3rd entry in the window and trip the cap
+    // immediately — count would stay at 3.
+    expect(shared.forkMock.mock.calls.length).toBe(5);
+  });
+
+  it("dispose() while a restart timer is pending suppresses the restart fork", () => {
+    // Pre-fix regression: if `dispose()` only cleared the timer but the
+    // timer callback didn't recheck `isDisposed`, a near-instant
+    // dispose-after-crash race could still spawn a watchdog after we
+    // committed to shutting down.
+    const client = new WatchdogClient({ mainPid: 4242 });
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+
+    // Crash → restart timer scheduled.
+    mockChild.emit("exit", 1);
+
+    // Dispose before the restart cap elapses.
+    client.dispose();
+
+    // Advance past the cap — the restart fork must NOT happen.
+    vi.advanceTimersByTime(10_000);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses watchdog-specific jitter constants distinct from PtyHostLifecycle", () => {
+    // The watchdog must not share jitter ranges with PtyHostLifecycle —
+    // correlated restart delays trigger simultaneous fork storms when both
+    // services crash from a shared trigger (OOM, signal). Spy on Math.random
+    // to capture both endpoints of the floor/cap range.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    new WatchdogClient({ mainPid: 4242 });
+
+    mockChild.emit("exit", 1);
+    expect(randomSpy).toHaveBeenCalled();
+
+    // floor (random=0) → delay = RESTART_FLOOR_MS = 250ms. PtyHostLifecycle
+    // uses floor=100; the watchdog's 250 means at the floor the two cannot
+    // collide within the 100ms collision-window definition.
+    const nextChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(nextChild);
+    vi.advanceTimersByTime(249);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1); // not yet
+    vi.advanceTimersByTime(2);
+    expect(shared.forkMock).toHaveBeenCalledTimes(2); // fired at 250ms
+
+    randomSpy.mockRestore();
+  });
+
+  it("jitter cap is bounded by RESTART_CAP_MAX_MS even at high attempt counts", () => {
+    // Spy with random=0.9999 so the delay lands just under the cap.
+    vi.spyOn(Math, "random").mockReturnValue(0.9999);
+    new WatchdogClient({ mainPid: 4242 });
+
+    let currentChild = mockChild;
+    for (let i = 0; i < 2; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      // 6s is past RESTART_CAP_MAX_MS (5s) — the second restart MUST fire.
+      vi.advanceTimersByTime(6_000);
+      currentChild = next;
+    }
+    // Both restarts fired within the 5s cap → 3 total forks.
+    expect(shared.forkMock.mock.calls.length).toBe(3);
   });
 
   it("pause() before resume() is a no-op when called on an already-paused client", () => {
@@ -318,5 +490,152 @@ describe("MainProcessWatchdogClient", () => {
       (c) => (c[0] as { type?: string })?.type === "sleep"
     );
     expect(sleeps).toHaveLength(0);
+  });
+
+  it("fires onDisabled listener exactly once when the restart cap is hit", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // Drive 3 crash cycles within the sliding window — the 3rd trips
+    // CRASH_THRESHOLD and notifies once.
+    let currentChild = mockChild;
+    for (let i = 0; i < 3; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 137);
+      vi.advanceTimersByTime(11_000);
+      currentChild = next;
+    }
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const payload = listener.mock.calls[0][0] as {
+      attemptCount: number;
+      lastExitCode: number | null;
+      timestamp: number;
+    };
+    expect(payload.attemptCount).toBe(3);
+    expect(payload.lastExitCode).toBe(137);
+    expect(typeof payload.timestamp).toBe("number");
+    client.dispose();
+  });
+
+  it("sends a watchdog_disabled telemetry event when the restart cap is hit", () => {
+    shared.trackEventMock.mockClear();
+    const client = new WatchdogClient({ mainPid: 4242 });
+
+    // 3 crashes within the sliding window — the 3rd trips CRASH_THRESHOLD.
+    let currentChild = mockChild;
+    for (let i = 0; i < 3; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(11_000);
+      currentChild = next;
+    }
+
+    expect(shared.trackEventMock).toHaveBeenCalledTimes(1);
+    const [eventName, props] = shared.trackEventMock.mock.calls[0];
+    expect(eventName).toBe("watchdog_disabled");
+    expect(props).toMatchObject({
+      attemptCount: 3,
+      lastExitCode: 1,
+    });
+    client.dispose();
+  });
+
+  it("does not call onDisabled or telemetry on intermediate restarts below the cap", () => {
+    shared.trackEventMock.mockClear();
+    const client = new WatchdogClient({ mainPid: 4242 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // One crash below the cap.
+    const next = createMockChild();
+    shared.forkMock.mockReturnValueOnce(next);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(shared.trackEventMock).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
+  it("does not refire onDisabled when scheduleRestart is invoked again while still capped", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // 3 crashes trip CRASH_THRESHOLD — listener fires once.
+    let currentChild = mockChild;
+    for (let i = 0; i < 3; i++) {
+      const next = createMockChild();
+      shared.forkMock.mockReturnValueOnce(next);
+      currentChild.emit("exit", 1);
+      vi.advanceTimersByTime(11_000);
+      currentChild = next;
+    }
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // A second cap-hit before restart() is a no-op — no extra fires.
+    // (No fork happens after the cap, but defensively assert.)
+    vi.advanceTimersByTime(11_000);
+    expect(listener).toHaveBeenCalledTimes(1);
+    client.dispose();
+  });
+
+  it("restart() resets the crash window, forks a fresh child, and re-arms the disabled listener", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    const listener = vi.fn();
+    client.onDisabled(listener);
+
+    // First cap-hit cycle: queue 2 replacements (3rd crash hits the cap and
+    // does not fork). Crashes 1 & 2 consume the queue; crash 3 trips
+    // CRASH_THRESHOLD and notifies once.
+    const second = createMockChild();
+    const third = createMockChild();
+    shared.forkMock.mockReturnValueOnce(second).mockReturnValueOnce(third);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    second.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    third.emit("exit", 1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Manual restart — clears crashTimestamps + disabledNotified and forks fresh.
+    const forksBeforeRestart = shared.forkMock.mock.calls.length;
+    const fresh = createMockChild();
+    shared.forkMock.mockReturnValueOnce(fresh);
+    client.restart();
+    expect(shared.forkMock).toHaveBeenCalledTimes(forksBeforeRestart + 1);
+
+    // A second cap-hit cycle re-fires the listener (re-armed).
+    const fifth = createMockChild();
+    const sixth = createMockChild();
+    shared.forkMock.mockReturnValueOnce(fifth).mockReturnValueOnce(sixth);
+    fresh.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    fifth.emit("exit", 1);
+    vi.advanceTimersByTime(11_000);
+    sixth.emit("exit", 1);
+    expect(listener).toHaveBeenCalledTimes(2);
+    client.dispose();
+  });
+
+  it("restart() is a no-op after dispose", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    client.dispose();
+    const forksBefore = shared.forkMock.mock.calls.length;
+    expect(() => client.restart()).not.toThrow();
+    expect(shared.forkMock.mock.calls.length).toBe(forksBefore);
+  });
+
+  it("restart() while the child is still running only resets the crash window (no extra fork)", () => {
+    const client = new WatchdogClient({ mainPid: 4242 });
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    client.restart();
+    // Already running — no new fork, crash window reset silently.
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    client.dispose();
   });
 });

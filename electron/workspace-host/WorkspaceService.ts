@@ -1,8 +1,9 @@
 import os from "os";
+import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, access, mkdir } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -16,6 +17,12 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
 } from "../../shared/types/workspace-host.js";
+import type {
+  PluginWorktreeLinked,
+  PluginWorktreeLinkedIssue,
+  PluginWorktreeLinkedPR,
+} from "../../shared/types/plugin.js";
+import type { CIStatus } from "../../shared/types/forge.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
@@ -54,6 +61,12 @@ export { probeGitLfsAvailable } from "./worktreeUtils.js";
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
+// Periodic safety-net reconcile cadence. On macOS the FSEvents-backed topology
+// watcher goes silent when `.git/worktrees/` is deleted (last worktree removed)
+// and `startTopologyWatcher()` no-ops when that dir is absent — so a phantom row
+// can persist until the 300s background poll happens to hit the fs.access check.
+// This interval bounds that staleness independent of watcher liveness (#8510).
+const TOPOLOGY_SAFETY_INTERVAL_MS = 90_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,6 +90,13 @@ export class WorkspaceService {
   private activeWorktreeId: string | null = null;
   private pollIntervalActive: number = DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS;
   private pollIntervalBackground: number = DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS;
+  private fetchIntervalActiveMs: number = 30_000;
+  private fetchIntervalBackgroundMs: number = 5 * 60_000;
+  // Last GitHub rate-limit cadence multiplier applied to monitor fetch
+  // schedulers. Tracked so a recovery (multiplier back to 1) can be detected
+  // and trigger an immediate re-arm. The user-configured base intervals above
+  // are never overwritten by throttling — see applyFetchThrottle.
+  private _lastAppliedThrottleMultiplier: number = 1;
   private adaptiveBackoff: boolean = true;
   private pollIntervalMax: number = 30000;
   private circuitBreakerThreshold: number = 3;
@@ -109,12 +129,65 @@ export class WorkspaceService {
   private topologyWatcherSubscription = new MutableDisposable();
   private topologyReconcileQueue = new PQueue({ concurrency: 1 });
   private topologyReconcilePending = false;
-  private topologyWatchSuppressUntil = 0;
+  // App-owned worktree create/delete register the metadata-subdir basename
+  // here so the watcher event their own `git worktree add/remove` produces is
+  // recognized and dropped — instead of blanket-suppressing *all* watcher
+  // events for a fixed window, which silently swallowed concurrent external
+  // `git worktree remove` calls (#8412). External events whose basename isn't
+  // pending still flow through to reconciliation.
+  private topologyPendingCreate = new Set<string>();
+  private topologyPendingDelete = new Set<string>();
+  private topologyPendingSafetyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Events accumulate here across the 300ms debounce window and are filtered
+  // against the pending sets at drain time, preserving burst coalescing.
+  private topologyEventBuffer: Array<{ path: string; type?: string }> = [];
   private topologyWatchCooldownUntil = 0;
   private topologyWatchCooldownDirty = false;
   private topologyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private topologyWatcherEnabled = true;
   private topologyWatcherGeneration = 0;
+  // Watcher-independent safety net (#8510): the topology watcher can go
+  // permanently silent (macOS FSEvents root deletion) or never start (metadata
+  // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
+  // are no-ops while paused/disabled via scheduleTopologyReconcile's guards.
+  private periodicSafetyTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Host-run identity, minted once per WorkspaceService instance — i.e. once
+   * per workspace-host process lifetime. Stamped onto every worktree state
+   * event so the renderer can detect a host restart (epoch change) and
+   * re-hydrate instead of silently dropping events whose `seq` reset (#8403).
+   */
+  private readonly epoch: string = randomUUID();
+  /** Monotonic event counter within `epoch`. */
+  private seq = 0;
+
+  /**
+   * Epoch-scoped set of mutation IDs that have been successfully acknowledged
+   * by this host run. The renderer mints a stable mutationId per delete intent
+   * (#8405) and the host records each successful delete here so a replay of
+   * the same mutationId after a transient port hiccup is short-circuited to a
+   * success ack instead of re-running `git worktree remove` (which would throw
+   * once the monitor is already gone). Cleared implicitly on host restart —
+   * the new epoch starts with an empty set, which matches the renderer's
+   * outbox semantics: a fresh epoch means the prior run's acks no longer apply
+   * and the renderer's outbox replay flow takes over.
+   */
+  private readonly acknowledgedMutations = new Set<string>();
+
+  /** Advance and return the next monotonic seq for an outgoing event. */
+  private nextSeq(): number {
+    return ++this.seq;
+  }
+
+  /**
+   * Current version stamp — used by the `get-all-states` response so the
+   * renderer anchors its baseline to the host's high-water mark. `seq` is NOT
+   * advanced here: a snapshot describes existing state, it is not a new event.
+   */
+  getVersion(): { epoch: string; seq: number } {
+    return { epoch: this.epoch, seq: this.seq };
+  }
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.fetchCoordinator = new RepoFetchCoordinator({
@@ -132,7 +205,40 @@ export class WorkspaceService {
       onPRDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
         if (!monitor) return;
+        if (
+          data.branchName !== undefined &&
+          monitor.branch !== undefined &&
+          monitor.branch !== data.branchName
+        ) {
+          return;
+        }
 
+        // `linked` is the source of truth — built from the canonical
+        // provider/owner/repo carried by the detection event. Flat fields are
+        // derived compatibility values written alongside it.
+        const existingIssue = monitor.getSnapshot().linked?.issue;
+        const linked = this.composeLinked({
+          providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
+          pr: {
+            number: data.prNumber,
+            title: data.prTitle,
+            url: data.prUrl,
+            state: data.prState,
+            ciStatus: data.ciStatus,
+            baseRef: data.baseRef,
+          },
+          issue:
+            data.issueNumber && data.issueTitle
+              ? { number: data.issueNumber, title: data.issueTitle }
+              : undefined,
+        });
+        // Preserve an earlier issue linkage this PR event didn't carry.
+        const finalLinked: PluginWorktreeLinked =
+          !linked.issue && existingIssue ? { ...linked, issue: existingIssue } : linked;
+
+        monitor.setLinked(finalLinked);
         monitor.setPRInfo({
           prNumber: data.prNumber,
           prUrl: data.prUrl,
@@ -143,6 +249,7 @@ export class WorkspaceService {
           prLastUpdatedAt: data.prLastUpdatedAt,
           issueLastUpdatedAt: data.issueLastUpdatedAt,
         });
+
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
@@ -159,13 +266,33 @@ export class WorkspaceService {
           issueTitle: data.issueTitle,
           prLastUpdatedAt: data.prLastUpdatedAt,
           issueLastUpdatedAt: data.issueLastUpdatedAt,
+          branchName: data.branchName,
+          providerId: data.providerId,
+          linked: finalLinked,
         });
       },
-      onPRCleared: (worktreeId) => {
+      onPRCleared: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
         if (!monitor) return;
+        if (
+          data.branchName !== undefined &&
+          monitor.branch !== undefined &&
+          monitor.branch !== data.branchName
+        ) {
+          return;
+        }
 
         monitor.clearPRInfo();
+        // Preserve linked.issue when only the PR is being cleared
+        const existingLinked = monitor.getSnapshot().linked;
+        if (existingLinked?.issue) {
+          monitor.setLinked({
+            providerId: existingLinked.providerId,
+            issue: existingLinked.issue,
+          });
+        } else {
+          monitor.clearLinked();
+        }
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
@@ -173,16 +300,46 @@ export class WorkspaceService {
         this.sendEvent({
           type: "pr-cleared",
           worktreeId,
+          branchName: data.branchName,
+          providerId: data.providerId,
         });
       },
       onIssueDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
         if (!monitor) return;
+        if (
+          data.branchName !== undefined &&
+          monitor.branch !== undefined &&
+          monitor.branch !== data.branchName
+        ) {
+          return;
+        }
 
+        // Keep the private flat issue number in lockstep so the
+        // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
+        // matches forge-resolved issues, not just branch-parsed ones.
+        monitor.setIssueNumber(data.issueNumber);
         monitor.setIssueTitle(data.issueTitle);
         if (data.issueLastUpdatedAt !== undefined) {
           monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
         }
+
+        // `linked` is the source of truth — built from the canonical
+        // provider/owner/repo carried by the detection event.
+        const existingPr = monitor.getSnapshot().linked?.pr;
+        const linked = this.composeLinked({
+          providerId: data.providerId,
+          owner: data.owner,
+          repo: data.repo,
+          issue: { number: data.issueNumber, title: data.issueTitle },
+        });
+        // Preserve existing PR linkage if present.
+        const finalLinked: PluginWorktreeLinked = existingPr
+          ? { ...linked, pr: existingPr }
+          : linked;
+
+        monitor.setLinked(finalLinked);
+
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
@@ -193,6 +350,9 @@ export class WorkspaceService {
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,
           issueLastUpdatedAt: data.issueLastUpdatedAt,
+          branchName: data.branchName,
+          providerId: data.providerId,
+          linked: finalLinked,
         });
       },
       onIssueNotFound: (worktreeId, issueNumber) => {
@@ -202,6 +362,18 @@ export class WorkspaceService {
 
         monitor.setIssueNumber(undefined);
         monitor.setIssueTitle(undefined);
+
+        // Clear the linked.issue projection but preserve any PR linkage
+        const snapshot = monitor.getSnapshot();
+        const existingLinked = snapshot.linked ?? null;
+        if (existingLinked?.issue) {
+          monitor.setLinked(
+            existingLinked.pr
+              ? { providerId: existingLinked.providerId, pr: existingLinked.pr }
+              : null
+          );
+        }
+
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
@@ -211,6 +383,9 @@ export class WorkspaceService {
           worktreeId,
           issueNumber,
         });
+      },
+      onDetectionStateChanged: (tripped) => {
+        this.sendEvent({ type: "pr-detection-state", tripped });
       },
     });
 
@@ -228,7 +403,12 @@ export class WorkspaceService {
     requestId: string,
     projectRootPath: string,
     globalEnvVars?: Record<string, string>,
-    wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>
+    wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>,
+    forgeSettings?: {
+      forgeProviderOverride: string | null;
+      forgeDefaultProviderId: string | null;
+      forgeRemote: string | null;
+    }
   ): Promise<void> {
     try {
       this.projectRootPath = projectRootPath;
@@ -237,6 +417,9 @@ export class WorkspaceService {
         // during this load-project's async work would otherwise be silently
         // overwritten. The most recent in-memory value wins on conflict.
         this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
+      }
+      if (forgeSettings) {
+        pullRequestService.setForgeSettings(forgeSettings);
       }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
@@ -269,6 +452,12 @@ export class WorkspaceService {
       ]);
 
       this.startTopologyWatcher();
+      // Started independently of startTopologyWatcher() — that method no-ops
+      // when `.git/worktrees/` is absent (the exact "all worktrees removed"
+      // case), so gating the safety net on it would defeat its purpose (#8510).
+      if (this.pollingEnabled) {
+        this.startPeriodicSafetyTimer();
+      }
 
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
@@ -298,7 +487,14 @@ export class WorkspaceService {
     monitorConfig?: MonitorConfig,
     skipInitialGitStatus: boolean = false
   ): Promise<void> {
-    this.mainBranch = mainBranch;
+    // Derive the repository's main/integration branch from the actual main
+    // worktree rather than trusting the caller. The legacy `mainBranch`
+    // argument is never populated with a real value — internal callers pass
+    // the stale field straight back — so base-branch divergence was pinned to
+    // "main" for every repo whose integration branch isn't named "main"
+    // (e.g. gitflow repos on "develop"). The caller's value stays as the
+    // last-resort fallback for a detached-HEAD main worktree.
+    this.mainBranch = worktrees.find((wt) => wt.isMainWorktree)?.branch ?? mainBranch;
     this.activeWorktreeId = activeWorktreeId;
 
     if (monitorConfig?.pollIntervalActive !== undefined) {
@@ -322,6 +518,12 @@ export class WorkspaceService {
     if (monitorConfig?.gitWatchDebounceMs !== undefined) {
       this.gitWatchDebounceMs = monitorConfig.gitWatchDebounceMs;
     }
+    if (monitorConfig?.fetchIntervalActiveMs !== undefined) {
+      this.fetchIntervalActiveMs = monitorConfig.fetchIntervalActiveMs;
+    }
+    if (monitorConfig?.fetchIntervalBackgroundMs !== undefined) {
+      this.fetchIntervalBackgroundMs = monitorConfig.fetchIntervalBackgroundMs;
+    }
 
     const currentIds = new Set(worktrees.map((wt) => wt.id));
 
@@ -340,11 +542,14 @@ export class WorkspaceService {
         this.resourceActionExecutor.cleanupResourceActionState(id);
         monitor.stop();
         this.monitors.delete(id);
+        this.recoverWatcherIfNoMonitorsRemain();
         clearGitDirCache(monitor.path);
         invalidateGitStatusCache(monitor.path);
         this.sendEvent({
           type: "worktree-removed",
           worktreeId: id,
+          epoch: this.epoch,
+          seq: this.nextSeq(),
         });
         events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
       }
@@ -362,6 +567,9 @@ export class WorkspaceService {
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
         existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+        // Keep the base-branch divergence fallback fresh if the main worktree
+        // switched branches since this monitor was created.
+        existingMonitor.setMainBranch(this.mainBranch);
 
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.updateConfig({
@@ -371,6 +579,8 @@ export class WorkspaceService {
           circuitBreakerThreshold: this.circuitBreakerThreshold,
           gitWatchEnabled: this.gitWatchEnabled,
           gitWatchDebounceMs: this.gitWatchDebounceMs,
+          fetchIntervalActiveMs: this.throttledFetchActiveMs,
+          fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
         });
 
         existingMonitor.ensureWatcherState();
@@ -379,7 +589,11 @@ export class WorkspaceService {
           existingMonitor.restartWatcherIfRunning();
         }
 
-        if (isCurrentChanged && existingMonitor.hasInitialStatus) {
+        // Skip this emit when the branch also changed — the branch-change
+        // block below emits the full snapshot (with updated isCurrent and
+        // cleared PR) anyway. Emitting here first would surface an
+        // intermediate frame carrying the new branch with the old PR (#8079).
+        if (isCurrentChanged && !branchChanged && existingMonitor.hasInitialStatus) {
           this.emitUpdate(existingMonitor);
         }
 
@@ -392,12 +606,18 @@ export class WorkspaceService {
             void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
           }
           existingMonitor.setIssueTitle(undefined);
+          // Bundle the PR clear into this same branch-change emit so the
+          // renderer never renders the new branch with the old PR (#8079).
+          existingMonitor.clearPRInfo();
+          existingMonitor.clearLinked();
           if (existingMonitor.hasInitialStatus) {
             this.emitUpdate(existingMonitor);
           }
         } else if (branchChanged && !wt.branch) {
           existingMonitor.setIssueNumber(undefined);
           existingMonitor.setIssueTitle(undefined);
+          existingMonitor.clearPRInfo();
+          existingMonitor.clearLinked();
           if (existingMonitor.hasInitialStatus) {
             this.emitUpdate(existingMonitor);
           }
@@ -499,6 +719,8 @@ export class WorkspaceService {
         circuitBreakerThreshold: this.circuitBreakerThreshold,
         gitWatchEnabled: this.gitWatchEnabled,
         gitWatchDebounceMs: this.gitWatchDebounceMs,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
       },
       {
         onUpdate: (snapshot) => {
@@ -521,6 +743,7 @@ export class WorkspaceService {
         },
         onInotifyLimitReached: () => this.handleInotifyLimitReached(),
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
+        onWatcherRecovered: () => this.handleWatcherRecovered(),
         onScheduleFetch: async (worktreeId, _isCurrent, force) => {
           const target = this.monitors.get(worktreeId);
           if (!target || !target.isRunning) return;
@@ -665,8 +888,56 @@ export class WorkspaceService {
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
     });
     events.emit("sys:worktree:update", snapshot);
+  }
+
+  /**
+   * Build the provider-agnostic `linked` projection from canonical
+   * provider/owner/repo carried by detection events. This is the single
+   * construction point — callers must never synthesize a {@link ResourceRef}
+   * with empty `owner`/`repo` (the #8452 anti-pattern).
+   */
+  private composeLinked(params: {
+    providerId: string;
+    owner: string;
+    repo: string;
+    pr?: {
+      number: number;
+      title?: string;
+      url: string;
+      state: "open" | "merged" | "closed";
+      ciStatus?: CIStatus;
+      baseRef?: string;
+    };
+    issue?: { number: number; title?: string };
+  }): PluginWorktreeLinked {
+    const { providerId, owner, repo } = params;
+    const linked: {
+      providerId: string;
+      pr?: PluginWorktreeLinkedPR;
+      issue?: PluginWorktreeLinkedIssue;
+    } = { providerId };
+
+    if (params.pr) {
+      linked.pr = {
+        ref: { providerId, owner, repo, number: params.pr.number, rawData: null },
+        title: params.pr.title,
+        url: params.pr.url,
+        state: params.pr.state,
+        ...(params.pr.ciStatus ? { ciStatus: params.pr.ciStatus } : {}),
+        ...(params.pr.baseRef ? { baseRef: params.pr.baseRef } : {}),
+      };
+    }
+    if (params.issue) {
+      linked.issue = {
+        ref: { providerId, owner, repo, number: params.issue.number, rawData: null },
+        title: params.issue.title,
+      };
+    }
+    return linked;
   }
 
   private emitUpdate(monitor: WorktreeMonitor): void {
@@ -674,6 +945,8 @@ export class WorkspaceService {
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
     });
     events.emit("sys:worktree:update", snapshot);
   }
@@ -689,6 +962,12 @@ export class WorkspaceService {
    *
    * `getGitCommonDir` is synchronous and cached, so the O(n) scan is cheap
    * after the first call per worktree.
+   *
+   * Note: `isFetchInFlight` is intentionally excluded from this fan-out —
+   * propagating per-monitor in-flight state to N sibling rows would produce
+   * simultaneous pulse animations across the sidebar, recreating the visual
+   * fatigue pattern that drove removal of the `panel-state-working` breathe
+   * loop. Only the row that triggered the fetch shows the in-flight pulse.
    */
   private applyFetchResultToSiblings(
     triggering: WorktreeMonitor,
@@ -741,11 +1020,61 @@ export class WorkspaceService {
     this.sendEvent({ type: "emfile-limit-reached" });
   }
 
+  /**
+   * A recursive watcher re-armed after a degradation. Clear the one-shot
+   * notification guards so a later relapse can re-signal, and emit
+   * `watcher-recovered` so the renderer hides the persistent degraded
+   * indicator and the main-process router resets its toast guards. Idempotent
+   * — firing when nothing was degraded is a harmless no-op downstream.
+   */
+  private handleWatcherRecovered(): void {
+    this.inotifyLimitNotified = false;
+    this.emfileLimitNotified = false;
+    this.sendEvent({ type: "watcher-recovered" });
+  }
+
+  /**
+   * Whether any worktree's recursive watcher is currently degraded to the
+   * polling/git-only fallback. Bundled into the `get-all-states` handshake so
+   * a late-mounting view hydrates the persistent indicator without waiting
+   * for a live event.
+   */
+  isWatcherDegraded(): boolean {
+    return this.inotifyLimitNotified || this.emfileLimitNotified;
+  }
+
+  /**
+   * Called after a monitor is removed. If the last monitor is gone while the
+   * degradation guards are still set, the degraded watcher was torn down
+   * before it could recover — there is no longer anything degraded, so treat
+   * it as recovered. Otherwise a stale `watcherDegraded: true` would ride the
+   * next `get-all-states` handshake and pin the indicator on with no way to
+   * clear it.
+   */
+  private recoverWatcherIfNoMonitorsRemain(): void {
+    if (this.monitors.size === 0 && this.isWatcherDegraded()) {
+      this.handleWatcherRecovered();
+    }
+  }
+
   private worktreeMetadataDirPath(): string | null {
     if (!this.projectRootPath) return null;
     const commonDir = getGitCommonDir(this.projectRootPath);
     if (!commonDir) return null;
     return `${commonDir}/worktrees`;
+  }
+
+  // Idempotent: a second call while the timer is live is a no-op, so the two
+  // call sites (load-project path + setPollingEnabled resume) can both invoke
+  // it unconditionally. Cleared in stopTopologyWatcher() (which dispose() and
+  // the pause path both call), so the timer never outlives the service.
+  private startPeriodicSafetyTimer(): void {
+    if (this.periodicSafetyTimer !== null) return;
+    const timer = setInterval(() => {
+      this.scheduleTopologyReconcile();
+    }, TOPOLOGY_SAFETY_INTERVAL_MS);
+    timer.unref?.();
+    this.periodicSafetyTimer = timer;
   }
 
   private startTopologyWatcher(): void {
@@ -757,14 +1086,25 @@ export class WorkspaceService {
     if (!existsSync(metadataDir)) return;
 
     const generation = ++this.topologyWatcherGeneration;
-    const schedule = () => this.scheduleTopologyReconcile();
+    const drain = () => this.drainTopologyEventBuffer();
 
     parcelWatcher
-      .subscribe(metadataDir, (_err, _events) => {
+      .subscribe(metadataDir, (_err, events) => {
+        if (Array.isArray(events)) {
+          for (const ev of events) {
+            const e = ev as { path?: unknown; type?: unknown } | null;
+            if (typeof e?.path === "string") {
+              this.topologyEventBuffer.push({
+                path: e.path,
+                type: typeof e.type === "string" ? e.type : undefined,
+              });
+            }
+          }
+        }
         if (this.topologyDebounceTimer) {
           clearTimeout(this.topologyDebounceTimer);
         }
-        this.topologyDebounceTimer = setTimeout(schedule, 300);
+        this.topologyDebounceTimer = setTimeout(drain, 300);
       })
       .then((subscription) => {
         if (generation !== this.topologyWatcherGeneration) {
@@ -794,14 +1134,96 @@ export class WorkspaceService {
       clearTimeout(this.topologyDebounceTimer);
       this.topologyDebounceTimer = null;
     }
+    this.topologyEventBuffer = [];
+    // Drop pending entries: with no watcher running nothing will drain them,
+    // and a stale entry surviving a pause/resume could suppress a real
+    // external change for up to 5s after the watcher restarts.
+    for (const timer of this.topologyPendingSafetyTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.topologyPendingSafetyTimers.clear();
+    this.topologyPendingCreate.clear();
+    this.topologyPendingDelete.clear();
     this.topologyReconcilePending = false;
     this.topologyWatchCooldownDirty = false;
+    if (this.periodicSafetyTimer !== null) {
+      clearInterval(this.periodicSafetyTimer);
+      this.periodicSafetyTimer = null;
+    }
+  }
+
+  // The basename of `.git/worktrees/<name>` is exactly what @parcel/watcher
+  // reports for the create/delete of the metadata subdir, so it's the key we
+  // match watcher events against. Resolve first so a trailing slash or a
+  // relative path normalizes to the same leaf as the event path.
+  private topologyMetadataKey(worktreePath: string): string {
+    return basename(pathResolve(worktreePath));
+  }
+
+  private topologyMarkPending(key: string, set: Set<string>): void {
+    set.add(key);
+    const existing = this.topologyPendingSafetyTimers.get(key);
+    if (existing) clearTimeout(existing);
+    // Safety valve: if the watcher event never arrives (slow FS, missed
+    // event), the entry must not suppress a later real external change
+    // indefinitely. Clear-only — the cooldown/dirty path already reschedules
+    // any reconcile genuinely needed.
+    const timer = setTimeout(() => {
+      this.topologyPendingCreate.delete(key);
+      this.topologyPendingDelete.delete(key);
+      this.topologyPendingSafetyTimers.delete(key);
+    }, 5000);
+    timer.unref?.();
+    this.topologyPendingSafetyTimers.set(key, timer);
+  }
+
+  private topologyClearPending(key: string): void {
+    this.topologyPendingCreate.delete(key);
+    this.topologyPendingDelete.delete(key);
+    const timer = this.topologyPendingSafetyTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.topologyPendingSafetyTimers.delete(key);
+    }
+  }
+
+  private drainTopologyEventBuffer(): void {
+    const events = this.topologyEventBuffer;
+    this.topologyEventBuffer = [];
+
+    let hasUnmatched = false;
+    for (const ev of events) {
+      const key = basename(ev.path);
+      // Gate on event type so a pending *create* can't swallow an external
+      // *delete* of a same-named worktree (and vice versa). An absent/unknown
+      // type falls back to either set — better an idempotent reconcile than a
+      // dropped external change.
+      const matched =
+        ev.type === "create"
+          ? this.topologyPendingCreate.has(key)
+          : ev.type === "delete"
+            ? this.topologyPendingDelete.has(key)
+            : this.topologyPendingCreate.has(key) || this.topologyPendingDelete.has(key);
+      if (matched) {
+        // App-owned op produced this event — drain the pending entry (and
+        // cancel its safety valve) so a *subsequent* external change to the
+        // same name is no longer treated as ours.
+        this.topologyClearPending(key);
+      } else {
+        hasUnmatched = true;
+      }
+    }
+
+    // Empty payloads can't be classified, so fall back to the pre-fix
+    // behavior of always reconciling rather than risk dropping a real change.
+    if (events.length === 0 || hasUnmatched) {
+      this.scheduleTopologyReconcile();
+    }
   }
 
   private scheduleTopologyReconcile(): void {
     if (!this.topologyWatcherEnabled) return;
     if (!this.pollingEnabled) return;
-    if (Date.now() < this.topologyWatchSuppressUntil) return;
     if (Date.now() < this.topologyWatchCooldownUntil) {
       this.topologyWatchCooldownDirty = true;
       return;
@@ -880,6 +1302,7 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
     monitor.stop();
     this.monitors.delete(worktreeId);
+    this.recoverWatcherIfNoMonitorsRemain();
 
     clearGitDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
@@ -888,7 +1311,12 @@ export class WorkspaceService {
       this.listService.invalidateCache(cacheKey);
     }
 
-    this.sendEvent({ type: "worktree-removed", worktreeId });
+    this.sendEvent({
+      type: "worktree-removed",
+      worktreeId,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
+    });
     events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 
     console.log(
@@ -901,7 +1329,14 @@ export class WorkspaceService {
     for (const monitor of this.monitors.values()) {
       states.push(monitor.getSnapshot());
     }
-    this.sendEvent({ type: "all-states", requestId, states });
+    this.sendEvent({
+      type: "all-states",
+      requestId,
+      states,
+      epoch: this.epoch,
+      seq: this.seq,
+      lastAcknowledgedMutationIds: [...this.acknowledgedMutations],
+    });
   }
 
   getSnapshotsSync(): WorktreeSnapshot[] {
@@ -910,6 +1345,18 @@ export class WorkspaceService {
       states.push(monitor.getSnapshot());
     }
     return states;
+  }
+
+  /**
+   * Snapshot of mutation IDs successfully acknowledged in the current epoch
+   * (#8405). The renderer reads this on every `get-all-states` reply to prune
+   * outbox entries whose result already landed before a host crash. Each id
+   * stays in the set for the lifetime of the host process — replays of the
+   * same id are cheap (a Set lookup) and the cardinality is bounded by the
+   * delete activity within a single session.
+   */
+  getAcknowledgedMutationIds(): string[] {
+    return [...this.acknowledgedMutations];
   }
 
   getMonitor(requestId: string, worktreeId: string): void {
@@ -1076,17 +1523,20 @@ export class WorkspaceService {
     rootPath: string,
     options: CreateWorktreeOptions
   ): Promise<void> {
+    // Hoisted so the catch can clear the pending entry even though
+    // absoluteCreatePath is block-scoped to the try.
+    let pendingCreateKey: string | null = null;
     try {
       const git = createHardenedGit(rootPath);
       const { baseBranch, path } = options;
       let { newBranch } = options;
       let { fromRemote = false, useExistingBranch = false } = options;
 
-      // Authoritative validation gate. Every caller (IPC, MCP, recipes,
-      // worktree:create-for-task) reaches this method, so any branch-name or
-      // parent-dir issue caught here surfaces a clear error instead of
-      // bubbling up as a low-level git fatal. #7033. Also rejects argv-shaped
-      // names (leading dash) and git-special characters before any git call.
+      // Authoritative validation gate. Every caller (IPC, MCP, recipes)
+      // reaches this method, so any branch-name or parent-dir issue caught
+      // here surfaces a clear error instead of bubbling up as a low-level
+      // git fatal. #7033. Also rejects argv-shaped names (leading dash) and
+      // git-special characters before any git call.
       if (typeof newBranch !== "string" || newBranch.trim().length === 0) {
         throw new Error("Branch name cannot be empty");
       }
@@ -1164,10 +1614,11 @@ export class WorkspaceService {
       // `--end-of-options` after the subcommand flags so any leading-dash ref
       // or path that slipped past validation is treated as positional.
 
-      // Suppress the topology watcher during app-owned worktree creation so
-      // the `.git/worktrees/<name>/` directory creation doesn't trigger a
-      // redundant discoverAndSyncWorktrees pass.
-      this.topologyWatchSuppressUntil = Date.now() + 60000;
+      // Mark the metadata-subdir basename pending so the watcher event our own
+      // `git worktree add` produces is recognized and dropped — without
+      // blanket-suppressing concurrent external `git worktree remove` events.
+      pendingCreateKey = this.topologyMetadataKey(absoluteCreatePath);
+      this.topologyMarkPending(pendingCreateKey, this.topologyPendingCreate);
 
       if (useExistingBranch) {
         await git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
@@ -1242,10 +1693,11 @@ export class WorkspaceService {
       // authoritative and would remove every other non-main monitor.
       await this.addNewWorktreeMonitor(createdWorktree, isActive, true);
 
-      // Reset suppression: the monitor is registered, metadata writes will
-      // settle within 500ms. The short post-op window absorbs any remaining
-      // filesystem events from the git worktree add.
-      this.topologyWatchSuppressUntil = Date.now() + 500;
+      // Monitor is registered. Drop the pending entry now: any still-buffered
+      // create event for this name will be matched by the next drain (the
+      // safety valve is cancelled here so the happy path can't spuriously
+      // reconcile 5s later).
+      this.topologyClearPending(pendingCreateKey);
 
       if (options.worktreeMode && options.worktreeMode !== "local") {
         const m = this.monitors.get(canonicalWorktreeId);
@@ -1282,10 +1734,20 @@ export class WorkspaceService {
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );
       })().catch((err) => {
+        const message = formatErrorMessage(err, "createWorktree async tail failed");
+        const stack = err instanceof Error ? err.stack : undefined;
         console.warn("[WorkspaceHost] createWorktree async tail failed:", err);
+        this.sendEvent({
+          type: "lifecycle-setup-error",
+          worktreeId: canonicalWorktreeId,
+          message,
+          details: stack,
+        });
       });
     } catch (error) {
-      this.topologyWatchSuppressUntil = Date.now() + 500;
+      // Create failed — drop any pending entry so a real external change to
+      // that name isn't masked, and cancel its safety valve.
+      if (pendingCreateKey) this.topologyClearPending(pendingCreateKey);
       this.sendEvent({
         type: "create-worktree-result",
         requestId,
@@ -1332,6 +1794,39 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Re-run the lifecycle setup script for an existing worktree without
+   * recreating it. Surfaced via the `run-lifecycle-setup` port action so the
+   * worktree card can offer a "Retry setup" affordance after a failed/timed-out
+   * setup. Same idempotence assumption as resource provisioning — the user
+   * authors setup scripts knowing they may be re-run in place.
+   */
+  async retryLifecycleSetup(worktreeId: string): Promise<void> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) {
+      throw new Error(`Worktree not found: ${worktreeId}`);
+    }
+    if (!this.projectRootPath) {
+      throw new Error("Cannot retry setup before a project is loaded");
+    }
+    if (monitor.lifecycleStatus?.state === "running") {
+      throw new Error("Setup is already running");
+    }
+
+    // Set running synchronously *before* the first await so a second concurrent
+    // request (rapid clicks, multi-window, retry-after-error) sees the in-flight
+    // state and is rejected by the guard above. `runLifecycleSetup` re-sets the
+    // same state with full command-progress metadata once config loads.
+    monitor.setLifecycleStatus({
+      phase: "setup",
+      state: "running",
+      startedAt: Date.now(),
+    });
+    this.emitUpdate(monitor);
+
+    await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false);
+  }
+
   private async runLifecycleTeardown(
     worktreeId: string,
     monitor: WorktreeMonitor,
@@ -1348,11 +1843,44 @@ export class WorkspaceService {
     requestId: string,
     worktreeId: string,
     force: boolean = false,
-    deleteBranch: boolean = false
+    deleteBranch: boolean = false,
+    mutationId?: string,
+    /**
+     * Whether to re-throw on failure after emitting `delete-worktree-result`.
+     * Defaults to `false` to preserve the legacy callers' contract — they
+     * resolve via the requestId-keyed event, not the promise return. The port
+     * dispatcher passes `true` so semantic failures (uncommitted changes,
+     * etc.) reject the renderer's `worktreePort.request("delete-worktree")`
+     * instead of silently resolving to `{ ok: true }` (#8405 review #1).
+     */
+    throwOnError: boolean = false
   ): Promise<void> {
+    // Mutation-outbox replay short-circuit (#8405): a replay of an already
+    // acknowledged delete must not re-run `git worktree remove` (which would
+    // fail with "not a working tree" or "worktree not found" depending on
+    // whether the metadata was pruned). The original ack stuck — the renderer
+    // just didn't observe the result before the port dropped. Re-emit the
+    // success ack so the renderer can resolve and prune the outbox entry.
+    if (mutationId && this.acknowledgedMutations.has(mutationId)) {
+      this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
+      return;
+    }
+    // Hoisted so the catch can clear the pending entry even though `monitor`
+    // is block-scoped to the try.
+    let pendingDeleteKey: string | null = null;
     try {
       const monitor = this.monitors.get(worktreeId);
       if (!monitor) {
+        // Replay path: the monitor was cleaned up by the original successful
+        // delete but the ack never reached the renderer (port dropped between
+        // `worktree-removed` and the result ack). If we know this mutation
+        // succeeded earlier we ack idempotently; otherwise this is a genuine
+        // unknown id and we surface the error. The earlier `acknowledgedMutations`
+        // check covers cleanly-acked replays, but a host that crashed AFTER
+        // monitor cleanup but BEFORE recording the ack would land here — there's
+        // no way to distinguish that from a never-existed delete without further
+        // bookkeeping, so we keep the strict error and rely on the renderer to
+        // surface it once the user dismisses or retries.
         throw new Error(`Worktree not found: ${worktreeId}`);
       }
 
@@ -1398,10 +1926,11 @@ export class WorkspaceService {
 
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
-      // Suppress the topology watcher during app-owned worktree deletion so
-      // the `.git/worktrees/<name>/` directory removal doesn't trigger a
-      // redundant discoverAndSyncWorktrees pass.
-      this.topologyWatchSuppressUntil = Date.now() + 60000;
+      // Mark the metadata-subdir basename pending so the watcher event our own
+      // `git worktree remove` produces is recognized and dropped — without
+      // blanket-suppressing concurrent external worktree changes.
+      pendingDeleteKey = this.topologyMetadataKey(monitor.path);
+      this.topologyMarkPending(pendingDeleteKey, this.topologyPendingDelete);
 
       if (this.git) {
         // #6669: if the directory is already gone (deleted externally), skip
@@ -1464,14 +1993,18 @@ export class WorkspaceService {
       this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
       monitor.stop();
       this.monitors.delete(worktreeId);
+      this.recoverWatcherIfNoMonitorsRemain();
 
-      // Reset suppression: monitor is cleaned up, metadata writes will settle
-      // within 500ms.
-      this.topologyWatchSuppressUntil = Date.now() + 500;
+      // Monitor is cleaned up. Drop the pending entry now (cancelling its
+      // safety valve): any still-buffered delete event for this name is
+      // matched by the next drain.
+      this.topologyClearPending(pendingDeleteKey);
 
       this.sendEvent({
         type: "worktree-removed",
         worktreeId,
+        epoch: this.epoch,
+        seq: this.nextSeq(),
       });
 
       if (branchToDelete && this.git) {
@@ -1486,25 +2019,52 @@ export class WorkspaceService {
             console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
           } else if (errorMsg.includes("not fully merged")) {
             throw new Error(
-              `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
+              `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`,
+              { cause: branchError }
             );
           } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
-            throw new Error(`Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`);
+            throw new Error(
+              `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`,
+              {
+                cause: branchError,
+              }
+            );
           } else {
-            throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
+            throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`, {
+              cause: branchError,
+            });
           }
         }
       }
 
+      // Record the successful ack before sending the result so the next port
+      // reconnect's `get-all-states` advertises it (#8405). If the port drops
+      // between the record and the send, the renderer's outbox replay path
+      // sees the id in `lastAcknowledgedMutationIds` and prunes without firing
+      // a second delete — the operation completed once, the renderer just
+      // missed the live ack.
+      if (mutationId) this.acknowledgedMutations.add(mutationId);
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
-      this.topologyWatchSuppressUntil = Date.now() + 500;
+      // Delete failed — drop any pending entry so a real external change to
+      // that name isn't masked, and cancel its safety valve.
+      if (pendingDeleteKey) this.topologyClearPending(pendingDeleteKey);
+      // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
+      // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
         type: "delete-worktree-result",
         requestId,
         success: false,
         error: (error as Error).message,
       });
+      // Re-throw so the port path (`handleWorktreePortRequest`) can reject the
+      // port `request()` with the same error string — without the throw, the
+      // port handler returns `{ ok: true }` and the renderer's outbox prunes
+      // the entry as if the delete succeeded, silently masking the failure
+      // (#8405 review finding #1). Legacy callers can opt out by omitting
+      // `mutationId` and the `throwOnError` flag (`WorkspaceClient.sendWithResponse`
+      // resolves via the delete-worktree-result event, not the promise return).
+      if (throwOnError) throw error;
     }
   }
 
@@ -1730,12 +2290,72 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     if (config.pollIntervalMax !== undefined) {
       this.pollIntervalMax = config.pollIntervalMax;
     }
+    if (config.fetchIntervalActiveMs !== undefined) {
+      this.fetchIntervalActiveMs = config.fetchIntervalActiveMs;
+    }
+    if (config.fetchIntervalBackgroundMs !== undefined) {
+      this.fetchIntervalBackgroundMs = config.fetchIntervalBackgroundMs;
+    }
 
     for (const [worktreeId, monitor] of this.monitors) {
       const isActive = worktreeId === this.activeWorktreeId;
       const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-      monitor.updateConfig({ basePollingInterval: baseInterval });
+      monitor.updateConfig({
+        basePollingInterval: baseInterval,
+        fetchIntervalActiveMs: this.throttledFetchActiveMs,
+        fetchIntervalBackgroundMs: this.throttledFetchBackgroundMs,
+      });
     }
+  }
+
+  /**
+   * Focused-tier fetch interval with the active GitHub rate-limit throttle
+   * folded in. Used everywhere a monitor's fetch cadence is (re)written —
+   * syncMonitors, addNewWorktreeMonitor, updateMonitorConfig — so an unrelated
+   * config push can't silently clobber an in-effect throttle back to baseline.
+   */
+  private get throttledFetchActiveMs(): number {
+    return Math.round(this.fetchIntervalActiveMs * this._lastAppliedThrottleMultiplier);
+  }
+
+  /** Background-tier fetch interval with the active throttle folded in. */
+  private get throttledFetchBackgroundMs(): number {
+    return Math.round(this.fetchIntervalBackgroundMs * this._lastAppliedThrottleMultiplier);
+  }
+
+  /**
+   * Apply a GitHub rate-limit cadence multiplier to every monitor's background
+   * fetch scheduler.
+   *
+   * The multiplier always scales the user-configured base intervals
+   * (`fetchIntervalActiveMs` / `fetchIntervalBackgroundMs`) — never an
+   * already-throttled value — so repeated calls can't compound. When the
+   * multiplier returns to `1` (budget recovered), each scheduler is re-armed at
+   * the short startup-tier delay so fresh ahead/behind data lands promptly
+   * instead of waiting out a previously-stretched window.
+   *
+   * Driven by `gitHubRateLimitService` budget notifications relayed through the
+   * workspace-host `onStateChange` handler.
+   */
+  applyFetchThrottle(multiplier: number): void {
+    const safeMultiplier = Number.isFinite(multiplier) && multiplier >= 1 ? multiplier : 1;
+    const previous = this._lastAppliedThrottleMultiplier;
+    const recovered = safeMultiplier === 1 && previous > 1;
+
+    const activeMs = Math.round(this.fetchIntervalActiveMs * safeMultiplier);
+    const backgroundMs = Math.round(this.fetchIntervalBackgroundMs * safeMultiplier);
+
+    for (const monitor of this.monitors.values()) {
+      monitor.updateConfig({
+        fetchIntervalActiveMs: activeMs,
+        fetchIntervalBackgroundMs: backgroundMs,
+      });
+      if (recovered) {
+        monitor.rescheduleFetch(true);
+      }
+    }
+
+    this._lastAppliedThrottleMultiplier = safeMultiplier;
   }
 
   setPollingEnabled(enabled: boolean): void {
@@ -1753,6 +2373,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         monitor.resumePolling();
       }
       this.startTopologyWatcher();
+      // stopTopologyWatcher() (run on the !enabled branch) cleared the safety
+      // timer, so resume must restart it symmetrically (#8510).
+      this.startPeriodicSafetyTimer();
       this.scheduleTopologyReconcile();
     }
   }
@@ -1789,10 +2412,22 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.sendEvent({ type: "reset-pr-state-result", requestId, success: true });
   }
 
-  updateGitHubToken(token: string | null): void {
-    this.prService.updateToken(token, this.projectRootPath);
-    if (token) {
-      // A new token may resolve previously-failing auth — drop suspensions so
+  updateForgeSettings(args: {
+    forgeProviderOverride: string | null;
+    forgeDefaultProviderId: string | null;
+    forgeRemote: string | null;
+  }): void {
+    pullRequestService.setForgeSettings(args);
+    void pullRequestService.refresh();
+  }
+
+  updateForgeCredentials(
+    providerId: string,
+    credentials: import("../../shared/types/forge.js").Credentials | null
+  ): void {
+    this.prService.updateForgeCredentials(providerId, credentials, this.projectRootPath);
+    if (credentials) {
+      // A new credential may resolve previously-failing auth — drop suspensions so
       // the next scheduled fetch retries. Network/transient entries stay so we
       // don't immediately re-storm an offline remote.
       this.fetchCoordinator.clearAuthFailures();
@@ -1887,10 +2522,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false, envKey);
       }
     } catch (err) {
+      const message = formatErrorMessage(err, "switchWorktreeEnvironment lifecycle setup failed");
+      const stack = err instanceof Error ? err.stack : undefined;
       console.warn(
         `[WorkspaceService] switchWorktreeEnvironment config resolution failed (non-fatal):`,
         err
       );
+      this.sendEvent({
+        type: "lifecycle-setup-error",
+        worktreeId,
+        message,
+        details: stack,
+      });
     }
 
     this.emitUpdate(monitor);
@@ -1952,6 +2595,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   dispose(): void {
     this._shutdownController.abort();
+    // stopTopologyWatcher clears the pending sets and their safety timers.
     this.stopTopologyWatcher();
     this.topologyReconcileQueue.clear();
     this.prService.cleanup();

@@ -11,14 +11,33 @@
  * response) is unchanged — these types are compile-time only.
  */
 
-import type { CreateWorktreeOptions, WorktreeSnapshot } from "./workspace-host.js";
+import type {
+  CreateWorktreeOptions,
+  WorktreeSnapshot,
+  WorktreeEventVersion,
+} from "./workspace-host.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
 export interface WorktreePortProtocol {
   "get-all-states": {
     payload: Record<string, never>;
-    result: { states: WorktreeSnapshot[] };
+    // Carries the host's current version stamp so the renderer can anchor its
+    // comparison baseline to the host's actual `(epoch, seq)` position rather
+    // than a renderer-minted counter (#8403). `seq` is the high-water mark at
+    // snapshot time — a state description, not a new event.
+    // `watcherDegraded` hydrates the persistent watcher-degraded indicator on
+    // late-mounting views without waiting for a live event (#8413).
+    // `lastAcknowledgedMutationIds` carries the host's epoch-scoped set of
+    // successfully acknowledged mutation IDs so the renderer's mutation outbox
+    // can prune entries that landed before a host crash without replaying them
+    // (#8405). Empty array on a fresh epoch — the host's ack map starts clean
+    // because mutationIds are minted per-attempt and don't cross host restarts.
+    result: {
+      states: WorktreeSnapshot[];
+      watcherDegraded: boolean;
+      lastAcknowledgedMutationIds: string[];
+    } & WorktreeEventVersion;
   };
   "set-active": {
     payload: { worktreeId: string };
@@ -33,7 +52,13 @@ export interface WorktreePortProtocol {
     result: { ok: true };
   };
   "delete-worktree": {
-    payload: { worktreeId: string; force?: boolean; deleteBranch?: boolean };
+    // `mutationId` is the renderer's stable identifier for a single user-intent
+    // delete (#8405). Carrying it across retries lets the host dedupe replays
+    // that arrive after a crash + reconnect — the host's ack map keys on it so
+    // a second invocation with the same id is short-circuited to a success
+    // ack without re-running `git worktree remove`. Optional so non-outbox
+    // callers (e.g. integration tests) keep working without minting an id.
+    payload: { worktreeId: string; force?: boolean; deleteBranch?: boolean; mutationId?: string };
     result: { ok: true };
   };
   "list-branches": {
@@ -50,6 +75,10 @@ export interface WorktreePortProtocol {
   };
   "resource-action": {
     payload: { worktreeId: string; action: WorktreePortResourceAction };
+    result: { ok: true };
+  };
+  "run-lifecycle-setup": {
+    payload: { worktreeId: string };
     result: { ok: true };
   };
   "switch-worktree-environment": {

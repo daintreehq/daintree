@@ -102,15 +102,6 @@ export const config: AgentConfig = {
     promptConfidence: 0.85,
     debounceMs: 6000,
   },
-  routing: {
-    capabilities: ["python", "shell", "javascript", "code-execution", "general-purpose"],
-    domains: {
-      backend: 0.7,
-      debugging: 0.65,
-    },
-    maxConcurrent: 1,
-    enabled: true,
-  },
   resume: {
     kind: "rolling-history",
     args: () => [],

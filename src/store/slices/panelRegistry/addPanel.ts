@@ -12,7 +12,7 @@ import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
@@ -138,7 +138,7 @@ export const createAddPanelActions = (
         requestedLocation === "grid" && currentGridCount >= maxCapacity
           ? "dock"
           : requestedLocation;
-      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
@@ -293,7 +293,7 @@ export const createAddPanelActions = (
       requestedLocation === "grid" && currentGridGroupCount >= maxCapacity
         ? "dock"
         : requestedLocation;
-    const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
     // When activeWorktreeId is null (worktree store not yet hydrated — common during
     // project switch), treat the terminal as being in the active worktree to avoid
     // incorrectly backgrounding it. applyWorktreeTerminalPolicy will reconcile
@@ -520,7 +520,7 @@ export const createAddPanelActions = (
       // Prewarm ALL terminal types to ensure managed instance exists.
       // This is critical for terminals in inactive worktrees - they need a managed
       // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
-      const currentActiveWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       // When activeWorktreeId is null (hydration in progress), don't treat the
       // terminal as offscreen — it would be prewarmed in the offscreen container
       // at -20000px and backgrounded, suppressing data flow from the pty-host.

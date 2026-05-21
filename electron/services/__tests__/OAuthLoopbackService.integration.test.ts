@@ -165,8 +165,9 @@ describe("OAuthLoopbackService — Integration with Fake IdP", () => {
     expect(rewrittenUrl.searchParams.get("code_challenge_method")).toBe("S256");
 
     // Verify the result is the ORIGINAL callback URL with captured params
-    expect(result).not.toBeNull();
-    const resultUrl = new URL(result!.callbackUrl);
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("expected success");
+    const resultUrl = new URL(result.callbackUrl);
     expect(resultUrl.origin).toBe("http://localhost:3000");
     expect(resultUrl.pathname).toBe("/auth/callback");
     expect(resultUrl.searchParams.get("code")).toMatch(/^FAKE_AUTH_CODE_/);
@@ -220,9 +221,10 @@ describe("OAuthLoopbackService — Integration with Fake IdP", () => {
     await httpGet(`${rewrittenRedirect}?code=MYCODE&state=complex_state`);
 
     const result = await resultPromise;
-    expect(result).not.toBeNull();
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("expected success");
 
-    const resultUrl = new URL(result!.callbackUrl);
+    const resultUrl = new URL(result.callbackUrl);
     expect(resultUrl.origin).toBe("http://localhost:5173");
     expect(resultUrl.pathname).toBe("/api/auth/callback");
     // Original query param preserved

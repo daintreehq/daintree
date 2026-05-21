@@ -59,12 +59,31 @@ describe("shortcutHintStore", () => {
 
   it("returns false when count is not a milestone", () => {
     const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 4 });
+    s.hydrateCounts({ "nav.quickSwitcher": 3 });
     s.recordPointer(100, 200);
     const result = s.show("nav.quickSwitcher", "⌘K");
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("encodes exactly the 6-entry geometric milestone curve", () => {
+    expect(Array.from(HINT_MILESTONES)).toEqual([1, 2, 4, 8, 16, 32]);
+    expect(HINT_MILESTONES.size).toBe(6);
+  });
+
+  it("does not show hint for powers of two beyond the cap", () => {
+    for (const count of [64, 128, 256, 1024]) {
+      shortcutHintStore.setState({
+        counts: { "nav.quickSwitcher": count },
+        hydrated: true,
+        pointer: null,
+        activeHint: null,
+      });
+      const s = shortcutHintStore.getState();
+      s.recordPointer(100, 200);
+      expect(s.show("nav.quickSwitcher", "⌘K")).toBe(false);
+    }
   });
 
   it("shows hint at each milestone value", () => {
@@ -83,7 +102,7 @@ describe("shortcutHintStore", () => {
   });
 
   it("does not show hint at non-milestone values", () => {
-    const nonMilestones = [0, 4, 5, 9, 11, 25, 31, 49, 51, 151, 999];
+    const nonMilestones = [0, 3, 5, 9, 11, 17, 25, 31, 33, 49, 51, 999];
     for (const count of nonMilestones) {
       shortcutHintStore.setState({
         counts: { "nav.quickSwitcher": count },
@@ -100,7 +119,7 @@ describe("shortcutHintStore", () => {
 
   it("stops showing hints after the last milestone", () => {
     const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 151 });
+    s.hydrateCounts({ "nav.quickSwitcher": 33 });
     s.recordPointer(100, 200);
     const result = s.show("nav.quickSwitcher", "⌘K");
 
@@ -170,18 +189,18 @@ describe("shortcutHintStore", () => {
 
   it("does not show hint after last milestone is reached via increment", () => {
     const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 150 });
+    s.hydrateCounts({ "nav.quickSwitcher": 32 });
     s.recordPointer(100, 200);
     s.incrementCount("nav.quickSwitcher");
     const result = s.show("nav.quickSwitcher", "⌘K");
 
     expect(result).toBe(false);
-    expect(shortcutHintStore.getState().counts["nav.quickSwitcher"]).toBe(151);
+    expect(shortcutHintStore.getState().counts["nav.quickSwitcher"]).toBe(33);
   });
 
   it("tracks actions independently", () => {
     const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 4 });
+    s.hydrateCounts({ "nav.quickSwitcher": 3 });
     s.recordPointer(100, 200);
 
     s.incrementCount("terminal.new");
@@ -236,7 +255,7 @@ describe("shortcutHintStore", () => {
 
   it("isHoverEligible returns false for non-milestone non-zero count", () => {
     const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 4 });
+    s.hydrateCounts({ "nav.quickSwitcher": 3 });
     expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
   });
 

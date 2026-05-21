@@ -7,10 +7,17 @@ import { getAgentConfig } from "@/config/agents";
 // Mode 1049: Save cursor + switch to alternate screen buffer (most common)
 const ALT_SCREEN_MODES = new Set([47, 1047, 1049]);
 
+// Private-use OSC identifier carrying the PTY data-loss signal. Chosen from
+// the high private range (57300+) to avoid clashing with emulator OSC numbers
+// (iTerm2 1337, rxvt 777, WezTerm 1000-range) or our own OSC 11/52 handlers.
+// Wire format: ESC ] 57301 ; <droppedBytes> ; <reasonCode> BEL
+const OSC_DATA_LOSS = 57301;
+
 export class TerminalParserHandler {
   private managed: ManagedTerminal;
   private disposables: Array<{ dispose: () => void }> = [];
   private onBufferExit?: () => void;
+  private onDataLoss?: (droppedBytes: number) => void;
 
   private normalizeCsiParams(params: Array<number | number[]> | undefined): number[] {
     if (!params) return [];
@@ -25,9 +32,14 @@ export class TerminalParserHandler {
     return flat;
   }
 
-  constructor(managed: ManagedTerminal, onBufferExit?: () => void) {
+  constructor(
+    managed: ManagedTerminal,
+    onBufferExit?: () => void,
+    onDataLoss?: (droppedBytes: number) => void
+  ) {
     this.managed = managed;
     this.onBufferExit = onBufferExit;
+    this.onDataLoss = onDataLoss;
     this.attachHandlers();
   }
 
@@ -66,6 +78,28 @@ export class TerminalParserHandler {
     // Unconditional — all terminal kinds must block this attack vector.
     const osc52Handler = terminal.parser.registerOscHandler(52, () => true);
     this.disposables.push(osc52Handler);
+
+    // PTY data-loss marker. The pty-host drops bytes (drop-don't-block) during
+    // heavy-output bursts and signals it through this private-use OSC instead
+    // of a raw ANSI write, keeping the wire format free of presentation. xterm
+    // strips the identifier + first semicolon, so `data` is "<bytes>;<reason>".
+    // Always consume (return true) so a malformed payload never leaks into the
+    // buffer. The callback is fired synchronously; the caller is responsible
+    // for deferring any terminal.write to avoid write-during-parse reentrancy.
+    const dataLossHandler = terminal.parser.registerOscHandler(OSC_DATA_LOSS, (data) => {
+      const sepIdx = data.indexOf(";");
+      if (sepIdx === -1) return true;
+      const bytesField = data.slice(0, sepIdx);
+      // Strict decimal-only: reject "", "0x10", "1e3", "+1", " ", which
+      // Number() would otherwise coerce. Defensive against a crafted stream
+      // deliberately targeting this private-use OSC.
+      if (!/^\d+$/.test(bytesField)) return true;
+      const droppedBytes = Number(bytesField);
+      if (!Number.isSafeInteger(droppedBytes)) return true;
+      this.onDataLoss?.(droppedBytes);
+      return true;
+    });
+    this.disposables.push(dataLossHandler);
 
     // Track alternate screen buffer exit via DEC private mode sequences.
     // Note: Buffer state (isAltBuffer) is primarily tracked via xterm.js's

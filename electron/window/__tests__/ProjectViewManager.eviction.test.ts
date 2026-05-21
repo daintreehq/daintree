@@ -13,7 +13,6 @@ function createMockWebContents() {
     id,
     osPid,
     isDestroyed: vi.fn(() => false),
-    setBackgroundThrottling: vi.fn(),
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
@@ -122,6 +121,8 @@ vi.mock("../rendererConsoleCapture.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -145,6 +146,7 @@ import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
+import { throttleCpuWebContents } from "../../utils/webContentsLifecycle.js";
 
 function createMockWindow() {
   return {
@@ -177,6 +179,7 @@ describe("ProjectViewManager — eviction safety", () => {
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
   });
@@ -221,6 +224,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -254,6 +258,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -287,6 +292,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -320,6 +326,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -354,12 +361,13 @@ describe("ProjectViewManager — eviction safety", () => {
     );
   });
 
-  // ── Memory-sorted eviction (issue #6272) ──
+  // ── LRU eviction with memory logging (issue #8602) ──
 
-  it("evicts the largest-privateBytes cached view first, not the LRU one", async () => {
+  it("evicts the LRU cached view first, not the largest renderer", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -369,8 +377,9 @@ describe("ProjectViewManager — eviction safety", () => {
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
 
-    // proj-a (oldest LRU) is small; proj-b is the heaviest cached renderer.
-    // Memory-sorted eviction should target proj-b even though proj-a is older.
+    // proj-a is the LRU view but small; proj-b is the heaviest cached renderer
+    // and more recent. Under #8602, size must not promote proj-b ahead of the
+    // LRU pick — proj-a is evicted, the large/recently-used proj-b survives.
     const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = wcBEntry?.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
     mockGetAppMetrics.mockReturnValue([
@@ -381,17 +390,53 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
-    expect(remaining).toContain("proj-a");
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
     expect(remaining).toContain("proj-c");
-    expect(remaining).not.toContain("proj-b");
-    expect(wcA.close).not.toHaveBeenCalled();
-    expect(wcB.close).toHaveBeenCalled();
+    expect(wcA.close).toHaveBeenCalled();
+    expect(wcB.close).not.toHaveBeenCalled();
+  });
+
+  it("switching back to a cached view refreshes its LRU stamp", async () => {
+    let now = 1_700_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    try {
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+
+      // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
+      // no longer the oldest candidate. Without this, the next overflow would
+      // wrongly target proj-a.
+      await managerWithLimit.switchTo("proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-d", "/path/d");
+
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).not.toContain("proj-b");
+      expect(remaining).toContain("proj-a");
+      expect(remaining).toContain("proj-c");
+      expect(remaining).toContain("proj-d");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("falls back to LRU when no candidate has measured memory", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -413,10 +458,11 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(wcA.close).toHaveBeenCalled();
   });
 
-  it("missing-metric views sort below measured ones (LRU as the deeper fallback)", async () => {
+  it("evicts the LRU view even when only some candidates have measured memory", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -426,9 +472,9 @@ describe("ProjectViewManager — eviction safety", () => {
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
 
-    // Only proj-a has a measured pid. proj-b is unmeasured and should sort
-    // *below* proj-a despite being newer; proj-a (the only measured candidate)
-    // wins eviction priority.
+    // Only proj-a has a measured pid; proj-b is unmeasured. Memory data does
+    // not influence the sort — proj-a is the LRU pick and wins eviction
+    // priority regardless of which side has metrics.
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 600 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
@@ -441,10 +487,11 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-c");
   });
 
-  it("active-agent views are still evicted last regardless of memory rank", async () => {
+  it("active-agent views are still evicted last regardless of LRU rank", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -481,6 +528,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -506,6 +554,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -528,10 +577,11 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).toContain("proj-c");
   });
 
-  it("evicts in descending privateBytes order when limit shrinks past multiple views", async () => {
+  it("evicts in LRU order when limit shrinks past multiple views", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 4,
     });
 
@@ -548,8 +598,10 @@ describe("ProjectViewManager — eviction safety", () => {
     const wcC = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-c")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
-    // proj-d is active. Among the cached three (a, b, c), expect c (900) to
-    // evict before a (800), with b (100) surviving once limit drops to 2.
+    // proj-d is active. Among the cached three (a, b, c), LRU order is
+    // a → b → c (a was backgrounded first, c most recently). With the limit
+    // dropping to 2, the two oldest (a, b) evict and proj-c survives,
+    // regardless of their memory footprint.
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 800 * 1024 } },
       { pid: wcB.osPid, memory: { privateBytes: 100 * 1024 } },
@@ -559,16 +611,26 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.setCachedViewLimit(2);
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
-    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
     expect(remaining).toContain("proj-d");
     expect(remaining).not.toContain("proj-a");
-    expect(remaining).not.toContain("proj-c");
+    expect(remaining).not.toContain("proj-b");
+
+    // Lock in eviction sequence (not just membership): proj-a evicts before
+    // proj-b, matching LRU order. Without this, a reverse-order regression
+    // would still produce the same survivor set and silently pass.
+    const evictionCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+    expect(evictionCalls).toEqual(["proj-a", "proj-b"]);
   });
 
   it("calls forgetBlinkSample with the evicted webContents id", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -586,6 +648,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -618,6 +681,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -650,6 +714,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -692,6 +757,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -715,16 +781,19 @@ describe("ProjectViewManager — telemetry", () => {
     expect(revivalCalls[0][1]).toMatchObject({
       projectId: "proj-a",
       timeSinceEvictionMs: expect.any(Number),
+      visibleMs: expect.any(Number),
     });
     expect(
       (revivalCalls[0][1] as { timeSinceEvictionMs: number }).timeSinceEvictionMs
     ).toBeGreaterThanOrEqual(0);
+    expect((revivalCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);
   });
 
   it("does not emit projectview.revival a second time for the same project without a new eviction (timestamp is consumed on read)", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -759,6 +828,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -785,6 +855,7 @@ describe("ProjectViewManager — telemetry", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -798,6 +869,258 @@ describe("ProjectViewManager — telemetry", () => {
     // dispose should not throw and should clear internal state
     expect(() => manager.dispose()).not.toThrow();
     expect(manager.getAllViews().length).toBe(0);
+  });
+
+  it("does not emit projectview.warm-swap on cold-start switches (no prior cached view)", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    vi.mocked(logInfo).mockClear();
+
+    // Cold start to proj-b — no cached view exists, so warm-swap must not fire.
+    await manager.switchTo("proj-b", "/path/b");
+
+    const warmSwapCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.warm-swap");
+    expect(warmSwapCalls.length).toBe(0);
+  });
+
+  it("emits projectview.warm-swap on every cache-hit reactivation with visibleMs", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    vi.mocked(logInfo).mockClear();
+
+    // Cache hit on proj-a — no prior eviction, so revival does NOT fire,
+    // but warm-swap MUST fire with the activation latency.
+    await manager.switchTo("proj-a", "/path/a");
+
+    const warmSwapCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.warm-swap");
+    const revivalCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.revival");
+    expect(warmSwapCalls.length).toBe(1);
+    expect(revivalCalls.length).toBe(0);
+    expect(warmSwapCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      visibleMs: expect.any(Number),
+    });
+    expect((warmSwapCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("sampleCachedViewMemory emits projectview.cached-memory for non-active cached views", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: wcB.osPid, memory: { privateBytes: 300 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    // proj-b is the active view; only proj-a (cached) should be sampled
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      memoryKb: 250 * 1024,
+      pid: wcA.osPid,
+    });
+  });
+
+  it("sampleCachedViewMemory is a no-op when no views are cached", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("sampleCachedViewMemory skips views whose pid lookup is missing", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    // Metrics return nothing for proj-a's pid — sampler must skip silently.
+    mockGetAppMetrics.mockReturnValue([]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("sampleCachedViewMemory keeps sampling remaining views when one per-view call throws", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 4,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+    // proj-c is now active; proj-a and proj-b are cached.
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // proj-a's getOSProcessId throws — the iteration over proj-a must be skipped,
+    // but proj-b must still be sampled.
+    wcA.getOSProcessId = vi.fn(() => {
+      throw new Error("view glitch");
+    });
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    expect(() =>
+      (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
+    ).not.toThrow();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-b",
+      memoryKb: 400 * 1024,
+    });
+  });
+
+  it("sampleCachedViewMemory swallows app.getAppMetrics() failures", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockImplementation(() => {
+      throw new Error("metrics unavailable");
+    });
+
+    expect(() =>
+      (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
+    ).not.toThrow();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
+  });
+
+  it("dispose cancels the cached-memory sampler", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    manager.dispose();
+
+    vi.mocked(logInfo).mockClear();
+
+    // Manually invoke the sampler post-dispose — even if a stale interval tick
+    // were to fire, the sampler must not emit because views were cleared.
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(0);
   });
 });
 
@@ -817,6 +1140,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -837,11 +1161,12 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
   });
 
-  it("fires onViewCached BEFORE setBackgroundThrottling(true) so ports close before freeze becomes possible", async () => {
+  it("fires onViewCached BEFORE CPU throttle so ports close before freeze becomes possible", async () => {
     const onViewCached = vi.fn();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -850,14 +1175,21 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const viewA = { webContents: wcA, setBounds: vi.fn() };
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
+    const throttleMock = vi.mocked(throttleCpuWebContents);
+    throttleMock.mockClear();
+
     await manager.switchTo("proj-b", "/path/b");
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
-    const throttleOrder = wcA.setBackgroundThrottling.mock.invocationCallOrder[0];
+    const throttleCall = throttleMock.mock.calls.findIndex((args) => {
+      const arg = args[0] as unknown;
+      return arg instanceof Object && "id" in arg && (arg as { id: number }).id === wcA.id;
+    });
+    const throttleOrder = throttleMock.mock.invocationCallOrder[throttleCall];
     expect(cachedOrder).toBeDefined();
     expect(throttleOrder).toBeDefined();
     expect(cachedOrder!).toBeLessThan(throttleOrder);
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(throttleMock).toHaveBeenCalledWith(wcA);
   });
 
   it("invokes onViewCached for each cached view across rapid switches A→B→C (never for the active C)", async () => {
@@ -865,6 +1197,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -891,6 +1224,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -908,6 +1242,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -926,6 +1261,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -951,6 +1287,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
       onViewCached,
     });
@@ -962,15 +1299,16 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
-    // Throttling must still happen even if the callback throws — the catch
+    // CPU throttle must still happen even if the callback throws — the catch
     // is around onViewCached only, not the surrounding deactivate flow.
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
   });
 
   it("manager works without onViewCached configured (option is optional)", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -979,7 +1317,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
-    expect(wcA.setBackgroundThrottling).toHaveBeenCalledWith(true);
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
   });
 });
 
@@ -1010,6 +1348,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1064,6 +1403,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1099,6 +1439,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
       onViewReady,
     });
@@ -1136,6 +1477,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 2,
     });
 
@@ -1160,6 +1502,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
 
@@ -1232,6 +1575,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
     });
   });
@@ -1389,6 +1733,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
       cachedProjectViews: 2,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
     managerWithLimit.setLowMemoryFreeThresholdMb(768);
 
@@ -1479,6 +1825,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
       dirname: "/test",
       cachedProjectViews: 4,
       onViewEvicted,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
     stubSystemMemoryInfo({ free: 64 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
     pressureManager.setLowMemoryFreeThresholdMb(768);

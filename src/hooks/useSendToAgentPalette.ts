@@ -21,12 +21,9 @@ export interface SendToAgentItem {
 // Module-level state for the opener function (object to avoid react-compiler reassignment warning)
 const pendingState = { sourceId: null as string | null, selection: "" };
 
-export function openSendToAgentPalette(sourceTerminalId: string): boolean {
-  const selection = terminalInstanceService.getCachedSelection(sourceTerminalId);
-  if (!selection) return false;
-
+function hasSendTargets(sourceTerminalId: string | null): boolean {
   const { panelsById, panelIds } = usePanelStore.getState();
-  const hasTargets = panelIds.some((id) => {
+  return panelIds.some((id) => {
     const t = panelsById[id];
     return (
       t &&
@@ -37,10 +34,33 @@ export function openSendToAgentPalette(sourceTerminalId: string): boolean {
       t.hasPty !== false
     );
   });
-  if (!hasTargets) return false;
+}
+
+export function openSendToAgentPalette(sourceTerminalId: string): boolean {
+  const selection = terminalInstanceService.getCachedSelection(sourceTerminalId);
+  if (!selection) return false;
+  if (!hasSendTargets(sourceTerminalId)) return false;
 
   pendingState.sourceId = sourceTerminalId;
   pendingState.selection = selection;
+  usePaletteStore.getState().openPalette("send-to-agent");
+  return true;
+}
+
+/**
+ * Opens the send-to-agent palette pre-populated with arbitrary text instead of
+ * a cached terminal selection. Used by handoff surfaces (e.g. the agent
+ * completion banner) that already have the text to relay. `sourceTerminalId`,
+ * when provided, is excluded from the target list so an agent doesn't send its
+ * own output back to itself.
+ */
+export function openSendToAgentPaletteWithText(text: string, sourceTerminalId?: string): boolean {
+  if (!text.trim()) return false;
+  const sourceId = sourceTerminalId ?? null;
+  if (!hasSendTargets(sourceId)) return false;
+
+  pendingState.sourceId = sourceId;
+  pendingState.selection = text;
   usePaletteStore.getState().openPalette("send-to-agent");
   return true;
 }

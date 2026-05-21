@@ -2,7 +2,6 @@
 export type EventCategory =
   | "system" // sys:* - core system state (worktrees, PR detection)
   | "agent" // agent:* - agent lifecycle and output
-  | "task" // task:* - task orchestration
   | "server" // server:* - dev server state
   | "file" // file:* - file operations (copy-tree, open)
   | "ui" // ui:* - UI notifications/state
@@ -15,8 +14,6 @@ export interface EventPayload {
   worktreeId?: string;
   /** Agent context */
   agentId?: string;
-  /** Task context */
-  taskId?: string;
   /** Run context */
   runId?: string;
   /** Terminal context */
@@ -61,8 +58,6 @@ export interface EventFilterOptions {
   worktreeId?: string;
   /** Filter by agent ID */
   agentId?: string;
-  /** Filter by task ID */
-  taskId?: string;
   /** Filter by run ID (for multi-agent orchestration) */
   runId?: string;
   /** Filter by terminal ID */

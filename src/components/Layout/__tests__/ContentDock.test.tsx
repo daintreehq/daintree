@@ -54,6 +54,18 @@ describe("ContentDock regression test", () => {
     expect(content).toMatch(/isOver\s*&&\s*[^]*?ring-border-default/);
   });
 
+  // Issue #8162 — drop the ambient in-flight rail tint; the only drag-state cue
+  // is the armed isOver treatment, plus a cursor-no-drop rejection signal for
+  // worktree-card sort drags that can't drop on the dock.
+  it("removes ambient panel-drag tint and adds worktree-sort cursor feedback", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    expect(content).not.toContain("useIsDragging");
+    expect(content).not.toContain('isPanelDragging && "bg-overlay-subtle"');
+    expect(content).toContain('isWorktreeSortDragging && "cursor-no-drop"');
+    expect(content).toMatch(/isOver\s*&&\s*[^]*?cursor-copy/);
+  });
+
   // Issue #6590 — handleAddTerminal must rely on the atomic dock activation
   // flag instead of a follow-up openDockTerminal() call, otherwise the
   // watchdog effect collapses the freshly created panel.
@@ -132,5 +144,108 @@ describe("ContentDock regression test", () => {
     expect(effectStart).toBeGreaterThan(0);
     expect(panelsByIdGuard).toBeGreaterThan(effectStart);
     expect(panelsByIdGuard).toBeLessThan(closeCall);
+  });
+
+  // Issue #8170 — the scrollable chip rail is an ARIA toolbar with a single
+  // tab stop and roving tabindex Arrow/Home/End navigation. dnd-kit's
+  // KeyboardSensor owns the keys during an active drag; the rail handler
+  // must early-return when useDndContext().active != null. Focusing an
+  // off-screen chip scrolls it into view with behavior:"instant".
+  describe("keyboard navigation — issue #8170", () => {
+    it("marks the scrollable rail as an ARIA toolbar", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain('role="toolbar"');
+      expect(content).toContain('aria-label="Docked terminals"');
+      expect(content).toContain('aria-orientation="horizontal"');
+    });
+
+    it("flips aria-busy on the rail while a dnd-kit drag is active", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toMatch(/const\s+\{\s*active:\s*dndActive\s*\}\s*=\s*useDndContext\(\)/);
+      expect(content).toContain("const isDndActive = dndActive !== null");
+      expect(content).toContain("aria-busy={isDndActive || undefined}");
+    });
+
+    it("queries [data-dock-item] chips inside the scroll container", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain('querySelectorAll<HTMLElement>("[data-dock-item]")');
+      expect(content).toContain("offsetParent !== null");
+    });
+
+    it("uses a ref (not state) for the active dock index", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain("activeDockIndexRef = useRef(0)");
+    });
+
+    it("syncs roving tab stops via useLayoutEffect", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain("useLayoutEffect");
+      expect(content).toContain("syncDockTabStops");
+      // Clamp matches Toolbar.tsx pattern when chips are added/removed.
+      expect(content).toMatch(/Math\.min\(activeDockIndexRef\.current,\s*items\.length\s*-\s*1\)/);
+    });
+
+    it("wires onKeyDown and onFocusCapture to the rail container", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain("onKeyDown={handleDockKeyDown}");
+      expect(content).toContain("onFocusCapture={handleDockFocusCapture}");
+    });
+
+    it("early-returns the key handler when dnd-kit has an active drag", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      // The guard must appear inside handleDockKeyDown, before any
+      // preventDefault or arrow-key handling.
+      const handlerStart = content.indexOf("handleDockKeyDown = useCallback");
+      const guard = content.indexOf("if (dndActive !== null) return", handlerStart);
+      const switchStart = content.indexOf("switch (e.key)", handlerStart);
+
+      expect(handlerStart).toBeGreaterThan(0);
+      expect(guard).toBeGreaterThan(handlerStart);
+      expect(guard).toBeLessThan(switchStart);
+    });
+
+    it("handles Arrow/Home/End with wrap and preventDefault inside the switch", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain('case "ArrowRight"');
+      expect(content).toContain('case "ArrowLeft"');
+      expect(content).toContain('case "Home"');
+      expect(content).toContain('case "End"');
+      // Wrap arithmetic on both ends.
+      expect(content).toMatch(/\(currentIdx \+ 1\) % items\.length/);
+      expect(content).toMatch(/\(currentIdx - 1 \+ items\.length\) % items\.length/);
+    });
+
+    it("focuses then scrolls instantly — focus must precede scrollIntoView", () => {
+      const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+      expect(content).toContain('scrollIntoView({ behavior: "instant"');
+      expect(content).toContain('block: "nearest"');
+      expect(content).toContain('inline: "nearest"');
+
+      // .focus() must come before scrollIntoView in handleDockKeyDown so the
+      // browser's own scroll-on-focus does not override the explicit call.
+      const handlerStart = content.indexOf("handleDockKeyDown = useCallback");
+      const focusCall = content.indexOf("target.focus()", handlerStart);
+      const scrollCall = content.indexOf("target.scrollIntoView", handlerStart);
+
+      expect(focusCall).toBeGreaterThan(0);
+      expect(scrollCall).toBeGreaterThan(focusCall);
+    });
+
+    it("preserves data-dock-item attribute on chip buttons", () => {
+      const terminalItem = readFileSync(resolve(__dirname, "../DockedTerminalItem.tsx"), "utf-8");
+      const tabGroup = readFileSync(resolve(__dirname, "../DockedTabGroup.tsx"), "utf-8");
+
+      expect(terminalItem).toContain('data-dock-item=""');
+      expect(tabGroup).toContain('data-dock-item=""');
+    });
   });
 });

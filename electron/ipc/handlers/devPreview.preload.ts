@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const DEV_PREVIEW_METHOD_CHANNELS = {
   ensure: "dev-preview:ensure",
   restart: "dev-preview:restart",
+  restartAndClearCache: "dev-preview:restart-and-clear-cache",
+  reinstallAndRestart: "dev-preview:reinstall-and-restart",
   stop: "dev-preview:stop",
   stopByPanel: "dev-preview:stop-by-panel",
   getState: "dev-preview:get-state",

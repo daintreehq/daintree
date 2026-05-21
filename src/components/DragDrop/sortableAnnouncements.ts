@@ -19,9 +19,17 @@ export function makeSortableAnnouncements(
     return label != null && label.trim() !== "" ? label : `${itemNoun} ${String(id)}`;
   };
 
+  // Pin the list size at pickup so filter/reorder mutations mid-drag don't
+  // churn the denominator the drop string reads. Reset on end/cancel so the
+  // next drag pins a fresh size.
+  let pinnedTotal: number | null = null;
+
   return {
     onDragStart({ active }) {
-      return `Picked up ${resolve(active.id)}`;
+      const data = active.data.current as { sortable?: { items?: unknown[] } } | undefined;
+      const total = data?.sortable?.items?.length;
+      pinnedTotal = typeof total === "number" ? total : null;
+      return `Picked up ${resolve(active.id)}. Press arrow keys to move, Space to drop, Escape to cancel.`;
     },
     onDragOver({ active, over }) {
       const label = resolve(active.id);
@@ -32,12 +40,21 @@ export function makeSortableAnnouncements(
     },
     onDragEnd({ active, over }) {
       const label = resolve(active.id);
-      if (over) {
-        return `Dropped ${label}`;
+      if (!over) {
+        pinnedTotal = null;
+        return `${label} returned to its original position`;
       }
-      return `${label} returned to its original position`;
+      const overData = over.data.current as { sortable?: { index?: number } } | undefined;
+      const destIndex = overData?.sortable?.index;
+      const total = pinnedTotal;
+      pinnedTotal = null;
+      if (typeof destIndex === "number" && total !== null && total > 0) {
+        return `Dropped ${label} at position ${destIndex + 1} of ${total}`;
+      }
+      return `Dropped ${label}`;
     },
     onDragCancel({ active }) {
+      pinnedTotal = null;
       const label = resolve(active.id);
       return `Drag cancelled. ${label} returned to its original position`;
     },

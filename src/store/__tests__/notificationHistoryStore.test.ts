@@ -664,4 +664,288 @@ describe("notificationHistorySlice", () => {
       expect(getState().unreadCount).toBe(0);
     });
   });
+
+  describe("archive (Done state)", () => {
+    it("defaults archivedAt to null on new entries", () => {
+      addEntry({ message: "test" });
+      expect(getState().entries[0]!.archivedAt).toBeNull();
+    });
+
+    it("archiveEntry sets archivedAt and seenAsToast atomically", () => {
+      const id = getState().addEntry({ type: "info", message: "live" });
+      expect(getState().entries[0]!.archivedAt).toBeNull();
+      expect(getState().entries[0]!.seenAsToast).toBe(false);
+      const before = Date.now();
+      getState().archiveEntry(id);
+      const after = Date.now();
+      const entry = getState().entries[0]!;
+      expect(entry.archivedAt).not.toBeNull();
+      expect(entry.archivedAt!).toBeGreaterThanOrEqual(before);
+      expect(entry.archivedAt!).toBeLessThanOrEqual(after);
+      expect(entry.seenAsToast).toBe(true);
+    });
+
+    it("archiveEntry decrements unreadCount", () => {
+      addEntry({ message: "a" });
+      addEntry({ message: "b" });
+      expect(getState().unreadCount).toBe(2);
+      const id = getState().entries[0]!.id;
+      getState().archiveEntry(id);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("archiveEntry preserves the entry (non-destructive)", () => {
+      const id = getState().addEntry({ type: "info", message: "still here" });
+      getState().archiveEntry(id);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0]!.message).toBe("still here");
+    });
+
+    it("archiveEntry is a no-op when entry is already archived", () => {
+      const id = getState().addEntry({ type: "info", message: "test" });
+      getState().archiveEntry(id);
+      const firstArchived = getState().entries[0]!.archivedAt;
+      const before = getState().entries[0];
+      getState().archiveEntry(id);
+      const after = getState().entries[0];
+      expect(after).toBe(before!);
+      expect(after!.archivedAt).toBe(firstArchived);
+    });
+
+    it("archiveEntry is a no-op when id does not exist", () => {
+      addEntry({ message: "test" });
+      const before = getState();
+      getState().archiveEntry("nonexistent-id");
+      const after = getState();
+      expect(after.entries).toBe(before.entries);
+      expect(after.unreadCount).toBe(before.unreadCount);
+    });
+
+    it("unreadCount excludes archived entries even when seenAsToast resets", () => {
+      const id = getState().addEntry({ type: "info", message: "live" });
+      getState().archiveEntry(id);
+      expect(getState().unreadCount).toBe(0);
+      // markUnseenAsToast is a no-op on archived entries — see the guard in
+      // the slice. Asserting unreadCount stays 0 regardless.
+      getState().markUnseenAsToast(id);
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("markUnseenAsToast on archived entry is a no-op (no eviction count tick)", () => {
+      const id = getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      getState().archiveEntry(id);
+      expect(getState().evictedToInboxCount).toBe(0);
+      const beforeEntry = getState().entries[0];
+      getState().markUnseenAsToast(id);
+      // Archived entry survives unmodified; evicted counter does not tick.
+      const afterEntry = getState().entries[0];
+      expect(afterEntry).toBe(beforeEntry!);
+      expect(afterEntry!.seenAsToast).toBe(true);
+      expect(getState().evictedToInboxCount).toBe(0);
+    });
+
+    it("archiveByCorrelationId archives all non-archived entries in the thread", () => {
+      addEntry({ message: "a", correlationId: "panel-1" });
+      addEntry({ message: "b", correlationId: "panel-1" });
+      addEntry({ message: "c", correlationId: "panel-2" });
+      getState().archiveByCorrelationId("panel-1");
+      const entries = getState().entries;
+      expect(entries.find((e) => e.message === "a")!.archivedAt).not.toBeNull();
+      expect(entries.find((e) => e.message === "b")!.archivedAt).not.toBeNull();
+      expect(entries.find((e) => e.message === "c")!.archivedAt).toBeNull();
+    });
+
+    it("archiveByCorrelationId leaves already-archived entries untouched", () => {
+      addEntry({ message: "a", correlationId: "panel-1" });
+      const liveId = getState().addEntry({
+        type: "info",
+        message: "b",
+        correlationId: "panel-1",
+      });
+      const oldId = getState().entries.find((e) => e.message === "a")!.id;
+      getState().archiveEntry(oldId);
+      const oldArchivedAt = getState().entries.find((e) => e.id === oldId)!.archivedAt;
+      // Force a measurable delta so equality is meaningful even on machines
+      // where Date.now() returns the same value between calls.
+      const realDateNow = Date.now;
+      Date.now = () => realDateNow() + 50;
+      try {
+        getState().archiveByCorrelationId("panel-1");
+      } finally {
+        Date.now = realDateNow;
+      }
+      expect(getState().entries.find((e) => e.id === oldId)!.archivedAt).toBe(oldArchivedAt);
+      expect(getState().entries.find((e) => e.id === liveId)!.archivedAt).not.toBeNull();
+    });
+
+    it("archiveByCorrelationId is a no-op when nothing matches", () => {
+      addEntry({ message: "a", correlationId: "panel-1" });
+      const before = getState();
+      getState().archiveByCorrelationId("panel-99");
+      const after = getState();
+      expect(after.entries).toBe(before.entries);
+      expect(after.unreadCount).toBe(before.unreadCount);
+    });
+
+    it("archiveByCorrelationId decrements unreadCount only for newly-archived entries", () => {
+      addEntry({ message: "missed", correlationId: "panel-1" });
+      getState().addEntry({
+        type: "info",
+        message: "seen",
+        correlationId: "panel-1",
+        seenAsToast: true,
+      });
+      expect(getState().unreadCount).toBe(1);
+      getState().archiveByCorrelationId("panel-1");
+      expect(getState().unreadCount).toBe(0);
+    });
+  });
+
+  describe("supersede on addEntry", () => {
+    it("supersedes by exact id archives the target entry", () => {
+      const oldId = getState().addEntry({ type: "error", message: "Disconnected" });
+      getState().addEntry({
+        type: "success",
+        message: "Reconnected",
+        supersedes: oldId,
+      });
+      const old = getState().entries.find((e) => e.id === oldId)!;
+      expect(old.archivedAt).not.toBeNull();
+      expect(old.seenAsToast).toBe(true);
+    });
+
+    it("supersedes by id is a no-op when the target is missing", () => {
+      addEntry({ message: "live" });
+      const before = getState().entries.length;
+      getState().addEntry({
+        type: "success",
+        message: "Reconnected",
+        supersedes: "ghost-id",
+      });
+      // The new entry is still added; only the supersede lookup is a no-op.
+      expect(getState().entries.length).toBe(before + 1);
+    });
+
+    it("supersedes by id is a no-op when target is already archived", () => {
+      const oldId = getState().addEntry({ type: "error", message: "Disconnected" });
+      getState().archiveEntry(oldId);
+      const firstArchivedAt = getState().entries.find((e) => e.id === oldId)!.archivedAt;
+      const realDateNow = Date.now;
+      Date.now = () => realDateNow() + 100;
+      try {
+        getState().addEntry({
+          type: "success",
+          message: "Reconnected",
+          supersedes: oldId,
+        });
+      } finally {
+        Date.now = realDateNow;
+      }
+      // archivedAt stays at the original archive time — not re-archived.
+      expect(getState().entries.find((e) => e.id === oldId)!.archivedAt).toBe(firstArchivedAt);
+    });
+
+    it("supersedeKey archives the latest non-archived entry with the matching key", () => {
+      const key = "terminal.A.fallback";
+      getState().addEntry({ type: "error", message: "Disconnected", supersedeKey: key });
+      const errId = getState().entries[0]!.id;
+      getState().addEntry({ type: "success", message: "Reconnected", supersedeKey: key });
+      expect(getState().entries.find((e) => e.id === errId)!.archivedAt).not.toBeNull();
+    });
+
+    it("supersedeKey picks the newest live match when two priors share the key", () => {
+      // Normal addEntry auto-archives the prior on every same-key write, so
+      // two live priors only coexist via direct seeding (e.g., from a test or
+      // a future restore-from-disk path). The find() must still pick the
+      // newest (index 0) so the lookup is robust against that shape.
+      const key = "terminal.A.fallback";
+      useNotificationHistoryStore.setState({
+        entries: [
+          {
+            id: "b-newer",
+            type: "error",
+            message: "newer",
+            timestamp: Date.now(),
+            seenAsToast: false,
+            summarized: false,
+            countable: true,
+            archivedAt: null,
+            supersedeKey: key,
+          },
+          {
+            id: "a-older",
+            type: "error",
+            message: "older",
+            timestamp: Date.now() - 1000,
+            seenAsToast: false,
+            summarized: false,
+            countable: true,
+            archivedAt: null,
+            supersedeKey: key,
+          },
+        ],
+        unreadCount: 2,
+      });
+      getState().addEntry({ type: "success", message: "resolve", supersedeKey: key });
+      const entries = getState().entries;
+      expect(entries.find((e) => e.id === "b-newer")!.archivedAt).not.toBeNull();
+      expect(entries.find((e) => e.id === "a-older")!.archivedAt).toBeNull();
+    });
+
+    it("supersedeKey stores the key on the new entry for future archival", () => {
+      const key = "terminal.A.fallback";
+      getState().addEntry({ type: "error", message: "Disconnected", supersedeKey: key });
+      expect(getState().entries[0]!.supersedeKey).toBe(key);
+    });
+
+    it("supersedeKey skips already-archived entries with the same key", () => {
+      const key = "terminal.A.fallback";
+      getState().addEntry({ type: "error", message: "old", supersedeKey: key });
+      const oldId = getState().entries[0]!.id;
+      getState().archiveEntry(oldId);
+      const oldArchivedAt = getState().entries.find((e) => e.id === oldId)!.archivedAt;
+      getState().addEntry({ type: "info", message: "newer", supersedeKey: key });
+      // The pre-archived old entry stays untouched (archiveAt unchanged).
+      expect(getState().entries.find((e) => e.id === oldId)!.archivedAt).toBe(oldArchivedAt);
+    });
+
+    it("supersedes takes precedence over supersedeKey when both are present", () => {
+      const key = "k";
+      const targetId = getState().addEntry({ type: "error", message: "target", supersedeKey: key });
+      const otherId = getState().addEntry({
+        type: "error",
+        message: "decoy",
+        supersedeKey: key,
+      });
+      // newer non-archived match would be `otherId` via supersedeKey, but
+      // explicit supersedes:targetId wins.
+      getState().addEntry({
+        type: "success",
+        message: "fix",
+        supersedes: targetId,
+        supersedeKey: key,
+      });
+      expect(getState().entries.find((e) => e.id === targetId)!.archivedAt).not.toBeNull();
+      expect(getState().entries.find((e) => e.id === otherId)!.archivedAt).toBeNull();
+    });
+
+    it("addEntry without supersede fields does not archive anything", () => {
+      addEntry({ message: "a" });
+      addEntry({ message: "b" });
+      expect(getState().entries.every((e) => e.archivedAt === null)).toBe(true);
+    });
+
+    it("supersedes does not persist on the new entry", () => {
+      const oldId = getState().addEntry({ type: "error", message: "old" });
+      const newId = getState().addEntry({
+        type: "success",
+        message: "new",
+        supersedes: oldId,
+      });
+      // `supersedes` is a write-time directive, not stored state.
+      expect(
+        (getState().entries.find((e) => e.id === newId)! as { supersedes?: string }).supersedes
+      ).toBeUndefined();
+    });
+  });
 });

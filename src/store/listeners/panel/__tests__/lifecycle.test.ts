@@ -24,7 +24,27 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-import { handleFallbackTriggered } from "../lifecycle";
+const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => void>);
+vi.mock("@/controllers", () => {
+  const noopSub = () => () => {};
+  return {
+    terminalRegistryController: {
+      onFallbackTriggered: vi.fn(noopSub),
+      onTrashed: vi.fn(noopSub),
+      onRestored: vi.fn((handler: (data: { id: string }) => void) => {
+        restoredHandlers.push(handler);
+        return () => {};
+      }),
+      onExit: vi.fn(noopSub),
+      onStatus: vi.fn(noopSub),
+      onSpawnResult: vi.fn(noopSub),
+      onReduceScrollback: vi.fn(noopSub),
+      onRestoreScrollback: vi.fn(noopSub),
+    },
+  };
+});
+
+import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
 
 const actionMatcher = {
@@ -270,5 +290,45 @@ describe("handleFallbackTriggered — guard clauses", () => {
     });
 
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("onRestored — dock popover preservation (#8368)", () => {
+  function getRestoredHandler(): (data: { id: string }) => void {
+    restoredHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = restoredHandlers.at(-1);
+    if (!handler) throw new Error("onRestored handler was not registered");
+    return handler;
+  }
+
+  it("does not clear an unrelated open dock popover when a background terminal restores", () => {
+    setupPanel();
+    usePanelStore.setState({ activeDockTerminalId: "dock-1", focusedId: "dock-1" });
+
+    getRestoredHandler()({ id: "term-1" });
+
+    // A background terminal waking from hibernation must not dismiss the
+    // dock session the user is typing into.
+    expect(usePanelStore.getState().activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("clears the dock popover when the restored terminal is the one displayed in it", () => {
+    setupPanel();
+    usePanelStore.setState({ activeDockTerminalId: "term-1", focusedId: "term-1" });
+
+    getRestoredHandler()({ id: "term-1" });
+
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("is a no-op on dock state when no dock popover is open", () => {
+    setupPanel();
+    usePanelStore.setState({ activeDockTerminalId: null, focusedId: "other" });
+
+    getRestoredHandler()({ id: "term-1" });
+
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+    expect(usePanelStore.getState().focusedId).toBe("term-1");
   });
 });

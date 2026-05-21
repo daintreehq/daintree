@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TerminalHibernationManager, HibernationManagerDeps } from "../TerminalHibernationManager";
 import type { ManagedTerminal } from "../types";
+import { AGENT_IDLE_SILENCE_MS } from "../types";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const { freshTerminalOpenMock, freshTerminalOnWriteParsed } = vi.hoisted(() => ({
@@ -158,6 +159,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     applyDeferredResize: vi.fn(),
     openLink: vi.fn(),
     getCwdProvider: vi.fn(() => undefined),
+    onHibernationChanged: vi.fn(),
     onBufferModeChange: vi.fn(),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
@@ -205,20 +207,58 @@ describe("TerminalHibernationManager", () => {
       expect(deps.destroyRestoreState).not.toHaveBeenCalled();
     });
 
-    it("should no-op for working agent terminal", () => {
+    it("should no-op for recently-active working agent terminal", () => {
       managed.launchAgentId = "claude";
       managed.runtimeAgentId = "claude";
       managed.canonicalAgentState = "working";
+      // Recently rendered output → inside the silence window, must not tear
+      // down. The plain "working" state alone isn't enough to block anymore
+      // — silence is the load-bearing signal.
+      managed.lastWriteAt = Date.now() - 1000;
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
 
-    it("should no-op for waiting agent terminal", () => {
+    it("should no-op for recently-active waiting agent terminal", () => {
       managed.launchAgentId = "claude";
       managed.runtimeAgentId = "claude";
       managed.canonicalAgentState = "waiting";
+      managed.lastWriteAt = Date.now() - 1000;
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should no-op when an active agent has writes in flight", () => {
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      // lastWriteAt far enough in the past to clear the silence window, but
+      // pendingWrites > 0 means xterm is still flushing a burst — must not
+      // tear down mid-write.
+      managed.lastWriteAt = Date.now() - AGENT_IDLE_SILENCE_MS - 5000;
+      managed.pendingWrites = 2;
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should hibernate a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = Date.now() - AGENT_IDLE_SILENCE_MS - 1000;
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("should hibernate an idle agent immediately (no silence window required)", () => {
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "idle";
+      // No lastWriteAt set — `idle` is a resting state, treated like
+      // completed/exited, so the silence window doesn't apply.
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBe(true);
     });
 
     it("should hibernate completed agent terminal", () => {
@@ -247,6 +287,23 @@ describe("TerminalHibernationManager", () => {
       expect(deps.releaseWebGL).toHaveBeenCalledWith("t1");
       expect(deps.clearResizeJob).toHaveBeenCalledWith(managed);
       expect(deps.clearSettledTimer).toHaveBeenCalledWith("t1");
+    });
+
+    it("notifies onHibernationChanged after the flag is written", () => {
+      let seenFlag: boolean | undefined;
+      (deps.onHibernationChanged as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        seenFlag = managed.isHibernated;
+      });
+      manager.hibernate("t1");
+      expect(deps.onHibernationChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onHibernationChanged).toHaveBeenCalledWith("t1");
+      expect(seenFlag).toBe(true);
+    });
+
+    it("does not notify onHibernationChanged when the call short-circuits", () => {
+      managed.isHibernated = true;
+      manager.hibernate("t1");
+      expect(deps.onHibernationChanged).not.toHaveBeenCalled();
     });
 
     it("should dispose addons and null them", () => {
@@ -411,6 +468,23 @@ describe("TerminalHibernationManager", () => {
       expect(managed.lastReflowAt).toBe(0);
     });
 
+    it("notifies onHibernationChanged after the flag is cleared", () => {
+      let seenFlag: boolean | undefined;
+      (deps.onHibernationChanged as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        seenFlag = managed.isHibernated;
+      });
+      manager.unhibernate("t1");
+      expect(deps.onHibernationChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onHibernationChanged).toHaveBeenCalledWith("t1");
+      expect(seenFlag).toBe(false);
+    });
+
+    it("does not notify onHibernationChanged when the terminal is not hibernated", () => {
+      managed.isHibernated = false;
+      manager.unhibernate("t1");
+      expect(deps.onHibernationChanged).not.toHaveBeenCalled();
+    });
+
     it("should not throw if terminal.open throws (bad host)", () => {
       Object.defineProperty(managed.hostElement, "clientWidth", { value: 800, configurable: true });
       Object.defineProperty(managed.hostElement, "clientHeight", {
@@ -454,13 +528,25 @@ describe("TerminalHibernationManager", () => {
       expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
     });
 
-    it("rejects BACKGROUND while an agent is still working/waiting", () => {
+    it("rejects BACKGROUND while a recently-active agent is still working/waiting/directing", () => {
+      const now = Date.now();
       managed.runtimeAgentId = "claude";
+      managed.lastWriteAt = now - 1000;
+
       managed.canonicalAgentState = "working";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(false);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        false
+      );
 
       managed.canonicalAgentState = "waiting";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(false);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        false
+      );
+
+      managed.canonicalAgentState = "directing";
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        false
+      );
     });
 
     it("accepts BACKGROUND once an agent has completed or exited", () => {
@@ -469,6 +555,58 @@ describe("TerminalHibernationManager", () => {
       expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
 
       managed.canonicalAgentState = "exited";
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+    });
+
+    it("treats `idle` as immediately eligible — no silence window required", () => {
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "idle";
+      // No lastWriteAt: `idle` is a resting state, not in ACTIVE_AGENT_STATES,
+      // so the silence guard doesn't apply.
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+    });
+
+    it("accepts BACKGROUND for a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS;
+      managed.pendingWrites = 0;
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        true
+      );
+    });
+
+    it("rejects BACKGROUND one millisecond shy of the silence boundary", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "waiting";
+      managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS + 1;
+      managed.pendingWrites = 0;
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        false
+      );
+    });
+
+    it("rejects BACKGROUND when an idle-eligible active agent still has pending writes", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS - 10_000;
+      managed.pendingWrites = 1;
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
+        false
+      );
+    });
+
+    it("accepts BACKGROUND for an active agent that has no recorded lastWriteAt", () => {
+      // A just-spawned agent that has never written anything reports
+      // infinite silence by definition — eligible. The next write will
+      // stamp lastWriteAt and may flip the state back to ineligible.
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "waiting";
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = undefined;
       expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
     });
   });
@@ -536,6 +674,110 @@ describe("TerminalHibernationManager", () => {
     it("cancelHibernation is safe when no timer is armed", () => {
       managed.hibernationTimer = undefined;
       expect(() => manager.cancelHibernation(managed)).not.toThrow();
+    });
+
+    it("honors the optional delayMs override", () => {
+      managed.runtimeAgentId = undefined;
+      managed.isVisible = false;
+
+      manager.scheduleHibernation("t1", managed, 5_000);
+      expect(managed.hibernationTimer).toBeDefined();
+
+      // Standard 30s should NOT be enough — we set 5s.
+      vi.advanceTimersByTime(4_999);
+      expect(managed.isHibernated).toBe(false);
+
+      vi.advanceTimersByTime(2);
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("arms an eligibility re-check (not the hibernation timer) for a still-silent active agent", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0; // wrote at t=0, silence window not yet reached
+
+      manager.scheduleHibernation("t1", managed);
+
+      // No hibernation timer yet — re-check timer is armed instead.
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      // Advance to just before eligibility flips.
+      vi.advanceTimersByTime(AGENT_IDLE_SILENCE_MS - 1);
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBe(false);
+
+      // Cross the silence boundary — re-check fires, schedules the
+      // normal 30s timer, then advance through that to hibernate.
+      vi.advanceTimersByTime(1);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.advanceTimersByTime(30_000);
+      expect(managed.isHibernated).toBe(true);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("re-check bails if the terminal became visible before eligibility flipped", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0;
+
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      managed.isVisible = true;
+      vi.advanceTimersByTime(AGENT_IDLE_SILENCE_MS);
+
+      // Eligibility re-check ran, bailed because terminal is visible.
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBe(false);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("cancelHibernation clears the eligibility re-check timer too", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "waiting";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0;
+
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+
+      manager.cancelHibernation(managed);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+
+      // Past the window, nothing should fire.
+      vi.advanceTimersByTime(AGENT_IDLE_SILENCE_MS + 1000);
+      expect(managed.hibernationTimer).toBeUndefined();
+      expect(managed.isHibernated).toBe(false);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("arms the regular hibernation timer immediately when an active agent is already past the silence window", () => {
+      vi.setSystemTime(AGENT_IDLE_SILENCE_MS + 10_000);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0; // ancient
+
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.setSystemTime(new Date());
     });
   });
 

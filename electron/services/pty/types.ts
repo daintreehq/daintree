@@ -253,7 +253,22 @@ export const GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS = 100;
 export const IPC_MAX_QUEUE_BYTES = 3 * 1024 * 1024; // 3MB max per terminal
 export const IPC_HIGH_WATERMARK_PERCENT = 67; // Pause PTY at 67% full (~2MB)
 export const IPC_LOW_WATERMARK_PERCENT = 33; // Resume PTY when drops to 33% (~1MB)
-export const IPC_MAX_PAUSE_MS = 10000; // Force resume after 10s — accommodates degraded background-tab parse rates
+// Force resume after 10s. The renderer drain loop (not PTY I/O — that runs in a
+// UtilityProcess unaffected by renderer throttling) is subject to Chromium 146's
+// tiered background-throttling policies the moment the document is hidden or fully
+// occluded:
+//   - BackgroundTimerThrottling: setTimeout/setInterval clamped to 1Hz immediately.
+//   - requestAnimationFrame: suspended entirely (0Hz) while the document is hidden.
+//   - IntensiveWakeUpThrottling: escalates wakeups to 1/minute. With
+//     QuickIntensiveWakeUpThrottlingAfterLoading default-on in Chromium 146,
+//     this engages at the 60s-hidden mark for fully-loaded pages (the baseline
+//     without that flag is 5min).
+// 10s keeps the forced resume comfortably below the 60s IntensiveWakeUpThrottling
+// boundary: it fires the drain while still only under 1Hz BackgroundTimerThrottling,
+// before the far worse 1/minute intensive throttle can engage. Without it, a paused
+// PTY left untouched past 60s could go a full minute between drain ticks and freeze
+// visibly. (history: #3508, #4682, #4683)
+export const IPC_MAX_PAUSE_MS = 10000;
 
 // MessagePort adaptive batching configuration
 export const PORT_BATCH_THRESHOLD_BYTES = 64 * 1024; // 64KB — sync-flush when buffered data exceeds this

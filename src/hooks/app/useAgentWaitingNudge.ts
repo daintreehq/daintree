@@ -11,7 +11,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   const firedRef = useRef(false);
   const notificationIdRef = useRef<string | null>(null);
 
-  function fireNudge() {
+  function fireNudge(panelId: string) {
     if (firedRef.current) return;
     firedRef.current = true;
 
@@ -28,6 +28,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
       inboxMessage:
         "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
       duration: 0,
+      context: { eventKind: "waiting", panelId },
       actions: [
         {
           label: "Enable notifications",
@@ -82,9 +83,9 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
         eligibleRef.current = true;
 
         const { panelsById, panelIds } = usePanelStore.getState();
-        const hasWaiting = panelIds.some((id) => panelsById[id]?.agentState === "waiting");
-        if (hasWaiting && !firedRef.current) {
-          fireNudge();
+        const waitingId = panelIds.find((id) => panelsById[id]?.agentState === "waiting");
+        if (waitingId && !firedRef.current) {
+          fireNudge(waitingId);
         }
       } catch {
         // Silently ignore — nudge is non-critical
@@ -117,7 +118,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
         if (!terminal) continue;
         const prev = prevAgentStates.get(id);
         if (terminal.agentState === "waiting" && prev !== "waiting") {
-          fireNudge();
+          fireNudge(id);
           break;
         }
       }

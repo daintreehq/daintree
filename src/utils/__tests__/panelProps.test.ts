@@ -23,6 +23,7 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     restartError: undefined,
     reconnectError: undefined,
     spawnError: undefined,
+    scrollbackRestoreError: undefined,
     detectedProcessId: undefined,
     browserUrl: undefined,
     ...overrides,

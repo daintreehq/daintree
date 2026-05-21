@@ -38,7 +38,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
               style={{
                 width: 12,
                 height: 12,
-                color: "var(--color-github-open)",
+                color: "var(--color-pr-open)",
                 flexShrink: 0,
               }}
               aria-hidden="true"

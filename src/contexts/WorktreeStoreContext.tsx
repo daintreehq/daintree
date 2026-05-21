@@ -1,15 +1,18 @@
-import { createContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useEffect, useState, startTransition, type ReactNode } from "react";
 import {
   createWorktreeStore,
   setCurrentViewStore,
+  compareVersion,
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
-import type { WorktreeSnapshot } from "@shared/types";
+import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
+import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { mutateCacheEntries } from "@/lib/githubResourceCache";
@@ -19,11 +22,15 @@ export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(n
 interface WorktreeUpdateEvent {
   type: "worktree-update";
   worktree: WorktreeSnapshot;
+  epoch: string;
+  seq: number;
 }
 
 interface WorktreeRemovedEvent {
   type: "worktree-removed";
   worktreeId: string;
+  epoch: string;
+  seq: number;
 }
 
 interface PRDetectedEvent {
@@ -38,11 +45,15 @@ interface PRDetectedEvent {
   issueTitle?: string;
   prLastUpdatedAt?: number;
   issueLastUpdatedAt?: number;
+  branchName?: string;
+  providerId?: string;
+  linked?: PluginWorktreeLinked | null;
 }
 
 interface PRClearedEvent {
   type: "pr-cleared";
   worktreeId: string;
+  branchName?: string;
 }
 
 interface IssueDetectedEvent {
@@ -51,12 +62,38 @@ interface IssueDetectedEvent {
   issueNumber: number;
   issueTitle: string;
   issueLastUpdatedAt?: number;
+  branchName?: string;
+  providerId?: string;
+  linked?: PluginWorktreeLinked | null;
 }
 
 interface IssueNotFoundEvent {
   type: "issue-not-found";
   worktreeId: string;
   issueNumber: number;
+}
+
+// Drop overlays whose lookup branch no longer matches the worktree's current
+// branch — they raced against a branch change and would corrupt the row.
+// Treat undefined on either side as "allow" (older host code may omit the
+// field, and detached HEAD has no branch to compare against).
+function branchesMatch(
+  eventBranch: string | undefined,
+  currentBranch: string | undefined
+): boolean {
+  if (eventBranch === undefined || currentBranch === undefined) return true;
+  return eventBranch === currentBranch;
+}
+
+// Overlay events (pr/issue detection) are renderer-synthesized — the host
+// mints no `(epoch, seq)` for them. Reuse the CURRENT stamp rather than
+// advancing the seq: the store accepts an equal same-epoch version (the guard
+// rejects only strictly-older), so the targeted field merge lands without
+// claiming a seq the host will later emit. Advancing it would shadow the real
+// host event that lands on that exact seq (#8403 review finding #3). A later
+// higher-seq host update or epoch transition still supersedes the overlay.
+function overlayVersion(current: WorktreeEventVersion): WorktreeEventVersion {
+  return { epoch: current.epoch, seq: current.seq };
 }
 
 interface WorktreeActivatedEvent {
@@ -85,41 +122,135 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       if (!isWake) {
         store.getState().setLoading(true);
       }
+
+      // Replay-on-wake: the circuit breaker is pushed via `pr-detection-state`,
+      // but a view that wakes after it tripped would miss that push. Re-seed
+      // from the request-response status. Fire-and-forget and non-critical —
+      // on failure the store stays `false` and the next push corrects it.
+      void worktreeClient
+        .getPRStatus()
+        .then((status) => {
+          if (thisGen !== generation) return;
+          usePRCircuitBreakerStore.getState().setTripped(status?.circuitBreakerTripped ?? false);
+        })
+        .catch(() => {
+          /* non-critical — next pr-detection-state push corrects it */
+        });
+
       worktreePort
         .request("get-all-states")
-        .then(async (response: { states: WorktreeSnapshot[] }) => {
-          if (thisGen !== generation) return;
-
-          // Hydrate manual issue associations from electron store.
-          // Auto-detected issues (from branch names) are already in the snapshots,
-          // but user-attached associations are stored separately.
-          let states = response.states;
-          try {
-            const associations = await worktreeClient.getAllIssueAssociations();
+        .then(
+          async (response: {
+            states: WorktreeSnapshot[];
+            epoch: string;
+            seq: number;
+            watcherDegraded: boolean;
+            // Set of mutation IDs the host has already acknowledged this epoch
+            // (#8405). Empty on a fresh host run — the renderer's outbox
+            // entries from a prior epoch will have their targets reconciled
+            // against the snapshot rather than matched against ack ids.
+            lastAcknowledgedMutationIds?: string[];
+          }) => {
             if (thisGen !== generation) return;
-            if (Object.keys(associations).length > 0) {
-              states = states.map((s) => {
-                const assoc = associations[s.id];
-                // Only apply manual association if no auto-detected issue exists
-                if (assoc && !s.issueNumber) {
-                  return { ...s, issueNumber: assoc.issueNumber, issueTitle: assoc.issueTitle };
-                }
-                return s;
-              });
+
+            // Hydrate the persistent watcher-degraded indicator from the
+            // handshake so a late-mounting view reflects current state without
+            // waiting for a live event. Set before the async associations fetch
+            // so a degradation/recovery event delivered during that await wins
+            // over this now-stale snapshot value.
+            store.getState().setWatcherDegraded(response.watcherDegraded ?? false);
+
+            // Hydrate manual issue associations from electron store.
+            // Auto-detected issues (from branch names) arrive in the snapshots,
+            // but user-attached associations are stored separately and must
+            // survive subsequent `worktree-update` events (#8079). The store
+            // merges them (MANUAL_OVER_AUTO) and caches the map so later events
+            // can re-merge without another IPC round-trip.
+            const states = response.states;
+            // The host stamps this response with its current `(epoch, seq)`
+            // high-water mark, so the snapshot version is fixed at request time
+            // — no renderer-side minting. A `worktree-update` delivered during
+            // the association await carries a strictly higher host `seq` (same
+            // epoch) and `applySnapshot`'s own compare guard rejects this older
+            // snapshot, so the live update is never reverted (#8079, #8403).
+            const snapshotVersion: WorktreeEventVersion = {
+              epoch: response.epoch,
+              seq: response.seq,
+            };
+
+            // `undefined` (not `{}`) means "couldn't load — keep whatever's
+            // cached". An empty object means "authoritatively no associations".
+            // Defaulting to `{}` on failure would wipe cached manual
+            // associations on a transient IPC error (#8079 review).
+            let associations:
+              | Record<string, { issueNumber: number; issueTitle?: string }>
+              | undefined;
+            try {
+              associations = await worktreeClient.getAllIssueAssociations();
+              if (thisGen !== generation) return;
+            } catch {
+              // Non-critical — keep cached associations (associations stays undefined)
+              if (thisGen !== generation) return;
             }
-          } catch {
-            // Non-critical — proceed without manual associations
-            if (thisGen !== generation) return;
+
+            // If the host crashed during the associations fetch (a separate IPC
+            // that port-close cannot reject), skip applySnapshot so it does not
+            // spuriously clear the Reconnecting… indicator.  The next onReady
+            // cycle will deliver fresh data.
+            if (!worktreePort.isReady()) return;
+
+            // A `worktree-update` raced ahead during the association fetch and
+            // advanced the store STRICTLY past this snapshot (same epoch, higher
+            // seq). Don't revert it. An equal seq is the host's authoritative
+            // state at the same boundary (`get-all-states` reports the high-water
+            // seq without advancing), so it must still apply — otherwise cold
+            // start never initializes and an epoch-change re-hydrate is silently
+            // swallowed (#8403 review findings #1, #2). A differing epoch means
+            // the host restarted and always wins. On cold start we still must
+            // hydrate, so retry (the generation guard prevents stale overlaps).
+            if (compareVersion(snapshotVersion, store.getState().version) < 0) {
+              if (!store.getState().isInitialized) fetchInitialState();
+              return;
+            }
+
+            // Wrap the wholesale Map replacement in a transition so the
+            // cascade of `useSyncExternalStore` worktree subscribers re-renders
+            // at non-urgent priority instead of synchronously blocking the
+            // event that delivered the snapshot (#8403).
+            startTransition(() => {
+              store.getState().applySnapshot(states, snapshotVersion, associations);
+            });
+
+            // Mutation-outbox reconcile + replay (#8405). Order matters: prune
+            // FIRST so an ack the renderer missed (host crashed between
+            // `git worktree remove` and the result ack) doesn't get replayed.
+            // Then replay the survivors when either (a) this is a wake
+            // reconnect (epoch transition with a previously-initialized store)
+            // OR (b) there are outbox entries to replay — the second condition
+            // is critical for the manual-restart-after-fatal-error path, where
+            // `setFatalError` reset `isInitialized` to false so `isWake` is
+            // false on the post-restart fetch (#8405 review finding #2). Pure
+            // cold starts can't have outbox entries from this session anyway,
+            // so the `mutationOutbox.size > 0` check costs nothing in that
+            // case. Both calls run outside the startTransition above so they
+            // aren't batched into the non-urgent render priority.
+            store.getState().pruneAcknowledgedMutations(response.lastAcknowledgedMutationIds ?? []);
+            if (isWake || store.getState().mutationOutbox.size > 0) {
+              store.getState().replayOutboxAfterReconnect();
+            }
+
+            // Mirror the per-event resolve below: a snapshot delivered after a
+            // host crash / port reconnect may carry the freshly created worktree
+            // without firing the per-id `worktree-update` event the placeholder
+            // normally listens for. Without this, the skeleton row would stay
+            // stuck in "creating" indefinitely. resolvePendingCreation is a
+            // no-op when no entry matches, so iterating every state is cheap.
+            const selectionStore = useWorktreeSelectionStore.getState();
+            for (const snap of states) {
+              selectionStore.resolvePendingCreation(snap.id);
+            }
           }
-
-          // If the host crashed during the associations fetch (a separate IPC
-          // that port-close cannot reject), skip applySnapshot so it does not
-          // spuriously clear the Reconnecting… indicator.  The next onReady
-          // cycle will deliver fresh data.
-          if (!worktreePort.isReady()) return;
-
-          store.getState().applySnapshot(states, store.getState().nextVersion());
-        })
+        )
         .catch((err: Error) => {
           if (thisGen !== generation) return;
           // On wake, preserve existing data — don't show error screen
@@ -133,32 +264,50 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     cleanups.push(
       worktreePort.onEvent("worktree-update", (data) => {
         const event = data as WorktreeUpdateEvent;
-        store.getState().applyUpdate(event.worktree, store.getState().nextVersion());
+        const prevEpoch = store.getState().version.epoch;
+        // A differing epoch means the workspace host restarted. The event
+        // carries valid state and is applied (a new epoch always wins the
+        // compare), then we re-hydrate from a fresh snapshot to recover
+        // anything the restart's seq reset would otherwise have hidden.
+        // prevEpoch === "" is the pre-hydration baseline, not a restart.
+        const epochChanged = event.epoch !== prevEpoch && prevEpoch !== "";
+        store.getState().applyUpdate(event.worktree, { epoch: event.epoch, seq: event.seq });
+        if (epochChanged) fetchInitialState();
 
         // Side effect: sync pending worktree selection
         const selectionStore = useWorktreeSelectionStore.getState();
         if (selectionStore.pendingWorktreeId === event.worktree.id) {
           selectionStore.applyPendingWorktreeSelection(event.worktree.id);
         }
+
+        // Side effect: clear sidebar placeholder once the real worktree arrives.
+        // Idempotent — the action is a no-op when no entry matches the id, so
+        // unrelated worktree-update events cost nothing.
+        selectionStore.resolvePendingCreation(event.worktree.id);
       })
     );
 
     cleanups.push(
       worktreePort.onEvent("worktree-removed", (data) => {
         const event = data as WorktreeRemovedEvent;
+        const prevEpoch = store.getState().version.epoch;
+        const epochChanged = event.epoch !== prevEpoch && prevEpoch !== "";
         const { worktrees } = store.getState();
         const worktree = worktrees.get(event.worktreeId);
 
-        // Block removal of main worktree
+        // Block removal of main worktree (but still re-hydrate on a host
+        // restart so the rest of the tree converges on fresh state).
         if (worktree?.isMainWorktree) {
           console.warn("[WorktreeStore] Attempted to remove main worktree - blocked", {
             worktreeId: event.worktreeId,
             branch: worktree.branch,
           });
+          if (epochChanged) fetchInitialState();
           return;
         }
 
-        store.getState().applyRemove(event.worktreeId, store.getState().nextVersion());
+        store.getState().applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq });
+        if (epochChanged) fetchInitialState();
 
         // Side effect: invalidate pulse cache
         usePulseStore.getState().invalidate(event.worktreeId);
@@ -203,6 +352,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const { worktrees } = store.getState();
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
+        if (!branchesMatch(event.branchName, existing.branch)) return;
         // Full-replace semantics for prCiStatus mirror the backend
         // (WorktreeMonitor.setPRInfo): undefined means "no checks", not
         // "preserve prior value." Merging with ?? would let stale CI rollups
@@ -219,8 +369,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             issueTitle: event.issueTitle ?? existing.issueTitle,
             prLastUpdatedAt: event.prLastUpdatedAt ?? existing.prLastUpdatedAt,
             issueLastUpdatedAt: event.issueLastUpdatedAt ?? existing.issueLastUpdatedAt,
+            linked: event.linked ?? existing.linked,
           },
-          store.getState().nextVersion()
+          overlayVersion(store.getState().version)
         );
 
         // Sync the GitHub PR dropdown cache so the sidebar PRBadge and the
@@ -229,15 +380,41 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // a project switch (#4670).
         const projectPath = useProjectStore.getState().currentProject?.path;
         if (!projectPath) return;
-        mutateCacheEntries(projectPath, "pr", (entry) => {
+        mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
+          // keyRemainder is `${filterState}:${sortOrder}`; filterState values
+          // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
+          // values fall back to "all" semantics (keep the row, only patch CI)
+          // so a malformed key can never silently evict a PR.
+          const filterState = keyRemainder.split(":")[0];
+          const isFilteredSlot =
+            filterState === "open" || filterState === "closed" || filterState === "merged";
+
           let changed = false;
-          const items = entry.items.map((item) => {
+          const items: (typeof entry.items)[number][] = [];
+          for (const item of entry.items) {
             const pr = item as GitHubPR;
-            if (pr.number !== event.prNumber) return item;
-            if (pr.ciStatus === event.prCiStatus) return item;
+            if (pr.number !== event.prNumber) {
+              items.push(item);
+              continue;
+            }
+            // The PR's state no longer matches this filtered slot (e.g. a
+            // closed PR still sitting in the "open" slot). Drop the row so the
+            // sidebar badge and dropdown converge on the next filter switch
+            // instead of waiting out the 45s TTL. This eviction branch must
+            // stay ahead of the CI-only branch below: it sets changed=true on
+            // removal even when ciStatus is unchanged, which is what triggers
+            // the generation bump in mutateCacheEntries.
+            if (isFilteredSlot && pr.state && pr.state.toLowerCase() !== event.prState) {
+              changed = true;
+              continue;
+            }
+            if (pr.ciStatus === event.prCiStatus) {
+              items.push(item);
+              continue;
+            }
             changed = true;
-            return { ...pr, ciStatus: event.prCiStatus };
-          });
+            items.push({ ...pr, ciStatus: event.prCiStatus });
+          }
           if (!changed) return null;
           return { ...entry, items };
         });
@@ -250,18 +427,35 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const { worktrees } = store.getState();
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
+        if (!branchesMatch(event.branchName, existing.branch)) return;
+        // Mirror the host: clearing the PR drops the CI rollup too. Without
+        // this, an early-startup window where monitor.hasInitialStatus is
+        // false would skip the worktree-update path and leave prCiStatus
+        // hanging without an associated PR.
         store.getState().applyUpdate(
           {
             ...existing,
             prNumber: undefined,
             prUrl: undefined,
             prState: undefined,
+            prCiStatus: undefined,
             prTitle: undefined,
             prLastUpdatedAt: undefined,
             issueLastUpdatedAt: undefined,
+            linked: existing.linked?.issue
+              ? { providerId: existing.linked.providerId, issue: existing.linked.issue }
+              : null,
           },
-          store.getState().nextVersion()
+          overlayVersion(store.getState().version)
         );
+      })
+    );
+
+    cleanups.push(
+      worktreePort.onEvent("pr-detection-state", (data) => {
+        // Service-wide ambient signal — not keyed to a worktree. Use
+        // `.getState()` (not a captured ref) since this callback fires async.
+        usePRCircuitBreakerStore.getState().setTripped((data as { tripped: boolean }).tripped);
       })
     );
 
@@ -271,14 +465,20 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const { worktrees } = store.getState();
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
+        if (!branchesMatch(event.branchName, existing.branch)) return;
+        // `linked` is the source of truth — pass through the host-built
+        // projection (carrying canonical providerId/owner/repo) rather than
+        // re-synthesizing it with empty owner/repo (#8452). Full-replace, so
+        // the host's preserved PR linkage isn't lost.
         store.getState().applyUpdate(
           {
             ...existing,
             issueNumber: event.issueNumber,
             issueTitle: event.issueTitle,
             issueLastUpdatedAt: event.issueLastUpdatedAt ?? existing.issueLastUpdatedAt,
+            linked: event.linked ?? existing.linked,
           },
-          store.getState().nextVersion()
+          overlayVersion(store.getState().version)
         );
       })
     );
@@ -290,15 +490,41 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         const existing = worktrees.get(event.worktreeId);
         if (!existing) return;
         if (existing.issueNumber !== event.issueNumber) return;
+        // `linked` is the source of truth (#8452): clearing the issue must
+        // drop linked.issue too, mirroring the host's onIssueNotFound and the
+        // pr-cleared handler above. Preserve any PR linkage that's present.
         store.getState().applyUpdate(
           {
             ...existing,
             issueNumber: undefined,
             issueTitle: undefined,
             issueLastUpdatedAt: undefined,
+            linked: existing.linked?.pr
+              ? { providerId: existing.linked.providerId, pr: existing.linked.pr }
+              : null,
           },
-          store.getState().nextVersion()
+          overlayVersion(store.getState().version)
         );
+      })
+    );
+
+    // Watcher degradation/recovery — service-wide ambient signals, not keyed
+    // to a worktree. Use `.getState()` (not a captured ref) since these fire
+    // async; the store action's functional updater keeps them race-safe
+    // against the get-all-states hydration.
+    cleanups.push(
+      worktreePort.onEvent("inotify-limit-reached", () => {
+        store.getState().setWatcherDegraded(true);
+      })
+    );
+    cleanups.push(
+      worktreePort.onEvent("emfile-limit-reached", () => {
+        store.getState().setWatcherDegraded(true);
+      })
+    );
+    cleanups.push(
+      worktreePort.onEvent("watcher-recovered", () => {
+        store.getState().setWatcherDegraded(false);
       })
     );
 
@@ -334,17 +560,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
-    // Snapshot-on-wake: when a cached view is reactivated (addChildView),
-    // Chromium fires visibilitychange. Request a fresh worktree snapshot to
-    // rehydrate state that may have changed while the view was backgrounded,
-    // then fan out per-terminal wake to pull the missed range from the
-    // pty-host's headless mirror into each visible xterm buffer (#7999).
+    // Visibility flips drive per-terminal wake fan-out only: pulls the
+    // missed range from the pty-host's headless mirror into each visible
+    // xterm buffer (#7999). The worktree-state refresh path that used to
+    // run alongside this fan-out was removed in #8066 — system sleep-wake
+    // is now consolidated onto `useSystemWakeStore.wakeEpoch`, which the
+    // workspace host's `refreshOnWake` already mirrors via `worktree-update`
+    // push events. Re-entering this handler for short alt-tabs no longer
+    // triggers redundant `get-all-states` fetches.
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
-      if (worktreePort.isReady()) {
-        fetchInitialState();
-      }
-      wakeActiveWorktreeTerminals();
+      void wakeActiveWorktreeTerminals();
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     cleanups.push(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
@@ -355,7 +581,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // worktreePort.isReady() / onReady paths above, so only the wake fan-out
     // needs to run here.
     if (document.visibilityState === "visible") {
-      wakeActiveWorktreeTerminals();
+      void wakeActiveWorktreeTerminals();
     }
 
     return () => {

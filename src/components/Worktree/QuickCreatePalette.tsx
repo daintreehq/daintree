@@ -178,7 +178,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       footer={
         <PaletteFooterHints
           primaryHint={{ keys: ["↵"], label: palette.isPending ? "creating…" : "to create" }}
-          hints={[{ keys: ["Esc"], label: "to cancel" }]}
+          hints={[{ keys: ["Esc"], label: "cancel" }]}
         />
       }
     />

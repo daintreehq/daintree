@@ -1,23 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
-
-const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
-function formatLastFetched(epochMs: number, now: number = Date.now()): string {
-  const deltaSeconds = Math.round((epochMs - now) / 1000);
-  const absSeconds = Math.abs(deltaSeconds);
-  if (absSeconds < 60) return RELATIVE_TIME_FORMATTER.format(deltaSeconds, "second");
-  const deltaMinutes = Math.round(deltaSeconds / 60);
-  if (Math.abs(deltaMinutes) < 60) return RELATIVE_TIME_FORMATTER.format(deltaMinutes, "minute");
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (Math.abs(deltaHours) < 24) return RELATIVE_TIME_FORMATTER.format(deltaHours, "hour");
-  const deltaDays = Math.round(deltaHours / 24);
-  return RELATIVE_TIME_FORMATTER.format(deltaDays, "day");
-}
+import { useSkeletonGate } from "@/hooks/useDeferredLoading";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -26,9 +12,16 @@ interface UpstreamSyncBadgeProps {
   lastFetchedAt: number | null | undefined;
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
-  isGitHubRemote: boolean;
+  isGitHubProvider: boolean;
   containerGapClass: string;
+  baseBranchName?: string | null;
+  baseAheadCount?: number | null;
+  baseBehindCount?: number | null;
+  baseMatchesUpstream?: boolean;
+  fetchIntervalMs?: number;
 }
+
+const STALENESS_MULTIPLIER = 1.5;
 
 export function UpstreamSyncBadge({
   aheadCount,
@@ -37,23 +30,39 @@ export function UpstreamSyncBadge({
   lastFetchedAt,
   fetchAuthFailed,
   fetchNetworkFailed,
-  isGitHubRemote,
+  isGitHubProvider,
   containerGapClass,
+  baseBranchName,
+  baseAheadCount,
+  baseBehindCount,
+  baseMatchesUpstream,
+  fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
-  const showPulse = useDeferredLoading(isFetchInFlight, UI_SKELETON_GATE_MS);
+  const showPulse = useSkeletonGate(isFetchInFlight);
+
+  const isStale = useMemo(() => {
+    if (lastFetchedAt == null || fetchIntervalMs == null) return false;
+    return Date.now() - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
+  }, [lastFetchedAt, fetchIntervalMs]);
+
+  const showBaseDivergence =
+    baseBranchName != null &&
+    !baseMatchesUpstream &&
+    ((baseAheadCount != null && baseAheadCount > 0) ||
+      (baseBehindCount != null && baseBehindCount > 0));
 
   const handleSignInClick = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
     void actionService.dispatch(
       "app.settings.openTab",
-      { tab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
       { source: "user" }
     );
   }, []);
 
-  if (fetchAuthFailed && isGitHubRemote) {
+  if (fetchAuthFailed && isGitHubProvider) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -80,14 +89,14 @@ export function UpstreamSyncBadge({
           <div>GitHub authentication failed</div>
           <div className="text-daintree-text/70 mt-0.5">Click to reconnect GitHub</div>
           {lastFetchedAt != null && (
-            <div className="text-text-muted">Last fetched {formatLastFetched(lastFetchedAt)}</div>
+            <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
           )}
         </TooltipContent>
       </Tooltip>
     );
   }
 
-  if (!hasAhead && !hasBehind) return null;
+  if (!hasAhead && !hasBehind && !showBaseDivergence) return null;
 
   return (
     <Tooltip>
@@ -96,13 +105,24 @@ export function UpstreamSyncBadge({
           className={cn(
             "flex items-center text-[10px] font-mono tabular-nums",
             containerGapClass,
-            isFetchInFlight && showPulse && "animate-pulse-immediate"
+            isFetchInFlight && showPulse && "animate-pulse-immediate",
+            fetchNetworkFailed && "opacity-75",
+            isStale && !isFetchInFlight && "opacity-50 transition-opacity duration-150"
           )}
           data-testid="upstream-sync-indicator"
           data-fetch-in-flight={isFetchInFlight ? "true" : undefined}
+          data-fetch-network-failed={fetchNetworkFailed ? "true" : undefined}
+          data-stale={isStale ? "true" : undefined}
         >
           {hasAhead && <span className="text-status-success">↑{aheadCount}</span>}
           {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
+          {showBaseDivergence && (
+            <span className="text-text-muted/60">
+              &Delta; {baseBranchName}{" "}
+              {baseAheadCount != null && baseAheadCount > 0 && <>↑{baseAheadCount}</>}
+              {baseBehindCount != null && baseBehindCount > 0 && <>↓{baseBehindCount}</>}
+            </span>
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="text-xs">
@@ -120,13 +140,32 @@ export function UpstreamSyncBadge({
           )}
           <span> upstream</span>
         </div>
+        {showBaseDivergence && baseBranchName && (
+          <div className="text-text-muted/70">
+            {baseAheadCount != null && baseAheadCount > 0 && (
+              <span>
+                {baseAheadCount} ahead of {baseBranchName}
+              </span>
+            )}
+            {baseBehindCount != null && baseBehindCount > 0 && (
+              <span>
+                {baseBehindCount} behind {baseBranchName}
+              </span>
+            )}
+          </div>
+        )}
         {fetchNetworkFailed && (
           <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">
             Couldn't reach origin
           </div>
         )}
-        {lastFetchedAt != null && (
-          <div className="text-text-muted">Last fetched {formatLastFetched(lastFetchedAt)}</div>
+        {isStale && lastFetchedAt != null && (
+          <div className="text-text-muted/70">
+            Stale (last fetched {formatRelativeTime(lastFetchedAt)})
+          </div>
+        )}
+        {!isStale && lastFetchedAt != null && (
+          <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
         )}
       </TooltipContent>
     </Tooltip>

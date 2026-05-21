@@ -277,6 +277,9 @@ export function SettingsShortcutCapture({
         // Time-bound Undo (5s) — must surface even during quiet hours, otherwise
         // the user has no path to recover from an accidental unbind.
         urgent: true,
+        // One-shot confirmation; the shortcut table below is the persistent
+        // recovery surface, so no inbox row is needed once the 5s Undo lapses.
+        transient: true,
         action: {
           label: "Undo",
           onClick: async () => {
@@ -295,6 +298,7 @@ export function SettingsShortcutCapture({
               setConflictRefreshKey((prev) => prev + 1);
             } catch (err) {
               logError("Failed to undo keybinding change", err);
+              // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
               notify({
                 type: "error",
                 message: "Failed to undo keybinding change",
@@ -307,6 +311,7 @@ export function SettingsShortcutCapture({
       });
     } catch (err) {
       logError("Failed to unbind keybinding", err);
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         message: "Failed to unbind keybinding",

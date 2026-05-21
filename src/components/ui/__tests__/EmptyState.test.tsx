@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -288,7 +288,7 @@ describe("EmptyState", () => {
   });
 
   describe("animation", () => {
-    it("applies motion-safe entry animation classes on inner content", () => {
+    it("applies motion-safe entry animation classes on the current cell", () => {
       const { container } = render(
         <EmptyState variant="zero-data" scale="canvas" title="No items" />
       );
@@ -303,6 +303,175 @@ describe("EmptyState", () => {
         <EmptyState variant="zero-data" scale="canvas" title="No items" />
       );
       expect(container.innerHTML).not.toContain("transition-all");
+    });
+  });
+
+  describe("fade-through transition", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("renders only the current cell on initial mount", () => {
+      const { container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      // No outgoing cell — only the current title is rendered.
+      expect(screen.getByText('No matches for "fo"')).toBeTruthy();
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+    });
+
+    it("renders both outgoing and incoming cells during a variant flip", () => {
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
+      );
+      // Outgoing cell mounted with the previous title.
+      expect(screen.getByText('No matches for "fo"')).toBeTruthy();
+      // Incoming cell mounted with the new title.
+      expect(screen.getByText('No matches for "foo"')).toBeTruthy();
+      // Exit-animation class is on the outgoing cell.
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+    });
+
+    it("wires onAnimationEnd on the outgoing cell to drive cleanup", () => {
+      // The keyframe animationend event is the primary cleanup path. We can't
+      // reliably trigger React's `onAnimationEnd` from jsdom (it doesn't route
+      // synthetic AnimationEvents through React's event delegation), so we
+      // verify the handler is bound; the safety-timeout test below covers the
+      // fallback path that runs under reduced-motion / performance-mode where
+      // the keyframe is suppressed and animationend never fires.
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
+      );
+      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      expect(outgoing).toBeTruthy();
+      // React stores props on the fiber, not the DOM, so we can't introspect
+      // `onAnimationEnd` directly. Instead, assert the structural contract:
+      // outgoing cell carries the exit-animation class and is mounted in
+      // the same grid cell as the incoming cell.
+      expect(outgoing?.className).toContain("[grid-area:1/1]");
+      const incoming = container.querySelector(".motion-safe\\:animate-in");
+      expect(incoming?.className).toContain("[grid-area:1/1]");
+    });
+
+    it("safety-timeout clears outgoing cell when animationend never fires", () => {
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
+      );
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+      act(() => {
+        vi.advanceTimersByTime(260);
+      });
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+      expect(screen.queryByText('No matches for "fo"')).toBeNull();
+    });
+
+    it("restarts the animation when a new flip arrives mid-transition", () => {
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
+      );
+      // Mid-exit, a new flip arrives — the outgoing cell should now show "foo",
+      // and the incoming should show "fooz".
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fooz"' />
+      );
+      expect(screen.getByText('No matches for "foo"')).toBeTruthy();
+      expect(screen.getByText('No matches for "fooz"')).toBeTruthy();
+      expect(screen.queryByText('No matches for "fo"')).toBeNull();
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(1);
+    });
+
+    it("marks the outgoing cell as aria-hidden", () => {
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' />
+      );
+      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      expect(outgoing?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("marks the outgoing cell as inert so stale actions can't take focus", () => {
+      // Regression guard: an `aria-hidden` cell still keeps its descendants
+      // in the tab order. `inert` removes both. The stale `action` button in
+      // an outgoing filtered-empty cell (e.g. "Clear search") would otherwise
+      // be focusable for up to 250ms during the exit animation.
+      const { rerender, container } = render(
+        <EmptyState
+          variant="filtered-empty"
+          scale="popover"
+          title='No matches for "fo"'
+          action={<button data-testid="stale-action">Clear search</button>}
+        />
+      );
+      rerender(
+        <EmptyState
+          variant="filtered-empty"
+          scale="popover"
+          title='No matches for "foo"'
+          action={<button data-testid="fresh-action">Clear search</button>}
+        />
+      );
+      const outgoing = container.querySelector(".motion-safe\\:animate-out");
+      expect(outgoing?.hasAttribute("inert")).toBe(true);
+    });
+  });
+
+  describe("instant prop", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("suppresses the outgoing cell during a flip", () => {
+      const { rerender, container } = render(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "fo"' instant />
+      );
+      rerender(
+        <EmptyState variant="filtered-empty" scale="sidebar" title='No matches for "foo"' instant />
+      );
+      expect(container.querySelectorAll(".motion-safe\\:animate-out").length).toBe(0);
+      expect(screen.queryByText('No matches for "fo"')).toBeNull();
+      expect(screen.getByText('No matches for "foo"')).toBeTruthy();
+    });
+  });
+
+  describe("instant prop (compile-time enforcement)", () => {
+    it("rejects instant on user-cleared", () => {
+      const element = (
+        // @ts-expect-error user-cleared never carries instant
+        <EmptyState variant="user-cleared" scale="canvas" title="You're all caught up" instant />
+      );
+      expect(element).toBeTruthy();
+    });
+
+    it("accepts instant on filtered-empty", () => {
+      const element = (
+        <EmptyState variant="filtered-empty" scale="sidebar" title="No matches" instant />
+      );
+      expect(element).toBeTruthy();
+    });
+
+    it("accepts instant on zero-data", () => {
+      const element = <EmptyState variant="zero-data" scale="canvas" title="No items" instant />;
+      expect(element).toBeTruthy();
     });
   });
 

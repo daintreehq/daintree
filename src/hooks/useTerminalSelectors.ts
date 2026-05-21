@@ -4,6 +4,7 @@ import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
+import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 export { isTerminalOrphaned, isTerminalVisible };
 
 let _cachedWorktrees: Map<string, WorktreeSnapshot> | null = null;
@@ -99,6 +100,30 @@ export function useWaitingTerminals(): TerminalInstance[] {
 export function useWaitingTerminalIds(): string[] {
   const waiting = useWaitingTerminals();
   return useMemo(() => waiting.map((t) => t.id), [waiting]);
+}
+
+export function useErrorTerminals(): TerminalInstance[] {
+  const worktreeIds = useWorktreeIds();
+
+  return usePanelStore(
+    useShallow((state) => {
+      const out: TerminalInstance[] = [];
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
+        if (!t) continue;
+        if (t.agentState !== "exited") continue;
+        if (typeof t.exitCode !== "number" || t.exitCode === 0) continue;
+        // isTerminalVisible rejects trash/background/ephemeral/orphaned;
+        // isTerminalErrorClusterEligible adds the dock-location exclusion.
+        // Without the orphan gate, clicking an entry from a deleted worktree
+        // would call selectWorktree() on a stale ID and persist it.
+        if (!isTerminalVisible(t, state.isInTrash, worktreeIds)) continue;
+        if (!isTerminalErrorClusterEligible(t)) continue;
+        out.push(t);
+      }
+      return out;
+    })
+  );
 }
 
 export function useBackgroundedTerminals(): TerminalInstance[] {

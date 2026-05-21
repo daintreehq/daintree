@@ -194,6 +194,7 @@ describe("useAgentWaitingNudge", () => {
     expect(payload.placement).toBe("grid-bar");
     expect(payload.duration).toBe(0);
     expect(payload.type).toBe("info");
+    expect(payload.context).toEqual({ eventKind: "waiting", panelId: "t1" });
   });
 
   it("does not fire a second time for another agent", async () => {

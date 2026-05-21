@@ -8,9 +8,6 @@ export interface EventContext {
   /** ID of the agent executing work */
   agentId?: string;
 
-  /** ID of the task being performed */
-  taskId?: string;
-
   /** ID of the terminal involved */
   terminalId?: string;
 

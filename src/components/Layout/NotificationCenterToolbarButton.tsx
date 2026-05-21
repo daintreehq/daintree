@@ -1,11 +1,18 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
-import { Bell, BellOff } from "lucide-react";
+import { Bell, BellOff, Unplug } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 import { isScheduledQuietNow } from "@shared/utils/quietHours";
@@ -33,6 +40,7 @@ export function NotificationCenterToolbarButton({
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
+  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const {
     enabled: notificationsEnabled,
     quietUntil,
@@ -170,13 +178,37 @@ export function NotificationCenterToolbarButton({
     return () => clearTimeout(timer);
   }, [isBellBlipping]);
 
+  // Screen-reader announcement on DND start / end transitions. Initialize the
+  // ref to `isDndActive` so mounting while DND is already active does not
+  // synthesize a spurious "Notifications resumed" announcement.
+  const prevDndActiveRef = useRef(isDndActive);
+  const [dndAnnouncement, setDndAnnouncement] = useState("");
+  useEffect(() => {
+    const prev = prevDndActiveRef.current;
+    prevDndActiveRef.current = isDndActive;
+    if (!notificationsEnabled) {
+      // Bell is hidden; clear any prior announcement so it doesn't surface as
+      // stale text the next time notifications are re-enabled.
+      setDndAnnouncement("");
+      return;
+    }
+    if (prev === isDndActive) return;
+    if (isDndActive) {
+      // Mirror the aria-label priority: isSessionMuted wins when both sources
+      // overlap, so the live region and the button label agree on the reason.
+      setDndAnnouncement(isSessionMuted ? "Notifications paused" : "Quiet hours active");
+    } else {
+      setDndAnnouncement("Notifications resumed");
+    }
+  }, [isDndActive, isSessionMuted, notificationsEnabled]);
+
   if (!notificationsEnabled) return null;
 
   const label = (() => {
     if (isSessionMuted) {
-      return `Notifications — muted until ${timeFormatter.format(new Date(quietUntil))}`;
+      return `Notifications — paused until ${timeFormatter.format(new Date(quietUntil))}`;
     }
-    if (isScheduledMuted) return "Notifications — scheduled quiet hours";
+    if (isScheduledMuted) return "Notifications — quiet hours active";
     if (notificationUnreadCount > 0) return `Notifications — ${notificationUnreadCount} unread`;
     return "Notifications";
   })();
@@ -185,37 +217,47 @@ export function NotificationCenterToolbarButton({
 
   return (
     <div className="relative">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            ref={notificationCenterButtonRef}
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            data-dnd-active={isDndActive ? "true" : undefined}
-            onClick={toggleNotificationCenter}
-            className={toolbarIconButtonClass}
-            aria-label={label}
-            aria-expanded={notificationCenterOpen}
-            aria-haspopup="dialog"
-          >
-            <span
-              data-testid="notification-bell-icon"
-              className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
-              onAnimationEnd={handleBellAnimationEnd}
-            >
-              <Icon />
-            </span>
-            <span
-              data-testid="notification-unread-dot"
-              data-visible={notificationUnreadCount > 0}
-              data-dnd-active={isDndActive ? "true" : undefined}
-              className="toolbar-badge absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-daintree-text/50 ring-1 ring-daintree-bg/60"
-            />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{label}</TooltipContent>
-      </Tooltip>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                ref={notificationCenterButtonRef}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                data-dnd-active={isDndActive ? "true" : undefined}
+                onClick={toggleNotificationCenter}
+                className={toolbarIconButtonClass}
+                aria-label={label}
+                aria-expanded={notificationCenterOpen}
+                aria-haspopup="dialog"
+              >
+                <span
+                  data-testid="notification-bell-icon"
+                  className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
+                  onAnimationEnd={handleBellAnimationEnd}
+                >
+                  <Icon />
+                </span>
+                <span
+                  data-testid="notification-unread-dot"
+                  data-visible={notificationUnreadCount > 0}
+                  data-dnd-active={isDndActive ? "true" : undefined}
+                  className="toolbar-badge absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-daintree-text/50 ring-1 ring-daintree-bg/60"
+                />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{label}</TooltipContent>
+          </Tooltip>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+          <ContextMenuItem onSelect={() => toggleButtonVisibility("notification-center", "right")}>
+            <Unplug className="mr-2 h-3.5 w-3.5" />
+            Unpin from Toolbar
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       <FixedDropdown
         open={notificationCenterOpen}
         onOpenChange={(open) => {
@@ -226,6 +268,15 @@ export function NotificationCenterToolbarButton({
       >
         <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
       </FixedDropdown>
+      <span
+        data-testid="notification-dnd-announcement"
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {dndAnnouncement}
+      </span>
     </div>
   );
 }

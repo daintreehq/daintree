@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import { join as pathJoin } from "path";
+import type { RepoState } from "../../shared/types/git.js";
 
 /**
  * Sentinel files/directories git creates while a multi-step operation is
@@ -38,4 +39,50 @@ export function isRepoOperationInProgress(gitDir: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Synchronously classify the in-progress git operation by checking sentinel
+ * files in `gitDir`. Returns the blocking operation type (REBASING, MERGING,
+ * CHERRY_PICKING, REVERTING), or `undefined` when no operation is in progress.
+ *
+ * Order of checks matches the async `detectRepoOperationState`: rebase first
+ * (both merge and apply backends), then cherry-pick, revert, merge.
+ *
+ * Fails open on filesystem errors — a permission error on any sentinel path
+ * is treated as absent so the classifier never blocks polling.
+ */
+export function getRepoOperationStateSync(gitDir: string): RepoState | undefined {
+  try {
+    if (
+      existsSync(pathJoin(gitDir, "rebase-merge")) ||
+      existsSync(pathJoin(gitDir, "rebase-apply"))
+    ) {
+      return "REBASING";
+    }
+  } catch {
+    // Treat unreadable as absent.
+  }
+  try {
+    if (existsSync(pathJoin(gitDir, "CHERRY_PICK_HEAD"))) {
+      return "CHERRY_PICKING";
+    }
+  } catch {
+    // Treat unreadable as absent.
+  }
+  try {
+    if (existsSync(pathJoin(gitDir, "REVERT_HEAD"))) {
+      return "REVERTING";
+    }
+  } catch {
+    // Treat unreadable as absent.
+  }
+  try {
+    if (existsSync(pathJoin(gitDir, "MERGE_HEAD"))) {
+      return "MERGING";
+    }
+  } catch {
+    // Treat unreadable as absent.
+  }
+  return undefined;
 }

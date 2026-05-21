@@ -51,7 +51,7 @@ describe("GitHubTokenBanner", () => {
 
     expect(listener).toHaveBeenCalledOnce();
     const event = listener.mock.calls[0]![0] as CustomEvent<{ tab: string }>;
-    expect(event.detail.tab).toBe("github");
+    expect(event.detail.tab).toBe("code-forge");
 
     window.removeEventListener("daintree:open-settings-tab", listener as EventListener);
   });

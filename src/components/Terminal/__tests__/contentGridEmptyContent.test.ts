@@ -73,7 +73,38 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("detached at ");
     expect(content).toContain("activeWorktreeHead.slice(0, 7)");
-    expect(content).toContain('import { GitBranch, Settings } from "lucide-react"');
+    expect(content).toMatch(/import \{ .*GitBranch, Settings \} from "lucide-react"/);
     expect(content).toContain("<GitBranch ");
+  });
+});
+
+describe("ContentGridEmptyState surfaces recipes pre-agent-launch (issue #8086)", () => {
+  it("RecipeRunner is gated on the recipe store binding, not hasEverLaunchedAgent", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    // The gate must allow first-run discovery: visible whenever there's an
+    // active worktree, recipes are bound to a project, and the load has
+    // settled (avoiding the in-flight empty-state flash).
+    expect(content).toContain("hasActiveWorktree && recipesProjectId !== null && !recipesLoading");
+    // The previous double-gate that hid RecipeRunner until an agent had launched
+    // must no longer apply to RecipeRunner.
+    expect(content).not.toMatch(
+      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RecipeRunner /
+    );
+  });
+
+  it("RotatingTip stays gated on hasEverLaunchedAgent (teaching content)", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toMatch(
+      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RotatingTip /
+    );
+  });
+
+  it("subscribes to the recipe store for both projectId and loading state", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain('from "@/store/recipeStore"');
+    expect(content).toContain("useRecipeStore((state) => state.currentProjectId)");
+    // The isLoading guard closes the flash window that opens between the
+    // synchronous `set({ currentProjectId })` and the async recipe arrival.
+    expect(content).toContain("useRecipeStore((state) => state.isLoading)");
   });
 });

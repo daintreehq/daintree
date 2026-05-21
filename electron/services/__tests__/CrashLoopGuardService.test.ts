@@ -90,21 +90,42 @@ describe("isSafeModeActive", () => {
     expect(isSafeModeActive(tmpDir)).toBe(false);
   });
 
-  it("returns false when launches are outside the rapid crash window", () => {
+  it("returns false when launches are outside the crash window", () => {
     const now = Date.now();
+    // 31, 35, 40 minutes ago — all outside the 30-min window
     fs.writeFileSync(
       statePath,
       JSON.stringify({
         version: 1,
         crashes: 3,
-        launches: [now - 400000, now - 370000, now - 340000],
+        launches: [now - 31 * 60_000, now - 35 * 60_000, now - 40 * 60_000],
         cleanExit: false,
-        lastReset: now - 300000,
+        lastReset: now - 30 * 60_000,
       }),
       "utf8"
     );
 
     expect(isSafeModeActive(tmpDir)).toBe(false);
+  });
+
+  it("returns true for three slow-flap launches inside the wider window", () => {
+    const now = Date.now();
+    // Slow flap: crashes every 6 minutes — under the old 5-min window this
+    // accumulated 0 strikes (each entry expired before the next crash).
+    // With the 30-min window, three entries within ~18 minutes accumulate.
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        crashes: 3,
+        launches: [now - 12 * 60_000, now - 6 * 60_000, now - 1_000],
+        cleanExit: false,
+        lastReset: now - 30 * 60_000,
+      }),
+      "utf8"
+    );
+
+    expect(isSafeModeActive(tmpDir)).toBe(true);
   });
 
   it("returns false on corrupted state file", () => {
@@ -230,26 +251,6 @@ describe("CrashLoopGuardService", () => {
     expect(guard4.isSafeMode()).toBe(false);
   });
 
-  it("resets counter after stability timer fires", () => {
-    // Simulate 2 crashes
-    for (let i = 0; i < 2; i++) {
-      const guard = new CrashLoopGuardService();
-      guard.initialize();
-    }
-
-    const guard = new CrashLoopGuardService();
-    guard.initialize();
-    guard.startStabilityTimer();
-
-    vi.advanceTimersByTime(5 * 60 * 1000);
-
-    const state = readState();
-    expect(state.crashes).toBe(0);
-    expect(state.cleanExit).toBe(true);
-
-    guard.dispose();
-  });
-
   it("handles corrupted state file gracefully", () => {
     fs.writeFileSync(statePath, "not valid json!!!", "utf8");
 
@@ -258,6 +259,59 @@ describe("CrashLoopGuardService", () => {
 
     expect(guard.isSafeMode()).toBe(false);
     expect(guard.shouldRelaunch()).toBe(true);
+  });
+
+  it("quarantines a corrupt state file instead of silently discarding it", () => {
+    fs.writeFileSync(statePath, "not valid json!!!", "utf8");
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    const quarantinedPath = guard.getQuarantinedStatePath();
+    expect(quarantinedPath).toMatch(/crash-loop-state\.json\.corrupted\.\d+$/);
+    expect(fs.existsSync(quarantinedPath!)).toBe(true);
+    // The quarantined file still contains the original corrupt bytes.
+    expect(fs.readFileSync(quarantinedPath!, "utf8")).toBe("not valid json!!!");
+  });
+
+  it("quarantines a state file with an invalid structure", () => {
+    writeState({ version: 2, foo: "bar" });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    const quarantinedPath = guard.getQuarantinedStatePath();
+    expect(quarantinedPath).toMatch(/crash-loop-state\.json\.corrupted\.\d+$/);
+    expect(fs.existsSync(quarantinedPath!)).toBe(true);
+  });
+
+  it("does not quarantine when the state file is missing (first run)", () => {
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+    // No `.corrupted.*` siblings created.
+    const siblings = fs
+      .readdirSync(tmpDir)
+      .filter((e) => e.startsWith("crash-loop-state.json.corrupted."));
+    expect(siblings).toHaveLength(0);
+  });
+
+  it("does not quarantine a valid state file", () => {
+    writeState({
+      version: 1,
+      crashes: 0,
+      launches: [],
+      cleanExit: true,
+      lastReset: Date.now(),
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toBeNull();
   });
 
   it("handles invalid state structure gracefully", () => {
@@ -270,58 +324,132 @@ describe("CrashLoopGuardService", () => {
     expect(guard.shouldRelaunch()).toBe(true);
   });
 
-  it("only counts crashes within the rapid crash window", () => {
+  describe("stale tmp sweep", () => {
+    it("deletes a stale `.tmp` left by a crashed atomic write", () => {
+      const staleTs = Date.now() - 6 * 60 * 1000; // 6 min ago, beyond 5-min TTL
+      const tmpPath = path.join(tmpDir, `crash-loop-state.json.${staleTs}-abc123.tmp`);
+      fs.writeFileSync(tmpPath, "stale data", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(tmpPath)).toBe(false);
+    });
+
+    it("preserves a fresh `.tmp` (within the 5-min TTL)", () => {
+      const freshTs = Date.now() - 60 * 1000; // 1 min ago
+      const tmpPath = path.join(tmpDir, `crash-loop-state.json.${freshTs}-abc123.tmp`);
+      fs.writeFileSync(tmpPath, "in-flight write", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(tmpPath)).toBe(true);
+    });
+
+    it("only sweeps tmp files that match the crash-loop naming pattern", () => {
+      const otherTmp = path.join(tmpDir, "settings.json.123-abc.tmp");
+      fs.writeFileSync(otherTmp, "not ours", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      expect(fs.existsSync(otherTmp)).toBe(true);
+    });
+  });
+
+  describe("corrupted sibling prune", () => {
+    it("retains the 3 most-recent `.corrupted.*` siblings and prunes older ones", () => {
+      // Drop 5 corrupted siblings with ascending timestamps so the prune sort
+      // is well-defined.
+      const timestamps = [1000, 2000, 3000, 4000, 5000];
+      for (const ts of timestamps) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const survivors = fs
+        .readdirSync(tmpDir)
+        .filter((e) => e.startsWith("crash-loop-state.json.corrupted."))
+        .sort();
+      // The three newest (3000, 4000, 5000) survive — 1000 and 2000 are gone.
+      expect(survivors).toEqual([
+        "crash-loop-state.json.corrupted.3000",
+        "crash-loop-state.json.corrupted.4000",
+        "crash-loop-state.json.corrupted.5000",
+      ]);
+    });
+
+    it("does not prune when there are 3 or fewer siblings", () => {
+      for (const ts of [1000, 2000, 3000]) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const survivors = fs
+        .readdirSync(tmpDir)
+        .filter((e) => e.startsWith("crash-loop-state.json.corrupted."));
+      expect(survivors).toHaveLength(3);
+    });
+
+    it("does not prune the just-quarantined sibling from the current boot", () => {
+      // Two older siblings already on disk.
+      for (const ts of [1000, 2000]) {
+        fs.writeFileSync(path.join(tmpDir, `crash-loop-state.json.corrupted.${ts}`), "x", "utf8");
+      }
+      // And a corrupt state file the current boot will quarantine.
+      fs.writeFileSync(statePath, "garbage", "utf8");
+
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+
+      const quarantinedPath = guard.getQuarantinedStatePath();
+      expect(quarantinedPath).not.toBeNull();
+      expect(fs.existsSync(quarantinedPath!)).toBe(true);
+    });
+  });
+
+  it("only counts crashes within the crash window", () => {
     const now = Date.now();
 
-    // Write state with old launches (outside 300s window)
+    // Write state with launches well outside the 30-min window
     writeState({
       version: 1,
       crashes: 3,
-      launches: [now - 400000, now - 370000, now - 340000],
+      launches: [now - 40 * 60_000, now - 35 * 60_000, now - 31 * 60_000],
       cleanExit: false,
-      lastReset: now - 300000,
+      lastReset: now - 30 * 60_000,
     });
 
     const guard = new CrashLoopGuardService();
     guard.initialize();
 
-    // Old launches are outside the 300s window, so crashes should be 0
     expect(guard.isSafeMode()).toBe(false);
   });
 
-  it("dispose clears stability timer", () => {
-    const guard = new CrashLoopGuardService();
-    guard.initialize();
-    guard.startStabilityTimer();
-    guard.dispose();
-
-    // Timer should not fire
-    const stateBefore = readState();
-    vi.advanceTimersByTime(5 * 60 * 1000);
-    const stateAfter = readState();
-
-    expect(stateAfter.crashes).toBe(stateBefore.crashes);
-  });
-
-  it("stability timer resets in-memory flags after hard stop", () => {
-    // Reach hard-stop state (5 crashes)
-    for (let i = 0; i < 5; i++) {
+  it("accumulates slow-flap launches across the wider window (regression #8683)", () => {
+    // Four unclean launches spaced 6 minutes apart — the fourth boot reads
+    // three prior in-window launches and enters safe mode. Under the prior
+    // 5-min rapid window with the stability-timer reset, this slow flap
+    // silently accumulated zero strikes; with the 30-min lazy-decay window
+    // it correctly trips at the third strike.
+    const start = Date.now();
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(start + i * 6 * 60_000);
       const guard = new CrashLoopGuardService();
       guard.initialize();
+      expect(guard.isSafeMode()).toBe(false);
     }
 
-    const guard = new CrashLoopGuardService();
-    guard.initialize();
-    expect(guard.isSafeMode()).toBe(true);
-    expect(guard.shouldRelaunch()).toBe(false);
-
-    guard.startStabilityTimer();
-    vi.advanceTimersByTime(5 * 60 * 1000);
-
-    expect(guard.isSafeMode()).toBe(false);
-    expect(guard.shouldRelaunch()).toBe(true);
-
-    guard.dispose();
+    vi.setSystemTime(start + 3 * 6 * 60_000);
+    const fourth = new CrashLoopGuardService();
+    fourth.initialize();
+    expect(fourth.isSafeMode()).toBe(true);
+    expect(fourth.shouldRelaunch()).toBe(true);
   });
 
   it("initialize is idempotent — second call is a no-op", () => {
@@ -331,20 +459,6 @@ describe("CrashLoopGuardService", () => {
 
     const state = readState();
     expect(state.launches).toHaveLength(1);
-  });
-
-  it("startStabilityTimer is idempotent", () => {
-    const guard = new CrashLoopGuardService();
-    guard.initialize();
-    guard.startStabilityTimer();
-    guard.startStabilityTimer();
-
-    vi.advanceTimersByTime(5 * 60 * 1000);
-
-    const state = readState();
-    expect(state.crashes).toBe(0);
-
-    guard.dispose();
   });
 
   describe("crash metadata", () => {
@@ -456,29 +570,6 @@ describe("CrashLoopGuardService", () => {
 
       expect(guard.isSafeMode()).toBe(false);
       expect(guard.getLastCrashTimestamp()).toBeUndefined();
-    });
-
-    it("cancels the stability timer so it can't clobber the fresh state", () => {
-      for (let i = 0; i < 3; i++) {
-        const guard = new CrashLoopGuardService();
-        guard.initialize();
-      }
-      const guard = new CrashLoopGuardService();
-      guard.initialize();
-      guard.startStabilityTimer();
-
-      guard.resetForNormalBoot();
-
-      // Advancing past the 5-minute timeout must not re-fire the timer
-      // (which would also write fresh state, but more importantly must
-      // not throw on a torn-down service).
-      vi.advanceTimersByTime(6 * 60 * 1000);
-
-      const state = readState();
-      expect(state.crashes).toBe(0);
-      expect(state.cleanExit).toBe(true);
-
-      guard.dispose();
     });
   });
 });

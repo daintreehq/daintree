@@ -1,11 +1,17 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
-import type { DevServerErrorType } from "../../shared/utils/devServerErrors";
+import type { DevServerError } from "../../shared/utils/devServerErrors";
 import type { DevPreviewSessionState } from "../../shared/types/ipc/devPreview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
-export type DevPreviewStatus = "stopped" | "starting" | "installing" | "running" | "error";
+export type DevPreviewStatus =
+  | "stopped"
+  | "starting"
+  | "installing"
+  | "running"
+  | "stopping"
+  | "error";
 
 export interface UseDevServerOptions {
   panelId: string;
@@ -20,7 +26,8 @@ export interface UseDevServerState {
   status: DevPreviewStatus;
   url: string | null;
   terminalId: string | null;
-  error: { type: DevServerErrorType; message: string } | null;
+  error: DevServerError | null;
+  phaseLabel?: "Compiling";
 }
 
 export interface UseDevServerReturn extends UseDevServerState {
@@ -28,10 +35,28 @@ export interface UseDevServerReturn extends UseDevServerState {
   stop: () => void;
   restart: () => Promise<void>;
   isRestarting: boolean;
+  /**
+   * Escalation level while the server is stuck in `starting`. 0 = not stuck,
+   * 1 = ambient (6s), 2 = warning banner (12s), 3 = error banner (25s).
+   * Resets to 0 whenever status leaves `starting`.
+   */
+  stuckTier: DevServerStuckTier;
+  forceKilled?: boolean;
 }
 
-const STUCK_START_RECOVERY_MS = 10000;
-const MAX_AUTO_RECOVERY_ATTEMPTS = 1;
+/**
+ * Staged stuck-start escalation thresholds (#8276). When the dev server stays
+ * in `starting` past each threshold, `stuckTier` advances so the UI can
+ * surface a progressively stronger, user-driven signal instead of silently
+ * restarting (which wiped the logs explaining the stall). All three timers
+ * are scheduled together from a single effect; tier 1 sits well past the 5s
+ * post-spawn URL poll window so it never fires for fast-starting servers.
+ */
+const STUCK_TIER1_MS = 6000;
+const STUCK_TIER2_MS = 12000;
+const STUCK_TIER3_MS = 25000;
+
+export type DevServerStuckTier = 0 | 1 | 2 | 3;
 
 /**
  * Module-level cache that persists the last successful ensure configKey across
@@ -83,8 +108,11 @@ export function useDevServer({
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
   const [url, setUrl] = useState<string | null>(null);
   const [terminalId, setTerminalId] = useState<string | null>(null);
-  const [error, setError] = useState<{ type: DevServerErrorType; message: string } | null>(null);
+  const [error, setError] = useState<DevServerError | null>(null);
+  const [phaseLabel, setPhaseLabel] = useState<"Compiling" | undefined>(undefined);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [stuckTier, setStuckTier] = useState<DevServerStuckTier>(0);
+  const [forceKilled, setForceKilled] = useState<boolean | undefined>(undefined);
   const latestSessionRef = useRef<{
     status: DevPreviewStatus;
     url: string | null;
@@ -99,9 +127,6 @@ export function useDevServer({
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureConfigRef = useRef<string | null>(null);
   const requestVersionRef = useRef(0);
-  const autoRecoveryAttemptsRef = useRef<{ starting: number }>({
-    starting: 0,
-  });
 
   const latestContextRef = useRef<{
     panelId: string;
@@ -156,19 +181,17 @@ export function useDevServer({
     setStatus(state.status);
     setUrl(state.url);
     setTerminalId(state.terminalId);
-    setError(
-      state.error
-        ? ({ type: state.error.type, message: state.error.message } as {
-            type: DevServerErrorType;
-            message: string;
-          })
-        : null
-    );
+    setError(state.error ?? null);
+    setPhaseLabel(state.phaseLabel);
     setIsRestarting(state.isRestarting);
+    setForceKilled(state.forceKilled);
   }, []);
 
   const applyInvokeError = useCallback((err: unknown) => {
     if (!isMountedRef.current) return;
+    // IPC rejections are opaque — formatErrorMessage produces a user-facing
+    // string; if the main process ever sends structured DevServerError rejects,
+    // this path would need deserialization to preserve type/port/module.
     const message = formatErrorMessage(err, "Dev server request failed");
     latestSessionRef.current = {
       status: "error",
@@ -319,7 +342,6 @@ export function useDevServer({
 
   useEffect(() => {
     requestVersionRef.current += 1;
-    autoRecoveryAttemptsRef.current = { starting: 0 };
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, turbopackEnabled]);
 
   useEffect(() => {
@@ -432,70 +454,59 @@ export function useDevServer({
     ensureLatestConfig,
   ]);
 
+  // Staged stuck-start escalation (#8276). Replaces the old silent
+  // auto-restart: instead of firing `devPreview.restart()` once at 10s
+  // (which wiped the logs explaining the stall), we advance `stuckTier`
+  // at 6s/12s/25s so the UI can surface a user-driven signal. The user
+  // now drives any recovery explicitly via the banner actions.
   useEffect(() => {
-    if (status !== "starting") {
-      autoRecoveryAttemptsRef.current = { starting: 0 };
+    if (status !== "starting" || !currentProjectId || !terminalId || url || isRestarting) {
+      // `installing` and every other non-starting state falls through here,
+      // which keeps banners suppressed during long first-run installs.
+      setStuckTier(0);
       return;
     }
-    if (!currentProjectId || !terminalId || url || isRestarting) return;
-    const currentAttempts = autoRecoveryAttemptsRef.current[status];
-    if (currentAttempts >= MAX_AUTO_RECOVERY_ATTEMPTS) return;
 
     const requestVersion = requestVersionRef.current;
     const requestProjectId = currentProjectId;
     const requestPanelId = panelId;
-    const requestStatus = status;
 
-    const timeout = window.setTimeout(() => {
+    const advanceTier = (tier: DevServerStuckTier) => {
       const latestContext = latestContextRef.current;
       const latestSession = latestSessionRef.current;
 
       if (!isMountedRef.current) return;
-      if (autoRecoveryAttemptsRef.current[requestStatus] >= MAX_AUTO_RECOVERY_ATTEMPTS) return;
       if (requestVersion !== requestVersionRef.current) return;
       if (latestContext.projectId !== requestProjectId) return;
       if (latestContext.panelId !== requestPanelId) return;
-      if (latestSession.status !== requestStatus || latestSession.url || !latestSession.terminalId)
+      if (latestSession.status !== "starting" || latestSession.url || !latestSession.terminalId)
         return;
 
-      autoRecoveryAttemptsRef.current[requestStatus] += 1;
-      window.electron.devPreview
-        .restart({ panelId: requestPanelId, projectId: requestProjectId })
-        .then((nextState) => {
-          if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
-            applyState(nextState);
-          }
-        })
-        .catch((err) => {
-          if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
-            applyInvokeError(err);
-          }
-        });
-    }, STUCK_START_RECOVERY_MS);
+      setStuckTier((prev) => (tier > prev ? tier : prev));
+    };
+
+    const timers = [
+      window.setTimeout(() => advanceTier(1), STUCK_TIER1_MS),
+      window.setTimeout(() => advanceTier(2), STUCK_TIER2_MS),
+      window.setTimeout(() => advanceTier(3), STUCK_TIER3_MS),
+    ];
 
     return () => {
-      window.clearTimeout(timeout);
+      for (const timer of timers) window.clearTimeout(timer);
     };
-  }, [
-    panelId,
-    currentProjectId,
-    status,
-    terminalId,
-    url,
-    isRestarting,
-    applyState,
-    applyInvokeError,
-    isRequestCurrent,
-  ]);
+  }, [panelId, currentProjectId, status, terminalId, url, isRestarting]);
 
   return {
     status,
     url,
     terminalId,
     error,
+    phaseLabel,
     start,
     stop,
     restart,
     isRestarting,
+    stuckTier,
+    forceKilled,
   };
 }

@@ -59,6 +59,7 @@ describe("useMcpBridge", () => {
         actionId: string;
         args?: unknown;
         confirmed?: boolean;
+        context?: Record<string, unknown>;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -94,6 +95,7 @@ describe("useMcpBridge", () => {
               actionId: string;
               args?: unknown;
               confirmed?: boolean;
+              context?: Record<string, unknown>;
             }) => void | Promise<void>
           ) => {
             dispatchHandler = callback;
@@ -153,6 +155,46 @@ describe("useMcpBridge", () => {
     });
   });
 
+  it("forwards the bound provision-time context as contextOverride (#8317)", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const boundContext = { focusedWorktreeId: "wt-7", focusedTerminalId: "term-2" };
+    await dispatchHandler?.({
+      requestId: "req-ctx",
+      actionId: "terminal.inject",
+      args: { text: "ls" },
+      context: boundContext,
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "terminal.inject",
+      { text: "ls" },
+      { source: "agent", confirmed: undefined, contextOverride: boundContext }
+    );
+  });
+
+  it("passes contextOverride: undefined for unpinned dispatch — live context preserved (#8317)", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-no-ctx",
+      actionId: "actions.list",
+      args: { limit: 3 },
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "actions.list",
+      { limit: 3 },
+      { source: "agent", confirmed: undefined, contextOverride: undefined }
+    );
+  });
+
   it("suppresses create-time panel focus while an MCP action dispatch is in flight", async () => {
     mocks.get.mockReturnValue(safeManifestEntry());
     mocks.dispatch.mockImplementation(async () => {
@@ -209,6 +251,35 @@ describe("useMcpBridge", () => {
       result: { ok: true, result: { ok: true } },
       confirmationDecision: "approved",
     });
+  });
+
+  it("preserves the bound context across the confirmation wait (#8317)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const boundContext = { focusedWorktreeId: "wt-confirm" };
+    const dispatched = dispatchHandler?.({
+      requestId: "req-confirm-ctx",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+      context: boundContext,
+    });
+
+    await Promise.resolve();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    // contextOverride must be the value captured in the handler closure,
+    // not re-read from live state after the modal await resolved.
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "worktree.delete",
+      { worktreeId: "wt-1" },
+      { source: "agent", confirmed: true, contextOverride: boundContext }
+    );
   });
 
   it("returns USER_REJECTED without ever calling actionService.dispatch when the user cancels", async () => {

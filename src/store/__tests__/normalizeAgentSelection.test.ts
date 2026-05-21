@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAgentSelection } from "../agentSettingsStore";
 import { getEffectiveAgentIds } from "../../../shared/config/agentRegistry";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds";
+import { DEFAULT_AGENT_SETTINGS, type AgentSettings, type CliAvailability } from "@shared/types";
 
 describe("normalizeAgentSelection", () => {
   const makeSettings = (agents: Record<string, { pinned?: boolean }>): AgentSettings => ({
@@ -50,11 +51,56 @@ describe("normalizeAgentSelection", () => {
     expect(result.agents.claude!.pinned).toBeUndefined();
   });
 
-  it("seeds empty entries (no pinned) for missing registered agents when hasRealData is true", () => {
-    // Fresh install: no entries in the persisted store. Seed empty records
-    // so the tri-state selector can follow availability — no eager
-    // synthesis here, the renderer derives at read time.
-    const settings: AgentSettings = { agents: {} };
+  it("pins the first five installed built-ins on a fresh default install", () => {
+    const installedIds = BUILT_IN_AGENT_IDS.slice(0, 7);
+    const availability = availabilityFor(
+      Object.fromEntries(installedIds.map((id) => [id, "installed"]))
+    );
+    const result = normalizeAgentSelection(DEFAULT_AGENT_SETTINGS, availability, true);
+
+    expect(result.settingsVersion).toBe(2);
+    for (const [index, id] of BUILT_IN_AGENT_IDS.entries()) {
+      expect(result.agents[id]?.pinned).toBe(index < 5);
+    }
+  });
+
+  it("sets non-installed built-ins to explicit unpinned on a fresh default install", () => {
+    const availability = availabilityFor({ [BUILT_IN_AGENT_IDS[0]!]: "installed" });
+    const result = normalizeAgentSelection(DEFAULT_AGENT_SETTINGS, availability, true);
+
+    expect(result.agents[BUILT_IN_AGENT_IDS[0]!]?.pinned).toBe(true);
+    for (const id of BUILT_IN_AGENT_IDS.slice(1)) {
+      expect(result.agents[id]?.pinned).toBe(false);
+    }
+  });
+
+  it("recovers a default-shaped settingsVersion 1 store from a missed first-run pin pass", () => {
+    const settings: AgentSettings = {
+      ...DEFAULT_AGENT_SETTINGS,
+      settingsVersion: 1,
+    };
+    const availability = availabilityFor({
+      claude: "ready",
+      opencode: "installed",
+      aider: "installed",
+      gemini: "ready",
+      codex: "ready",
+      cursor: "ready",
+    });
+
+    const result = normalizeAgentSelection(settings, availability, true);
+
+    expect(result.settingsVersion).toBe(2);
+    expect(result.agents.claude?.pinned).toBe(true);
+    expect(result.agents.opencode?.pinned).toBe(true);
+    expect(result.agents.aider?.pinned).toBe(true);
+    expect(result.agents.gemini?.pinned).toBe(true);
+    expect(result.agents.codex?.pinned).toBe(true);
+    expect(result.agents.cursor?.pinned).toBe(false);
+  });
+
+  it("seeds empty entries (no pinned) for missing registered agents when hasRealData is true and settings are not fresh defaults", () => {
+    const settings: AgentSettings = { settingsVersion: 1, agents: {} };
     const allIds = getEffectiveAgentIds();
     const [firstInstalled] = allIds;
     const availability = availabilityFor({ [firstInstalled!]: "installed" });

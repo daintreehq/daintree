@@ -52,9 +52,11 @@ export function getGeneration(key: string): number {
  * pair, regardless of filter or sort. Use after a mutation (close, merge,
  * reopen) so sibling filter slots don't serve stale rows on the next switch.
  *
- * The transform receives each entry and returns either a new entry (write
- * back + bump generation to discard any concurrent in-flight SWR for that
- * slot) or null (leave untouched, no generation bump).
+ * The transform receives each entry plus the key remainder after the
+ * `${projectPath}:${type}:` prefix (i.e. `${filterState}:${sortOrder}`), so it
+ * can tell which filter slot it is mutating. It returns either a new entry
+ * (write back + bump generation to discard any concurrent in-flight SWR for
+ * that slot) or null (leave untouched, no generation bump).
  *
  * Prefix-matches on `${projectPath}:${type}:` rather than splitting on `:`
  * because `projectPath` can contain colons on Windows (e.g., `C:\projects`).
@@ -62,12 +64,15 @@ export function getGeneration(key: string): number {
 export function mutateCacheEntries(
   projectPath: string,
   type: string,
-  transform: (entry: GitHubResourceCacheEntry) => GitHubResourceCacheEntry | null
+  transform: (
+    entry: GitHubResourceCacheEntry,
+    keyRemainder: string
+  ) => GitHubResourceCacheEntry | null
 ): void {
   const prefix = `${projectPath}:${type}:`;
   for (const [key, entry] of cache.entries()) {
     if (!key.startsWith(prefix)) continue;
-    const next = transform(entry);
+    const next = transform(entry, key.slice(prefix.length));
     if (next === null) continue;
     setCache(key, next);
     nextGeneration(key);

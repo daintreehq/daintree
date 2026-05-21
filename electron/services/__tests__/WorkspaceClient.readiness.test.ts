@@ -96,8 +96,6 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     getAllRequests(): Array<{ requestId: string; type: string; [key: string]: any }> {
       return this.sendWithResponse.mock.calls.map(([req]: any) => req);
     }
-
-    attachRendererPort = vi.fn(() => true);
   }
 
   return { mockHosts, MockWorkspaceHostProcess };
@@ -108,20 +106,22 @@ vi.mock("../WorkspaceHostProcess.js", () => ({
 }));
 
 vi.mock("electron", () => {
-  class MockMessageChannelMain {
-    port1 = { close: vi.fn() };
-    port2 = { close: vi.fn() };
-  }
   return {
     BrowserWindow: {
       getAllWindows: vi.fn(() => []),
     },
-    MessageChannelMain: MockMessageChannelMain,
   };
 });
 
 vi.mock("../events.js", () => ({
   events: { emit: vi.fn() },
+}));
+
+// `WorkspaceHostPool` reads forge settings via `projectStore` to plumb into
+// the `load-project` payload (#8316). Stub it so importing the pool doesn't
+// fire ProjectStore's eager `app.getPath("userData")` constructor.
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }) },
 }));
 
 import { WorkspaceClient } from "../WorkspaceClient.js";

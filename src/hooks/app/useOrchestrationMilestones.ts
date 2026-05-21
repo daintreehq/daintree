@@ -68,7 +68,7 @@ function checkContextInjection(): boolean {
 function checkPRMerged(): boolean {
   const worktrees = getCurrentViewStore().getState().worktrees;
   for (const w of worktrees.values()) {
-    if (w.prState === "merged") return true;
+    if (w.linked?.pr?.state === "merged") return true;
   }
   return false;
 }
@@ -136,6 +136,10 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
           title: milestone.title,
           message: milestone.message,
           duration: TOAST_DURATION,
+          // One-shot celebration; the milestone is already captured in
+          // onboarding state, so inbox persistence would just accumulate
+          // stale "Milestone reached" rows with no recovery path.
+          transient: true,
         });
       }
 
@@ -185,9 +189,9 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
           viewStore.subscribe((state, prev) => {
             if (shown["first-pr-merged"]) return;
             for (const [id, w] of state.worktrees) {
-              if (w.prState === "merged") {
+              if (w.linked?.pr?.state === "merged") {
                 const prevW = prev.worktrees.get(id);
-                if (!prevW || prevW.prState !== "merged") {
+                if (!prevW || prevW.linked?.pr?.state !== "merged") {
                   showToast("first-pr-merged");
                   return;
                 }

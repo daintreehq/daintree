@@ -10,9 +10,13 @@ const HOVER_DWELL_MS = 1500;
  * HOVER_DWELL_MS. Only triggers for actions at count 0 (pre-use discovery)
  * or at a milestone count, with one-shot gating per count level.
  *
+ * Keyboard parity (WCAG 1.4.13): focus shows the same hint immediately, with
+ * no dwell delay — keyboard users expect content on focus without a wait.
+ *
  * Returns handlers to spread onto the target element's root node:
- *   const { onPointerEnter, onPointerLeave, onPointerDown } = useShortcutHintHover("nav.toggleSidebar");
- *   <button onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} onPointerDown={onPointerDown} />
+ *   const { onPointerEnter, onPointerLeave, onPointerDown, onFocus, onBlur } =
+ *     useShortcutHintHover("nav.toggleSidebar");
+ *   <button onPointerEnter={onPointerEnter} ... onFocus={onFocus} onBlur={onBlur} />
  */
 export function useShortcutHintHover(actionId: string) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -92,5 +96,42 @@ export function useShortcutHintHover(actionId: string) {
     clearTimer();
   };
 
-  return { onPointerEnter, onPointerLeave, onPointerDown };
+  const onFocus = (e: React.FocusEvent) => {
+    // Cancel any racing pointer dwell so it can't double-show after focus did.
+    clearTimer();
+
+    const displayCombo = displayComboRef.current;
+    if (!displayCombo) return;
+
+    const target = e.currentTarget;
+
+    // Suppress when a Radix tooltip is already teaching the same shortcut on
+    // this trigger (data-state is merged onto the trigger child via asChild).
+    const tooltipState = target.getAttribute("data-state");
+    if (tooltipState === "delayed-open" || tooltipState === "instant-open") return;
+
+    const store = shortcutHintStore;
+    if (!store.getState().isHoverEligible(actionId)) return;
+
+    const rect = target.getBoundingClientRect();
+    const shown = store.getState().show(actionId, displayCombo, {
+      x: rect.left,
+      y: rect.top,
+    });
+    if (shown) {
+      store.getState().markHoverShown(actionId);
+    }
+  };
+
+  const onBlur = () => {
+    clearTimer();
+    // Only clear the hint this element owns — a blur here must not dismiss a
+    // hint another trigger raised (e.g. a pointer dwell on a different button).
+    const store = shortcutHintStore;
+    if (store.getState().activeHint?.actionId === actionId) {
+      store.getState().hide();
+    }
+  };
+
+  return { onPointerEnter, onPointerLeave, onPointerDown, onFocus, onBlur };
 }

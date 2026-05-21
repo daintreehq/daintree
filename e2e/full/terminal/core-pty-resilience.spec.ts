@@ -3,7 +3,12 @@ import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../../
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getTerminalText, waitForTerminalText, runTerminalCommand } from "../../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../../helpers/panels";
+import {
+  expectToolbarButtonReachable,
+  getFirstGridPanel,
+  getGridPanelCount,
+  openTerminal,
+} from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 import {
@@ -250,8 +255,8 @@ test.describe.serial("Core: PTY Resilience", () => {
       .toMatch(/trashed|preserved/);
 
     // Verify the toolbar is still interactive (app is responsive)
-    await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible();
-    await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible();
+    await expectToolbarButtonReachable(window, SEL.toolbar.toggleSidebar, T_MEDIUM);
+    await expectToolbarButtonReachable(window, SEL.toolbar.openSettings, T_MEDIUM);
   });
 
   test("PTY crash mid-output: open new terminal after crash", async () => {

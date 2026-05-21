@@ -7,6 +7,7 @@ import type {
   TerminalRuntimeStatus,
   SpawnError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   TabGroup,
   TabGroupLocation,
   BrowserHistory,
@@ -100,6 +101,13 @@ export interface PanelRegistrySlice {
   ) => void;
   updateLastCommand: (id: string, lastCommand: string) => void;
   updateVisibility: (id: string, isVisible: boolean) => void;
+  /**
+   * Stamp `lastActiveAt = Date.now()` on the panel. Called from user-intent
+   * focus paths (`setFocused`, `activateTerminal`, `openDockTerminal`) so
+   * panel restore can promote the most-recently-active panel per worktree
+   * to the priority tier. Idempotent on missing panels.
+   */
+  stampLastActive: (id: string) => void;
   getTerminal: (id: string) => TerminalInstance | undefined;
 
   moveTerminalToDock: (id: string) => void;
@@ -163,10 +171,14 @@ export interface PanelRegistrySlice {
   setBrowserZoom: (id: string, zoom: number) => void;
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
+  setDevPreviewConsoleTab: (id: string, tab: "output" | "console") => void;
   setViewportPreset: (
     id: string,
     preset: import("@shared/types/panel.js").ViewportPresetId | undefined
   ) => void;
+  setViewportRotated: (id: string, rotated: boolean) => void;
+  setViewportDpr: (id: string, dpr: 1 | 2 | 3) => void;
+  setViewportFit: (id: string, fit: boolean) => void;
   setDevPreviewScrollPosition: (
     id: string,
     position: { url: string; scrollY: number } | undefined
@@ -182,6 +194,8 @@ export interface PanelRegistrySlice {
   clearSpawnError: (id: string) => void;
   setReconnectError: (id: string, error: TerminalReconnectError) => void;
   clearReconnectError: (id: string) => void;
+  setScrollbackRestoreError: (id: string, error: TerminalScrollbackRestoreError) => void;
+  clearScrollbackRestoreError: (id: string) => void;
 
   // Tab grouping methods - TabGroup is the single source of truth
   /** Get all panels in a group, ordered by group's panelIds array. Location param is deprecated. */

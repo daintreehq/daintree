@@ -756,7 +756,7 @@ export function GeneralTab({
               />
 
               {idleNotifyConfig.enabled && (
-                <div id="general-idle-terminal-threshold" className="space-y-2">
+                <div id="general-idle-terminal-threshold" className="space-y-2 scroll-mt-12">
                   <label className="text-sm text-daintree-text/70">Idle Threshold</label>
                   <div className="flex gap-2">
                     {IDLE_TERMINAL_THRESHOLD_PRESETS.map(({ value, label }) => (
@@ -807,7 +807,7 @@ export function GeneralTab({
               />
 
               {hibernationConfig.enabled && (
-                <div id="general-hibernation-threshold" className="space-y-2">
+                <div id="general-hibernation-threshold" className="space-y-2 scroll-mt-12">
                   <label className="text-sm text-daintree-text/70">Inactivity Threshold</label>
                   <div className="flex gap-2">
                     {THRESHOLD_PRESETS.map(({ value, label }) => (

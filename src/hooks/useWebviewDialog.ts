@@ -55,6 +55,7 @@ export function useWebviewDialog(
             panelId,
             dialogId: current.dialogId,
           });
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Dialog response failed",

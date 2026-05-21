@@ -151,6 +151,22 @@ export function InlineStatusBanner({
 
   const hasDescription = description || contextLine || descriptionExtras;
 
+  const closeButton = onClose ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      aria-label={closeAriaLabel}
+      className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
+    >
+      <X className="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  ) : null;
+
+  const showControlsRow = !!trailingSlot || (!hasDescription && !!onClose) || actions.length > 0;
+
   return (
     <div
       className={cn(
@@ -186,12 +202,15 @@ export function InlineStatusBanner({
         />
         {hasDescription ? (
           <div className="flex-1 min-w-0">
-            <span
-              className={cn("text-sm font-medium", isNeutral && "text-daintree-text")}
-              style={isNeutral ? undefined : { color: `var(${colorVar})` }}
-            >
-              {title}
-            </span>
+            <div className="flex justify-between items-start gap-2">
+              <span
+                className={cn("text-sm font-medium", isNeutral && "text-daintree-text")}
+                style={isNeutral ? undefined : { color: `var(${colorVar})` }}
+              >
+                {title}
+              </span>
+              {closeButton}
+            </div>
             {description && (
               <p
                 className={cn("text-xs mt-0.5 break-words", isNeutral && "text-daintree-text/70")}
@@ -232,69 +251,61 @@ export function InlineStatusBanner({
         )}
       </div>
 
-      <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
-        {trailingSlot}
-        {onClose && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            aria-label={closeAriaLabel}
-            className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        )}
-        {actions.map((action) => {
-          const variant = action.variant ?? "primary";
-          const variantClasses = getButtonClasses(variant);
-          const variantStyle = colorVar ? getButtonStyle(variant, colorVar) : undefined;
-          const isDisabled = action.disabled || action.loading;
-          const iconClasses = action.iconOnly ? "w-3.5 h-3.5" : "w-3 h-3";
-          const spinnerSize = action.iconOnly ? "sm" : "xs";
-          const buttonEl = (
-            <button
-              key={action.id}
-              type="button"
-              disabled={isDisabled}
-              aria-busy={action.loading || undefined}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isDisabled) return;
-                action.onClick();
-              }}
-              className={cn(
-                action.iconOnly ? "p-1" : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
-                "transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
-                variantClasses,
-                (variant === "danger" || variant === "dangerFilled") &&
-                  "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",
-                isDisabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
-              )}
-              style={variantStyle}
-              aria-label={action.ariaLabel}
-            >
-              {action.loading ? (
-                <Spinner size={spinnerSize} />
-              ) : (
-                action.icon && <action.icon className={iconClasses} aria-hidden="true" />
-              )}
-              {!action.iconOnly && action.label}
-            </button>
-          );
+      {showControlsRow && (
+        <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
+          {trailingSlot}
+          {!hasDescription && closeButton}
+          {actions.map((action) => {
+            const variant = action.variant ?? "primary";
+            const variantClasses = getButtonClasses(variant);
+            const variantStyle = colorVar ? getButtonStyle(variant, colorVar) : undefined;
+            const isDisabled = action.disabled || action.loading;
+            const iconClasses = action.iconOnly ? "w-3.5 h-3.5" : "w-3 h-3";
+            const spinnerSize = action.iconOnly ? "sm" : "xs";
+            const buttonEl = (
+              <button
+                key={action.id}
+                type="button"
+                disabled={isDisabled}
+                aria-busy={action.loading || undefined}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (isDisabled) return;
+                  action.onClick();
+                }}
+                className={cn(
+                  action.iconOnly
+                    ? "p-1"
+                    : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
+                  "transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+                  variantClasses,
+                  (variant === "danger" || variant === "dangerFilled") &&
+                    "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",
+                  isDisabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
+                )}
+                style={variantStyle}
+                aria-label={action.ariaLabel}
+              >
+                {action.loading ? (
+                  <Spinner size={spinnerSize} />
+                ) : (
+                  action.icon && <action.icon className={iconClasses} aria-hidden="true" />
+                )}
+                {!action.iconOnly && action.label}
+              </button>
+            );
 
-          return action.title ? (
-            <Tooltip key={action.id}>
-              <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
-              <TooltipContent side="bottom">{action.title}</TooltipContent>
-            </Tooltip>
-          ) : (
-            <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
-          );
-        })}
-      </div>
+            return action.title ? (
+              <Tooltip key={action.id}>
+                <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
+                <TooltipContent side="bottom">{action.title}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

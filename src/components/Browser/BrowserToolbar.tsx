@@ -11,6 +11,7 @@ import {
   ZoomIn,
   ZoomOut,
   Camera,
+  Maximize2,
   SquareTerminal,
   Code,
   Smartphone,
@@ -48,6 +49,9 @@ interface BrowserToolbarProps {
   isConsoleOpen?: boolean;
   isWebviewReady?: boolean;
   viewportPreset?: ViewportPresetId;
+  viewportRotated?: boolean;
+  viewportDpr?: 1 | 2 | 3;
+  viewportFit?: boolean;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
@@ -59,6 +63,9 @@ interface BrowserToolbarProps {
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
   onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
+  onViewportRotateToggle?: () => void;
+  onViewportDprChange?: (dpr: 1 | 2 | 3) => void;
+  onViewportFitToggle?: () => void;
 }
 
 export function BrowserToolbar({
@@ -72,6 +79,9 @@ export function BrowserToolbar({
   isConsoleOpen = false,
   isWebviewReady = false,
   viewportPreset,
+  viewportRotated = false,
+  viewportDpr = 1,
+  viewportFit = false,
   onNavigate,
   onBack,
   onForward,
@@ -83,6 +93,9 @@ export function BrowserToolbar({
   onToggleConsole,
   onToggleDevTools,
   onViewportPresetChange,
+  onViewportRotateToggle,
+  onViewportDprChange,
+  onViewportFitToggle,
 }: BrowserToolbarProps) {
   const [inputValue, setInputValue] = useState(getDisplayUrl(url));
   const [isEditing, setIsEditing] = useState(false);
@@ -101,6 +114,7 @@ export function BrowserToolbar({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const chipRowRef = useRef<HTMLDivElement>(null);
+  const dprRowRef = useRef<HTMLDivElement>(null);
   const lastViewportPresetRef = useRef<ViewportPresetId>("iphone");
   const [chipFocusedIndex, setChipFocusedIndex] = useState<number>(-1);
   const listboxId = useId();
@@ -179,6 +193,51 @@ export function BrowserToolbar({
     return () =>
       container.removeEventListener("keydown", handleKeyDown as unknown as EventListener);
   }, [onViewportPresetChange, viewportPreset]);
+
+  useEffect(() => {
+    const container = dprRowRef.current;
+    if (!container) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const buttons = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[role='radio']:not(:disabled)")
+      );
+      if (buttons.length === 0) return;
+
+      const currentIndex = buttons.findIndex((b) => b === document.activeElement);
+      let nextIndex: number;
+
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        nextIndex = currentIndex < buttons.length - 1 ? currentIndex + 1 : 0;
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        nextIndex = currentIndex > 0 ? currentIndex - 1 : buttons.length - 1;
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        nextIndex = 0;
+      } else if (e.key === "End") {
+        e.preventDefault();
+        nextIndex = buttons.length - 1;
+      } else {
+        return;
+      }
+
+      if (nextIndex !== currentIndex && nextIndex >= 0 && nextIndex < buttons.length) {
+        const nextButton = buttons[nextIndex];
+        nextButton?.focus();
+        // APG radiogroup contract: selection follows focus.
+        const dprValue = Number(nextButton?.getAttribute("data-dpr"));
+        if ((dprValue === 1 || dprValue === 2 || dprValue === 3) && onViewportDprChange) {
+          onViewportDprChange(dprValue);
+        }
+      }
+    };
+
+    container.addEventListener("keydown", handleKeyDown as unknown as EventListener);
+    return () =>
+      container.removeEventListener("keydown", handleKeyDown as unknown as EventListener);
+  }, [onViewportDprChange, viewportPreset, viewportDpr]);
 
   useEffect(() => {
     if (!isEditing) {
@@ -538,6 +597,87 @@ export function BrowserToolbar({
                   </button>
                 );
               })}
+            </div>
+          )}
+          {viewportPreset && (
+            <div className="flex items-center ml-1 pl-1.5 border-l border-overlay">
+              {onViewportRotateToggle && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={onViewportRotateToggle}
+                      className={cn(
+                        buttonClass,
+                        viewportRotated && "bg-overlay-emphasis text-daintree-text"
+                      )}
+                      aria-label="Rotate viewport"
+                      aria-pressed={viewportRotated}
+                    >
+                      <RotateCw className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {viewportRotated ? "Portrait" : "Landscape"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {onViewportDprChange && (
+                <div
+                  ref={dprRowRef}
+                  role="radiogroup"
+                  aria-label="Device pixel ratio"
+                  className="flex items-center ml-0.5"
+                >
+                  {([1, 2, 3] as const).map((dpr) => {
+                    const isSelected = viewportDpr === dpr;
+                    return (
+                      <button
+                        key={dpr}
+                        type="button"
+                        role="radio"
+                        aria-checked={isSelected}
+                        aria-label={`Device pixel ratio ${dpr}x`}
+                        data-dpr={dpr}
+                        tabIndex={isSelected ? 0 : -1}
+                        onClick={() => {
+                          if (!isSelected) onViewportDprChange(dpr);
+                        }}
+                        className={cn(
+                          "px-1.5 py-1 rounded text-[10px] font-medium transition-colors",
+                          "hover:bg-overlay-medium",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                          isSelected
+                            ? "bg-overlay-emphasis text-daintree-text"
+                            : "text-daintree-text/50"
+                        )}
+                      >
+                        {dpr}×
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {onViewportFitToggle && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={onViewportFitToggle}
+                      className={cn(
+                        buttonClass,
+                        "ml-0.5",
+                        viewportFit && "bg-overlay-emphasis text-daintree-text"
+                      )}
+                      aria-label="Zoom to fit"
+                      aria-pressed={viewportFit}
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Zoom to fit</TooltipContent>
+                </Tooltip>
+              )}
             </div>
           )}
         </div>

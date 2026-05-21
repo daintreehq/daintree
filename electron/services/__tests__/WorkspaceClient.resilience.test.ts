@@ -95,8 +95,6 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     getAllRequests(): Array<{ requestId: string; type: string; [key: string]: any }> {
       return this.sendWithResponse.mock.calls.map(([req]: any) => req);
     }
-
-    attachRendererPort = vi.fn(() => true);
   }
 
   return { mockHosts, MockWorkspaceHostProcess };
@@ -107,15 +105,10 @@ vi.mock("../WorkspaceHostProcess.js", () => ({
 }));
 
 vi.mock("electron", () => {
-  class MockMessageChannelMain {
-    port1 = { close: vi.fn() };
-    port2 = { close: vi.fn() };
-  }
   return {
     BrowserWindow: {
       getAllWindows: vi.fn(() => []),
     },
-    MessageChannelMain: MockMessageChannelMain,
   };
 });
 
@@ -125,8 +118,16 @@ vi.mock("../events.js", () => ({
   },
 }));
 
+// `WorkspaceHostPool` reads forge settings via `projectStore` to plumb into
+// the `load-project` payload (#8316). Stub it so importing the pool doesn't
+// fire ProjectStore's eager `app.getPath("userData")` constructor.
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }) },
+}));
+
 import path from "path";
 import { WorkspaceClient } from "../WorkspaceClient.js";
+import { projectStore } from "../ProjectStore.js";
 
 type MockHost = InstanceType<typeof MockWorkspaceHostProcess>;
 
@@ -807,16 +808,34 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(h(1).pauseHealthCheck).toHaveBeenCalled();
     });
 
-    it("updateGitHubToken sends to all hosts", async () => {
+    it("updateForgeCredentials sends to all hosts", async () => {
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load1;
 
-      client.updateGitHubToken("test-token");
+      client.updateForgeCredentials("daintree.github.github", {
+        kind: "bearer",
+        value: "test-token",
+      });
 
       expect(h(0).send).toHaveBeenCalledWith({
-        type: "update-github-token",
-        token: "test-token",
+        type: "update-forge-credentials",
+        providerId: "daintree.github.github",
+        credentials: { kind: "bearer", value: "test-token" },
+      });
+    });
+
+    it("updateForgeCredentials propagates null credentials", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      client.updateForgeCredentials("daintree.github.github", null);
+
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "update-forge-credentials",
+        providerId: "daintree.github.github",
+        credentials: null,
       });
     });
   });
@@ -922,6 +941,33 @@ describe("WorkspaceClient multi-process manager", () => {
         .getAllRequests()
         .filter((r: any) => r.type === "load-project")[1];
       expect(reloadReq.rootPath).toBe(path.resolve("/project-a"));
+    });
+
+    it("forwards the selected forgeRemote on the post-restart load-project (#8456)", async () => {
+      vi.mocked(projectStore.getProjectSettings).mockResolvedValue({
+        runCommands: [],
+        forgeRemote: "upstream",
+      } as any);
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      h(0).emit("restarted");
+
+      await vi.waitFor(() => {
+        const reqs = h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "load-project");
+        expect(reqs).toHaveLength(2);
+      });
+
+      const reloadReq = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "load-project")[1];
+      expect(reloadReq.forgeRemote).toBe("upstream");
+
+      vi.mocked(projectStore.getProjectSettings).mockResolvedValue({ runCommands: [] } as any);
     });
   });
 

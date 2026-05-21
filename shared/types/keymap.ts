@@ -28,6 +28,7 @@ export type BuiltInKeyAction =
   | "nav.collapse"
   | "nav.primary"
   | "nav.toggleSidebar"
+  | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
   | "nav.focusRegion.next"
   | "nav.focusRegion.prev"
@@ -135,7 +136,9 @@ export type BuiltInKeyAction =
   | "agent.palette"
   | AgentKeyAction
   | "agent.terminal"
+  | "agent.browser"
   | "agent.focusNextWaiting"
+  | "agent.focusNextWaitingGlobal"
   | "agent.focusNextWorking"
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
@@ -214,6 +217,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.collapse",
   "nav.primary",
   "nav.toggleSidebar",
+  "nav.toggleFocusMode",
   "nav.quickSwitcher",
   "nav.focusRegion.next",
   "nav.focusRegion.prev",
@@ -315,7 +319,9 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",
+  "agent.browser",
   "agent.focusNextWaiting",
+  "agent.focusNextWaitingGlobal",
   "agent.focusNextWorking",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",

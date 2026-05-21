@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
@@ -137,6 +138,53 @@ describe("toolbarPreferencesStore", () => {
 
       store.getState().toggleButtonVisibility("terminal", "left");
       expect(store.getState().layout.pinnedButtons["terminal"]).toBeUndefined();
+    });
+
+    it("does not mutate launcher.defaultSelection when toggling a plugin button", async () => {
+      const store = await loadStore();
+      store.getState().setDefaultSelection("terminal");
+      const before = store.getState().launcher.defaultSelection;
+
+      store.getState().toggleButtonVisibility("plugin.acme.foo" as AnyToolbarButtonId, "right");
+
+      expect(store.getState().launcher.defaultSelection).toBe(before);
+      expect(store.getState().layout.pinnedButtons["plugin.acme.foo"]).toBe(false);
+    });
+  });
+
+  describe("sweepStalePluginPinnedButtons", () => {
+    it("removes plugin entries absent from the valid id set", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility("plugin.acme.old" as AnyToolbarButtonId, "right");
+      store.getState().toggleButtonVisibility("plugin.acme.active" as AnyToolbarButtonId, "right");
+
+      store.getState().sweepStalePluginPinnedButtons(["plugin.acme.active"]);
+
+      const { pinnedButtons } = store.getState().layout;
+      expect(pinnedButtons["plugin.acme.old"]).toBeUndefined();
+      expect(pinnedButtons["plugin.acme.active"]).toBe(false);
+    });
+
+    it("never touches built-in (non-plugin) keys", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      store.getState().toggleButtonVisibility("plugin.acme.gone" as AnyToolbarButtonId, "right");
+
+      store.getState().sweepStalePluginPinnedButtons([]);
+
+      const { pinnedButtons } = store.getState().layout;
+      expect(pinnedButtons["copy-tree"]).toBe(false);
+      expect(pinnedButtons["plugin.acme.gone"]).toBeUndefined();
+    });
+
+    it("is a no-op (preserves layout reference) when nothing is stale", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility("copy-tree", "right");
+      const layoutBefore = store.getState().layout;
+
+      store.getState().sweepStalePluginPinnedButtons([]);
+
+      expect(store.getState().layout).toBe(layoutBefore);
     });
   });
 

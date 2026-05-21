@@ -9,6 +9,9 @@ import {
   AgentStateCallback,
   PostCompleteHook,
   isWebGLEligibleTier,
+  WRITE_BURST_DECAY_MS,
+  HIBERNATION_DELAY_PRESSURE_TIER1_MS,
+  HIBERNATION_DELAY_PRESSURE_TIER2_MS,
 } from "./types";
 import {
   setupTerminalAddons,
@@ -46,10 +49,17 @@ export { isNonKeyboardInput } from "./inputUtils";
 // `forceXtermReflow` from this module don't need to update their imports.
 export { forceXtermReflow };
 
-// Debounce on the visibility-driven WebGL restore path. Hide is immediate;
-// show waits this long before re-acquiring so rapid tab/panel toggles don't
-// thrash WebglAddon load/unload (each cycle reallocates GPU resources).
+// Debounce on the visibility-driven WebGL restore path. Show waits this long
+// before re-acquiring so rapid tab/panel toggles don't thrash WebglAddon
+// load/unload (each cycle reallocates GPU resources).
 const WEBGL_RESTORE_DEBOUNCE_MS = 100;
+
+// Release hysteresis on the visibility-driven hide path. Holding the context
+// for this long before releasing covers normal panel-toggle and focus-cycle
+// cadences (~100–300ms) without over-occupying the 12-slot WebGL pool under
+// multi-terminal hide. Authoritative release paths (tier demotion, agent
+// demotion, destroy, hibernation) cancel this timer and release immediately.
+const WEBGL_HIDE_DWELL_MS = 500;
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -60,11 +70,13 @@ function canAutoInitializeTerminalIngest(): boolean {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
-  private dataBuffer = new TerminalOutputIngestService((id, data) =>
-    this.writeToTerminal(id, data)
+  private dataBuffer = new TerminalOutputIngestService(
+    (id, data) => this.writeToTerminal(id, data),
+    (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
+  private hibernationListeners = new Map<string, Set<() => void>>();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<
     string,
@@ -109,6 +121,7 @@ class TerminalInstanceService {
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
       incrementUnseen: (id, isScrolledBack) =>
         this.unseenTracker.incrementUnseen(id, isScrolledBack),
+      onWrite: (id) => this.onPtyWrite(id),
     });
 
     this.hibernationManager = new TerminalHibernationManager({
@@ -121,6 +134,7 @@ class TerminalInstanceService {
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
       getCwdProvider: (id) => this.cwdProviders.get(id),
+      onHibernationChanged: (id) => this.notifyHibernationListeners(id),
       ...this.makeListenerInstallDeps(),
     });
 
@@ -144,9 +158,19 @@ class TerminalInstanceService {
         return this.wakeManager.wakeAndRestore(id);
       },
       onPostWake: (id) => this.handlePostWake(id),
+      onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       onTierApplied: (id, tier, managed) => {
-        if (this.isHibernationEligible(tier, managed) && !managed.isVisible) {
+        // Enter scheduleHibernation whenever the terminal is BACKGROUND and
+        // offscreen, even if it's not eligible right now. scheduleHibernation
+        // owns the decision: arm the regular 30s timer if eligible now, or
+        // arm a one-shot eligibility re-check for active-state agents that
+        // are silent but inside the AGENT_IDLE_SILENCE_MS window. Gating
+        // here on isHibernationEligible (as the original did) makes the
+        // re-check unreachable — a recently-active agent that drops to
+        // BACKGROUND would be permanently exempt, the exact regression
+        // this feature was built to fix.
+        if (tier === TerminalRefreshTier.BACKGROUND && !managed.isVisible) {
           this.scheduleHibernation(id, managed);
         } else {
           this.cancelHibernation(managed);
@@ -248,6 +272,9 @@ class TerminalInstanceService {
             this.webGLManager.ensureContext(id, managed);
           } else if (!managed.isVisible) {
             // Keep WebGL while visible — releasing here causes a one-frame renderer gap.
+            // Tier demotion is an authoritative signal — cancel any pending
+            // hide-dwell and release immediately.
+            this.cancelWebGLHideTimer(managed);
             const hadWebGL = this.webGLManager.isActive(id);
             this.webGLManager.releaseContext(id);
             // Only refresh for a visible terminal — repainting an offscreen
@@ -429,6 +456,53 @@ class TerminalInstanceService {
     this.agentStateController.onUserInput(id, data);
   }
 
+  /**
+   * Write-driven BURST tier: each PTY write extends the burst window in O(1)
+   * by bumping `writeBurstDeadline`. A single self-rearming timer handles
+   * decay — it re-checks the deadline on fire and either reschedules for the
+   * remaining time (if a write extended the window while it was pending) or
+   * reverts the tier via the panel's current `getRefreshTier()`.
+   *
+   * Avoiding per-write clearTimeout/setTimeout matters: at 60fps+ output the
+   * naive pattern thrashes Chromium's timer queue and produces GC pressure.
+   *
+   * `applyRendererPolicy(BURST)` is called on every write: when BURST is
+   * already applied the policy returns early (line 50 of
+   * TerminalRendererPolicy) and as a load-bearing side-effect clears any
+   * pending tierChangeTimer — that cancellation is what prevents a
+   * concurrent focus-loss-scheduled downgrade from firing unopposed and
+   * stranding the terminal at FOCUSED/VISIBLE/BACKGROUND mid-stream.
+   */
+  private onPtyWrite(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    managed.writeBurstDeadline = Date.now() + WRITE_BURST_DECAY_MS;
+    this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+
+    if (managed.writeBurstTimer === undefined) {
+      this.scheduleWriteBurstDecay(id, WRITE_BURST_DECAY_MS);
+    }
+  }
+
+  private scheduleWriteBurstDecay(id: string, delayMs: number): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    managed.writeBurstTimer = window.setTimeout(() => {
+      const current = this.instances.get(id);
+      if (!current) return;
+      current.writeBurstTimer = undefined;
+      const deadline = current.writeBurstDeadline;
+      const nowFire = Date.now();
+      if (deadline !== undefined && nowFire < deadline) {
+        this.scheduleWriteBurstDecay(id, deadline - nowFire);
+        return;
+      }
+      current.writeBurstDeadline = undefined;
+      this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
+    }, delayMs);
+  }
+
   private onEnterPressed(id: string): void {
     this.agentStateController.onEnterPressed(id);
   }
@@ -511,6 +585,7 @@ class TerminalInstanceService {
         clearTimeout(managed.webGLRestoreTimer);
         managed.webGLRestoreTimer = undefined;
       }
+      this.cancelWebGLHideTimer(managed);
 
       if (isVisible) {
         // Revealing an on-screen terminal — make sure it doesn't get hibernated.
@@ -569,15 +644,26 @@ class TerminalInstanceService {
           this.webGLManager.ensureContext(id, current);
         }, WEBGL_RESTORE_DEBOUNCE_MS);
       } else {
-        // Going offscreen. Release the WebGL context immediately to free a
-        // pool slot — xterm falls back to the DOM renderer until the
-        // terminal becomes visible again.
-        this.webGLManager.releaseContext(id);
+        // Going offscreen. Hold the WebGL context for WEBGL_HIDE_DWELL_MS so
+        // rapid hide→show cycles (panel toggles, focus oscillation) don't
+        // churn the pool. The timer callback re-fetches `managed` to avoid
+        // stale refs (same pattern as webGLRestoreTimer above) and re-checks
+        // isVisible so a show during the dwell window keeps the context.
+        managed.webGLHideTimer = window.setTimeout(() => {
+          const current = this.instances.get(id);
+          if (!current) return;
+          current.webGLHideTimer = undefined;
+          if (current.isVisible) return;
+          this.webGLManager.releaseContext(id);
+        }, WEBGL_HIDE_DWELL_MS);
 
-        // If we're already in a hibernation-eligible tier, onTierApplied
-        // won't fire to start the timer — do it here instead.
+        // If we're already in BACKGROUND tier, onTierApplied won't fire to
+        // start the timer — do it here instead. Pass to scheduleHibernation
+        // even when not eligible right now (active-state agent with recent
+        // writes); the function arms either the regular timer or a one-shot
+        // eligibility re-check that fires when the silence window expires.
         const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
-        if (tier !== undefined && this.isHibernationEligible(tier, managed)) {
+        if (tier === TerminalRefreshTier.BACKGROUND) {
           this.scheduleHibernation(id, managed);
         }
       }
@@ -607,8 +693,14 @@ class TerminalInstanceService {
       for (const id of panelIds) {
         if (!this.instances.has(id)) continue;
         this.resizeController.lockResize(id, false);
-        this.resizeController.fit(id);
       }
+      // ResizeObserver doesn't retroactively fire when a lock releases, so a
+      // corrective pass is required to pick up the post-transition geometry.
+      // batchResize runs the read-all / write-all pass in a single task —
+      // safe to call inline since locks above release synchronously (#8597).
+      // The grid hook (useContentGridContext) also schedules a batch ~50ms
+      // later when grid deps change; the resize() dedup guard absorbs that.
+      this.batchResize(panelIds);
     }, durationMs);
   }
 
@@ -676,16 +768,108 @@ class TerminalInstanceService {
   }
 
   /**
-   * Inject a visible discontinuity marker into the xterm buffer at the point
-   * where the PTY host discarded bytes from the IPC fallback queue. The
-   * leading `\x18` (CAN) cancels any partial in-progress escape sequence so
-   * the styled marker renders correctly mid-stream.
+   * Run the full click-equivalent wake sequence on a visible terminal whose
+   * project view just regained visibility (#8562). `wake(id)` only triggers
+   * buffer restore + xterm.refresh; the click/focus path additionally runs
+   * `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
+   * `dataBuffer.resumeFlush`. Without those steps, visible terminals show
+   * stale geometry and missing recent output until the user clicks each pane.
+   *
+   * Bypasses {@link TerminalRendererPolicy.applyRendererPolicy} — that path
+   * early-returns on tier equality and a backgrounded view's terminals stay
+   * at VISIBLE the whole time. Bypasses the resize lock the same way the
+   * attach path does (record remaining suppression TTL, unlock, resize,
+   * relock with remaining TTL) so geometry resync doesn't silently no-op
+   * while project-switch suppression is active.
+   */
+  async fullWakeForVisibilityRestore(id: string): Promise<void> {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.isHibernated) {
+      this.unhibernate(id);
+    }
+
+    // Re-fetch after unhibernate so we operate on the current instance.
+    const current = this.instances.get(id);
+    if (!current) return;
+    if (!current.isOpened) return;
+
+    // Attach is in progress — its post-rAF reconciliation (around L1166) will
+    // apply the renderer policy and run the wake. A second path here would
+    // race.
+    if (current.isAttaching) return;
+
+    const needsLockBypass = current.isResizeSuppressed === true;
+    let remainingMs = 0;
+    if (needsLockBypass && current.resizeSuppressionEndTime) {
+      remainingMs = Math.max(0, current.resizeSuppressionEndTime - Date.now());
+      this.resizeController.lockResize(id, false);
+    }
+    try {
+      this.resizeController.applyDeferredResize(id);
+    } finally {
+      if (needsLockBypass) {
+        this.resizeController.lockResize(id, true, remainingMs);
+      }
+    }
+
+    const termEl = current.terminal.element;
+    if (termEl) {
+      try {
+        forceXtermReflow(termEl);
+      } catch (error) {
+        logWarn(`forceXtermReflow failed for ${id}`, { error });
+      }
+    }
+
+    const ok = await this.wakeManager.wakeAndRestore(id);
+
+    // Re-check after async: terminal may have been destroyed, hibernated, or
+    // replaced while wakeAndRestore was in flight.
+    const after = this.instances.get(id);
+    if (!after || after !== current) return;
+    if (after.isHibernated) return;
+
+    after.terminal.refresh(0, after.terminal.rows - 1);
+
+    if (ok) {
+      this.handlePostWake(id);
+    }
+    this.dataBuffer.resumeFlush(id);
+  }
+
+  /**
+   * Signal a PTY data-loss discontinuity at the point where the pty-host
+   * discarded bytes from the IPC fallback queue. Instead of writing a styled
+   * ANSI line directly (which embeds presentation in the wire format and can't
+   * be asserted in WebGL-disabled E2E), this writes a structured private-use
+   * OSC 57301 sequence carrying the dropped byte count and a reason code. The
+   * handler registered in `TerminalParserHandler` parses it and fires the
+   * `onDataLoss` callback wired in `getOrCreate`, which draws the yellow
+   * marker. The leading `\x18` (CAN) cancels any partial in-progress escape
+   * sequence so the OSC parses cleanly mid-stream.
    */
   injectDataLossMarker(id: string, droppedBytes: number): void {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return;
-    const label = droppedBytes > 0 ? `~${droppedBytes} bytes` : "output";
-    managed.terminal.write(`\x18\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
+    managed.terminal.write(`\x18\x1b]57301;${droppedBytes};backpressure\x07`);
+  }
+
+  /**
+   * Draw the user-visible yellow data-loss marker. Deferred via
+   * `queueMicrotask` because it is reached from inside the OSC 57301 parse
+   * callback — calling `terminal.write` synchronously during parsing would be
+   * reentrant. Re-checks instance state because hibernation can occur between
+   * the OSC write and this microtask.
+   */
+  private drawDataLossMarker(id: string, droppedBytes: number): void {
+    queueMicrotask(() => {
+      const managed = this.instances.get(id);
+      if (!managed || managed.isHibernated) return;
+      const label = droppedBytes > 0 ? `~${droppedBytes} bytes` : "output";
+      managed.terminal.write(`\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
+    });
   }
 
   getOrCreate(
@@ -822,9 +1006,15 @@ class TerminalInstanceService {
       onInput,
     };
 
-    managed.parserHandler = new TerminalParserHandler(managed, () => {
-      this.resizeController.applyDeferredResize(id);
-    });
+    managed.parserHandler = new TerminalParserHandler(
+      managed,
+      () => {
+        this.resizeController.applyDeferredResize(id);
+      },
+      (droppedBytes) => {
+        this.drawDataLossMarker(id, droppedBytes);
+      }
+    );
 
     installTerminalBoundListeners(terminal, managed, id, this.makeListenerInstallDeps());
 
@@ -839,6 +1029,11 @@ class TerminalInstanceService {
     // lastAppliedTier so that a later promotion is seen as an upgrade.
     if (initialTier === TerminalRefreshTier.BACKGROUND) {
       managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      // Seed the renderer-policy backend tier so the first promotion is seen
+      // as a real BACKGROUND→active transition. Without this, lastBackendTier
+      // is unset, prevBackendTier defaults to "active", and the wake/flush
+      // path is skipped — bytes held by the background gate would never drain.
+      this.rendererPolicy.initializeBackendTier(id, "background");
       try {
         managed.imageAddon?.dispose();
       } catch {
@@ -946,6 +1141,13 @@ class TerminalInstanceService {
       managed.attachRevealDisposable = undefined;
     }
     managed.hostElement.style.opacity = "";
+  }
+
+  private cancelWebGLHideTimer(managed: ManagedTerminal): void {
+    if (managed.webGLHideTimer !== undefined) {
+      clearTimeout(managed.webGLHideTimer);
+      managed.webGLHideTimer = undefined;
+    }
   }
 
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
@@ -1233,6 +1435,55 @@ class TerminalInstanceService {
     return this.resizeController.resize(id, width, height, options);
   }
 
+  /**
+   * Resize a set of panels in a single read-all / write-all pass (#8597).
+   *
+   * The previous grid-fit batch chained one `fit()` per requestAnimationFrame,
+   * which (a) spread the visual settle across N frames and (b) interleaved
+   * `fitAddon.fit()`'s `getComputedStyle` read with the per-panel xterm write
+   * for every panel — classic layout thrash. Here we phase the work: phase 1
+   * reads `getBoundingClientRect()` for every eligible panel up front (cheap
+   * thanks to per-panel `contain: layout style`), phase 2 calls
+   * `resizeController.resize()` for each collected rect. `resize()` computes
+   * cols/rows from cached cell metrics without touching the DOM, so the write
+   * phase performs no further layout reads. The whole pass completes in a
+   * single task.
+   *
+   * Eligibility guards mirror the per-panel checks the old chained-fit loop
+   * relied on: instance must exist, host element must be connected and
+   * visible (xterm's `fit()` path checks `checkVisibility()`, but `resize()`
+   * does not, so we apply it here), and the panel must not be resize-locked.
+   * Caller is responsible for the `isDragging` guard since the React ref
+   * holding that state is owned by the grid hook.
+   */
+  batchResize(ids: string[]): void {
+    if (ids.length === 0) return;
+
+    type Pending = { id: string; width: number; height: number };
+    const seen = new Set<string>();
+    const pending: Pending[] = [];
+
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      const managed = this.instances.get(id);
+      if (!managed) continue;
+      if (!managed.hostElement.isConnected) continue;
+      if (!managed.hostElement.checkVisibility()) continue;
+      if (this.resizeController.isResizeLocked(id)) continue;
+
+      const rect = managed.hostElement.getBoundingClientRect();
+      if (rect.width < 50 || rect.height < 50) continue;
+
+      pending.push({ id, width: rect.width, height: rect.height });
+    }
+
+    for (const { id, width, height } of pending) {
+      this.resizeController.resize(id, width, height);
+    }
+  }
+
   scrollToBottom(id: string): void {
     const managed = this.instances.get(id);
     if (managed && !managed.isHibernated) {
@@ -1277,6 +1528,36 @@ class TerminalInstanceService {
 
   subscribeUnseenOutput(id: string, listener: () => void): () => void {
     return this.unseenTracker.subscribe(id, listener);
+  }
+
+  subscribeHibernation(id: string, listener: () => void): () => void {
+    let listeners = this.hibernationListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.hibernationListeners.set(id, listeners);
+    }
+    listeners.add(listener);
+
+    return () => {
+      const current = this.hibernationListeners.get(id);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) {
+        this.hibernationListeners.delete(id);
+      }
+    };
+  }
+
+  private notifyHibernationListeners(id: string): void {
+    const listeners = this.hibernationListeners.get(id);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        logWarn("Hibernation listener error", { error });
+      }
+    }
   }
 
   getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
@@ -1493,6 +1774,10 @@ class TerminalInstanceService {
     managed.lastActiveTime = Date.now();
   }
 
+  isFocused(id: string): boolean {
+    return this.instances.get(id)?.isFocused === true;
+  }
+
   focus(id: string): void {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return;
@@ -1664,8 +1949,12 @@ class TerminalInstanceService {
     });
   }
 
-  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
-    this.rendererPolicy.applyRendererPolicy(id, tier);
+  applyRendererPolicy(
+    id: string,
+    tier: TerminalRefreshTier,
+    options?: { fleetDriven?: boolean }
+  ): void {
+    this.rendererPolicy.applyRendererPolicy(id, tier, options);
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -1727,6 +2016,9 @@ class TerminalInstanceService {
     // pane gets its blinking cursor back.
     this.applyCursorBlinkPolicy(managed);
     restoreScrollback(managed);
+    // Agent demotion is authoritative — cancel any pending hide-dwell so the
+    // timer can't fire later and call releaseContext on a stale slot.
+    this.cancelWebGLHideTimer(managed);
     this.webGLManager.releaseContext(id);
     this.maybeReflowTerminal(managed);
   }
@@ -1767,16 +2059,46 @@ class TerminalInstanceService {
     this.hibernationManager.unhibernate(id);
   }
 
-  private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
-    return this.hibernationManager.isHibernationEligible(tier, managed);
-  }
-
-  private scheduleHibernation(id: string, managed: ManagedTerminal): void {
-    this.hibernationManager.scheduleHibernation(id, managed);
+  private scheduleHibernation(id: string, managed: ManagedTerminal, delayMs?: number): void {
+    this.hibernationManager.scheduleHibernation(id, managed, delayMs);
   }
 
   private cancelHibernation(managed: ManagedTerminal): void {
     this.hibernationManager.cancelHibernation(managed);
+  }
+
+  /**
+   * Memory-pressure accelerator. Sweep every BACKGROUND-tier instance and
+   * re-arm its hibernation timer with a shorter delay so idle terminals
+   * release memory immediately under OS pressure instead of waiting for the
+   * fixed 30s window.
+   *
+   * - Level 1 (mild pressure): HIBERNATION_DELAY_PRESSURE_TIER1_MS (5s).
+   *   Enough headroom for a write burst to drain and to absorb tab-flip
+   *   oscillation, but ~6x faster than the normal window.
+   * - Level 2 (sustained pressure): HIBERNATION_DELAY_PRESSURE_TIER2_MS (0).
+   *   Fire immediately; the `hibernate()` safety guard still blocks
+   *   actively-writing or recently-active agent terminals.
+   *
+   * Skips visible terminals (the user is looking at them) and terminals that
+   * are not currently in BACKGROUND tier (those are protected by the
+   * renderer policy). Already-hibernated terminals are skipped.
+   */
+  accelerateHibernation(level: 1 | 2): void {
+    const delayMs =
+      level === 1 ? HIBERNATION_DELAY_PRESSURE_TIER1_MS : HIBERNATION_DELAY_PRESSURE_TIER2_MS;
+    for (const [id, managed] of this.instances.entries()) {
+      if (managed.isHibernated) continue;
+      if (managed.isVisible) continue;
+      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) continue;
+      // Cancel the existing 30s timer so we don't race two pending
+      // hibernations against each other. The new schedule re-runs the
+      // eligibility check, so active-agent terminals with recent writes
+      // still wait out their silence window (their eligibility re-check
+      // timer takes over from here).
+      this.cancelHibernation(managed);
+      this.scheduleHibernation(id, managed, delayMs);
+    }
   }
 
   destroy(id: string): void {
@@ -1818,10 +2140,15 @@ class TerminalInstanceService {
     this.resizeController.clearSettledTimer(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
+    this.hibernationListeners.delete(id);
 
     if (managed.hibernationTimer) {
       clearTimeout(managed.hibernationTimer);
       managed.hibernationTimer = undefined;
+    }
+    if (managed.hibernationEligibilityTimer) {
+      clearTimeout(managed.hibernationEligibilityTimer);
+      managed.hibernationEligibilityTimer = undefined;
     }
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);
@@ -1831,6 +2158,11 @@ class TerminalInstanceService {
       clearTimeout(managed.inputBurstTimer);
       managed.inputBurstTimer = undefined;
     }
+    if (managed.writeBurstTimer !== undefined) {
+      clearTimeout(managed.writeBurstTimer);
+      managed.writeBurstTimer = undefined;
+    }
+    managed.writeBurstDeadline = undefined;
     if (managed.titleReportTimer !== undefined) {
       clearTimeout(managed.titleReportTimer);
       managed.titleReportTimer = undefined;
@@ -1848,6 +2180,10 @@ class TerminalInstanceService {
     if (managed.webGLRestoreTimer !== undefined) {
       clearTimeout(managed.webGLRestoreTimer);
       managed.webGLRestoreTimer = undefined;
+    }
+    if (managed.webGLHideTimer !== undefined) {
+      clearTimeout(managed.webGLHideTimer);
+      managed.webGLHideTimer = undefined;
     }
 
     managed.lastActivityMarker?.dispose();

@@ -7,7 +7,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@shared/types";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -21,16 +21,14 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
   "directing",
 ]);
 
-const BUILT_IN_AGENT_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_AGENT_IDS);
-
-function isBuiltInAgentId(id: AnyToolbarButtonId): id is BuiltInAgentId {
-  return BUILT_IN_AGENT_ID_SET.has(id);
-}
-
 /**
  * Aggregates the highest-severity badge state from buttons currently pushed
  * into the overflow `…` menu so the trigger can surface a single dot rather
  * than silently hiding active state.
+ *
+ * Hardware-privacy indicators (e.g. voice recording) are pinned out of
+ * overflow by the toolbar — they never appear in `overflowIds`, so no
+ * branch here handles them.
  *
  * Why a primitive return: keeps Zustand selector identity stable so
  * downstream renders don't churn (lesson #3730). All store reads are
@@ -59,12 +57,6 @@ export function useOverflowBadgeSeverity(
 
     if (overflowIds.includes("problems") && errorCount > 0) {
       critical = true;
-    }
-
-    // voice-recording is only registered when actively recording — its
-    // mere presence in overflow signals a live session.
-    if (overflowIds.includes("voice-recording")) {
-      warning = true;
     }
 
     const overflowedAgentIds: BuiltInAgentId[] = [];

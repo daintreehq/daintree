@@ -18,22 +18,54 @@ import {
   type FilterState,
 } from "../worktreeFilters";
 import type { Worktree } from "@shared/types/worktree";
+import type {
+  StatusFilter,
+  TypeFilter,
+  SessionFilter,
+  ActivityFilter,
+} from "@/store/worktreeFilterStore";
 
-const createMockWorktree = (overrides: Partial<Worktree> = {}): Worktree => ({
-  id: "test-id",
-  path: "/home/user/project",
-  name: "main",
-  branch: "main",
-  isCurrent: false,
-  isMainWorktree: false,
-  ...overrides,
-});
+const createMockWorktree = (overrides: Partial<Worktree> = {}): Worktree => {
+  const num = overrides.prNumber;
+  const state = overrides.prState;
+  const title = overrides.prTitle;
+  const linked =
+    num !== undefined || state !== undefined || title !== undefined
+      ? {
+          linked: {
+            providerId: "github",
+            pr: {
+              ref: {
+                providerId: "github",
+                owner: "test",
+                repo: "test",
+                number: num ?? 0,
+                rawData: {},
+              },
+              state: (state ?? "open") as "open" | "merged" | "closed" | "declined",
+              url: `https://github.com/test/repo/pull/${num ?? 0}`,
+              ...(title ? { title } : {}),
+            },
+          },
+        }
+      : {};
+  return {
+    id: "test-id",
+    path: "/home/user/project",
+    name: "main",
+    branch: "main",
+    isCurrent: false,
+    isMainWorktree: false,
+    ...linked,
+    ...overrides,
+  };
+};
 
 const createEmptyFilters = (): FilterState => ({
   query: "",
   statusFilters: new Set(),
   typeFilters: new Set(),
-  githubFilters: new Set(),
+  prIssueFilters: new Set(),
   sessionFilters: new Set(),
   activityFilters: new Set(),
 });
@@ -517,7 +549,7 @@ describe("matchesFilters", () => {
   it("matches hasIssue filter", () => {
     const worktree = createMockWorktree({ issueNumber: 123 });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasIssue");
+    filters.prIssueFilters.add("hasIssue");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -525,7 +557,7 @@ describe("matchesFilters", () => {
   it("matches hasPR filter", () => {
     const worktree = createMockWorktree({ prNumber: 456 });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasPR");
+    filters.prIssueFilters.add("hasPR");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -533,7 +565,7 @@ describe("matchesFilters", () => {
   it("matches prOpen filter", () => {
     const worktree = createMockWorktree({ prState: "open" });
     const filters = createEmptyFilters();
-    filters.githubFilters.add("prOpen");
+    filters.prIssueFilters.add("prOpen");
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
@@ -970,7 +1002,7 @@ describe("hasAnyFilters", () => {
 
   it("returns true when github filter is set", () => {
     const filters = createEmptyFilters();
-    filters.githubFilters.add("hasIssue");
+    filters.prIssueFilters.add("hasIssue");
     expect(hasAnyFilters(filters)).toBe(true);
   });
 
@@ -1237,6 +1269,12 @@ describe("matchesQuickStateFilter", () => {
     const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(false);
   });
+
+  it('"finished" does NOT match a merged worktree with an active agent (chipState null)', () => {
+    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
+    expect(matchesQuickStateFilter("finished", meta)).toBe(false);
+    expect(matchesQuickStateFilter("working", meta)).toBe(true);
+  });
 });
 
 describe("computeChipCounts", () => {
@@ -1249,18 +1287,20 @@ describe("computeChipCounts", () => {
     vi.useRealTimers();
   });
 
+  const emptyFilters = createEmptyFilters();
+
   it("returns all-zero counts for an empty worktree list", () => {
-    const counts = computeChipCounts([], new Map(), null);
+    const counts = computeChipCounts([], new Map(), null, emptyFilters);
     expect(counts).toEqual(emptyChipCounts());
   });
 
-  it("counts branch types independently", () => {
+  it("with no active filters, counts equal absolute totals", () => {
     const worktrees = [
       createMockWorktree({ id: "1", branch: "feature/a" }),
       createMockWorktree({ id: "2", branch: "feature/b" }),
       createMockWorktree({ id: "3", branch: "bugfix/c" }),
     ];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.branchType.feature).toBe(2);
     expect(counts.branchType.bugfix).toBe(1);
     expect(counts.branchType.refactor).toBe(0);
@@ -1273,12 +1313,12 @@ describe("computeChipCounts", () => {
       createMockWorktree({ id: "3", prNumber: 202, prState: "merged" }),
       createMockWorktree({ id: "4", prNumber: 203, prState: "closed" }),
     ];
-    const counts = computeChipCounts(worktrees, new Map(), null);
-    expect(counts.github.hasIssue).toBe(2);
-    expect(counts.github.hasPR).toBe(3);
-    expect(counts.github.prOpen).toBe(1);
-    expect(counts.github.prMerged).toBe(1);
-    expect(counts.github.prClosed).toBe(1);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
+    expect(counts.prIssue.hasIssue).toBe(2);
+    expect(counts.prIssue.hasPR).toBe(3);
+    expect(counts.prIssue.prOpen).toBe(1);
+    expect(counts.prIssue.prMerged).toBe(1);
+    expect(counts.prIssue.prClosed).toBe(1);
   });
 
   it("counts status chips and respects activeWorktreeId for the 'active' chip", () => {
@@ -1296,11 +1336,10 @@ describe("computeChipCounts", () => {
       }),
       createMockWorktree({ id: "3", branch: "feature/c" }),
     ];
-    const counts = computeChipCounts(worktrees, new Map(), "3");
+    const counts = computeChipCounts(worktrees, new Map(), "3", emptyFilters);
     expect(counts.status.active).toBe(1);
     expect(counts.status.dirty).toBe(1);
     expect(counts.status.stale).toBe(1);
-    // id 2 is dirty (not idle); id 3 is active-only -> idle; id 1 is stale (not idle)
     expect(counts.status.idle).toBe(1);
   });
 
@@ -1336,7 +1375,7 @@ describe("computeChipCounts", () => {
         },
       ],
     ]);
-    const counts = computeChipCounts(worktrees, map, null);
+    const counts = computeChipCounts(worktrees, map, null, emptyFilters);
     expect(counts.sessions.hasTerminals).toBe(2);
     expect(counts.sessions.working).toBe(1);
     expect(counts.sessions.waiting).toBe(1);
@@ -1347,13 +1386,13 @@ describe("computeChipCounts", () => {
   it("counts activity chips against current time windows (cumulative)", () => {
     const now = Date.now();
     const worktrees = [
-      createMockWorktree({ id: "1", lastActivityTimestamp: now - 5 * 60 * 1000 }), // 5m
-      createMockWorktree({ id: "2", lastActivityTimestamp: now - 30 * 60 * 1000 }), // 30m
-      createMockWorktree({ id: "3", lastActivityTimestamp: now - 5 * 60 * 60 * 1000 }), // 5h
-      createMockWorktree({ id: "4", lastActivityTimestamp: now - 3 * 24 * 60 * 60 * 1000 }), // 3d
-      createMockWorktree({ id: "5", lastActivityTimestamp: now - 30 * 24 * 60 * 60 * 1000 }), // 30d
+      createMockWorktree({ id: "1", lastActivityTimestamp: now - 5 * 60 * 1000 }),
+      createMockWorktree({ id: "2", lastActivityTimestamp: now - 30 * 60 * 1000 }),
+      createMockWorktree({ id: "3", lastActivityTimestamp: now - 5 * 60 * 60 * 1000 }),
+      createMockWorktree({ id: "4", lastActivityTimestamp: now - 3 * 24 * 60 * 60 * 1000 }),
+      createMockWorktree({ id: "5", lastActivityTimestamp: now - 30 * 24 * 60 * 60 * 1000 }),
     ];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.activity.last15m).toBe(1);
     expect(counts.activity.last1h).toBe(2);
     expect(counts.activity.last24h).toBe(3);
@@ -1362,14 +1401,14 @@ describe("computeChipCounts", () => {
 
   it("ignores worktrees with no lastActivityTimestamp for activity chips", () => {
     const worktrees = [createMockWorktree({ id: "1" })];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.activity.last15m).toBe(0);
     expect(counts.activity.last7d).toBe(0);
   });
 
   it("treats lastActivityTimestamp === 0 the same as missing", () => {
     const worktrees = [createMockWorktree({ id: "1", lastActivityTimestamp: 0 })];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.activity.last15m).toBe(0);
     expect(counts.activity.last7d).toBe(0);
   });
@@ -1379,15 +1418,206 @@ describe("computeChipCounts", () => {
     const worktrees = [
       createMockWorktree({ id: "1", lastActivityTimestamp: now - 15 * 60 * 1000 }),
     ];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.activity.last15m).toBe(0);
     expect(counts.activity.last1h).toBe(1);
   });
 
   it("does not crash when derivedMetaMap is missing entries", () => {
     const worktrees = [createMockWorktree({ id: "1", branch: "feature/a" })];
-    const counts = computeChipCounts(worktrees, new Map(), null);
+    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
     expect(counts.branchType.feature).toBe(1);
     expect(counts.sessions.working).toBe(0);
+  });
+
+  // Disjunctive faceting tests
+
+  it("narrows non-status chips when a status filter is active", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a", mood: "stale" }),
+      createMockWorktree({ id: "2", branch: "bugfix/b", mood: "stale" }),
+      createMockWorktree({ id: "3", branch: "feature/c" }),
+    ];
+    const filters: FilterState = {
+      query: "",
+      statusFilters: new Set<StatusFilter>(["stale"]),
+      typeFilters: new Set(),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Status chips count against base set excluding status (all 3 worktrees)
+    expect(counts.status.stale).toBe(2);
+    expect(counts.status.idle).toBe(1);
+    expect(counts.status.active).toBe(0);
+    // Branch type chips counted against base set filtered by status=stale (only 2 stale worktrees)
+    expect(counts.branchType.feature).toBe(1);
+    expect(counts.branchType.bugfix).toBe(1);
+  });
+
+  it("narrows type chips when a branch type filter is active", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a" }),
+      createMockWorktree({ id: "2", branch: "feature/b" }),
+      createMockWorktree({ id: "3", branch: "bugfix/c" }),
+    ];
+    const filters: FilterState = {
+      query: "",
+      statusFilters: new Set(),
+      typeFilters: new Set<TypeFilter>(["feature"]),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Branch type chips show absolute totals (sibling group excluded from base set)
+    expect(counts.branchType.feature).toBe(2);
+    expect(counts.branchType.bugfix).toBe(1);
+    // Status chips counted against base set filtered by type=feature (only 2 feature worktrees)
+    expect(counts.status.idle).toBe(2);
+    expect(counts.status.active).toBe(0);
+  });
+
+  it("computes cross-facet intersection correctly with two active filter groups", () => {
+    const now = Date.now();
+    const worktrees = [
+      createMockWorktree({
+        id: "1",
+        branch: "feature/a",
+        lastActivityTimestamp: now - 5 * 60 * 1000,
+      }),
+      createMockWorktree({
+        id: "2",
+        branch: "bugfix/b",
+        lastActivityTimestamp: now - 5 * 60 * 1000,
+      }),
+      createMockWorktree({
+        id: "3",
+        branch: "feature/c",
+        lastActivityTimestamp: now - 2 * 60 * 60 * 1000,
+      }),
+    ];
+    const filters: FilterState = {
+      query: "",
+      statusFilters: new Set(),
+      typeFilters: new Set<TypeFilter>(["feature"]),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set<ActivityFilter>(["last15m"]),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Type chips count against base set excluding type filters (activity=last15m → w1 and w2)
+    expect(counts.branchType.feature).toBe(1); // w1 only
+    expect(counts.branchType.bugfix).toBe(1); // w2
+    // Activity chips count against base set excluding activity filters (type=feature → w1 and w3)
+    expect(counts.activity.last15m).toBe(1); // w1
+    expect(counts.activity.last1h).toBe(1); // w1
+    expect(counts.activity.last24h).toBe(2); // w1 + w3
+  });
+
+  it("applies text query as a global AND gate across all groups", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/login", name: "login" }),
+      createMockWorktree({ id: "2", branch: "feature/signup", name: "signup" }),
+      createMockWorktree({ id: "3", branch: "bugfix/login", name: "login-fix" }),
+    ];
+    const filters: FilterState = {
+      query: "login",
+      statusFilters: new Set(),
+      typeFilters: new Set(),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Only w1 and w3 match "login" query — all chips counted against this subset
+    expect(counts.branchType.feature).toBe(1);
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.status.idle).toBe(2);
+  });
+
+  it("shows zero for chips unreachable under active cross-facet filters", () => {
+    const map = new Map<string, DerivedWorktreeMeta>([
+      ["1", { ...createEmptyMeta(), hasWorkingAgent: true }],
+      ["2", { ...createEmptyMeta(), hasCompletedAgent: true }],
+      ["3", { ...createEmptyMeta(), hasWorkingAgent: true }],
+    ]);
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a" }),
+      createMockWorktree({ id: "2", branch: "feature/b" }),
+      createMockWorktree({ id: "3", branch: "bugfix/c" }),
+    ];
+    const filters: FilterState = {
+      query: "",
+      statusFilters: new Set(),
+      typeFilters: new Set<TypeFilter>(["bugfix"]),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set<SessionFilter>(["working"]),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, map, null, filters);
+    // Session chips: base set = type=bugfix → only w3
+    // w3 is bugfix and hasWorkingAgent → working=1
+    expect(counts.sessions.working).toBe(1);
+    expect(counts.sessions.completed).toBe(0);
+    // Branch type chips: base set = session=working → w1 and w3
+    // w1 is feature/working, w3 is bugfix/working
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.branchType.feature).toBe(1);
+  });
+
+  it("is unaffected by sibling group when computing within-group counts", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a" }),
+      createMockWorktree({ id: "2", branch: "bugfix/b" }),
+    ];
+    const filters: FilterState = {
+      query: "",
+      statusFilters: new Set(),
+      typeFilters: new Set<TypeFilter>(["feature"]),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Type chips ignore their own active filter — show absolute totals
+    expect(counts.branchType.feature).toBe(1);
+    expect(counts.branchType.bugfix).toBe(1);
+  });
+
+  it("applies exact-number query (#123) as a global AND gate", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a", issueNumber: 100 }),
+      createMockWorktree({ id: "2", branch: "feature/b", issueNumber: 200 }),
+      createMockWorktree({ id: "3", branch: "bugfix/c" }),
+    ];
+    const filters: FilterState = {
+      query: "#100",
+      statusFilters: new Set(),
+      typeFilters: new Set(),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      activityFilters: new Set(),
+    };
+    const counts = computeChipCounts(worktrees, new Map(), null, filters);
+    // Only w1 matches the exact-number query — all chips counted against it
+    expect(counts.branchType.feature).toBe(1);
+    expect(counts.branchType.bugfix).toBe(0);
+    expect(counts.prIssue.hasIssue).toBe(1);
+  });
+
+  it("excludes worktrees with future lastActivityTimestamp from all activity windows", () => {
+    const now = Date.now();
+    const worktrees = [
+      createMockWorktree({ id: "1", lastActivityTimestamp: now + 60 * 60 * 1000 }),
+      createMockWorktree({ id: "2", lastActivityTimestamp: now - 5 * 60 * 1000 }),
+    ];
+    const counts = computeChipCounts(worktrees, new Map(), null, createEmptyFilters());
+    // w1 has future timestamp → excluded from all activity chips
+    // w2 is within last15m → counted
+    expect(counts.activity.last15m).toBe(1);
+    expect(counts.activity.last1h).toBe(1);
+    expect(counts.activity.last24h).toBe(1);
   });
 });

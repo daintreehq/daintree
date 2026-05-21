@@ -1,9 +1,10 @@
+import type { BuiltInActionId, ActionId } from "@shared/types/actions";
 import { isMac } from "@/lib/platform";
 
 export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "portal" | "worktreeGrid";
 
 export interface KeybindingConfig {
-  actionId: string;
+  actionId: BuiltInActionId;
   combo: string; // e.g., "Cmd+T", "Ctrl+Shift+P", "Escape", "Cmd+K Cmd+S" (chords)
   scope: KeyScope;
   priority: number; // Higher priority wins in conflicts (default 0)
@@ -11,15 +12,21 @@ export interface KeybindingConfig {
   category?: string; // Category for organization in UI (e.g., "Terminal", "Panels")
 }
 
+// Wide variant for internal storage, registerBinding, and return types — actionId
+// accepts plugin-defined IDs via the ActionId open union.
+export type RegisteredKeybindingConfig = Omit<KeybindingConfig, "actionId"> & {
+  actionId: ActionId;
+};
+
 // "conflict": same combo as an existing binding in an overlapping scope.
 // "shadowed": chord-prefix collision — registering this combo would make either
 // the new binding or the existing chord unreachable (e.g. "Cmd+K" vs "Cmd+K Cmd+S").
-export interface KeybindingConflict extends KeybindingConfig {
+export interface KeybindingConflict extends RegisteredKeybindingConfig {
   kind: "conflict" | "shadowed";
 }
 
 export interface KeybindingResolutionResult {
-  match: KeybindingConfig | undefined;
+  match: RegisteredKeybindingConfig | undefined;
   chordPrefix: boolean;
   shouldConsume: boolean;
 }

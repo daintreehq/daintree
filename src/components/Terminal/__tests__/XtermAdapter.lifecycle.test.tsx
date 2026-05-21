@@ -56,6 +56,7 @@ const mocks = vi.hoisted(() => {
     addAltBufferListener: vi.fn(() => vi.fn()),
     fetchAndRestore: vi.fn(() => Promise.resolve(false)),
     notifyUserInput: vi.fn(),
+    notifyEnterPressed: vi.fn(),
   };
 
   return {
@@ -273,6 +274,11 @@ describe("XtermAdapter lifecycle", () => {
     expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\r");
     expect(firstOnInput).not.toHaveBeenCalled();
     expect(secondOnInput).toHaveBeenCalledWith("\r");
+    // Plain Enter must close the synthetic `directing` state explicitly —
+    // the custom key handler returns `false` before xterm's onKey/onData
+    // fires, bypassing the listener-installed onEnterPressed path (#8255).
+    expect(mocks.terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(mocks.terminalInstanceService.notifyEnterPressed).toHaveBeenCalledWith("term-1");
 
     mocks.getExitHandler()?.(7);
     expect(firstOnExit).not.toHaveBeenCalled();
@@ -289,7 +295,8 @@ describe("XtermAdapter lifecycle", () => {
     await waitFor(() =>
       expect(mocks.terminalInstanceService.applyRendererPolicy).toHaveBeenLastCalledWith(
         "term-1",
-        TerminalRefreshTier.BACKGROUND
+        TerminalRefreshTier.BACKGROUND,
+        { fleetDriven: false }
       )
     );
 
@@ -313,7 +320,8 @@ describe("XtermAdapter lifecycle", () => {
     await waitFor(() =>
       expect(mocks.terminalInstanceService.applyRendererPolicy).toHaveBeenLastCalledWith(
         "term-1",
-        TerminalRefreshTier.VISIBLE
+        TerminalRefreshTier.VISIBLE,
+        { fleetDriven: false }
       )
     );
     expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);

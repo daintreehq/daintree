@@ -164,6 +164,39 @@ describe("rendererGlobalErrorHandlers", () => {
 
       expect(useErrorStore.getState().errors).toHaveLength(0);
     });
+
+    it("ignores the benign ResizeObserver loop warning", () => {
+      const event = new ErrorEvent("error", {
+        message: "ResizeObserver loop completed with undelivered notifications.",
+      });
+
+      window.dispatchEvent(event);
+
+      expect(useErrorStore.getState().errors).toHaveLength(0);
+      expect(mockedLogError).not.toHaveBeenCalled();
+    });
+
+    it("ignores the legacy ResizeObserver loop limit warning", () => {
+      const event = new ErrorEvent("error", {
+        message: "ResizeObserver loop limit exceeded",
+      });
+
+      window.dispatchEvent(event);
+
+      expect(useErrorStore.getState().errors).toHaveLength(0);
+    });
+
+    it("still reports a real error whose message mentions ResizeObserver", () => {
+      const error = new Error("ResizeObserver loop limit exceeded");
+      const event = new ErrorEvent("error", {
+        error,
+        message: "ResizeObserver loop limit exceeded",
+      });
+
+      window.dispatchEvent(event);
+
+      expect(useErrorStore.getState().errors).toHaveLength(1);
+    });
   });
 
   describe("idempotency and cleanup", () => {

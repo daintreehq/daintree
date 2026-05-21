@@ -19,6 +19,7 @@ function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): Notificat
     seenAsToast: true,
     summarized: false,
     countable: true,
+    archivedAt: null,
     ...overrides,
   };
 }

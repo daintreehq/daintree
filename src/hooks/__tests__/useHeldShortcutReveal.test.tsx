@@ -20,6 +20,14 @@ function isRevealed(): boolean {
   return document.documentElement.dataset[REVEAL_DATASET_KEY] === "true";
 }
 
+function setVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", {
+    value: state,
+    configurable: true,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 describe("useHeldShortcutReveal", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -30,6 +38,10 @@ describe("useHeldShortcutReveal", () => {
   afterEach(() => {
     vi.useRealTimers();
     delete document.documentElement.dataset[REVEAL_DATASET_KEY];
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
   });
 
   it("does not reveal before 500ms threshold", () => {
@@ -168,6 +180,49 @@ describe("useHeldShortcutReveal", () => {
     });
 
     expect(isRevealed()).toBe(false);
+  });
+
+  it("clears reveal when the document becomes hidden (Linux WM workspace switch)", () => {
+    renderHook(() => useHeldShortcutReveal());
+
+    act(() => dispatchKey("keydown", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(isRevealed()).toBe(true);
+
+    act(() => setVisibility("hidden"));
+
+    expect(isRevealed()).toBe(false);
+  });
+
+  it("cancels a pending reveal timer when the document becomes hidden", () => {
+    renderHook(() => useHeldShortcutReveal());
+
+    act(() => dispatchKey("keydown", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    act(() => setVisibility("hidden"));
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(isRevealed()).toBe(false);
+  });
+
+  it("does not clear reveal when visibilitychange fires while still visible", () => {
+    renderHook(() => useHeldShortcutReveal());
+
+    act(() => dispatchKey("keydown", "Meta"));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(isRevealed()).toBe(true);
+
+    act(() => setVisibility("visible"));
+
+    expect(isRevealed()).toBe(true);
   });
 
   it("ignores OS auto-repeat keydown events", () => {

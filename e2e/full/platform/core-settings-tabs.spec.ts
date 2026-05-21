@@ -363,7 +363,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await removeButton.click();
 
     // ConfirmDialog should appear (rendered via portal, so use window scope)
-    await expect(window.getByRole("dialog", { name: "Remove 'staging'?" })).toBeVisible({
+    await expect(window.getByRole("alertdialog", { name: "Remove 'staging'?" })).toBeVisible({
       timeout: T_SHORT,
     });
     await window.getByRole("button", { name: "Remove environment" }).click();

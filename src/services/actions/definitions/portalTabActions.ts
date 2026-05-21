@@ -2,7 +2,9 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { usePortalStore } from "@/store/portalStore";
-import { activatePortalTab } from "./portalHelpers";
+import { usePortalPendingCloseStore } from "@/store/portalPendingCloseStore";
+import { deriveEffectiveTier } from "../deriveEffectiveTier";
+import { activatePortalTab, clearPortalPendingIf, parseConfirmed } from "./portalHelpers";
 
 export function registerPortalTabActions(
   actions: ActionRegistry,
@@ -247,13 +249,32 @@ export function registerPortalTabActions(
     category: "portal",
     kind: "command",
     danger: "safe",
+    // Runtime-escalated to a D1 confirm when 3+ tabs would close. A confirmed
+    // dispatch carries `{ confirmed: true }`; recording that into
+    // `lastAction` would let `action.repeatLast` replay it past its gate.
+    nonRepeatable: true,
     scope: "renderer",
-    argsSchema: z.object({ tabId: z.string().optional() }),
+    argsSchema: z
+      .object({ tabId: z.string().optional(), confirmed: z.boolean().optional() })
+      .optional(),
     run: async (args: unknown) => {
-      const { tabId } = args as { tabId?: string };
+      const { tabId } = (args ?? {}) as { tabId?: string };
       const state = usePortalStore.getState();
       const targetId = tabId ?? state.activeTabId;
       if (!targetId) return;
+      const tabsToClose = state.tabs.filter((t) => t.id !== targetId);
+      if (
+        !parseConfirmed(args) &&
+        deriveEffectiveTier("portal.closeOthers", { tabCount: tabsToClose.length }) === "D1"
+      ) {
+        usePortalPendingCloseStore.getState().request({
+          kind: "closeOthers",
+          tabsToClose,
+          keepTabId: targetId,
+        });
+        return;
+      }
+      clearPortalPendingIf("closeOthers");
       state.closeTabsExcept(targetId);
       const next = usePortalStore.getState();
       if (!next.activeTabId) {

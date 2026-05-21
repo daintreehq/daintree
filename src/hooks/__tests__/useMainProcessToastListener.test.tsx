@@ -15,6 +15,7 @@ type ToastCallback = (payload: {
   type: "success" | "error" | "info" | "warning";
   title?: string;
   message: string;
+  rateLimitKey?: string;
   action?: { label: string; ipcChannel: string };
 }) => void;
 
@@ -74,8 +75,26 @@ describe("useMainProcessToastListener", () => {
       type: "success",
       title: "CLI installed",
       message: "The daintree command is now available",
+      rateLimitKey: undefined,
       action: undefined,
     });
+  });
+
+  it("threads rateLimitKey through to notify when provided", () => {
+    renderHook(() => useMainProcessToastListener());
+
+    act(() => {
+      capturedCallback!({
+        type: "error",
+        title: "Cloud resource may still be running",
+        message: "Teardown failed",
+        rateLimitKey: "cloud-teardown-failure",
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ rateLimitKey: "cloud-teardown-failure" })
+    );
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {

@@ -27,7 +27,8 @@ import {
   migrateAgentSettings,
 } from "../agentSettingsStore";
 import { useCliAvailabilityStore } from "../cliAvailabilityStore";
-import type { CliAvailability } from "@shared/types";
+import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds";
+import { DEFAULT_AGENT_SETTINGS, type CliAvailability } from "@shared/types";
 
 function setAvailability(
   overrides: Partial<Record<string, "ready" | "installed" | "missing">>,
@@ -213,6 +214,52 @@ describe("agentSettingsStore adversarial", () => {
     // toolbar visibility resolves at read time via `isAgentToolbarVisible`.
     expect(state.settings?.agents.claude?.pinned).toBeUndefined();
     expect(state.settings?.agents.codex?.pinned).toBeUndefined();
+  });
+
+  it("initialize pins the first five installed built-ins for fresh default settings", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    setAvailability({ claude: "ready", codex: "installed" }, true);
+    clientMock.get.mockResolvedValue(DEFAULT_AGENT_SETTINGS);
+    clientMock.set.mockResolvedValue({ agents: {} });
+    clientMock.stampVersion.mockResolvedValue({ settingsVersion: 2, agents: {} });
+
+    await useAgentSettingsStore.getState().initialize();
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.settingsVersion).toBe(2);
+    expect(state.settings?.agents.claude?.pinned).toBe(true);
+    expect(state.settings?.agents.codex?.pinned).toBe(true);
+    for (const id of BUILT_IN_AGENT_IDS.filter((id) => id !== "claude" && id !== "codex")) {
+      expect(state.settings?.agents[id]?.pinned).toBe(false);
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clientMock.set).toHaveBeenCalledWith("claude", { pinned: true });
+    expect(clientMock.set).toHaveBeenCalledWith("codex", { pinned: true });
+    expect(clientMock.stampVersion).toHaveBeenCalledWith(2);
+  });
+
+  it("initialize recovers default-shaped settingsVersion 1 stores that missed first-run pinning", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    setAvailability({ claude: "ready", codex: "installed" }, true);
+    clientMock.get.mockResolvedValue({
+      ...DEFAULT_AGENT_SETTINGS,
+      settingsVersion: 1,
+    });
+    clientMock.set.mockResolvedValue({ agents: {} });
+    clientMock.stampVersion.mockResolvedValue({ settingsVersion: 2, agents: {} });
+
+    await useAgentSettingsStore.getState().initialize();
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.settingsVersion).toBe(2);
+    expect(state.settings?.agents.claude?.pinned).toBe(true);
+    expect(state.settings?.agents.codex?.pinned).toBe(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clientMock.stampVersion).toHaveBeenCalledWith(2);
   });
 
   it("getPinnedAgents returns only agents with explicit pinned: true (opt-in)", () => {

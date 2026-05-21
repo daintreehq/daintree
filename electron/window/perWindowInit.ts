@@ -4,7 +4,10 @@ import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { PtyClient } from "../services/PtyClient.js";
-import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
+import {
+  getMainProcessWatchdogClient,
+  type MainProcessWatchdogClient,
+} from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
@@ -16,7 +19,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { isDemoMode } from "../setup/environment.js";
+import { getEarlyPathRefreshPromise, isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -45,11 +48,11 @@ import {
  * with `worktreeService`, `worktreePortBroker`, and `projectViewManager` once
  * the workspace client and ProjectViewManager are wired in the orchestrator.
  */
-export function initPerWindowServices(
+export async function initPerWindowServices(
   win: BrowserWindow,
   ctx: WindowContext,
   windowRegistry: WindowRegistry | undefined
-): HandlerDependencies {
+): Promise<HandlerDependencies> {
   // Menu & Notifications (per-window: menu references this window)
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   let cliAvailabilityService = getCliAvailabilityServiceRef();
@@ -96,6 +99,28 @@ export function initPerWindowServices(
   if (!ptyClient) {
     console.log("[MAIN] Starting critical services...");
 
+    // Wait for the early PATH refresh (kicked off in app.whenReady) before
+    // forking the PTY host so node-pty inherits the user's full PATH —
+    // version-manager shims (mise/asdf/Volta) and user-local bin dirs are
+    // otherwise invisible to packaged builds (#8625). Awaiting a settled
+    // promise is a no-op when the refresh already finished. If the kick-off
+    // never ran (test/headless contexts), skip the await rather than block.
+    //
+    // Trade-off note: this still gates the first renderer load — IPC
+    // handlers and `startRendererLoad` in windowServices.ts run after
+    // `await initPerWindowServices`. In the P95 case the probe is already
+    // settled (~50ms via shell-env) and the await is instant; in the
+    // worst case it inherits refreshPath's 10s internal timeout, which is
+    // strictly better than the old fixPath() that ran synchronously at
+    // module load, before app.whenReady's intrinsic startup work could
+    // overlap. Fully unblocking renderer load is a follow-up — it requires
+    // registering IPC handlers with a deferred ptyClient ref so PtyClient
+    // construction can move past startRendererLoad.
+    const earlyPathRefresh = getEarlyPathRefreshPromise();
+    if (earlyPathRefresh) {
+      await earlyPathRefresh;
+    }
+
     // Start the external main-process watchdog before PtyClient so a deadlock
     // during PTY host fork (worst case: a synchronous spawn that hangs) is
     // still recoverable. The watchdog is fail-open: if its own fork throws,
@@ -104,7 +129,9 @@ export function initPerWindowServices(
       try {
         // Use the singleton accessor so `disposeMainProcessWatchdog()` in
         // shutdown.ts reaches the running instance instead of a no-op.
-        setMainProcessWatchdogClientRef(getMainProcessWatchdogClient());
+        const watchdog = getMainProcessWatchdogClient();
+        setMainProcessWatchdogClientRef(watchdog);
+        wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
       } catch (err) {
         console.error("[MAIN] Failed to start main-process watchdog:", err);
         setMainProcessWatchdogClientRef(null);
@@ -349,4 +376,35 @@ export function initPerWindowServices(
   handlerDeps.projectSwitchService = ctx.services.projectSwitchService;
 
   return handlerDeps;
+}
+
+/**
+ * Register the broadcast listener that turns a watchdog cap-hit into a
+ * `watchdog:disabled` push to every renderer. The watchdog client is Electron-
+ * agnostic and has no reference to the window registry; this helper is the
+ * single seam that bridges them. Called both at first-window startup (above)
+ * and from the `watchdog:restart` IPC handler after a manual restart, so a
+ * second cap-hit cycle reaches the renderer instead of dying silently.
+ */
+export function wireWatchdogDisabledBroadcast(
+  client: MainProcessWatchdogClient,
+  windowRegistry: WindowRegistry | undefined
+): void {
+  client.onDisabled((payload) => {
+    if (!windowRegistry) return;
+    for (const wCtx of windowRegistry.all()) {
+      const w = wCtx.browserWindow;
+      if (w.isDestroyed()) continue;
+      const wc = getAppWebContents(w);
+      if (wc.isDestroyed()) continue;
+      try {
+        wc.send(CHANNELS.EVENTS_PUSH, {
+          name: "watchdog:disabled",
+          payload,
+        });
+      } catch {
+        // Silently ignore send failures during window disposal.
+      }
+    }
+  });
 }

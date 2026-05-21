@@ -1,111 +1,14 @@
-export {
-  GitHubAuth,
-  GITHUB_API_TIMEOUT_MS,
-  GITHUB_AUTH_TIMEOUT_MS,
-  captureAuthMetadata,
-} from "./GitHubAuth.js";
-export type { GitHubTokenConfig, GitHubTokenValidation } from "./GitHubAuth.js";
-
-export {
-  gitHubRateLimitService,
-  GitHubRateLimitError,
-  PRIMARY_RESET_BUFFER_MS,
-} from "./GitHubRateLimitService.js";
-export type { ShouldBlockResult } from "./GitHubRateLimitService.js";
-
-export {
-  gitHubTokenHealthService,
-  GitHubTokenHealthServiceImpl,
-  HEALTH_CHECK_INTERVAL_MS,
-  HEALTH_CHECK_FOCUS_COOLDOWN_MS,
-  HEALTH_CHECK_FETCH_TIMEOUT_MS,
-} from "./GitHubTokenHealthService.js";
-
-export {
-  REPO_STATS_QUERY,
-  REPO_STATS_AND_PAGE_QUERY,
-  PROJECT_HEALTH_QUERY,
-  LIST_ISSUES_QUERY,
-  LIST_PRS_QUERY,
-  SEARCH_QUERY,
-  GET_ISSUE_QUERY,
-  GET_PR_QUERY,
-  GET_PR_REVIEW_THREADS_QUERY,
-  buildBatchPRQuery,
-  buildBatchRequiredChecksQuery,
-  buildGitHubSearchQuery,
-} from "./GitHubQueries.js";
-
-export { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
-export type { RollupContextNode, DerivedCIResult } from "./prRequiredCIStatus.js";
-
-export type {
-  RepoContext,
-  RepoStats,
-  RepoStatsResult,
-  LinkedPR,
-  PRCheckResult,
-  PRCheckCandidate,
-  BatchPRCheckResult,
-  CIStatus,
-  ProjectHealth,
-  ProjectHealthResult,
-} from "./types.js";
-
-// Token helpers
-export {
-  getGitHubToken,
-  hasGitHubToken,
-  setGitHubToken,
-  clearGitHubToken,
-  getGitHubConfig,
-  getGitHubConfigAsync,
-  validateGitHubToken,
-} from "./GitHubToken.js";
-
-// Token orchestration
-export { setTokenAndSync, clearTokenAndSync } from "./GitHubTokenOrchestrator.js";
-
-// Repo context
-export {
-  parseGitHubRepoUrl,
-  getRepoContext,
-  getRepoInfo,
-  getRepoUrl,
-  getIssueUrl,
-  withRepoContextRetry,
-} from "./GitHubRepoContext.js";
-
-// Cache management
-export { clearGitHubCaches, clearPRCaches } from "./GitHubCaches.js";
-
-// Stats
-export {
-  getRepoStats,
-  getRepoStatsAndPage,
-  getFirstPageCache,
-  getRepoStatsComplete,
-} from "./GitHubStats.js";
-export type { RepoStatsAndPageResult, RepoStatsCompleteResult } from "./GitHubStats.js";
-
-// Project health
-export { getProjectHealth, buildEmptyProjectHealthData } from "./GitHubHealth.js";
-
-// PR discovery
-export { batchCheckLinkedPRs } from "./GitHubPRDiscovery.js";
-
-// Error handling
-export { parseGitHubError } from "./GitHubErrors.js";
-
-// PRs
-export { listPullRequests, getPRByNumber, getPRTooltip, getPRReviewThreads } from "./GitHubPRs.js";
-
-// Issues
-export { listIssues, getIssueByNumber, getIssueTooltip, assignIssue } from "./GitHubIssues.js";
-export type { AssignIssueResult } from "./GitHubIssues.js";
-
-// Rate limit API
-export { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
-
-// Remotes
-export { listGitHubRemotes } from "./GitHubRemotes.js";
+/**
+ * Compat shim — the GitHub services were rehomed into the
+ * `daintree.github` built-in plugin at `plugins/builtin/github/main/` (#8060).
+ * This barrel keeps the existing `electron/services/github/*` import paths
+ * working for callers that have not yet migrated to the forge-provider
+ * surface — primarily the `window.electron.github.*` IPC handlers in
+ * `electron/ipc/handlers/github.ts`. Slated for removal after #8063 lands.
+ *
+ * Singleton identity is preserved across the electron main bundle and the
+ * loaded plugin bundle because both entries participate in the same esbuild
+ * build with `splitting: true`, so the underlying modules become a single
+ * shared chunk that both consumers reference.
+ */
+export * from "../../../plugins/builtin/github/main/index.js";

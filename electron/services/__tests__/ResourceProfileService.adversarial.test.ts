@@ -76,11 +76,31 @@ const mockPowerMonitorRemoveListener = powerMonitor.removeListener as unknown as
 
 interface MockPtyClient {
   setResourceProfile: Mock;
+  getAllTerminalsAsync: Mock;
 }
 
 interface MockWorkspaceClient {
   updateMonitorConfig: Mock;
   getAllStatesAsync: Mock;
+}
+
+function makeActiveAgentTerminals(count: number): Array<Record<string, unknown>> {
+  const terminals: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < count; i += 1) {
+    terminals.push({
+      id: `t-${i}`,
+      agentState: "working",
+      detectedAgentId: "claude",
+      isTrashed: false,
+    });
+  }
+  return terminals;
+}
+
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 interface MockHibernationService {
@@ -132,6 +152,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
 } {
   const pty: MockPtyClient = {
     setResourceProfile: vi.fn(),
+    getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
   };
   const workspace: MockWorkspaceClient = {
     updateMonitorConfig: vi.fn(),
@@ -149,7 +170,7 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
       getPtyClient: () => pty as unknown as PtyClient,
       getWorkspaceClient: () => workspace as unknown as WorkspaceClient,
       getHibernationService: () => hibernation as unknown as HibernationService,
-      getProjectViewManager: () => null,
+      getAllProjectViewManagers: () => [],
       getProjectStatsService: () => stats as unknown as ProjectStatsService,
       getUserCachedViewLimit: () => 1,
       ...overrides,
@@ -228,31 +249,21 @@ describe("ResourceProfileService adversarial", () => {
     service.stop();
   });
 
-  it("ignores an in-flight getAllStatesAsync resolution after stop", async () => {
-    const pendingStates = deferred<Array<{ id: string }>>();
-    const { deps, workspace } = createDeps();
-    workspace.getAllStatesAsync.mockReturnValueOnce(pendingStates.promise);
+  it("ignores an in-flight getAllTerminalsAsync resolution after stop", async () => {
+    const pendingTerminals = deferred<Array<Record<string, unknown>>>();
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockReturnValueOnce(pendingTerminals.promise);
 
     const service = new ResourceProfileService(deps);
     service.start();
     service.stop();
 
-    pendingStates.resolve([
-      { id: "wt-1" },
-      { id: "wt-2" },
-      { id: "wt-3" },
-      { id: "wt-4" },
-      { id: "wt-5" },
-      { id: "wt-6" },
-      { id: "wt-7" },
-      { id: "wt-8" },
-      { id: "wt-9" },
-    ]);
-    await pendingStates.promise;
+    pendingTerminals.resolve(makeActiveAgentTerminals(20));
+    await pendingTerminals.promise;
     await Promise.resolve();
 
-    const internals = service as unknown as { cachedWorktreeCount: number };
-    expect(internals.cachedWorktreeCount).toBe(0);
+    const internals = service as unknown as { cachedActiveAgentCount: number };
+    expect(internals.cachedActiveAgentCount).toBe(0);
   });
 
   it("clears pending evaluation timers on stop", () => {
@@ -274,18 +285,20 @@ describe("ResourceProfileService adversarial", () => {
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
-  it("prefers the most constrained profile when memory and worktree pressure spike together", () => {
-    const { deps } = createDeps();
+  it("prefers the most constrained profile when memory and fleet pressure spike together", async () => {
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(9));
     const service = new ResourceProfileService(deps);
 
-    service.setWorktreeCount(9);
     service.start();
+    await flushAsync();
 
     mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
     mockIsOnBatteryPower.mockReturnValue(false);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
+    // HIGH memory (+2) + 9 agents (+1 at FLEET_COUNT_HIGH) = 3 => efficiency
     expect(service.getProfile()).toBe("efficiency");
     service.stop();
   });
@@ -331,15 +344,16 @@ describe("ResourceProfileService adversarial", () => {
     service.stop();
   });
 
-  it("thermal and speed-limit signals combine with worktree count for efficiency", () => {
-    const { deps } = createDeps();
+  it("thermal and speed-limit signals combine with active-agent count for efficiency", async () => {
+    const { deps, pty } = createDeps();
+    pty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(9));
     const service = new ResourceProfileService(deps);
 
-    service.setWorktreeCount(9);
     mockIsOnBatteryPower.mockReturnValue(true);
     service.start();
+    await flushAsync();
 
-    // Low memory (0) + battery (+1) + thermal serious (+1) + worktrees (+1) = 3 => efficiency
+    // Low memory (0) + battery (+1) + thermal serious (+1) + 9 agents (+1) = 3 => efficiency
     mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
     (service as unknown as { thermalState: string }).thermalState = "serious";
 
@@ -382,6 +396,87 @@ describe("ResourceProfileService adversarial", () => {
       expect(service.getProfile()).toBe("balanced");
       vi.advanceTimersByTime(5_000);
       expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("lag-triggered efficiency entry does not clamp cached view limit", () => {
+      // Lag triggers efficiency directly from sampleLag(), bypassing
+      // computeTargetProfile(). Memory is not the trigger, so the
+      // setCachedViewLimit(1) clamp must NOT fire — only setEfficiencyFreeze(true)
+      // should run (freezing the renderers suppresses the CPU wake-ups that
+      // lag pressure is actually about).
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
+      });
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+
+      service.stop();
+    });
+
+    it("lag-triggered efficiency entry clears stale memory score from prior eval", () => {
+      // A prior memory-pressure eval may have set lastMemoryScore to 2. If lag
+      // then triggers a fresh efficiency entry (the prior entry was reset by an
+      // intervening recovery), the lag path must zero the stale score so the
+      // clamp does NOT fire. Without the zero, the lag path would inherit the
+      // last memory measurement (up to 30s old) and clamp incorrectly.
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
+        getUserCachedViewLimit: () => 3,
+      });
+      const service = new ResourceProfileService(deps);
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+
+      // Drive into efficiency via memory + battery — sets lastMemoryScore = 2.
+      mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+      expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(1);
+
+      // Recover to balanced. Memory drops, battery off.
+      const onAcHandler = mockPowerMonitorOn.mock.calls.find(
+        (call: string[]) => call[0] === "on-ac"
+      )?.[1] as (() => void) | undefined;
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      onAcHandler!();
+      vi.advanceTimersByTime(30_000 * 4);
+      expect(service.getProfile()).not.toBe("efficiency");
+      pvm.setCachedViewLimit.mockClear();
+
+      // Now drive efficiency via lag only. Memory is still low (no contribution).
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      // The lag entry must not have reused the stale memory score.
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(true);
 
       service.stop();
     });
@@ -469,7 +564,7 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
-    it("a single non-clean tick resets the recovery counter", () => {
+    it("exits via sliding window when 7 of 9 samples are clean", () => {
       const { deps } = createDeps();
       const service = new ResourceProfileService(deps);
       service.start();
@@ -480,27 +575,173 @@ describe("ResourceProfileService adversarial", () => {
       vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
 
-      // Eight clean ticks (one short of the 9-tick threshold).
-      setLag(50, 0.1);
-      for (let i = 0; i < 8; i++) {
+      // Push samples through the 9-sample window: 2 noisy + 7 clean,
+      // ending with the 7th clean sample making the window 7-of-9 clean.
+      const samples: Array<{ p99: number; util: number }> = [
+        { p99: 200, util: 0.5 }, // noisy (above exit threshold)
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean — window now contains 7 clean / 2 noisy
+      ];
+      for (const s of samples) {
+        setLag(s.p99, s.util);
         vi.advanceTimersByTime(5_000);
       }
-      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
 
-      // One non-clean tick (above exit threshold) resets the counter.
-      setLag(200, 0.5);
-      vi.advanceTimersByTime(5_000);
-
-      // Now eight more clean ticks should still NOT recover (counter restarted).
-      setLag(50, 0.1);
-      for (let i = 0; i < 8; i++) {
-        vi.advanceTimersByTime(5_000);
-      }
-      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
-
-      // Ninth clean tick clears it.
-      vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(false);
+
+      service.stop();
+    });
+
+    it("does not exit when only 6 of 9 samples are clean", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      // 3 noisy + 6 clean = below the 7-of-9 threshold.
+      const samples: Array<{ p99: number; util: number }> = [
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 200, util: 0.5 }, // noisy
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean
+        { p99: 50, util: 0.1 }, // clean — window: 6 clean / 3 noisy
+      ];
+      for (const s of samples) {
+        setLag(s.p99, s.util);
+        vi.advanceTimersByTime(5_000);
+      }
+
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      service.stop();
+    });
+
+    it("does not force-clear before the hard cap elapses", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+
+      // Sustain moderate lag below the cap. After 115_000ms post-entry the
+      // cap has NOT elapsed; the latch must still be active.
+      setLag(400, 0.9);
+      vi.advanceTimersByTime(115_000);
+
+      const internals = service as unknown as { lagPressureActive: boolean };
+      expect(internals.lagPressureActive).toBe(true);
+      expect(logInfo).not.toHaveBeenCalledWith("event-loop-lag-force-cleared", expect.any(Object));
+
+      service.stop();
+    });
+
+    it("force-clears the latch after the hard cap even with sustained lag", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // Enter degraded.
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect((service as unknown as { lagPressureActive: boolean }).lagPressureActive).toBe(true);
+
+      // Keep lag in the moderate band (above exit, below escalation) so the
+      // sliding window can never naturally clear it. The cap fires on the
+      // first lag-sample tick where (now - lagPressureStartedAt) >= 120_000.
+      // 120s lands exactly on the 5s-aligned cap-fire tick; one extra 5s tick
+      // confirms the post-cap state has no immediate re-entry yet (the
+      // moderate entry path needs 2 consecutive bad samples).
+      setLag(400, 0.9);
+      vi.advanceTimersByTime(125_000);
+
+      const internals = service as unknown as {
+        lagPressureActive: boolean;
+        lagEscalatedActive: boolean;
+        lagPressureStartedAt: number | null;
+        lagEnterTicks: number;
+      };
+      expect(internals.lagPressureActive).toBe(false);
+      expect(internals.lagEscalatedActive).toBe(false);
+      expect(internals.lagPressureStartedAt).toBeNull();
+      // One bad tick after cap-fire increments lagEnterTicks; not yet 2.
+      expect(internals.lagEnterTicks).toBe(1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-force-cleared",
+        expect.objectContaining({
+          p99Ms: 400,
+          maxMs: 400,
+          durationMs: expect.any(Number),
+        })
+      );
+
+      service.stop();
+    });
+
+    it("enters the latch on a single severe spike above 500ms", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // A single 5s window with p99 > LAG_ESCALATE_P99_MS (500) and high ELU
+      // bypasses the 2-tick moderate entry path.
+      setLag(600, 0.9);
+      vi.advanceTimersByTime(5_000);
+
+      const internals = service as unknown as {
+        lagPressureActive: boolean;
+        lagEscalatedActive: boolean;
+      };
+      expect(internals.lagPressureActive).toBe(true);
+      expect(internals.lagEscalatedActive).toBe(true);
+      expect(service.getProfile()).toBe("efficiency");
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-detected",
+        expect.objectContaining({ p99Ms: 600 })
+      );
+      expect(logInfo).toHaveBeenCalledWith(
+        "event-loop-lag-escalated",
+        expect.objectContaining({ p99Ms: 600 })
+      );
+
+      service.stop();
+    });
+
+    it("rejects a single severe spike when ELU is low (GC stall pattern)", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      // p99 above escalation threshold but ELU low — suspected GC pause,
+      // not genuine saturation. Must not trip the immediate-entry path.
+      setLag(700, 0.3);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+
+      const internals = service as unknown as { lagPressureActive: boolean };
+      expect(internals.lagPressureActive).toBe(false);
+      expect(service.getProfile()).toBe("balanced");
 
       service.stop();
     });
@@ -526,13 +767,13 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
-    it("escalation skips refreshWorktreeCount", async () => {
-      const { deps, workspace } = createDeps();
+    it("escalation skips refreshFleetState", async () => {
+      const { deps, pty } = createDeps();
       const service = new ResourceProfileService(deps);
       service.start();
 
-      // start() invokes refreshWorktreeCount once unconditionally.
-      const initialCalls = workspace.getAllStatesAsync.mock.calls.length;
+      // start() invokes refreshFleetState once unconditionally.
+      const initialCalls = pty.getAllTerminalsAsync.mock.calls.length;
 
       // Enter degraded.
       setLag(300, 0.85);
@@ -544,9 +785,9 @@ describe("ResourceProfileService adversarial", () => {
       vi.advanceTimersByTime(5_000);
       expect((service as unknown as { lagEscalatedActive: boolean }).lagEscalatedActive).toBe(true);
 
-      // The next 30s eval should NOT call refreshWorktreeCount.
+      // The next 30s eval should NOT call refreshFleetState (no new IPC fetch).
       vi.advanceTimersByTime(30_000);
-      expect(workspace.getAllStatesAsync).toHaveBeenCalledTimes(initialCalls);
+      expect(pty.getAllTerminalsAsync).toHaveBeenCalledTimes(initialCalls);
 
       service.stop();
     });
@@ -743,6 +984,54 @@ describe("ResourceProfileService adversarial", () => {
       service.stop();
     });
 
+    it("lag-only efficiency entry still unfreezes and restores limit on exit", () => {
+      // Lag enters efficiency without clamping (no memory contribution). On
+      // exit, the always-unconditional restore branch must still fire so
+      // renderers don't stay frozen and the user-configured limit is reasserted
+      // (even though entry never clamped — PVM's own evictStaleViews floor may
+      // have clamped during the efficiency window).
+      const pvm = {
+        setCachedViewLimit: vi.fn(),
+        setLowMemoryFreeThresholdMb: vi.fn(),
+        setEfficiencyFreeze: vi.fn(),
+      };
+      const { deps } = createDeps({
+        getAllProjectViewManagers: () =>
+          [pvm] as unknown as ReturnType<ResourceProfileDeps["getAllProjectViewManagers"]>,
+        getUserCachedViewLimit: () => 4,
+      });
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+      expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(true);
+
+      // Recover from lag.
+      setLag(50, 0.1);
+      for (let i = 0; i < 9; i++) {
+        vi.advanceTimersByTime(5_000);
+      }
+
+      // Drive normal scoring back up.
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
+      expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(4);
+
+      service.stop();
+    });
+
     it("getCurrentThermalState throwing does not crash start", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       mockGetCurrentThermalState.mockImplementation(() => {
@@ -867,6 +1156,194 @@ describe("ResourceProfileService adversarial", () => {
       };
       expect(internals.lagInterval).toBeNull();
       expect(internals.lagHistogram).toBeNull();
+    });
+  });
+
+  describe("active-agent count filtering", () => {
+    it("counts terminals across all ACTIVE_AGENT_STATES (working, waiting, directing)", async () => {
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValue([
+        { id: "a", agentState: "working", detectedAgentId: "claude" },
+        { id: "b", agentState: "waiting", detectedAgentId: "gemini" },
+        { id: "c", agentState: "directing", detectedAgentId: "claude" },
+        { id: "d", agentState: "working", detectedAgentId: "codex" },
+        { id: "e", agentState: "waiting", detectedAgentId: "claude" },
+        { id: "f", agentState: "directing", detectedAgentId: "claude" },
+        { id: "g", agentState: "working", detectedAgentId: "claude" },
+        { id: "h", agentState: "working", detectedAgentId: "claude" },
+      ]);
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      // 8 active agents → +1; no other pressure → balanced
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      service.stop();
+    });
+
+    it("accepts launchAgentId before runtime detection ever fired", async () => {
+      const { deps, pty } = createDeps();
+      // Cold-launched agents before first state-machine detection. Identity
+      // comes from launchAgentId; everDetectedAgent is undefined (false-ish).
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `launch-${i}`,
+          agentState: "working",
+          launchAgentId: "claude",
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      // 24 agents alone (+3) → efficiency
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("excludes terminals whose agent exited (everDetectedAgent=true, no detectedAgentId)", async () => {
+      const { deps, pty } = createDeps();
+      // Residual shell after agent exit: everDetectedAgent sticky, detectedAgentId cleared.
+      // These would falsely inflate the fleet count if not filtered.
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `exit-${i}`,
+          agentState: "working",
+          launchAgentId: "claude",
+          everDetectedAgent: true,
+          // no detectedAgentId
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      // Zero qualifying agents → performance (after upgrade hold)
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("resets fleet count to 0 when PtyClient returns [] under IPC failure", async () => {
+      // Documents the real production behavior: PtyClient.getAllTerminalsAsync
+      // catches its own IPC failures and resolves [], so the service's cache
+      // resets to 0. The 90s upgrade hold prevents transient drops from
+      // immediately upgrading the profile.
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
+
+      // Subsequent refreshes fail in the PtyClient layer — surfaced as [].
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      vi.advanceTimersByTime(30_000);
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      service.stop();
+    });
+
+    it("excludes terminals with hasPty=false from the active-agent count", async () => {
+      const { deps, pty } = createDeps();
+      // 24 terminals that look 'live' by every other signal but their PTY exited.
+      // ProjectStatsService applies the same hasPty filter; without it the
+      // service would lock to efficiency indefinitely on a fleet that exited
+      // without being trashed.
+      pty.getAllTerminalsAsync.mockResolvedValue(
+        Array.from({ length: 24 }, (_, i) => ({
+          id: `orphan-${i}`,
+          agentState: "working",
+          detectedAgentId: "claude",
+          hasPty: false,
+        }))
+      );
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("ignores a stale getAllTerminalsAsync result from a previous lifecycle", async () => {
+      const pendingTerminals = deferred<Array<Record<string, unknown>>>();
+      const { deps, pty } = createDeps();
+      // The very first call (during the first start()) is the slow one.
+      pty.getAllTerminalsAsync.mockReturnValueOnce(pendingTerminals.promise);
+      // Calls after that resolve immediately with [] (fresh lifecycle: no fleet).
+      pty.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = new ResourceProfileService(deps);
+      service.start();
+      service.stop();
+      service.start();
+      // Drain the fresh-lifecycle refresh to set cachedActiveAgentCount = 0.
+      await flushAsync();
+
+      // The slow promise from lifecycle #1 finally resolves with a huge fleet.
+      // Without the generation guard, this would write 24 into the new
+      // lifecycle's cache.
+      pendingTerminals.resolve(makeActiveAgentTerminals(24));
+      await pendingTerminals.promise;
+      await flushAsync();
+
+      const internals = service as unknown as { cachedActiveAgentCount: number };
+      expect(internals.cachedActiveAgentCount).toBe(0);
+
+      service.stop();
+    });
+
+    it("zeros cachedActiveAgentCount on restart even if the prior refresh succeeded", async () => {
+      const { deps, pty } = createDeps();
+      pty.getAllTerminalsAsync.mockResolvedValueOnce(makeActiveAgentTerminals(24));
+      const service = new ResourceProfileService(deps);
+      service.start();
+      await flushAsync();
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(24);
+
+      // Stop, then keep the next refresh deferred so it can't immediately
+      // overwrite the cache. The restart itself must reset the count.
+      service.stop();
+      const pending = deferred<Array<Record<string, unknown>>>();
+      pty.getAllTerminalsAsync.mockReturnValue(pending.promise);
+
+      service.start();
+      // No flushAsync — the new refresh hasn't resolved yet. The reset must
+      // come from start() itself, not from the refresh result.
+      expect(
+        (service as unknown as { cachedActiveAgentCount: number }).cachedActiveAgentCount
+      ).toBe(0);
+
+      pending.resolve([]);
+      service.stop();
     });
   });
 });

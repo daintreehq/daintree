@@ -109,13 +109,16 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         }),
 
       setTerminal: (terminalId, agentId, sessionId) =>
-        set({
+        set((s) => ({
           terminalId,
           agentId,
           sessionId,
-          preferredAgentId: agentId,
+          // Only initialize the preference on first launch. An explicit user
+          // choice (made via Settings) must survive terminal re-binds —
+          // overwriting it here is what made #8353's agent switch a no-op.
+          preferredAgentId: s.preferredAgentId ?? agentId,
           conversationTouched: false,
-        }),
+        })),
 
       clearTerminal: () =>
         set({ terminalId: null, agentId: null, sessionId: null, conversationTouched: false }),

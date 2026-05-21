@@ -48,6 +48,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       httpSessions: new Map(),
       sessionTierMap: new Map(),
       sessionWebContentsMap: new Map(),
+      sessionContextMap: new Map(),
       resourceSubscriptions: new Map(),
       drain: vi.fn(),
       getTier: vi.fn(() => "workbench" as const),
@@ -55,6 +56,9 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       createHttpIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       resetIdleTimer: vi.fn(),
       resetHttpIdleTimer: vi.fn(),
+      armTierElevationTimer: vi.fn(),
+      clearElevationTimer: vi.fn(),
+      revokeSession: vi.fn(() => false),
     },
     auditService: {
       hydrate: vi.fn(),
@@ -71,6 +75,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       recordDirectOutcome: vi.fn(),
       getRecords: vi.fn(() => []),
       clear: vi.fn(),
+      getCurrentTurnIdForSession: vi.fn(() => null),
     },
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
@@ -84,6 +89,12 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     emitStatusChange: vi.fn(),
     emitRuntimeStateChange: vi.fn(),
     setConfig: vi.fn(),
+    abusePolicy: {
+      recordDenial: vi.fn(() => ({ tripped: false })),
+      dropSession: vi.fn(),
+      clear: vi.fn(),
+      getSnapshot: vi.fn(() => null),
+    },
     ...overrides,
   } as unknown as HttpLifecycleDeps;
 }
@@ -253,6 +264,13 @@ describe("HttpLifecycle", () => {
 
       expect(result).toEqual({ sessionId: "sess-1", tier: "system" });
       expect(deps.sessionStore.sessionTierMap.get("sess-1")).toBe("system");
+      // The elevation must arm the decay timer with the pre-elevation tier
+      // as the baseline (#8462) — otherwise the elevation is unbounded.
+      expect(deps.sessionStore.armTierElevationTimer).toHaveBeenCalledWith(
+        "sess-1",
+        "system",
+        "workbench"
+      );
     });
 
     it("refuses downgrades silently and keeps current tier", () => {
@@ -332,6 +350,61 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.setSessionTier("", "system")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("buildSessionServerDeps — appendAuditRecord turnId stamping", () => {
+    it("stamps turnId on appendRecord when getCurrentTurnIdForSession returns a value", () => {
+      const deps = fakeDeps();
+      (
+        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
+      ).mockReturnValue("turn-uuid-abc");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-1");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ turnId: "turn-uuid-abc" })
+      );
+    });
+
+    it("omits turnId when getCurrentTurnIdForSession returns null", () => {
+      const deps = fakeDeps();
+      (
+        deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
+      ).mockReturnValue(null);
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-1");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+      });
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs).toBeDefined();
+      expect(callArgs.turnId).toBeUndefined();
     });
   });
 

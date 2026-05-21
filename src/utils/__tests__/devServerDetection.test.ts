@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findDevServerCandidate } from "../devServerDetection";
+import { findDevServerCandidate, findAllDevServerCandidates } from "../devServerDetection";
 import type { RunCommand } from "@shared/types";
 
 function runner(name: string, command: string, description?: string): RunCommand {
@@ -113,5 +113,73 @@ describe("findDevServerCandidate", () => {
       const runners = [runner("dev", "npm run dev", "next dev | tee log")];
       expect(findDevServerCandidate(runners)?.command).toBe("npm run dev");
     });
+  });
+});
+
+describe("findAllDevServerCandidates", () => {
+  it("returns empty array for undefined/empty input", () => {
+    expect(findAllDevServerCandidates(undefined)).toEqual([]);
+    expect(findAllDevServerCandidates([])).toEqual([]);
+  });
+
+  it("returns all priority matches in order", () => {
+    const runners = [
+      runner("serve", "npm run serve", "vite preview"),
+      runner("start", "npm run start", "node server.js"),
+      runner("dev", "npm run dev", "vite"),
+    ];
+    const result = findAllDevServerCandidates(runners);
+    expect(result.map((r) => r.name)).toEqual(["dev", "start", "serve"]);
+  });
+
+  it("includes non-priority runners after priority matches", () => {
+    const runners = [
+      runner("build", "npm run build"),
+      runner("dev", "npm run dev", "vite"),
+      runner("lint", "npm run lint"),
+      runner("start", "npm run start"),
+    ];
+    const result = findAllDevServerCandidates(runners);
+    expect(result.map((r) => r.name)).toEqual(["dev", "start", "build", "lint"]);
+  });
+
+  it("deduplicates runners by id", () => {
+    const devRunner = runner("dev", "npm run dev");
+    const runners = [devRunner, devRunner];
+    const result = findAllDevServerCandidates(runners);
+    expect(result).toHaveLength(1);
+  });
+
+  it("promotes devcontainer-poststart to first when no priority match", () => {
+    const runners = [
+      runner("build", "npm run build"),
+      { id: "devcontainer-poststart", name: "postStart", command: "npm start", icon: "docker" },
+    ];
+    const result = findAllDevServerCandidates(runners);
+    expect(result.map((r) => r.id)).toEqual(["devcontainer-poststart", "npm-build"]);
+  });
+
+  it("keeps devcontainer-poststart as a regular runner when priority matches exist", () => {
+    const runners = [
+      runner("dev", "npm run dev", "vite"),
+      { id: "devcontainer-poststart", name: "postStart", command: "npm start", icon: "docker" },
+    ];
+    const result = findAllDevServerCandidates(runners);
+    expect(result.map((r) => r.id)).toEqual(["npm-dev", "devcontainer-poststart"]);
+  });
+
+  it("applies turbopack to each Next.js candidate", () => {
+    const runners = [
+      runner("dev", "npm run dev", "next dev"),
+      runner("start", "npm run start", "next start"),
+    ];
+    const result = findAllDevServerCandidates(runners);
+    expect(result[0]?.command).toBe("npm run dev -- --turbopack");
+    expect(result[1]?.command).toBe("npm run start");
+  });
+
+  it("findDevServerCandidate delegates to findAllDevServerCandidates", () => {
+    const runners = [runner("serve", "npm run serve"), runner("dev", "npm run dev", "vite")];
+    expect(findDevServerCandidate(runners)?.name).toBe("dev");
   });
 });

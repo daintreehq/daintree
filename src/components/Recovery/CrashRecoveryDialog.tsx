@@ -14,7 +14,15 @@ import {
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { AnimatedLabel } from "../ui/AnimatedLabel";
+import { SettingsSwitch } from "../Settings/SettingsSwitch";
+import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
+import {
+  getSuspectPanelBannerTitle,
+  SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED,
+  SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED,
+} from "./recoveryCopy";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -59,13 +67,15 @@ export function CrashRecoveryDialog({
   const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
   const isInCrashLoop = (crash.crashCount ?? 0) >= 2;
+  const shouldDeselectSuspects = (crash.crashCount ?? 0) >= 1;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    () => new Set(panels.map((p) => p.id))
+    () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [privacyWarningShown, setPrivacyWarningShown] = useState(false);
+  const [showFreshConfirm, setShowFreshConfirm] = useState(false);
   const { copied, copy } = useCopyWithFeedback();
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
 
@@ -78,6 +88,14 @@ export function CrashRecoveryDialog({
       setResolving(true);
       try {
         await onResolve(action);
+      } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Recovery failed",
+          message: formatErrorMessage(err, "Couldn't complete recovery action"),
+          duration: 6000,
+        });
       } finally {
         setResolving(false);
       }
@@ -96,6 +114,11 @@ export function CrashRecoveryDialog({
   const handleFresh = useCallback(() => {
     handleResolve({ kind: "fresh" });
   }, [handleResolve]);
+
+  const handleFreshConfirm = useCallback(() => {
+    setShowFreshConfirm(false);
+    handleFresh();
+  }, [handleFresh]);
 
   const togglePanel = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -120,6 +143,7 @@ export function CrashRecoveryDialog({
   const handleOpenLogFile = useCallback(() => {
     window.electron.system.openPath(crash.logPath).catch((err) => {
       logError("Failed to open crash log path", err);
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Couldn't open log file",
@@ -155,289 +179,330 @@ export function CrashRecoveryDialog({
   const crashDate = new Date(crash.entry.timestamp).toLocaleString();
 
   return (
-    <AppDialog
-      isOpen={true}
-      onClose={() => {}}
-      dismissible={false}
-      size="md"
-      data-testid="crash-recovery-dialog"
-    >
-      <AppDialog.Header>
-        <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
-          Daintree closed unexpectedly
-        </AppDialog.Title>
-      </AppDialog.Header>
+    <>
+      <AppDialog
+        isOpen={true}
+        onClose={() => {}}
+        dismissible={false}
+        size="md"
+        data-testid="crash-recovery-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
+            Daintree closed unexpectedly
+          </AppDialog.Title>
+        </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
-        <p className="text-sm text-daintree-text/80">
-          The previous session ended unexpectedly on {crashDate}.
-          {hasPanels ? " Select which panels to restore:" : " Choose how to continue:"}
-        </p>
+        <AppDialog.Body className="space-y-4">
+          <p className="text-sm text-daintree-text/80">
+            The previous session ended unexpectedly on {crashDate}.
+            {hasPanels ? " Select which panels to restore:" : " Choose how to continue:"}
+          </p>
 
-        {hasPanels ? (
-          <>
-            <div className="border border-daintree-border rounded-lg overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-daintree-border">
-                <button
-                  type="button"
-                  onClick={toggleAll}
-                  className="cursor-pointer text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
-                  data-testid="toggle-all-button"
+          {hasPanels ? (
+            <>
+              <div className="border border-daintree-border rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-daintree-border">
+                  <button
+                    type="button"
+                    onClick={toggleAll}
+                    className="cursor-pointer text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+                    data-testid="toggle-all-button"
+                  >
+                    {allSelected ? "Deselect all" : "Select all"}
+                  </button>
+                  <span className="text-xs tabular-nums text-daintree-text/50">
+                    {selectedCount} of {panels.length} selected
+                  </span>
+                </div>
+                <div
+                  className="max-h-48 overflow-y-auto divide-y divide-daintree-border/50"
+                  data-testid="panel-list"
                 >
-                  {allSelected ? "Deselect all" : "Select all"}
-                </button>
-                <span className="text-xs tabular-nums text-daintree-text/50">
-                  {selectedCount} of {panels.length} selected
-                </span>
+                  {panels.map((panel) => (
+                    <PanelRow
+                      key={panel.id}
+                      panel={panel}
+                      selected={selectedIds.has(panel.id)}
+                      onToggle={togglePanel}
+                    />
+                  ))}
+                </div>
               </div>
-              <div
-                className="max-h-48 overflow-y-auto divide-y divide-daintree-border/50"
-                data-testid="panel-list"
-              >
-                {panels.map((panel) => (
-                  <PanelRow
-                    key={panel.id}
-                    panel={panel}
-                    selected={selectedIds.has(panel.id)}
-                    onToggle={togglePanel}
+
+              {suspectCount > 0 && (
+                <div data-testid="suspect-warning" className="rounded-md overflow-hidden">
+                  <InlineStatusBanner
+                    severity="warning"
+                    icon={AlertTriangle}
+                    title={getSuspectPanelBannerTitle(suspectCount, shouldDeselectSuspects)}
+                    description={
+                      shouldDeselectSuspects
+                        ? SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED
+                        : SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED
+                    }
+                    actions={[]}
+                    role="status"
+                    ariaLive="polite"
                   />
-                ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleRestoreSelected}
+                  disabled={resolving || selectedCount === 0}
+                  className="flex-1"
+                  data-testid="restore-selected-button"
+                >
+                  Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowFreshConfirm(true)}
+                  disabled={resolving || showFreshConfirm}
+                  data-testid="fresh-button"
+                >
+                  Continue without restoring
+                </Button>
               </div>
-            </div>
 
-            {suspectCount > 0 && (
-              <p
-                className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
-                data-testid="suspect-warning"
-              >
-                <span className="tabular-nums">{suspectCount}</span> panel
-                {suspectCount > 1 ? "s were" : " was"} created shortly before the crash and may be
-                related.
-              </p>
-            )}
-
-            <div className="flex gap-2">
-              <Button
-                onClick={handleRestoreSelected}
-                disabled={resolving || selectedCount === 0}
-                className="flex-1"
-                data-testid="restore-selected-button"
-              >
-                Restore selected (<span className="tabular-nums">{selectedCount}</span>)
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={handleFresh}
+              {backupDate && (
+                <p className="text-xs text-daintree-text/50">Session backup from {backupDate}</p>
+              )}
+            </>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleRestoreAll}
                 disabled={resolving}
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                data-testid="restore-button"
+              >
+                <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
+                  <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-daintree-text">
+                    Restore previous session
+                  </div>
+                  {backupDate ? (
+                    <div className="text-xs text-daintree-text/60 mt-0.5">
+                      Restore session from {backupDate}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-daintree-text/60 mt-0.5">
+                      No backup available — layout may be empty
+                    </div>
+                  )}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowFreshConfirm(true)}
+                disabled={resolving || showFreshConfirm}
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
                 data-testid="fresh-button"
               >
-                Continue without restoring
-              </Button>
+                <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
+                  <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-daintree-text">
+                    Continue without restoring
+                  </div>
+                  <div className="text-xs text-daintree-text/60 mt-0.5">
+                    Reset to a clean layout — open panels will be cleared
+                  </div>
+                </div>
+              </button>
             </div>
+          )}
 
-            {backupDate && (
-              <p className="text-xs text-daintree-text/50">Session backup from {backupDate}</p>
-            )}
-          </>
-        ) : (
-          <div className="flex flex-col gap-2">
+          <div className="border border-daintree-border rounded-lg overflow-hidden">
             <button
               type="button"
-              onClick={handleRestoreAll}
-              disabled={resolving}
-              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              data-testid="restore-button"
+              onClick={() => setDetailsOpen((o) => !o)}
+              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+              data-testid="details-toggle"
             >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-daintree-text">
-                  Restore previous session
-                </div>
-                {backupDate ? (
-                  <div className="text-xs text-daintree-text/60 mt-0.5">
-                    Restore session from {backupDate}
-                  </div>
-                ) : (
-                  <div className="text-xs text-daintree-text/60 mt-0.5">
-                    No backup available — layout may be empty
+              <span className="font-medium">Error details</span>
+              {detailsOpen ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+
+            {detailsOpen && (
+              <div
+                className="px-3 pb-3 space-y-2 border-t border-daintree-border"
+                data-testid="details-section"
+              >
+                <DetailRow label="App version" value={crash.entry.appVersion} />
+                <DetailRow label="Platform" value={`${crash.entry.platform} ${crash.entry.arch}`} />
+                <DetailRow label="OS version" value={crash.entry.osVersion} />
+                {crash.entry.sessionDurationMs !== undefined && (
+                  <DetailRow
+                    label="Session duration"
+                    value={formatDuration(crash.entry.sessionDurationMs)}
+                  />
+                )}
+                {crash.entry.electronVersion && (
+                  <DetailRow label="Electron" value={crash.entry.electronVersion} />
+                )}
+                {crash.entry.totalMemory !== undefined && (
+                  <DetailRow
+                    label="Memory"
+                    value={`${formatBytesCompact(crash.entry.freeMemory ?? 0)} free / ${formatBytesCompact(crash.entry.totalMemory)} total`}
+                  />
+                )}
+                {crash.entry.panelCount !== undefined && (
+                  <DetailRow label="Panels" value={String(crash.entry.panelCount)} />
+                )}
+                {crash.entry.processUptime !== undefined && (
+                  <DetailRow
+                    label="Process uptime"
+                    value={formatDuration(crash.entry.processUptime * 1000)}
+                  />
+                )}
+                {crash.entry.errorMessage && (
+                  <div className="mt-2">
+                    <div className="text-xs text-daintree-text/50 mb-1">Error</div>
+                    <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
+                      {crash.entry.errorMessage}
+                    </pre>
                   </div>
                 )}
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleFresh}
-              disabled={resolving}
-              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              data-testid="fresh-button"
-            >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-daintree-text">
-                  Continue without restoring
-                </div>
-                <div className="text-xs text-daintree-text/60 mt-0.5">
-                  Reset to a clean layout — open panels will be cleared
-                </div>
-              </div>
-            </button>
-          </div>
-        )}
-
-        <div className="border border-daintree-border rounded-lg overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setDetailsOpen((o) => !o)}
-            className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
-            data-testid="details-toggle"
-          >
-            <span className="font-medium">Error details</span>
-            {detailsOpen ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
-          </button>
-
-          {detailsOpen && (
-            <div
-              className="px-3 pb-3 space-y-2 border-t border-daintree-border"
-              data-testid="details-section"
-            >
-              <DetailRow label="App version" value={crash.entry.appVersion} />
-              <DetailRow label="Platform" value={`${crash.entry.platform} ${crash.entry.arch}`} />
-              <DetailRow label="OS version" value={crash.entry.osVersion} />
-              {crash.entry.sessionDurationMs !== undefined && (
-                <DetailRow
-                  label="Session duration"
-                  value={formatDuration(crash.entry.sessionDurationMs)}
-                />
-              )}
-              {crash.entry.electronVersion && (
-                <DetailRow label="Electron" value={crash.entry.electronVersion} />
-              )}
-              {crash.entry.totalMemory !== undefined && (
-                <DetailRow
-                  label="Memory"
-                  value={`${formatBytesCompact(crash.entry.freeMemory ?? 0)} free / ${formatBytesCompact(crash.entry.totalMemory)} total`}
-                />
-              )}
-              {crash.entry.panelCount !== undefined && (
-                <DetailRow label="Panels" value={String(crash.entry.panelCount)} />
-              )}
-              {crash.entry.processUptime !== undefined && (
-                <DetailRow
-                  label="Process uptime"
-                  value={formatDuration(crash.entry.processUptime * 1000)}
-                />
-              )}
-              {crash.entry.errorMessage && (
-                <div className="mt-2">
-                  <div className="text-xs text-daintree-text/50 mb-1">Error</div>
-                  <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
-                    {crash.entry.errorMessage}
-                  </pre>
-                </div>
-              )}
-              {crash.entry.errorStack && (
-                <div>
-                  <div className="text-xs text-daintree-text/50 mb-1">Stack trace</div>
-                  <pre className="text-xs text-daintree-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
-                    {crash.entry.errorStack}
-                  </pre>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-xs h-7"
-                  onClick={handleOpenLogFile}
-                  data-testid="open-log-button"
-                >
-                  <FileText className="h-3 w-3 mr-1" />
-                  Open log file
-                </Button>
-
                 {crash.entry.errorStack && (
+                  <div>
+                    <div className="text-xs text-daintree-text/50 mb-1">Stack trace</div>
+                    <pre className="text-xs text-daintree-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
+                      {crash.entry.errorStack}
+                    </pre>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1">
                   <Button
                     size="sm"
                     variant="ghost"
                     className="text-xs h-7"
-                    onClick={() => copyStack(crash.entry.errorStack!)}
-                    data-testid="copy-stack-button"
+                    onClick={handleOpenLogFile}
+                    data-testid="open-log-button"
                   >
-                    <Copy className="h-3 w-3 mr-1" />
-                    {stackCopied ? "Copied" : "Copy stack"}
+                    <FileText className="h-3 w-3 mr-1" />
+                    Open log file
                   </Button>
+
+                  {crash.entry.errorStack && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-xs h-7"
+                      onClick={() => copyStack(crash.entry.errorStack!)}
+                      data-testid="copy-stack-button"
+                    >
+                      <Copy className="h-3 w-3 mr-1" />
+                      {stackCopied ? "Copied" : "Copy stack"}
+                    </Button>
+                  )}
+
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-xs h-7"
+                    onClick={() => void handleReport()}
+                    data-testid="report-button"
+                  >
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    <AnimatedLabel
+                      label={
+                        copied
+                          ? "Copied!"
+                          : privacyWarningShown
+                            ? "Copy & report on GitHub"
+                            : "Report this crash"
+                      }
+                      animateKey={copied ? "copied" : privacyWarningShown ? "warn" : "default"}
+                    />
+                  </Button>
+                </div>
+
+                {privacyWarningShown && !copied && (
+                  <p
+                    className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
+                    data-testid="privacy-warning"
+                  >
+                    Opens GitHub Issues in your browser. The report includes platform info, app
+                    version, panel kinds, file paths, error message, and stack trace — and will be
+                    publicly visible. Review before pasting.
+                  </p>
                 )}
-
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-xs h-7"
-                  onClick={() => void handleReport()}
-                  data-testid="report-button"
-                >
-                  <ExternalLink className="h-3 w-3 mr-1" />
-                  <AnimatedLabel
-                    label={
-                      copied
-                        ? "Copied!"
-                        : privacyWarningShown
-                          ? "Copy & report on GitHub"
-                          : "Report this crash"
-                    }
-                    animateKey={copied ? "copied" : privacyWarningShown ? "warn" : "default"}
-                  />
-                </Button>
               </div>
+            )}
+          </div>
 
-              {privacyWarningShown && !copied && (
-                <p
-                  className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
-                  data-testid="privacy-warning"
-                >
-                  Opens GitHub Issues in your browser. The report includes platform info, app
-                  version, panel kinds, file paths, error message, and stack trace — and will be
-                  publicly visible. Review before pasting.
-                </p>
-              )}
+          {isInCrashLoop ? (
+            config.autoRestoreOnCrash && (
+              <p className="text-xs text-daintree-text/60" data-testid="auto-restore-paused">
+                Auto-restore paused — too many consecutive crashes.
+              </p>
+            )
+          ) : (
+            <div
+              className="flex items-center justify-between gap-3"
+              data-testid="auto-restore-label"
+            >
+              <div className="text-left">
+                <div id="auto-restore-title" className="text-sm font-medium text-daintree-text">
+                  Restore automatically next time
+                </div>
+                <div className="text-xs text-daintree-text/60">
+                  Skips this dialog. Shows again if Daintree crashes twice in a row.
+                </div>
+              </div>
+              <SettingsSwitch
+                checked={config.autoRestoreOnCrash}
+                onCheckedChange={handleAutoRestore}
+                aria-labelledby="auto-restore-title"
+                data-testid="auto-restore-checkbox"
+              />
             </div>
           )}
-        </div>
+        </AppDialog.Body>
+      </AppDialog>
 
-        {isInCrashLoop ? (
-          config.autoRestoreOnCrash && (
-            <p className="text-xs text-daintree-text/60" data-testid="auto-restore-paused">
-              Auto-restore paused — too many consecutive crashes.
-            </p>
-          )
-        ) : (
-          <label
-            className="flex items-center gap-2 cursor-pointer"
-            data-testid="auto-restore-label"
-          >
-            <input
-              type="checkbox"
-              checked={config.autoRestoreOnCrash}
-              onChange={(e) => handleAutoRestore(e.target.checked)}
-              className="accent-daintree-accent h-4 w-4"
-              data-testid="auto-restore-checkbox"
-            />
-            <span className="text-xs text-daintree-text/60">
-              Always restore sessions automatically
-            </span>
-          </label>
+      <ConfirmDialog
+        isOpen={showFreshConfirm}
+        onClose={() => setShowFreshConfirm(false)}
+        title="Reset to clean layout?"
+        description={
+          hasPanels
+            ? "All open panels listed below will be closed and their state will be discarded."
+            : crash.hasBackup
+              ? "Your session will start with a clean layout and the existing session backup will be discarded."
+              : "Your session will start with a clean layout."
+        }
+        confirmLabel="Reset to clean layout"
+        variant="destructive"
+        zIndex="nested"
+        onConfirm={handleFreshConfirm}
+      >
+        {hasPanels && (
+          <ul className="space-y-1.5">
+            {panels.map((panel) => (
+              <li key={panel.id} className="flex items-center gap-2 text-sm text-daintree-text/80">
+                <span className="shrink-0 text-daintree-text/50">{getPanelIcon(panel.kind)}</span>
+                <span className="truncate">{panel.title || panel.kind}</span>
+              </li>
+            ))}
+          </ul>
         )}
-      </AppDialog.Body>
-    </AppDialog>
+      </ConfirmDialog>
+    </>
   );
 }
 
@@ -566,6 +631,20 @@ function buildClipboardText(crash: PendingCrash): string {
     lines.push(`- **GPU Acceleration**: ${e.gpuAccelerationDisabled ? "Disabled" : "Enabled"}`);
 
   lines.push(`- **Crashed at**: ${new Date(e.timestamp).toISOString()}`);
+
+  if (e.cause === "watchdog-deadlock") {
+    const causeParts: string[] = [`**Cause**: Watchdog deadlock (SIGKILL)`];
+    if (e.watchdogMissedBeats !== undefined) {
+      causeParts.push(`${e.watchdogMissedBeats} missed heartbeats`);
+    }
+    if (e.watchdogKilledAt !== undefined) {
+      causeParts.push(`killed at ${new Date(e.watchdogKilledAt).toISOString()}`);
+    }
+    if (e.watchdogMainPid !== undefined) {
+      causeParts.push(`main PID ${e.watchdogMainPid}`);
+    }
+    lines.push(`- ${causeParts.join(" — ")}`);
+  }
 
   if (e.errorMessage) {
     lines.push(``, `**Error:** ${e.errorMessage}`);

@@ -47,7 +47,10 @@ describe("RequestResponseBroker", () => {
     const promise = broker.register("req-timeout");
 
     vi.advanceTimersByTime(11);
-    await expect(promise).rejects.toThrow("Request timeout: req-timeout");
+    const err = await promise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BrokerError);
+    expect((err as BrokerError).code).toBe("TIMEOUT");
+    expect((err as BrokerError).message).toBe("Request timeout: req-timeout");
     expect(onTimeout).toHaveBeenCalledWith("req-timeout", undefined);
     expect(broker.size).toBe(0);
   });

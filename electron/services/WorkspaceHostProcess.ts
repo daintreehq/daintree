@@ -1,17 +1,22 @@
 import { utilityProcess, UtilityProcess, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
+import { createHash } from "crypto";
 import path from "path";
 import os from "os";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "url";
 import type {
   WorkspaceHostRequest,
   WorkspaceHostEvent,
   WorkspaceClientConfig,
 } from "../../shared/types/workspace-host.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
-import { BrokerError } from "./rpc/RequestResponseBroker.js";
+import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { createLogger } from "../utils/logger.js";
+import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -21,6 +26,20 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const RESTART_FLOOR_MS = 100;
+const RESTART_CAP_BASE_MS = 1_000;
+const RESTART_CAP_MAX_MS = 10_000;
+
+// Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle
+// and CrashLoopGuardService so the three guards follow the same policy: three
+// crashes within the window trip the cap, and crashes spread further apart
+// decay out lazily at crash-record-time. Duplicated rather than imported
+// because the guards operate at independent layers. The alignment test
+// (`crashGuardAlignment.test.ts`) asserts the three values stay in lockstep
+// so the next person tuning one is forced to consider the others.
+const CRASH_THRESHOLD = 3;
+export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 export class WorkspaceHostProcess extends EventEmitter {
   private child: UtilityProcess | null = null;
@@ -32,22 +51,37 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
-  private restartAttempts = 0;
+  private disposeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Sliding window of recent crash timestamps. Lazy-pruned to entries within
+   * `CRASH_WINDOW_MS` on each crash — no proactive reset, no setTimeout.
+   * Three crashes within the window trip the cap and emit `host-crash`.
+   */
+  private crashTimestamps: number[] = [];
+  /**
+   * Authoritative crash reason captured from `app.on("child-process-gone")`.
+   * Consumed by the next `exit` handler via `setImmediate` deferral, since the
+   * Electron `exit`/`child-process-gone` ordering race (electron/electron#42283)
+   * causes `exit` to often fire before `child-process-gone` for utility-process
+   * crashes. This is distinct from the Windows exit-code mangling bug
+   * (electron/electron#50386, fixed in Electron 41.0.4).
+   */
+  private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
+  private childProcessGoneHandler:
+    | ((event: Electron.Event, details: Electron.Details) => void)
+    | null = null;
   private isHealthCheckPaused = false;
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private missedHeartbeats = 0;
   private readonly MAX_MISSED_HEARTBEATS = 3;
 
-  private pendingRequests = new Map<
-    string,
-    {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timeout: NodeJS.Timeout;
-    }
-  >();
+  private broker = new RequestResponseBroker({
+    idPrefix: "workspace",
+    // Slow git ops (project-pulse, file-diff, create-worktree) need the legacy
+    // 30s ceiling; collapsing to the broker's 5s default would break them.
+    defaultTimeoutMs: 30000,
+  });
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -73,13 +107,19 @@ export class WorkspaceHostProcess extends EventEmitter {
       .basename(projectPath)
       .replace(/[^a-zA-Z0-9_-]/g, "-")
       .slice(0, 40);
-    this.serviceName = `daintree-workspace-host:${safeName}`;
+    // Hash the full path to disambiguate same-basename projects (e.g.
+    // `/workspaces/a/api` and `/workspaces/b/api`). Without this suffix the
+    // per-instance `child-process-gone` filter would match both hosts and
+    // cross-attribute crash reasons.
+    const pathHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
+    this.serviceName = `daintree-workspace-host:${safeName}-${pathHash}`;
 
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
 
+    this.registerChildProcessGoneListener();
     this.startHost();
   }
 
@@ -92,7 +132,7 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   generateRequestId(): string {
-    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    return this.broker.generateId();
   }
 
   send(request: WorkspaceHostRequest): boolean {
@@ -105,22 +145,6 @@ export class WorkspaceHostProcess extends EventEmitter {
       return true;
     } catch (error) {
       console.error(`[WorkspaceHost:${this.serviceName}] Failed to send message:`, error);
-      return false;
-    }
-  }
-
-  /**
-   * Transfer a MessagePort to the workspace host for direct renderer communication.
-   * The host sends spontaneous events (worktree updates, PR events) through this port,
-   * bypassing the main-process IPC relay.
-   */
-  attachRendererPort(port: MessagePortMain): boolean {
-    if (!this.child || this.isDisposed) return false;
-    try {
-      this.child.postMessage({ type: "attach-renderer-port" }, [port]);
-      return true;
-    } catch (error) {
-      console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach renderer port:`, error);
       return false;
     }
   }
@@ -159,38 +183,39 @@ export class WorkspaceHostProcess extends EventEmitter {
       );
     }
 
-    return new Promise((resolve, reject) => {
-      const existing = this.pendingRequests.get(request.requestId);
-      if (existing) {
-        clearTimeout(existing.timeout);
-        existing.reject(new Error(`Duplicate request ID: ${request.requestId}`));
-        this.pendingRequests.delete(request.requestId);
-      }
+    const promise = this.broker.register<T>(request.requestId, {
+      method: request.type,
+      timeoutMs,
+    });
 
-      const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(request.requestId)) {
-          this.pendingRequests.delete(request.requestId);
-          reject(
-            new BrokerError("TIMEOUT", "Request timeout", {
-              projectScopeId: this.projectPath,
-            })
-          );
-        }
-      }, timeoutMs);
-
-      this.pendingRequests.set(request.requestId, { resolve, reject, timeout });
-      try {
-        if (!this.child) {
-          throw new BrokerError("HOST_EXITED", "Workspace Host not running", {
-            projectScopeId: this.projectPath,
-          });
-        }
-        this.child.postMessage(request);
-      } catch (error) {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(request.requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
+    try {
+      if (!this.child) {
+        throw new BrokerError("HOST_EXITED", "Workspace Host not running", {
+          projectScopeId: this.projectPath,
+        });
       }
+      this.child.postMessage(request);
+    } catch (error) {
+      this.broker.reject(
+        request.requestId,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+
+    // The broker emits plain BrokerError("TIMEOUT", ...) on timeout; callers
+    // here have always seen projectScopeId on the rejection, so wrap to preserve
+    // that contract without re-running the timer.
+    return promise.catch((err: unknown) => {
+      if (
+        err instanceof BrokerError &&
+        err.code === "TIMEOUT" &&
+        err.projectScopeId === undefined
+      ) {
+        throw new BrokerError("TIMEOUT", "Request timeout", {
+          projectScopeId: this.projectPath,
+        });
+      }
+      throw err;
     });
   }
 
@@ -251,10 +276,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
   /**
    * Restart the host after its auto-restart budget has been exhausted.
-   * Resets `restartAttempts` so future crashes get a fresh budget, respawns
+   * Clears the crash window so future crashes get a fresh budget, respawns
    * the child, and emits `"restarted"` so `WorkspaceClient` can re-broker
-   * ports and reload the project — the auto-restart path emits this from
-   * its `setTimeout` callback which `manualRestart()` bypasses.
+   * ports and reload the project — the auto-restart path emits this from its
+   * `setTimeout` callback which `manualRestart()` bypasses.
    */
   manualRestart(): void {
     if (this.isDisposed) {
@@ -274,7 +299,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.restartTimer = null;
     }
 
-    this.restartAttempts = 0;
+    this.crashTimestamps = [];
 
     console.log(`[WorkspaceHost:${this.serviceName}] Manual restart initiated`);
     this.startHost();
@@ -307,6 +332,12 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
     this.isWaitingForHandshake = false;
 
+    if (this.childProcessGoneHandler) {
+      app.off("child-process-gone", this.childProcessGoneHandler);
+      this.childProcessGoneHandler = null;
+    }
+    this.pendingChildProcessGoneReason = null;
+
     if (this.readyReject) {
       this.readyReject(
         new BrokerError("APP_SHUTDOWN", "WorkspaceHostProcess disposed", {
@@ -317,19 +348,18 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.readyResolve = null;
     }
 
-    for (const [, { reject, timeout }] of this.pendingRequests) {
-      clearTimeout(timeout);
-      reject(
-        new BrokerError("APP_SHUTDOWN", "WorkspaceHostProcess disposed", {
-          projectScopeId: this.projectPath,
-        })
-      );
-    }
-    this.pendingRequests.clear();
+    this.broker.clear(
+      new BrokerError("APP_SHUTDOWN", "WorkspaceHostProcess disposed", {
+        projectScopeId: this.projectPath,
+      })
+    );
 
     if (this.child) {
       this.send({ type: "dispose" });
-      setTimeout(() => {
+      // Unref'd so the pending backstop never holds the Electron event loop
+      // alive after app.quit when the host has already cooperated.
+      this.disposeTimer = setTimeout(() => {
+        this.disposeTimer = null;
         if (this.child) {
           try {
             this.child.kill();
@@ -343,6 +373,7 @@ export class WorkspaceHostProcess extends EventEmitter {
           }
         }
       }, 1000);
+      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
@@ -429,6 +460,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.restartTimer = null;
     }
 
+    // Defensive: clear any stale crash reason from a prior host cycle. Under
+    // normal flow the `exit` handler's setImmediate consumes this, but a
+    // missed exit event (or out-of-band listener fire) would otherwise leak
+    // into the next crash.
+    this.pendingChildProcessGoneReason = null;
+
     if (this.readyReject && this.isInitialized) {
       this.readyReject(new Error("Workspace Host restarting"));
     }
@@ -438,9 +475,23 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    // Attach a no-op handler so a fork failure (which rejects readyPromise
+    // synchronously inside the catch below) doesn't surface as an unhandled
+    // rejection on internal restart paths where no external caller is
+    // awaiting. Consumers calling waitForReady() still observe the rejection
+    // on their own chain because .catch returns a new branched promise.
+    this.readyPromise.catch(() => undefined);
 
     const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
     const hostPath = path.join(electronDir, "workspace-host-bootstrap.js");
+
+    // Anchor cross-process timing for the host's per-phase marks. The child
+    // has its own `performance.timeOrigin`, so we ship a wall-clock-aligned
+    // float (sub-ms precision) and let the child subtract.
+    const forkAbsMs = performance.timeOrigin + performance.now();
+    markPerformance(PERF_MARKS.WORKSPACE_HOST_FORK_DISPATCHED, {
+      serviceName: this.serviceName,
+    });
 
     try {
       this.child = utilityProcess.fork(hostPath, [], {
@@ -454,6 +505,11 @@ export class WorkspaceHostProcess extends EventEmitter {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
           DAINTREE_UTILITY_PROCESS_KIND: "workspace-host",
+          DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
+          DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
+          // Per-instance label so concurrent workspace-host marks (two projects
+          // open) remain distinguishable in the shared NDJSON.
+          DAINTREE_WORKSPACE_SERVICE_NAME: this.serviceName,
         },
       });
     } catch (error) {
@@ -499,15 +555,11 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.isInitialized = false;
       this.child = null;
 
-      for (const [, { reject, timeout }] of this.pendingRequests) {
-        clearTimeout(timeout);
-        reject(
-          new BrokerError("HOST_EXITED", "Workspace Host crashed", {
-            projectScopeId: this.projectPath,
-          })
-        );
-      }
-      this.pendingRequests.clear();
+      this.broker.clear(
+        new BrokerError("HOST_EXITED", "Workspace Host crashed", {
+          projectScopeId: this.projectPath,
+        })
+      );
 
       if (this.readyReject) {
         this.readyReject(
@@ -518,33 +570,76 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.readyReject = null;
       }
 
-      if (this.isDisposed) return;
+      if (this.isDisposed) {
+        this.pendingChildProcessGoneReason = null;
+        return;
+      }
 
       // Fire the recovery signal before restart scheduling so the renderer can
       // reject in-flight requests immediately instead of waiting up to ~10s for
       // the per-request timeout.
       this.emit("host-recovering", code);
 
-      if (this.restartAttempts < this.config.maxRestartAttempts) {
-        this.restartAttempts++;
-        const cap = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);
-        const delay = 100 + Math.floor(Math.random() * Math.max(0, cap - 100));
-        console.log(
-          `[WorkspaceHost:${this.serviceName}] Restarting in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
-        );
+      // `exit`/`child-process-gone` ordering race (electron/electron#42283):
+      // `exit` often fires before `child-process-gone` for utility-process
+      // crashes. Defer the restart decision by one event loop tick so the
+      // authoritative reason and exit code can arrive; fall back to the
+      // exit-code from the `exit` event when no reason was captured in time.
+      setImmediate(() => {
+        if (this.isDisposed) {
+          this.pendingChildProcessGoneReason = null;
+          return;
+        }
 
-        if (this.restartTimer) clearTimeout(this.restartTimer);
-        this.restartTimer = setTimeout(() => {
-          this.restartTimer = null;
-          this.startHost();
-          if (this.child !== null) {
-            this.emit("restarted");
-          }
-        }, delay);
-      } else {
-        console.error(`[WorkspaceHost:${this.serviceName}] Max restart attempts reached`);
-        this.emit("host-crash", code);
-      }
+        const gone = this.pendingChildProcessGoneReason;
+        this.pendingChildProcessGoneReason = null;
+        // Prefer the authoritative exit code from `child-process-gone` over
+        // the (sometimes unreliable) one from `exit` — defense-in-depth for
+        // pre-41.0.4 builds and future regressions of the Windows signed/unsigned
+        // mangling bug (fixed in electron/electron#50386, landed Electron 41.0.4).
+        const reportedCode = gone ? gone.exitCode : code;
+
+        // If `manualRestart()` or some other path already spawned a new host
+        // during the defer window, don't schedule a second auto-restart — it
+        // would orphan that host.
+        if (this.child !== null) return;
+
+        // Time-windowed sliding crash counter. Lazy-prune entries older than
+        // the window, then append the current crash. Three crashes within the
+        // window trip the cap; crashes spread further apart decay out.
+        const crashAt = Date.now();
+        this.crashTimestamps = this.crashTimestamps.filter((t) => crashAt - t < CRASH_WINDOW_MS);
+        this.crashTimestamps.push(crashAt);
+
+        if (this.crashTimestamps.length < CRASH_THRESHOLD) {
+          const windowAttempt = this.crashTimestamps.length;
+          const cap = Math.min(
+            RESTART_CAP_BASE_MS * Math.pow(2, windowAttempt),
+            RESTART_CAP_MAX_MS
+          );
+          const delay =
+            RESTART_FLOOR_MS + Math.floor(Math.random() * Math.max(0, cap - RESTART_FLOOR_MS));
+          console.log(
+            `[WorkspaceHost:${this.serviceName}] Restarting in ${delay}ms (attempt ${windowAttempt}/${CRASH_THRESHOLD - 1} in window)`
+          );
+
+          if (this.restartTimer) clearTimeout(this.restartTimer);
+          this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (this.isDisposed || this.child !== null) return;
+            this.startHost();
+            if (this.child !== null) {
+              this.emit("restarted");
+            }
+          }, delay);
+          this.restartTimer.unref?.();
+        } else {
+          console.error(
+            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS}ms), giving up`
+          );
+          this.emit("host-crash", reportedCode);
+        }
+      });
     });
 
     this.startHealthCheckInterval();
@@ -589,6 +684,32 @@ export class WorkspaceHostProcess extends EventEmitter {
     }, this.config.healthCheckIntervalMs);
   }
 
+  /**
+   * Register the `child-process-gone` listener once. Filtered to this host's
+   * unique per-instance `serviceName` (each WorkspaceHostProcess scopes its
+   * own host). The handler only records the reason; the `exit` handler
+   * consumes it via setImmediate.
+   */
+  private registerChildProcessGoneListener(): void {
+    if (this.childProcessGoneHandler) return;
+    const handler = (_event: Electron.Event, details: Electron.Details): void => {
+      if (this.isDisposed) return;
+      if (details.type !== "Utility") return;
+      // Electron 41 populates `name` from `serviceName` at runtime, but both
+      // fields are typed as optional. Accept either to stay resilient to
+      // future runtime changes or edge cases where only one is set.
+      const matchesHost =
+        details.name === this.serviceName || details.serviceName === this.serviceName;
+      if (!matchesHost) return;
+      this.pendingChildProcessGoneReason = {
+        reason: details.reason,
+        exitCode: details.exitCode,
+      };
+    };
+    this.childProcessGoneHandler = handler;
+    app.on("child-process-gone", handler);
+  }
+
   private handleHostEvent(event: WorkspaceHostEvent): void {
     try {
       this.processHostEvent(event);
@@ -598,14 +719,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       const requestId = (event as { requestId?: string })?.requestId;
       if (requestId) {
-        const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(requestId);
-          pending.reject(
-            error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
-          );
-        }
+        this.broker.reject(
+          requestId,
+          error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
+        );
       }
     }
   }
@@ -617,11 +734,20 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "ready": {
         if (!this.child) return;
         this.isInitialized = true;
-        this.restartAttempts = 0;
+        // Do NOT clear `crashTimestamps` here — clearing on ready would
+        // defeat the sliding window for a crash-ready-crash-ready loop,
+        // where each fresh ready would wipe the history right before the
+        // next crash. The window decays lazily at crash-record-time in the
+        // `exit` handler. This is the fix for #8553 (preserved) and #8683
+        // (no proactive reset timer).
 
         const token = GitHubAuth.getToken();
         if (token) {
-          this.send({ type: "update-github-token", token });
+          this.send({
+            type: "update-forge-credentials",
+            providerId: BUILTIN_GITHUB_PROVIDER_ID,
+            credentials: { kind: "bearer" as const, value: token },
+          });
         }
 
         // Replay cached log-level overrides on every ready (initial + restarts).
@@ -650,12 +776,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "error":
         console.error(`[WorkspaceHost:${this.serviceName}] Host error:`, event.error);
         if (event.requestId) {
-          const pending = this.pendingRequests.get(event.requestId);
-          if (pending) {
-            clearTimeout(pending.timeout);
-            this.pendingRequests.delete(event.requestId);
-            pending.reject(new Error(event.error));
-          }
+          this.broker.reject(event.requestId, new Error(event.error));
         }
         break;
 
@@ -723,6 +844,9 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "copytree:progress":
       case "inotify-limit-reached":
       case "emfile-limit-reached":
+      case "watcher-recovered":
+      case "forge-rate-limit-changed":
+      case "forge-token-health-changed":
         this.emit("host-event", event);
         break;
 
@@ -739,15 +863,10 @@ export class WorkspaceHostProcess extends EventEmitter {
     success?: boolean;
     error?: string;
   }): void {
-    const pending = this.pendingRequests.get(event.requestId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this.pendingRequests.delete(event.requestId);
-      if (event.success === false || event.error) {
-        pending.reject(new Error(event.error || "Operation failed"));
-      } else {
-        pending.resolve(event);
-      }
+    if (event.success === false || event.error) {
+      this.broker.reject(event.requestId, new Error(event.error || "Operation failed"));
+    } else {
+      this.broker.resolve(event.requestId, event);
     }
   }
 

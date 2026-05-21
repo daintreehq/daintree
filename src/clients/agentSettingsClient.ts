@@ -13,7 +13,7 @@ export const agentSettingsClient = {
     return window.electron.agentSettings.reset(agentType);
   },
 
-  stampVersion: (version: number): Promise<AgentSettings> => {
+  stampVersion: (version: number): Promise<Record<string, unknown>> => {
     return window.electron.agentSettings.stampVersion(version);
   },
 } as const;

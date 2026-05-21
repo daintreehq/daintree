@@ -22,13 +22,19 @@ export const createBrowserActions = (
   | "setBrowserZoom"
   | "setBrowserConsoleOpen"
   | "setDevPreviewConsoleOpen"
+  | "setDevPreviewConsoleTab"
   | "setViewportPreset"
+  | "setViewportRotated"
+  | "setViewportDpr"
+  | "setViewportFit"
   | "setDevPreviewScrollPosition"
   | "setDevServerState"
   | "setSpawnError"
   | "clearSpawnError"
   | "setReconnectError"
   | "clearReconnectError"
+  | "setScrollbackRestoreError"
+  | "clearScrollbackRestoreError"
 > => ({
   setBrowserUrl: (id, url) => {
     set((state) => {
@@ -101,6 +107,22 @@ export const createBrowserActions = (
     });
   },
 
+  setDevPreviewConsoleTab: (id, tab) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if (terminal.devPreviewConsoleTab === tab) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, devPreviewConsoleTab: tab },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
   setViewportPreset: (id, preset) => {
     set((state) => {
       const terminal = state.panelsById[id];
@@ -111,6 +133,54 @@ export const createBrowserActions = (
       const newById = {
         ...state.panelsById,
         [id]: { ...terminal, viewportPreset: preset },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setViewportRotated: (id, rotated) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if ((terminal.viewportRotated ?? false) === rotated) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, viewportRotated: rotated },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setViewportDpr: (id, dpr) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if ((terminal.viewportDpr ?? 1) === dpr) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, viewportDpr: dpr },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  setViewportFit: (id, fit) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.kind !== "dev-preview") return state;
+      if ((terminal.viewportFit ?? false) === fit) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, viewportFit: fit },
       };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
@@ -221,6 +291,38 @@ export const createBrowserActions = (
         panelsById: {
           ...state.panelsById,
           [id]: { ...terminal, reconnectError: undefined, runtimeStatus: undefined },
+        },
+      };
+    });
+  },
+
+  // Scrollback restore is a one-shot lifecycle event — no debounce. Severity
+  // is "warning" not "error", so we deliberately do NOT flip runtimeStatus;
+  // the terminal is still operational, only the replayed history is missing.
+  setScrollbackRestoreError: (id, error) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, scrollbackRestoreError: error },
+        },
+      };
+    });
+  },
+
+  clearScrollbackRestoreError: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      if (terminal.scrollbackRestoreError === undefined) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, scrollbackRestoreError: undefined },
         },
       };
     });

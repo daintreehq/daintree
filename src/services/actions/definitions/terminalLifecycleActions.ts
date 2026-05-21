@@ -4,6 +4,27 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import {
+  useTerminalPendingDestructiveActionStore,
+  type TerminalPendingDestructiveActionKind,
+} from "@/store/terminalPendingDestructiveActionStore";
+import {
+  collectRunningAgentTerminals,
+  terminalHasRunningAgentSession,
+} from "@/utils/destructiveSessionConfirm";
+
+function parseConfirmed(args: unknown): boolean {
+  if (!args || typeof args !== "object") return false;
+  return (args as { confirmed?: unknown }).confirmed === true;
+}
+
+function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
+  const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+  if (pending && pending.kind === kind) {
+    useTerminalPendingDestructiveActionStore.getState().clear();
+  }
+}
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -85,17 +106,34 @@ export function registerTerminalLifecycleActions(
     description: "Permanently kill and remove terminal",
     category: "terminal",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale: "Permanently kills the PTY process. Scrollback and session state are lost.",
     keywords: ["terminate", "stop", "remove", "delete"],
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      confirmed: z.boolean().optional(),
+    }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        state.removePanel(targetId);
+      if (!targetId) return;
+      const terminal = state.panelsById[targetId];
+      // Bare PTY stays D0 — only confirm when an agent session would lose
+      // in-flight work. Mid-work is "working"; "waiting"/"directing" are
+      // paused states where stopping is non-disruptive.
+      if (!parseConfirmed(args) && terminalHasRunningAgentSession(terminal)) {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "kill",
+          targetCount: 1,
+          runningAgentCount: 1,
+          terminalId: targetId,
+        });
+        return;
       }
+      clearPendingIf("kill");
+      state.removePanel(targetId);
     },
   }));
 
@@ -105,17 +143,32 @@ export function registerTerminalLifecycleActions(
     description: "Restart the terminal process",
     category: "terminal",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Restarts the terminal process. Scrollback is lost and the process is re-spawned.",
     keywords: ["relaunch", "reset", "rerun", "process"],
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({
+      terminalId: z.string().optional(),
+      confirmed: z.boolean().optional(),
+    }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        state.restartTerminal(targetId);
+      if (!targetId) return;
+      const terminal = state.panelsById[targetId];
+      if (!parseConfirmed(args) && terminalHasRunningAgentSession(terminal)) {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "restart",
+          targetCount: 1,
+          runningAgentCount: 1,
+          terminalId: targetId,
+        });
+        return;
       }
+      clearPendingIf("restart");
+      state.restartTerminal(targetId);
     },
   }));
 
@@ -227,6 +280,43 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    resultSchema: z.object({
+      id: z.string(),
+      projectId: z.string().optional(),
+      worktreeId: z.string().optional(),
+      kind: z.string().optional(),
+      launchAgentId: z.string().optional(),
+      title: z.string().optional(),
+      cwd: z.string(),
+      shell: z.string().optional(),
+      command: z.string().optional(),
+      agentState: z.string().optional(),
+      spawnedAt: z.number(),
+      lastInputTime: z.number(),
+      lastOutputTime: z.number(),
+      lastStateChange: z.number().optional(),
+      activityTier: z.string(),
+      outputBufferSize: z.number(),
+      semanticBufferLines: z.number(),
+      restartCount: z.number(),
+      hasPty: z.boolean().optional(),
+      agentSessionId: z.string().optional(),
+      detectedAgentId: z.string().optional(),
+      analysisEnabled: z.boolean().optional(),
+      ptyPid: z.number().optional(),
+      ptyCols: z.number().optional(),
+      ptyRows: z.number().optional(),
+      ptyForegroundProcess: z.string().optional(),
+      ptyTty: z.string().optional(),
+      spawnArgs: z.array(z.string()).optional(),
+      agentLaunchFlags: z.array(z.string()).optional(),
+      agentModelId: z.string().optional(),
+      agentPresetId: z.string().optional(),
+      agentPresetColor: z.string().optional(),
+      originalAgentPresetId: z.string().optional(),
+      exitCode: z.number().optional(),
+      everDetectedAgent: z.boolean().optional(),
+    }),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
@@ -276,6 +366,57 @@ export function registerTerminalLifecycleActions(
     },
   }));
 
+  actions.set("terminal.hibernate", () => ({
+    id: "terminal.hibernate",
+    title: "Sleep Terminal",
+    description:
+      "Hibernate the terminal — releases its renderer and WebGL context while preserving the PTY. Wakes on focus.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["sleep", "pause", "freeze", "suspend", "hibernate"],
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
+      if (!targetId) return;
+      terminalInstanceService.hibernate(targetId);
+    },
+  }));
+
+  actions.set("terminal.hibernateAllIdle", () => ({
+    id: "terminal.hibernateAllIdle",
+    title: "Sleep All Idle Terminals",
+    description:
+      "Hibernate every idle, completed, or exited terminal. Skips ephemeral panels and active agents.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["sleep", "pause", "freeze", "suspend", "hibernate", "idle"],
+    run: async () => {
+      const state = usePanelStore.getState();
+      for (const id of state.panelIds) {
+        const panel = state.panelsById[id];
+        if (!panel) continue;
+        if (!panel.kind || !panelKindHasPty(panel.kind)) continue;
+        if (panel.location === "trash") continue;
+        if ("ephemeral" in panel && panel.ephemeral === true) continue;
+        const agentState = "agentState" in panel ? panel.agentState : undefined;
+        if (
+          agentState !== undefined &&
+          agentState !== "idle" &&
+          agentState !== "completed" &&
+          agentState !== "exited"
+        ) {
+          continue;
+        }
+        terminalInstanceService.hibernate(id);
+      }
+    },
+  }));
+
   actions.set("terminal.closeAll", () => ({
     id: "terminal.closeAll",
     title: "Close All Terminals",
@@ -309,19 +450,32 @@ export function registerTerminalLifecycleActions(
     description: "Permanently remove all terminals (cannot be undone)",
     category: "terminal",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Permanently kills every non-ephemeral terminal. All scrollback and session state are lost.",
     keywords: ["terminate", "stop", "remove", "delete"],
-    run: async () => {
+    argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
+    run: async (args: unknown) => {
       // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
       // including the ephemeral assistant terminal. Filter ephemerals out
       // before issuing per-panel removes.
       const state = usePanelStore.getState();
-      const idsToKill = state.panelIds.filter((id) => {
-        const t = state.panelsById[id];
-        return t && t.ephemeral !== true;
-      });
-      idsToKill.forEach((id) => state.removePanel(id));
+      const targets = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((t): t is NonNullable<typeof t> => t != null && t.ephemeral !== true);
+      if (targets.length === 0) return;
+      const runningAgents = collectRunningAgentTerminals(targets);
+      if (!parseConfirmed(args) && runningAgents.length > 0) {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "killAll",
+          targetCount: targets.length,
+          runningAgentCount: runningAgents.length,
+        });
+        return;
+      }
+      clearPendingIf("killAll");
+      targets.forEach((t) => state.removePanel(t.id));
     },
   }));
 
@@ -331,11 +485,29 @@ export function registerTerminalLifecycleActions(
     description: "Restart all terminals in the active worktree",
     category: "terminal",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Restarts every non-trash terminal. All scrollback is lost across all terminals.",
     keywords: ["relaunch", "reset", "rerun", "processes"],
-    run: async () => {
-      usePanelStore.getState().bulkRestartAll();
+    argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
+    run: async (args: unknown) => {
+      const state = usePanelStore.getState();
+      const targets = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((t): t is NonNullable<typeof t> => t != null && t.location !== "trash");
+      if (targets.length === 0) return;
+      const runningAgents = collectRunningAgentTerminals(targets);
+      if (!parseConfirmed(args) && runningAgents.length > 0) {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "restartAll",
+          targetCount: targets.length,
+          runningAgentCount: runningAgents.length,
+        });
+        return;
+      }
+      clearPendingIf("restartAll");
+      await state.bulkRestartAll();
     },
   }));
 

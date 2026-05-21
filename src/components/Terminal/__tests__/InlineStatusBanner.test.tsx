@@ -305,6 +305,136 @@ describe("InlineStatusBanner", () => {
     }
   });
 
+  describe("dismiss button layout", () => {
+    it("renders dismiss in the title row when hasDescription is true and actions is empty", () => {
+      const onClose = vi.fn();
+      render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="25 panels open"
+          description="Consider closing idle panels."
+          severity="warning"
+          animated={false}
+          actions={[]}
+          onClose={onClose}
+        />
+      );
+      const title = screen.getByText("25 panels open");
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      // Dismiss shares a parent with the title text (the flex justify-between wrapper)
+      const titleParent = title.closest('[class*="flex"]');
+      const dismissParent = dismiss.closest('[class*="flex"]');
+      expect(titleParent).toBe(dismissParent);
+      // The parent is the justify-between wrapper, not the controls row
+      expect(titleParent?.className).toContain("justify-between");
+    });
+
+    it("fires onClose when the title-row dismiss is clicked", () => {
+      const onClose = vi.fn();
+      render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="25 panels open"
+          description="Consider closing idle panels."
+          severity="warning"
+          animated={false}
+          actions={[]}
+          onClose={onClose}
+        />
+      );
+      screen.getByRole("button", { name: "Dismiss" }).click();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("moves dismiss out of the controls row when hasDescription is true", () => {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="Title"
+          description="Description"
+          severity="warning"
+          animated={false}
+          actions={[{ id: "retry", label: "Retry", onClick: () => {} }]}
+          onClose={() => {}}
+        />
+      );
+      const controlsRow = container.querySelector(".ml-6");
+      expect(controlsRow).toBeTruthy();
+      // Dismiss button is NOT inside the ml-6 controls row
+      expect(controlsRow?.querySelector('[aria-label="Dismiss"]')).toBeNull();
+    });
+
+    it("keeps dismiss in the controls row for single-line banners", () => {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={Info}
+          title="Single line"
+          severity="info"
+          animated={false}
+          actions={[]}
+          onClose={() => {}}
+        />
+      );
+      // Single-line: no ml-6 wrapper, X is in the controls row (gap-1)
+      const controlsRow = container.querySelector('[class*="gap-1"]');
+      expect(controlsRow).toBeTruthy();
+      expect(controlsRow?.querySelector('[aria-label="Dismiss"]')).toBeTruthy();
+    });
+
+    it("renders dismiss in title row with descriptionExtras and no description prop", () => {
+      const onClose = vi.fn();
+      render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="25 panels open"
+          descriptionExtras={<button type="button">Close completed</button>}
+          severity="warning"
+          animated={false}
+          actions={[]}
+          onClose={onClose}
+        />
+      );
+      const title = screen.getByText("25 panels open");
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      const titleParent = title.closest('[class*="justify-between"]');
+      expect(titleParent).toBeTruthy();
+      expect(titleParent!.contains(dismiss)).toBe(true);
+    });
+
+    it("does not render an empty controls row when hasDescription, no actions, and onClose is present", () => {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="25 panels open"
+          description="Consider closing idle panels."
+          severity="warning"
+          animated={false}
+          actions={[]}
+          onClose={() => {}}
+        />
+      );
+      // No ml-6 or gap-1 controls row should exist — dismiss is in the title row
+      const controlsRow = container.querySelector('[class*="ml-6"]');
+      expect(controlsRow).toBeNull();
+    });
+
+    it("does not render a controls row when hasDescription is true with no trailingSlot, no actions, and no onClose", () => {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="Recovering"
+          description="The host is restarting."
+          severity="warning"
+          animated={false}
+          actions={[]}
+        />
+      );
+      // HostCrashBanner case — no controls row at all
+      const controlsRow = container.querySelector('[class*="ml-6"]');
+      expect(controlsRow).toBeNull();
+    });
+  });
+
   it("uses the 250ms entrance duration class when animated", () => {
     const { container } = render(
       <InlineStatusBanner

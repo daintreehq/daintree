@@ -75,6 +75,14 @@ Popover.displayName = "Popover";
 
 type PopoverTriggerProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Trigger>;
 
+function assignForwardedRef<T>(forwardedRef: React.ForwardedRef<T>, value: T | null) {
+  if (typeof forwardedRef === "function") {
+    forwardedRef(value);
+  } else if (forwardedRef) {
+    forwardedRef.current = value;
+  }
+}
+
 const PopoverTrigger = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitiveType.Trigger>,
   PopoverTriggerProps
@@ -85,6 +93,21 @@ const PopoverTrigger = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const requestOpen = React.useContext(PopoverIntentContext);
+    const triggerNodeRef = React.useRef<HTMLElement | null>(null);
+    const setTriggerRef = React.useCallback(
+      (node: React.ElementRef<typeof PopoverPrimitiveType.Trigger> | null) => {
+        triggerNodeRef.current = node as HTMLElement | null;
+        assignForwardedRef(ref, node);
+      },
+      [ref]
+    );
+
+    React.useLayoutEffect(() => {
+      const node = triggerNodeRef.current;
+      if (node && node.getAttribute("data-state") !== "open") {
+        node.removeAttribute("aria-controls");
+      }
+    });
 
     const handlePointerEnter: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       primeOnEvent();
@@ -137,7 +160,7 @@ const PopoverTrigger = React.forwardRef<
     const Trigger = radix.PopoverPrimitive.Trigger;
     return (
       <Trigger
-        ref={ref}
+        ref={setTriggerRef}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
         onPointerDown={handlePointerDown}

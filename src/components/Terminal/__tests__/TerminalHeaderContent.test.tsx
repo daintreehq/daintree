@@ -465,6 +465,40 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const wrapperFor = () =>
       container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
 
+    // Escalation reacts in 3 polls.
+    pollResource(rerender, 90, 1);
+    pollResource(rerender, 90, 2);
+    pollResource(rerender, 90, 3);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+
+    // De-escalation lingers — requires 5 polls per downward step.
+    pollResource(rerender, 60, 4);
+    pollResource(rerender, 60, 5);
+    pollResource(rerender, 60, 6);
+    pollResource(rerender, 60, 7);
+    pollResource(rerender, 60, 8);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-warning");
+    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
+
+    pollResource(rerender, 10, 9);
+    pollResource(rerender, 10, 10);
+    pollResource(rerender, 10, 11);
+    pollResource(rerender, 10, 12);
+    pollResource(rerender, 10, 13);
+    expect(wrapperFor().getAttribute("class")).toContain("text-daintree-text/40");
+    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+  });
+
+  it("does not de-escalate after only 4 polls below the threshold", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const wrapperFor = () =>
+      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
     pollResource(rerender, 90, 3);
@@ -473,14 +507,92 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
     pollResource(rerender, 60, 6);
+    pollResource(rerender, 60, 7);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+  });
+
+  it("de-escalates on exactly the 5th poll below the threshold", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const wrapperFor = () =>
+      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+
+    pollResource(rerender, 90, 1);
+    pollResource(rerender, 90, 2);
+    pollResource(rerender, 90, 3);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+
+    pollResource(rerender, 60, 4);
+    pollResource(rerender, 60, 5);
+    pollResource(rerender, 60, 6);
+    pollResource(rerender, 60, 7);
+    pollResource(rerender, 60, 8);
     expect(wrapperFor().getAttribute("class")).toContain("text-status-warning");
     expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
+  });
 
+  it("keeps the hotter band when severity oscillates within the 3-5 de-escalation gap", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const wrapperFor = () =>
+      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+
+    pollResource(rerender, 90, 1);
+    pollResource(rerender, 90, 2);
+    pollResource(rerender, 90, 3);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+
+    // 4 cool polls — one short of the 5-poll de-escalation commit.
+    pollResource(rerender, 60, 4);
+    pollResource(rerender, 60, 5);
+    pollResource(rerender, 60, 6);
+    pollResource(rerender, 60, 7);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+
+    // A single hot poll matches the displayed band and resets the pending counter.
+    pollResource(rerender, 90, 8);
+
+    // The de-escalation count restarts from zero; 4 more cool polls still hold red.
+    pollResource(rerender, 60, 9);
+    pollResource(rerender, 60, 10);
+    pollResource(rerender, 60, 11);
+    pollResource(rerender, 60, 12);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+  });
+
+  it("de-escalates red straight to muted without stepping through amber", () => {
+    mockResourceEnabled = true;
+    mockResourceState = makeResourceState(10);
+
+    const { rerender, container } = render(
+      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
+    );
+    const wrapperFor = () =>
+      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+
+    pollResource(rerender, 90, 1);
+    pollResource(rerender, 90, 2);
+    pollResource(rerender, 90, 3);
+    expect(wrapperFor().getAttribute("class")).toContain("text-status-error");
+
+    pollResource(rerender, 10, 4);
+    pollResource(rerender, 10, 5);
+    pollResource(rerender, 10, 6);
     pollResource(rerender, 10, 7);
     pollResource(rerender, 10, 8);
-    pollResource(rerender, 10, 9);
     expect(wrapperFor().getAttribute("class")).toContain("text-daintree-text/40");
     expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
   });
 
   it("commits to red via the memory threshold alone", () => {

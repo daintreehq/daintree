@@ -18,11 +18,14 @@ async function getRunCommandDetector(): Promise<
   }
   return cachedRunCommandDetector;
 }
-import { typedHandle } from "../../utils.js";
+import { z } from "zod";
+import { typedHandle, typedHandleValidated } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
+import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
+import type { HandlerDependencies } from "../../types.js";
 
-export function registerProjectSettingsHandlers(): () => void {
+export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}): () => void {
   const handlers: Array<() => void> = [];
 
   const handleProjectGetSettings = async (projectId: string): Promise<ProjectSettings> => {
@@ -33,32 +36,50 @@ export function registerProjectSettingsHandlers(): () => void {
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_GET_SETTINGS, handleProjectGetSettings));
 
-  const handleProjectSaveSettings = async (payload: {
-    projectId: string;
-    settings: ProjectSettings;
-  }): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
+  const ProjectSaveSettingsPayloadSchema = z.object({
+    projectId: z.string().min(1),
+    settings: ProjectSettingsSaveSchema,
+  });
+
+  const handleProjectSaveSettings = async (
+    payload: z.output<typeof ProjectSaveSettingsPayloadSchema>
+  ): Promise<void> => {
     const { projectId, settings } = payload;
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (!settings || typeof settings !== "object") {
-      throw new Error("Invalid settings object");
-    }
     const previousSettings = await projectStore.getProjectSettings(projectId);
-    await projectStore.saveProjectSettings(projectId, settings);
+    await projectStore.saveProjectSettings(projectId, settings as ProjectSettings);
     const project = projectStore.getProjectById(projectId);
     if (project?.inRepoSettings) {
-      await projectStore.writeInRepoSettings(project.path, settings);
+      await projectStore.writeInRepoSettings(project.path, settings as ProjectSettings);
     }
-    if (settings.githubRemote !== previousSettings.githubRemote) {
+    const previousRemote = previousSettings.forgeRemote ?? previousSettings.githubRemote;
+    const nextRemote = settings.forgeRemote ?? settings.githubRemote;
+    const remoteChanged = nextRemote !== previousRemote;
+    if (remoteChanged) {
       const { clearGitHubCaches } = await import("../../../services/GitHubService.js");
       clearGitHubCaches();
     }
+    // Re-resolve the workspace host's PR provider when the provider override
+    // or selected remote changes — otherwise the running host keeps the
+    // provider it resolved at load-project and stored settings drift out of
+    // sync with the resolved provider (#8456). No-ops when no host is loaded.
+    const providerOverrideChanged =
+      (settings.forgeProviderOverride ?? null) !== (previousSettings.forgeProviderOverride ?? null);
+    if (remoteChanged || providerOverrideChanged) {
+      const projectPath = project?.path;
+      if (projectPath) {
+        void deps.worktreeService?.updateForgeSettings(projectPath).catch((error) => {
+          console.warn("[IPC] Failed to push forge settings to workspace host:", error);
+        });
+      }
+    }
   };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.PROJECT_SAVE_SETTINGS,
+      ProjectSaveSettingsPayloadSchema,
+      handleProjectSaveSettings
+    )
+  );
 
   const handleProjectDetectRunners = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {

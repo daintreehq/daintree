@@ -91,8 +91,16 @@ export interface PanelSnapshot {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
+  devPreviewConsoleTab?: "output" | "console";
   /** Active viewport preset for dev-preview responsive emulation */
   viewportPreset?: ViewportPresetId;
+  /** Whether the active dev-preview viewport preset is rotated to landscape */
+  viewportRotated?: boolean;
+  /** Device-pixel-ratio override for the active dev-preview viewport preset */
+  viewportDpr?: 1 | 2 | 3;
+  /** Whether the dev-preview viewport is scaled to fit the available pane */
+  viewportFit?: boolean;
   /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits */
@@ -125,6 +133,12 @@ export interface PanelSnapshot {
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * Timestamp (ms) of the last user-initiated focus on this panel. Used by
+   * panel restore to promote the most-recently-active panel per worktree to
+   * the priority restore tier.
+   */
+  lastActiveAt?: number;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
@@ -291,6 +305,10 @@ export interface SnapshotFleetSavedScope {
   name: string;
   terminalIds: string[];
   createdAt: number;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
 }
 
 /** Predicate fleet scope: stores a filter rule that is re-evaluated against the current panel set on recall. */
@@ -302,6 +320,10 @@ export interface PredicateFleetSavedScope {
   /** "all" maps to armAll(scope); "working"/"waiting"/"finished" map to armByState(preset, scope, false). */
   stateFilter: "all" | "working" | "waiting" | "finished";
   createdAt: number;
+  /** Timestamp of last run (milliseconds since epoch) */
+  lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
 }
 
 /** A saved fleet scope — a named selection persisted per-project for quick recall. */
@@ -309,7 +331,7 @@ export type FleetSavedScope = SnapshotFleetSavedScope | PredicateFleetSavedScope
 
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {
-  /** Override shell executable path (machine-local, not stored in .daintree/settings.json) */
+  /** Override shell executable path */
   shell?: string;
   /** Override shell arguments (replaces default args when set) */
   shellArgs?: string[];
@@ -319,6 +341,32 @@ export interface ProjectTerminalSettings {
   scrollbackLines?: number;
 }
 
+/**
+ * Classifies how a `ProjectSettings` (or sub-field) field is persisted.
+ * - `shareable`: written to `.daintree/settings.json` (committed to git, shared with teammates)
+ * - `local`: persisted only in the machine-local project store, never written to the repo file
+ * - `transient`: runtime-only, never persisted to disk
+ *
+ * The shareability tables (`PROJECT_SETTINGS_SHAREABILITY`,
+ * `PROJECT_TERMINAL_SETTINGS_SHAREABILITY`) are the single source of truth — adding a new
+ * field to `ProjectSettings` without classifying it here is a build error.
+ */
+export type FieldShareability = "shareable" | "local" | "transient";
+
+/**
+ * Shareability classification for each field of `ProjectTerminalSettings`.
+ *
+ * `shell` and `defaultWorkingDirectory` are both machine-local: the reader
+ * (`parseTerminalSettings`) requires an absolute path, and absolute paths
+ * are inherently per-machine. Teammates cannot meaningfully share either.
+ */
+export const PROJECT_TERMINAL_SETTINGS_SHAREABILITY = {
+  shell: "local",
+  shellArgs: "shareable",
+  defaultWorkingDirectory: "local",
+  scrollbackLines: "shareable",
+} as const satisfies Record<keyof ProjectTerminalSettings, FieldShareability>;
+
 /** Project-level settings that persist per repository */
 export interface ProjectSettings {
   /** List of custom run commands for this project */
@@ -327,9 +375,9 @@ export interface ProjectSettings {
   environmentVariables?: Record<string, string>;
   /** List of env var keys stored separately from settings.json */
   secureEnvironmentVariables?: string[];
-  /** List of env var keys found in plaintext that should be migrated (transient, not persisted) */
+  /** List of env var keys found in plaintext that should be migrated */
   insecureEnvironmentVariables?: string[];
-  /** List of secure keys that couldn't be decrypted (transient, not persisted) */
+  /** List of secure keys that couldn't be decrypted */
   unresolvedSecureEnvironmentVariables?: string[];
   /** Paths to exclude from monitoring */
   excludedPaths?: string[];
@@ -376,15 +424,26 @@ export interface ProjectSettings {
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
   branchPrefixCustom?: string;
 
-  /** Git remote name to use for GitHub integration (defaults to "origin") */
+  /** Git remote name to use for forge integration (defaults to "origin") */
+  forgeRemote?: string;
+  /**
+   * @deprecated Use `forgeRemote` instead. Kept for one-cycle migration of existing project files.
+   * Normalized to `forgeRemote` on read by the project settings codec.
+   */
   githubRemote?: string;
+  /**
+   * Pinned forge provider for this project. When set, overrides hostname auto-detection
+   * for forge integrations. `null` (or absent) = auto-detect. Stores the bare `contribution.id` of a
+   * provider registered via the forge provider registry.
+   */
+  forgeProviderOverride?: string | null;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
   /** Saved fleet scopes for quick arm/recall */
   fleetSavedScopes?: FleetSavedScope[];
   /** Per-project terminal configuration overrides */
   terminalSettings?: ProjectTerminalSettings;
-  /** Per-project notification overrides (machine-local, never written to .daintree/settings.json) */
+  /** Per-project notification overrides */
   notificationOverrides?: Partial<NotificationSettings>;
   /** @deprecated Use resourceEnvironments instead. Kept for migration only. */
   resourceEnvironment?: ResourceEnvironment;
@@ -410,6 +469,53 @@ export interface ProjectSettings {
    */
   exposeDaintreeMcpToAgents?: boolean;
 }
+
+/**
+ * Shareability classification for each field of `ProjectSettings`.
+ *
+ * The `satisfies Record<keyof ProjectSettings, FieldShareability>` constraint makes adding
+ * a new `ProjectSettings` field without a classification entry a compile-time error.
+ *
+ * `terminalSettings` is marked `shareable` because it contains shareable sub-fields; the
+ * nested object is filtered through `PROJECT_TERMINAL_SETTINGS_SHAREABILITY` by the writer.
+ */
+export const PROJECT_SETTINGS_SHAREABILITY = {
+  runCommands: "shareable",
+  environmentVariables: "local",
+  secureEnvironmentVariables: "local",
+  insecureEnvironmentVariables: "transient",
+  unresolvedSecureEnvironmentVariables: "transient",
+  excludedPaths: "shareable",
+  projectIconSvg: "local",
+  defaultWorktreeRecipeId: "local",
+  devServerCommand: "shareable",
+  devServerDismissed: "local",
+  devServerAutoDetected: "local",
+  cloudSyncWarningDismissed: "local",
+  devServerLoadTimeout: "shareable",
+  turbopackEnabled: "shareable",
+  copyTreeSettings: "shareable",
+  commandOverrides: "local",
+  gitInitDefaults: "local",
+  preferredEditor: "local",
+  preferredImageViewer: "local",
+  branchPrefixMode: "local",
+  branchPrefixCustom: "local",
+  forgeRemote: "local",
+  githubRemote: "local",
+  forgeProviderOverride: "local",
+  worktreePathPattern: "shareable",
+  fleetSavedScopes: "local",
+  terminalSettings: "shareable",
+  notificationOverrides: "local",
+  resourceEnvironment: "local",
+  resourceEnvironments: "local",
+  activeResourceEnvironment: "local",
+  defaultWorktreeMode: "local",
+  browserAllowedHosts: "local",
+  daintreeMcpTier: "local",
+  exposeDaintreeMcpToAgents: "local",
+} as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
 /** Tier of Daintree MCP access exposed to agents in a project. */
 export type DaintreeMcpTier = "off" | "workbench" | "action" | "system";

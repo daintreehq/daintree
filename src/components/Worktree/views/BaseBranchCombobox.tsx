@@ -127,6 +127,15 @@ export function BaseBranchCombobox({
                   variant="filtered-empty"
                   scale="popover"
                   title={`No matches for "${branchQuery.trim()}"`}
+                  action={
+                    <button
+                      type="button"
+                      onClick={() => onQueryChange("")}
+                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    >
+                      Clear search
+                    </button>
+                  }
                 />
               ) : (
                 <EmptyState variant="zero-data" scale="popover" title="No branches available" />

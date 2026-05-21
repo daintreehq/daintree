@@ -28,6 +28,7 @@ interface SettingsSwitchProps {
   "aria-label"?: string;
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
+  "data-testid"?: string;
   id?: string;
   name?: string;
   colorScheme?: ColorScheme;
@@ -41,6 +42,7 @@ export function SettingsSwitch({
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledby,
   "aria-describedby": ariaDescribedby,
+  "data-testid": dataTestId,
   id,
   name,
   colorScheme = "accent",
@@ -58,8 +60,9 @@ export function SettingsSwitch({
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledby}
       aria-describedby={ariaDescribedby}
+      data-testid={dataTestId}
       className={cn(
-        "relative inline-flex items-center shrink-0 rounded-full transition-colors duration-150 ease-in-out",
+        "relative inline-flex items-center shrink-0 rounded-full transition-colors duration-200 ease-out",
         "w-11 h-6",
         scheme.track,
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
@@ -70,7 +73,7 @@ export function SettingsSwitch({
     >
       <Switch.Thumb
         className={cn(
-          "block rounded-full shadow-sm transition-transform duration-150 ease-in-out",
+          "block rounded-full shadow-sm transition-transform duration-100 ease-[var(--ease-out-expo)]",
           "w-4 h-4 translate-x-1 data-[state=checked]:translate-x-6",
           scheme.thumb
         )}

@@ -14,13 +14,18 @@
  * - `dedup`: a duplicate creation-tool call was suppressed by the
  *   per-session idempotency guard and the cached or in-flight result was
  *   returned. No second dispatch was performed.
+ * - `rate_limited`: the per-`(session, toolId)` token bucket was exhausted
+ *   and the call was rejected before dispatch with a `retryAfter` hint. No
+ *   dispatch was performed — this is a runaway-loop guard, not a failure.
  */
 export type McpAuditResult =
   | "success"
   | "error"
   | "confirmation-pending"
   | "unauthorized"
-  | "dedup";
+  | "dedup"
+  | "collision"
+  | "rate_limited";
 
 /**
  * Persisted audit record for a single MCP tool dispatch. Written once per
@@ -50,6 +55,53 @@ export type McpAuditResult =
  */
 export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 
+/**
+ * Audit-record severity tier. Derived from the dispatch result at record-write
+ * time so readers can triage without re-deriving from errorCode + result.
+ *
+ * - `info`: success or dedup — nominal dispatch.
+ * - `notice`: confirmation-pending — gate waiting on user approval.
+ * - `warning`: tier-rejected or rate-limited — legit user action blocked
+ *   by policy.
+ * - `error`: dispatch threw, timed out, or returned an error other than
+ *   confirmation-pending/unauthorized.
+ * - `critical`: reserved for systemic failures (not yet emitted).
+ */
+export type McpAuditSeverity = "info" | "notice" | "warning" | "error" | "critical";
+
+export const MCP_AUDIT_SCHEMA_VERSION = 1;
+
+const SEVERITY_BY_RESULT: Record<McpAuditResult, McpAuditSeverity> = {
+  success: "info",
+  dedup: "info",
+  "confirmation-pending": "info",
+  unauthorized: "error",
+  error: "error",
+  collision: "warning",
+  rate_limited: "warning",
+};
+
+const SEVERITY_BY_ERROR_CODE: Record<string, McpAuditSeverity> = {
+  USER_REJECTED: "warning",
+  CONFIRMATION_TIMEOUT: "warning",
+  CONFIRMATION_REQUIRED: "info",
+  TIER_NOT_PERMITTED: "error",
+  ELICITATION_FAILED: "error",
+  PRE_AUTH_FAILED: "error",
+  EXECUTION_ERROR: "critical",
+  DISPATCH_THREW: "critical",
+};
+
+export function computeMcpAuditSeverity(
+  result: McpAuditResult,
+  errorCode?: string
+): McpAuditSeverity {
+  if (errorCode !== undefined && errorCode in SEVERITY_BY_ERROR_CODE) {
+    return SEVERITY_BY_ERROR_CODE[errorCode]!;
+  }
+  return SEVERITY_BY_RESULT[result];
+}
+
 export interface McpAuditRecord {
   id: string;
   timestamp: number;
@@ -69,6 +121,111 @@ export interface McpAuditRecord {
    * non-unauthorized outcomes.
    */
   tierHint?: "workbench" | "action" | "system" | null;
+  /**
+   * For `unauthorized` outcomes only, true when the renderer banner was
+   * suppressed for this denial because the per-`(sessionId, toolId)`
+   * consecutive-denial counter had reached `MCP_DENIAL_SILENCE_THRESHOLD`.
+   * The audit record is still written so persistent denials remain visible
+   * in the audit panel even when no banner fired. See #8442.
+   */
+  bannerSuppressed?: boolean;
+  /**
+   * Stable correlation ID for the assistant turn this dispatch belongs to.
+   * Minted at the `active` FSM transition boundary in `TurnOutcomeService`
+   * and stamped on every audit record written within that turn window.
+   * Absent on pre-auth rejections and dispatches outside a turn boundary.
+   */
+  turnId?: string;
+  /** Schema version for forward-compat. New records always carry the current version. */
+  schemaVersion: number;
+  /** Derived severity so readers can triage without re-deriving from result/errorCode. */
+  severity: McpAuditSeverity;
+  /** Number of times this event repeated within the coalesce window. Absent when the event occurred once. */
+  repeatCount?: number;
+}
+
+/**
+ * Lifecycle event for a per-`(sessionId, toolId)` grant minted via the
+ * "Approve once" flow that replaces sticky session-tier elevation (#8442).
+ * Written in parallel with the dispatch audit ring buffer; renderers
+ * subscribe to a separate live broadcast for the same payload shape.
+ *
+ * - `grant.issued`: the renderer's `Approve once` minted a fresh grant.
+ *   `expiresAt` is set; `revokedReason` is absent.
+ * - `grant.expired`: a `check()` lazily evicted an entry whose `expiresAt`
+ *   passed. Emitted at most once per `(sessionId, toolId)` per grant. The
+ *   periodic sweep also drives this when an idle session's grant ages out
+ *   without a follow-up read.
+ * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
+ *   teardown, or an idle reaper firing wiped the grant before its TTL
+ *   elapsed. `revokedReason` distinguishes those sources.
+ */
+export type McpGrantRecordType = "grant.issued" | "grant.expired" | "grant.revoked";
+
+export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle";
+
+export interface McpGrantRecord {
+  type: McpGrantRecordType;
+  id: string;
+  timestamp: number;
+  sessionId: string;
+  toolId: string;
+  /** TTL the grant was minted with, in milliseconds. */
+  ttlMs: number;
+  /**
+   * Absolute epoch millis when the grant would expire without refresh.
+   * Set on `grant.issued`; absent on `grant.expired`/`grant.revoked` (the
+   * grant has already been deleted by record-write time).
+   */
+  expiresAt?: number;
+  /** Source of the revocation; only set on `grant.revoked`. */
+  revokedReason?: McpGrantRevokedReason;
+}
+
+/**
+ * Union of all records persisted to the MCP server's ring buffer. Existing
+ * `McpAuditRecord` entries are implicitly the `dispatch` kind — they have
+ * no `type` field — and predate this union; the discriminator lives only
+ * on `McpGrantRecord` to keep the legacy on-disk shape unchanged. Readers
+ * narrow with `"type" in record` rather than a typeof check on a missing
+ * field.
+ */
+export type McpLogRecord = McpAuditRecord | McpGrantRecord;
+
+/**
+ * Live event payload broadcast to the pinned renderer for a grant
+ * transition. Mirrors `McpGrantRecord` because renderers want the same
+ * fields they'd see in the audit log. Send is targeted (never broadcast)
+ * because grant state is session-scoped.
+ */
+export interface McpGrantLifecyclePayload {
+  type: McpGrantRecordType;
+  sessionId: string;
+  toolId: string;
+  ttlMs: number;
+  expiresAt?: number;
+  revokedReason?: McpGrantRevokedReason;
+}
+
+/**
+ * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
+ * deletes every grant for the named session and reports how many entries
+ * were affected — useful for UI confirmation copy ("Revoked N grants").
+ */
+export interface McpRevokeSessionGrantsResult {
+  sessionId: string;
+  revokedCount: number;
+}
+
+/**
+ * Result of a renderer-driven `issueGrant` IPC. Returns the `expiresAt`
+ * and `ttlMs` so the renderer can render a countdown without polling.
+ */
+export interface McpIssueGrantResult {
+  sessionId: string;
+  toolId: string;
+  ttlMs: number;
+  expiresAt: number;
 }
 
 /** Minimum and maximum values accepted for the configurable ring-buffer cap. */
@@ -89,6 +246,33 @@ export const MCP_AUDIT_DEFAULT_MAX_RECORDS = 500;
  */
 export interface McpAuditStats {
   auth401Count: number;
+  anomalySignals: McpAnomalySignal[];
+  anomalySuppressed: boolean;
+  anomalyRecordFloor: number;
+}
+
+export type McpAnomalySeverity = "danger";
+
+export type McpAnomalyKind =
+  | "latency-drift"
+  | "first-seen-combination"
+  | "failure-cluster"
+  | "p95-z-score";
+
+export interface McpAnomalySignal {
+  id: string;
+  kind: McpAnomalyKind;
+  toolId: string;
+  tier?: string;
+  severity: McpAnomalySeverity;
+  timestamp: number;
+  recordIds: string[];
+  zScore?: number;
+  durationMs?: number;
+  baselineMedianMs?: number;
+  p95Ms?: number;
+  clusterSize?: number;
+  clusterWindow?: number;
 }
 
 /**
@@ -106,6 +290,9 @@ export interface McpAuditStats {
  *   agent went silent without resolving its turn.
  * - `tool-error`: the most recent tool dispatch in this session resolved
  *   with `result: "error"` (and is not a tier rejection).
+ * - `reasoning-loop`: the agent called the same tool with the same arguments
+ *   at least 3 times within the turn window — a tight tool-call loop not
+ *   covered by the watchdog-driven `agent-stuck` class.
  * - `refused`: the agent's recent output indicates it declined to act.
  * - `hedged`: the agent expressed uncertainty without producing a concrete
  *   answer.
@@ -127,6 +314,7 @@ export type TurnOutcomeClass =
   | "mcp-not-ready"
   | "agent-stuck"
   | "tool-error"
+  | "reasoning-loop"
   | "hibernate-resume-stale"
   | "unknown";
 
@@ -158,6 +346,12 @@ export interface AssistantTurnRecord {
   previousState?: string;
   /** Free-text diagnostic for non-classified failures (e.g. mcp-not-ready reason). */
   detail?: string;
+  /**
+   * Stable correlation ID shared with `McpAuditRecord.turnId` for every
+   * dispatch inside this turn window. Minted at the `active` FSM transition
+   * boundary and absent on pre-turn failures (`mcp-not-ready`).
+   */
+  turnId?: string;
 }
 
 /**

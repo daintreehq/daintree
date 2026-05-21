@@ -22,7 +22,6 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import {
   TOOLBAR_BUTTON_METADATA,
   isToolbarButtonVisible,
@@ -33,16 +32,10 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
+import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-
-// Agent-ID writes for visibility route to `agentSettingsStore` (the
-// authoritative IPC-persisted store). Non-agent buttons (including
-// `agent-tray` and plugin buttons) live in `toolbarPreferencesStore`'s
-// `pinnedButtons` map. A version: 5 migration strips stale agent IDs from
-// pre-unification state so they can't shadow the canonical pinned state.
-const AGENT_ID_SET = new Set<string>(BUILT_IN_AGENT_IDS);
 
 interface SortableButtonItemProps {
   buttonId: AnyToolbarButtonId;
@@ -86,6 +79,46 @@ function SortableButtonItem({
           className={cn("h-4 w-4", isVisible ? "text-daintree-text/50" : "text-daintree-text/20")}
         />
       </div>
+      <div className="flex items-center gap-2 flex-1">
+        <div className="text-daintree-text">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="flex-1">
+          <div className="text-sm font-medium text-daintree-text">{metadata.label}</div>
+          <div className="text-xs text-daintree-text/50 select-text">{metadata.description}</div>
+        </div>
+      </div>
+      <input
+        type="checkbox"
+        checked={isVisible}
+        onChange={() => onToggle(buttonId)}
+        aria-label={`Toggle ${metadata.label} visibility`}
+        className="w-4 h-4 rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent focus:ring-2"
+      />
+    </div>
+  );
+}
+
+interface PluginButtonRowProps {
+  buttonId: AnyToolbarButtonId;
+  isVisible: boolean;
+  onToggle: (buttonId: AnyToolbarButtonId) => void;
+  metadata: ToolbarButtonMetadata | undefined;
+}
+
+// Plugin buttons are hide-only — they're never persisted into
+// `layout.rightButtons`, so they get no drag handle. Reusing
+// `SortableButtonItem` would call `useSortable` outside a `SortableContext`
+// and crash; this is a plain non-sortable row mirroring its visual structure.
+function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButtonRowProps) {
+  if (!metadata) return null;
+  const Icon = metadata.icon;
+
+  return (
+    <div
+      style={{ opacity: isVisible ? 1 : 0.5 }}
+      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+    >
       <div className="flex items-center gap-2 flex-1">
         <div className="text-daintree-text">
           <Icon className="h-4 w-4" />
@@ -188,32 +221,21 @@ export function ToolbarSettingsTab() {
     setRightButtons(newButtons);
   };
 
-  const handleToggleLeft = (buttonId: AnyToolbarButtonId) => {
-    if (AGENT_ID_SET.has(buttonId)) {
-      // Toggle the *currently visible* state so undefined-pinned agents
-      // resolve to the opposite of the derived state (installed→hide,
-      // missing→show) — see #7673 tri-state semantics.
-      const nextPinned = !isAgentToolbarVisible(
-        agentSettings?.agents?.[buttonId],
-        agentAvailability?.[buttonId]
-      );
-      void setAgentPinned(buttonId, nextPinned);
-      return;
-    }
-    toggleButtonVisibility(buttonId, "left");
-  };
+  const handleToggleLeft = (buttonId: AnyToolbarButtonId) =>
+    dispatchToolbarVisibility(buttonId, "left", {
+      agentSettings,
+      agentAvailability,
+      setAgentPinned,
+      toggleButtonVisibility,
+    });
 
-  const handleToggleRight = (buttonId: AnyToolbarButtonId) => {
-    if (AGENT_ID_SET.has(buttonId)) {
-      const nextPinned = !isAgentToolbarVisible(
-        agentSettings?.agents?.[buttonId],
-        agentAvailability?.[buttonId]
-      );
-      void setAgentPinned(buttonId, nextPinned);
-      return;
-    }
-    toggleButtonVisibility(buttonId, "right");
-  };
+  const handleToggleRight = (buttonId: AnyToolbarButtonId) =>
+    dispatchToolbarVisibility(buttonId, "right", {
+      agentSettings,
+      agentAvailability,
+      setAgentPinned,
+      toggleButtonVisibility,
+    });
 
   return (
     <div className="space-y-6">
@@ -281,6 +303,35 @@ export function ToolbarSettingsTab() {
         </DndContext>
       </SettingsSection>
 
+      {pluginButtonIds.length > 0 && (
+        <SettingsSection
+          icon={McpServerIcon}
+          title="Plugin buttons"
+          description={`Uncheck to hide. ${pluginButtonIds.filter((id) => isToolbarButtonVisible(id, layout.pinnedButtons, agentSettings, agentAvailability)).length} of ${pluginButtonIds.length} visible.`}
+        >
+          <div className="space-y-2">
+            {pluginButtonIds.map((buttonId) => (
+              <PluginButtonRow
+                key={buttonId}
+                buttonId={buttonId}
+                isVisible={isToolbarButtonVisible(
+                  buttonId,
+                  layout.pinnedButtons,
+                  agentSettings,
+                  agentAvailability
+                )}
+                onToggle={(id) => toggleButtonVisibility(id, "right")}
+                metadata={
+                  (allMetadata as Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>)[
+                    buttonId
+                  ]
+                }
+              />
+            ))}
+          </div>
+        </SettingsSection>
+      )}
+
       <SettingsSection
         icon={Rocket}
         title="Launcher palette"
@@ -335,7 +386,7 @@ export function ToolbarSettingsTab() {
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />
-          Reset to Defaults
+          Reset toolbar
         </button>
       </div>
     </div>

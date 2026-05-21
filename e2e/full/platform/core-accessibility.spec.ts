@@ -176,9 +176,9 @@ test.describe.serial("Core: Accessibility", () => {
         test("Cmd+, opens settings and focuses within the dialog", async () => {
           const { window } = ctx;
 
-          const settingsButton = window.locator(SEL.toolbar.openSettings);
-          await settingsButton.focus();
-          await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
+          const focusAnchor = window.locator(SEL.toolbar.toggleSidebar);
+          await focusAnchor.focus();
+          await expect(focusAnchor).toBeFocused({ timeout: T_SHORT });
 
           await window.keyboard.press(`${mod}+,`);
           const heading = window.locator(SEL.settings.heading);
@@ -198,8 +198,8 @@ test.describe.serial("Core: Accessibility", () => {
             timeout: T_SHORT,
           });
 
-          const settingsButton = window.locator(SEL.toolbar.openSettings);
-          await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
+          const focusAnchor = window.locator(SEL.toolbar.toggleSidebar);
+          await expect(focusAnchor).toBeFocused({ timeout: T_SHORT });
         });
 
         test("toolbar supports arrow-key navigation", async () => {
@@ -225,7 +225,7 @@ test.describe.serial("Core: Accessibility", () => {
           await ensureWindowFocused(ctx.app);
 
           // Start from a known toolbar element
-          const startEl = window.locator(SEL.toolbar.openSettings);
+          const startEl = window.locator(SEL.toolbar.toggleSidebar);
           await startEl.focus();
           await expect(startEl).toBeFocused({ timeout: T_SHORT });
 

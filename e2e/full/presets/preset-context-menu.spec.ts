@@ -36,13 +36,28 @@ test.describe.serial("Presets: Context Menu Integration (93–96)", () => {
   });
 
   const rightClickClaudeToolbar = async () => {
-    const button = ctx.window.locator('[aria-label="Start Claude Agent"]');
-    if (await button.isVisible({ timeout: T_SHORT }).catch(() => false)) {
+    const toolbar = ctx.window.getByRole("toolbar", { name: "Main toolbar" });
+    const candidates = [
+      toolbar
+        .locator('[data-toolbar-button-id="claude"]')
+        .getByRole("button", { name: /^(Start|Configure|Install|Checking) Claude/i })
+        .first(),
+      ctx.window.locator(SEL.agent.startButton).first(),
+      ctx.window.getByRole("button", { name: /^Start Claude(?: Agent)?$/i }).first(),
+    ];
+
+    for (const button of candidates) {
+      if (!(await button.isVisible({ timeout: T_SHORT }).catch(() => false))) {
+        continue;
+      }
       await button.click({ button: "right" });
-    } else {
-      const agentButton = ctx.window.locator(SEL.agent.startButton);
-      await agentButton.click({ button: "right" });
+      await ctx.window.waitForTimeout(T_SETTLE);
+      return;
     }
+
+    const fallback = candidates[0]!;
+    await expect(fallback).toBeVisible({ timeout: T_MEDIUM });
+    await fallback.click({ button: "right" });
     await ctx.window.waitForTimeout(T_SETTLE);
   };
 

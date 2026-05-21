@@ -9,6 +9,8 @@ const mockTerminalClient = {
   wake: vi.fn(),
   getSerializedState: vi.fn(),
   getSharedBuffer: vi.fn(() => null),
+  acknowledgePortData: vi.fn(),
+  acknowledgeData: vi.fn(),
 };
 
 vi.mock("@/clients", () => ({
@@ -60,6 +62,7 @@ type TierTestService = {
   applyAgentPromotion: (id: string, agentId: string) => void;
   clearAgentPromotion: (id: string) => void;
   reduceScrollbackAllBackground: (targetLines: number) => void;
+  writeController: { write: (id: string, data: string | Uint8Array) => void };
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
@@ -384,6 +387,190 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       // Plain at FOCUSED → blink on.
       expect(managed.terminal.options.cursorBlink).toBe(true);
+    });
+  });
+
+  describe("Write-driven BURST tier", () => {
+    it("promotes a FOCUSED terminal to BURST on first PTY write", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "hello");
+
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+    });
+
+    it("decays back to the panel's current tier after the idle window", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      managed.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "hello");
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+
+      // 500ms write-burst decay + 500ms downgrade hysteresis in the policy.
+      vi.advanceTimersByTime(1100);
+
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+    });
+
+    it("rapid-fire writes do not churn the decay timer (deadline extension is O(1))", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+      const setSpy = vi.spyOn(globalThis, "setTimeout");
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      // 100 back-to-back writes — naive per-write clearTimeout/setTimeout
+      // would produce ~200 timer-table touches. The deadline-timestamp
+      // pattern caps it at the single decay timer (≤ 2) regardless of
+      // write count, which is the load-bearing perf invariant.
+      const setCallsBefore = setSpy.mock.calls.length;
+      const clearCallsBefore = clearSpy.mock.calls.length;
+      for (let i = 0; i < 100; i++) {
+        service.writeController.write("t1", "x");
+      }
+      const setCallsAfter = setSpy.mock.calls.length;
+      const clearCallsAfter = clearSpy.mock.calls.length;
+
+      // Lower bound: at least the single decay timer must be armed,
+      // otherwise the test would pass even on a no-op implementation.
+      expect(setCallsAfter - setCallsBefore).toBeGreaterThanOrEqual(1);
+      expect(setCallsAfter - setCallsBefore).toBeLessThanOrEqual(2);
+      expect(clearCallsAfter - clearCallsBefore).toBe(0);
+
+      clearSpy.mockRestore();
+      setSpy.mockRestore();
+    });
+
+    it("writes during an active burst cancel a pending downgrade timer", () => {
+      // Regression: previously the deadline-gated re-promotion skipped
+      // applyRendererPolicy(BURST) for in-window writes, so a
+      // focus-loss-scheduled downgrade fired unopposed and stranded the
+      // terminal at the lower tier mid-stream. Writes must always
+      // re-assert BURST so the policy's tier===currentApplied early-return
+      // cancels any pending tierChangeTimer.
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      managed.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x");
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+
+      // Simulate focus loss: schedule a downgrade to VISIBLE. This arms
+      // the policy's tierChangeTimer with 500ms hysteresis.
+      service.applyRendererPolicy("t1", TerminalRefreshTier.VISIBLE);
+      const pendingTier = (managed as unknown as { pendingTier?: TerminalRefreshTier }).pendingTier;
+      expect(pendingTier).toBe(TerminalRefreshTier.VISIBLE);
+
+      // A new write 200ms later (still inside the burst window) must
+      // cancel that pending downgrade.
+      vi.advanceTimersByTime(200);
+      service.writeController.write("t1", "y");
+
+      expect(
+        (managed as unknown as { pendingTier?: TerminalRefreshTier }).pendingTier
+      ).toBeUndefined();
+      expect((managed as unknown as { tierChangeTimer?: number }).tierChangeTimer).toBeUndefined();
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+
+      // Confirm: advancing past the original 500ms hysteresis does NOT
+      // drop to VISIBLE, since the timer was cancelled.
+      vi.advanceTimersByTime(400);
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+    });
+
+    it("does not arm a write-burst timer on the deferred-restore path", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        isSerializedRestoreInProgress: true,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x");
+
+      expect((managed as unknown as { writeBurstTimer?: number }).writeBurstTimer).toBeUndefined();
+      expect(
+        (managed as unknown as { writeBurstDeadline?: number }).writeBurstDeadline
+      ).toBeUndefined();
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+    });
+
+    it("isolates write-burst state across terminals", () => {
+      const t1 = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      const t2 = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      service.instances.set("t1", t1 as unknown as Record<string, unknown>);
+      service.instances.set("t2", t2 as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x");
+
+      expect(t1.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+      expect(t2.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect((t1 as unknown as { writeBurstTimer?: number }).writeBurstTimer).toBeDefined();
+      expect((t2 as unknown as { writeBurstTimer?: number }).writeBurstTimer).toBeUndefined();
+    });
+
+    it("focus-only tier changes do not manufacture BURST (regression guard)", () => {
+      // Before this refactor, focus events promoted to BURST. The fix is
+      // that BURST is exclusively write-driven; a pure focus transition
+      // must land at FOCUSED, not BURST.
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
+
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect((managed as unknown as { writeBurstTimer?: number }).writeBurstTimer).toBeUndefined();
+    });
+
+    it("re-arms the decay timer when writes extend the deadline mid-flight", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      managed.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x"); // arms 500ms timer
+      vi.advanceTimersByTime(400); // 400ms in, 100ms to go
+      service.writeController.write("t1", "y"); // bumps deadline to t+900
+
+      vi.advanceTimersByTime(150); // t=550, original timer fires, re-arms for 350ms
+      // Tier must NOT have decayed yet — the write extended the window.
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+
+      // Advance past the new deadline + policy hysteresis.
+      vi.advanceTimersByTime(900);
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+    });
+
+    it("destroy clears the pending write-burst timer", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x");
+      const writeBurstTimer = (managed as unknown as { writeBurstTimer?: number }).writeBurstTimer;
+      expect(writeBurstTimer).toBeDefined();
+
+      service.destroy("t1");
+
+      expect((managed as unknown as { writeBurstTimer?: number }).writeBurstTimer).toBeUndefined();
+      expect(
+        (managed as unknown as { writeBurstDeadline?: number }).writeBurstDeadline
+      ).toBeUndefined();
+
+      // Advancing past the original window must not throw or re-touch the tier.
+      const tierAtDestroy = managed.lastAppliedTier;
+      vi.advanceTimersByTime(1100);
+      expect(managed.lastAppliedTier).toBe(tierAtDestroy);
+    });
+
+    it("does not fire BURST on the hibernated write path", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        isHibernated: true,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.writeController.write("t1", "x");
+
+      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
     });
   });
 

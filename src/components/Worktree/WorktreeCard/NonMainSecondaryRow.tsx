@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
@@ -5,6 +6,10 @@ import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { FileText } from "lucide-react";
 import type { WorktreeState } from "@/types";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
+import { useResourceProfileStore } from "@/store/resourceProfileStore";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
 
 interface NonMainSecondaryRowProps {
   worktree: WorktreeState;
@@ -35,6 +40,63 @@ export function NonMainSecondaryRow({
   hasPlanFile,
   badges,
 }: NonMainSecondaryRowProps) {
+  const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
+  const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
+  const fetchIntervalBackgroundMs = useResourceProfileStore((s) => s.fetchIntervalBackgroundMs);
+
+  const fetchIntervalMs = useMemo(
+    () => (worktree.isCurrent ? fetchIntervalActiveMs : fetchIntervalBackgroundMs),
+    [worktree.isCurrent, fetchIntervalActiveMs, fetchIntervalBackgroundMs]
+  );
+
+  const showPRBadge =
+    worktree.linked?.pr &&
+    worktree.linked.pr.state !== "closed" &&
+    worktree.linked.pr.state !== "declined";
+  const showUpstreamBadge = hasUpstreamDelta || hasAuthFailedSignIn;
+
+  const prTier = showPRBadge
+    ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
+    : 0;
+  const upstreamTier = computeAlarmTier({
+    authFailed: hasAuthFailedSignIn,
+    behindCount: worktree.behindCount,
+  }).tier;
+  const upstreamFirst = upstreamTier > prTier;
+
+  const prBadge = showPRBadge ? (
+    <PRBadge
+      prNumber={worktree.linked!.pr!.ref.number}
+      prState={worktree.linked!.pr!.state}
+      prCiStatus={worktree.linked!.pr!.ciStatus}
+      isSubordinate={!!worktree.issueNumber}
+      worktreePath={worktree.path}
+      onOpen={badges.onOpenPR}
+      isActive={isActive}
+      underlineOnHover={underlineOnHover}
+      rowLastUpdatedAt={worktree.prLastUpdatedAt}
+      prDetectionPaused={prDetectionPaused}
+    />
+  ) : null;
+
+  const upstreamBadge = showUpstreamBadge ? (
+    <UpstreamSyncBadge
+      aheadCount={worktree.aheadCount}
+      behindCount={worktree.behindCount}
+      isFetchInFlight={Boolean(worktree.isFetchInFlight)}
+      lastFetchedAt={worktree.lastFetchedAt}
+      fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
+      fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
+      isGitHubProvider={worktree.linked?.providerId === BUILTIN_GITHUB_PROVIDER_ID}
+      containerGapClass="gap-1.5"
+      baseBranchName={worktree.baseBranchName}
+      baseAheadCount={worktree.baseAheadCount}
+      baseBehindCount={worktree.baseBehindCount}
+      baseMatchesUpstream={worktree.baseMatchesUpstream}
+      fetchIntervalMs={fetchIntervalMs}
+    />
+  ) : null;
+
   return (
     <div className="flex flex-col gap-0.5 mt-1.5">
       {worktree.issueNumber && !hasIssueTitle && (
@@ -47,31 +109,8 @@ export function NonMainSecondaryRow({
           rowLastUpdatedAt={worktree.issueLastUpdatedAt}
         />
       )}
-      {worktree.prNumber && worktree.prState !== "closed" && (
-        <PRBadge
-          prNumber={worktree.prNumber}
-          prState={worktree.prState}
-          prCiStatus={worktree.prCiStatus}
-          isSubordinate={!!worktree.issueNumber}
-          worktreePath={worktree.path}
-          onOpen={badges.onOpenPR}
-          isActive={isActive}
-          underlineOnHover={underlineOnHover}
-          rowLastUpdatedAt={worktree.prLastUpdatedAt}
-        />
-      )}
-      {(hasUpstreamDelta || hasAuthFailedSignIn) && (
-        <UpstreamSyncBadge
-          aheadCount={worktree.aheadCount}
-          behindCount={worktree.behindCount}
-          isFetchInFlight={Boolean(worktree.isFetchInFlight)}
-          lastFetchedAt={worktree.lastFetchedAt}
-          fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
-          fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
-          isGitHubRemote={Boolean(worktree.isGitHubRemote)}
-          containerGapClass="gap-1.5"
-        />
-      )}
+      {upstreamFirst ? upstreamBadge : prBadge}
+      {upstreamFirst ? prBadge : upstreamBadge}
       {hasIssueTitle && (
         <BranchLabel
           label={branchLabel}

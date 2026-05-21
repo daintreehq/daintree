@@ -53,6 +53,10 @@ vi.mock("../../../services/RunCommandDetector.js", () => ({
 const mockGetWindowForWebContents = vi.fn();
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (...args: unknown[]) => mockGetWindowForWebContents(...args),
+  // broadcastProjectSwitchUpdates → broadcastToRenderer → getAllAppWebContents.
+  // Returning [] keeps the broadcast a no-op in this suite; PROJECT_UPDATED
+  // delivery is covered by projectSwitchBroadcast.test.ts.
+  getAllAppWebContents: vi.fn(() => []),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({
@@ -623,5 +627,74 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
       unknown
     >;
     expect(savedState.tabGroups).toEqual([]);
+  });
+});
+
+describe("project:switch worktree-load-status (#8400)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function runSwitch(loadProject: () => Promise<void>) {
+    const sendMock = vi.fn();
+    const mockView = {
+      webContents: { id: 300, isDestroyed: () => false, send: sendMock },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const worktreeService = {
+      loadProject: vi.fn(loadProject),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+    };
+
+    const deps = {
+      mainWindow: { id: 7 } as unknown,
+      projectViewManager: pvm,
+      worktreeService: worktreeService as never,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    await handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 300 } }, "proj-new");
+    return sendMock;
+  }
+
+  it("sends the error targeted to the activated view when loadProject throws", async () => {
+    const sendMock = await runSwitch(async () => {
+      throw new Error("Not a git repository");
+    });
+
+    expect(sendMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: "proj-new",
+      worktreeLoadError: "Not a git repository",
+    });
+  });
+
+  it("sends a null status on success so a stale banner clears", async () => {
+    const sendMock = await runSwitch(async () => undefined);
+
+    expect(sendMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: "proj-new",
+      worktreeLoadError: null,
+    });
   });
 });

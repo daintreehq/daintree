@@ -10,9 +10,9 @@ const WORKTREE_ACTIONS_TOOLBAR_PATH = path.resolve(
   __dirname,
   "../../Worktree/WorktreeCard/WorktreeActionsToolbar.tsx"
 );
-const HOOK_PATH = path.resolve(__dirname, "../useWorktreeGridRovingFocus.ts");
+const KEYBOARD_HOOK_PATH = path.resolve(__dirname, "../useWorktreeSidebarKeyboard.ts");
 
-describe("Worktree list keyboard grid — issue #6422", () => {
+describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", () => {
   describe("SortableWorktreeCard ARIA contract", () => {
     let source: string;
     beforeEach(async () => {
@@ -20,8 +20,6 @@ describe("Worktree list keyboard grid — issue #6422", () => {
     });
 
     it("strips dnd-kit's tabIndex from spread attributes so the row never gets a stray tab stop", () => {
-      // dnd-kit's useSortable returns attributes that include `tabIndex: 0`.
-      // Spreading them onto the row would defeat the single-tab-stop contract.
       expect(source).toMatch(/tabIndex:\s*_tabIndex/);
     });
 
@@ -30,16 +28,27 @@ describe("Worktree list keyboard grid — issue #6422", () => {
       expect(source).not.toContain('role="listitem"');
     });
 
-    it("exposes data-worktree-row so the roving controller can query rows", () => {
+    it("exposes data-worktree-row so the keyboard controller can locate rows", () => {
       expect(source).toContain("data-worktree-row={worktreeId}");
+    });
+
+    it("exposes a stable DOM id via getWorktreeSidebarRowId for aria-activedescendant", () => {
+      expect(source).toContain("getWorktreeSidebarRowId");
+      expect(source).toContain("id={getWorktreeSidebarRowId(worktreeId)}");
     });
 
     it('wraps children in role="gridcell" for valid grid > row > gridcell semantics', () => {
       expect(source).toContain('role="gridcell"');
     });
 
-    it("starts with tabIndex={-1}; the controller promotes one row to 0", () => {
+    it("starts with tabIndex={-1}; the grid container holds the single tab stop", () => {
       expect(source).toContain("tabIndex={-1}");
+    });
+
+    it("does not apply content-visibility: auto to the row wrapper (lesson #4438 + virtualization)", () => {
+      // Virtuoso provides equivalent windowing — keeping content-visibility:auto
+      // would only break dnd-kit transforms on the dragged row.
+      expect(source).not.toMatch(/contentVisibility:\s*["']auto["']/);
     });
   });
 
@@ -51,6 +60,15 @@ describe("Worktree list keyboard grid — issue #6422", () => {
 
     it('only applies role="group" in the overview grid variant — sidebar rows defer to the row wrapper', () => {
       expect(source).toContain('role={variant === "grid" ? "group" : undefined}');
+    });
+
+    it("keeps outline-hidden on the inner click-target button to preserve forced-colors UA outline (#8094)", () => {
+      expect(source).toMatch(/"absolute inset-0 z-0 outline-hidden"/);
+    });
+
+    it("does not paint a duplicate accent focus ring on the inner button — card-level :has(> button:focus-visible) ring is canonical (#8094)", () => {
+      expect(source).not.toContain("focus-visible:outline-daintree-accent");
+      expect(source).not.toContain("focus-visible:ring-daintree-accent");
     });
   });
 
@@ -95,99 +113,174 @@ describe("Worktree list keyboard grid — issue #6422", () => {
     });
   });
 
-  describe("SidebarContent grid wiring", () => {
+  describe("SidebarContent virtualized grid wiring", () => {
     let source: string;
     beforeEach(async () => {
       source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
     });
 
-    it("imports the roving-focus hook", () => {
-      expect(source).toContain('from "./useWorktreeGridRovingFocus"');
-      expect(source).toContain("useWorktreeGridRovingFocus");
+    it("imports the new aria-activedescendant keyboard hook", () => {
+      expect(source).toContain('from "./useWorktreeSidebarKeyboard"');
+      expect(source).toContain("useWorktreeSidebarKeyboard");
     });
 
-    it('wires gridRef + handlers from the hook into a role="grid" container', () => {
-      // Hook takes a scrollContainerRef (for PageUp/PageDown sizing) and an
-      // options object (for the Alt+Arrow keyboard reorder callback). The
-      // destructured return shape is unchanged.
-      expect(source).toMatch(
-        /const \{ gridRef, handleGridKeyDown, handleGridFocusCapture \} = useWorktreeGridRovingFocus\(\s*scrollContainerRef,/
-      );
+    it("renders a Virtuoso list (not a flat .map render) for the non-main worktrees", () => {
+      expect(source).toContain('from "react-virtuoso"');
+      expect(source).toMatch(/<Virtuoso<SidebarFlatItem,\s*SidebarVirtuosoContext>/);
+    });
+
+    it("wires gridRef + handlers + aria-activedescendant onto the role='grid' container", () => {
+      expect(source).toMatch(/aria-activedescendant=\{activeDescendantId\}/);
       expect(source).toContain('role="grid"');
       expect(source).toContain('aria-label="Worktrees"');
       expect(source).toContain("ref={gridRef}");
       expect(source).toContain("onKeyDown={handleGridKeyDown}");
+      expect(source).toContain("onFocus={handleGridFocus}");
       expect(source).toContain("onFocusCapture={handleGridFocusCapture}");
     });
 
-    it('wraps StaticWorktreeRow\'s WorktreeCard in role="row" + data-worktree-row + role="gridcell"', async () => {
+    it("sets a single tab stop on the grid container (not on individual rows)", () => {
+      // aria-activedescendant pattern: container holds tabIndex=0, rows stay -1.
+      expect(source).toMatch(/role="grid"[\s\S]{0,300}tabIndex=\{0\}/);
+    });
+
+    it("passes overscan + skipAnimationFrameInResizeObserver to Virtuoso", () => {
+      expect(source).toContain("SIDEBAR_VIRTUOSO_OVERSCAN_PX");
+      expect(source).toContain("skipAnimationFrameInResizeObserver");
+    });
+
+    it("uses module-level computeSidebarItemKey for stable item identity (past lesson #1992)", () => {
+      expect(source).toMatch(/function\s+computeSidebarItemKey\b/);
+      expect(source).toContain("computeItemKey={computeSidebarItemKey}");
+    });
+
+    it("threads reactive row state through Virtuoso's context prop (React Compiler safety)", () => {
+      expect(source).toMatch(/context=\{virtuosoContext\}/);
+      expect(source).toMatch(/const\s+virtuosoContext\s*=\s*useMemo</);
+    });
+
+    it("wraps Virtuoso in SortableContext only when sort is enabled", () => {
+      // Grouped sections disable sort and render static rows that don't call
+      // useSortable — wrapping that path in SortableContext would be a no-op
+      // and confuse dnd-kit measurement.
+      expect(source).toMatch(/groupedSections\s*\?\s*\(\s*<Virtuoso/);
+      expect(source).toMatch(/<SortableContext\s+items=\{sortableIds\}/);
+    });
+
+    it("wraps StaticWorktreeRow's WorktreeCard in role='row' + data-worktree-row + role='gridcell'", async () => {
       const staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
-      // The static (pinned/grouped) rows don't go through SortableWorktreeCard,
-      // so the row + gridcell roles must be added explicitly here.
       expect(staticSource).toMatch(/role="row"/);
       expect(staticSource).toContain("data-worktree-row={worktreeId}");
       expect(staticSource).toContain("tabIndex={-1}");
-      // Ensure the static path also has a gridcell wrapper
-      const staticRowMatch = staticSource.match(
-        /function StaticWorktreeRow[\s\S]*?<\/div>\s*\)\s*;\s*\}/
-      );
-      expect(staticRowMatch).toBeTruthy();
-      expect(staticRowMatch?.[0]).toContain('role="gridcell"');
+      expect(staticSource).toContain('role="gridcell"');
+    });
+
+    it("applies the stable aria-activedescendant id to StaticWorktreeRow", async () => {
+      const staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
+      expect(staticSource).toContain("getWorktreeSidebarRowId");
+      expect(staticSource).toContain("id={getWorktreeSidebarRowId(worktreeId)}");
     });
   });
 
-  describe("useWorktreeGridRovingFocus hook", () => {
+  describe("useWorktreeSidebarKeyboard hook", () => {
     let source: string;
     beforeEach(async () => {
-      source = await fs.readFile(HOOK_PATH, "utf-8");
+      source = await fs.readFile(KEYBOARD_HOOK_PATH, "utf-8");
     });
 
-    it("queries rows via [data-worktree-row]", () => {
-      expect(source).toContain("[data-worktree-row]");
+    it("exports a stable ID generator that pairs with aria-activedescendant", () => {
+      expect(source).toContain("export function getWorktreeSidebarRowId");
+      expect(source).toMatch(/worktree-sidebar-row-/);
     });
 
-    it("queries the per-row toolbar via [data-worktree-row-toolbar]", () => {
-      expect(source).toContain("[data-worktree-row-toolbar]");
+    it("tracks the active row by worktree id (not DOM index) so unmounted rows don't strand focus", () => {
+      expect(source).toMatch(
+        /\[activeWorktreeId,\s*setActiveWorktreeId\]\s*=\s*useState<string \| null>/
+      );
     });
 
-    it("syncs tab stops by mutating element.tabIndex directly (not via React state)", () => {
-      // Mirrors Toolbar.tsx's DOM-mutation pattern to avoid re-rendering 50–200
-      // worktree cards on every arrow keypress.
-      expect(source).toMatch(/\.tabIndex\s*=\s*-1/);
-      expect(source).toMatch(/\.tabIndex\s*=\s*0/);
+    it("returns an aria-activedescendant id, not a focused DOM element", () => {
+      expect(source).toMatch(/activeDescendantId/);
+    });
+
+    it("provides j / k aliases alongside ArrowUp / ArrowDown for vim navigation", () => {
+      expect(source).toMatch(/case\s+"j"/);
+      expect(source).toMatch(/case\s+"k"/);
+    });
+
+    it("uses VirtuosoHandle.scrollToIndex to bring the active row into view", () => {
+      expect(source).toMatch(/virtuosoRef\.current\?\.scrollToIndex\(/);
+    });
+
+    it("preserves the toolbar sub-mode entered via Enter / ArrowRight", () => {
+      expect(source).toMatch(/"Enter"/);
+      expect(source).toMatch(/"ArrowRight"/);
+      expect(source).toMatch(/"Escape"/);
+      expect(source).toMatch(/setGridMode\(\s*"toolbar"\s*\)/);
     });
 
     it("resets to list mode on window blur (lesson #4591)", () => {
       expect(source).toContain('window.addEventListener("blur"');
-      expect(source).toMatch(/modeRef\.current\s*=\s*"list"/);
+      expect(source).toMatch(/setGridMode\(\s*"list"\s*\)/);
     });
 
-    it("handles Enter / ArrowRight to enter toolbar mode and Escape to return to list mode", () => {
-      expect(source).toMatch(/"Enter"/);
-      expect(source).toMatch(/"ArrowRight"/);
-      expect(source).toMatch(/"Escape"/);
+    it("allows Ctrl+Home and Ctrl+End through the modifier guard", () => {
+      expect(source).toMatch(/e\.ctrlKey && e\.key !== "Home" && e\.key !== "End"/);
     });
 
-    it("handles Space to select the row's primary worktree button", () => {
-      expect(source).toMatch(/aria-label\^='Select worktree'/);
+    it("splits the modifier guard so Alt+Arrow carves through but other Alt combos bail", () => {
+      expect(source).toMatch(/if \(e\.metaKey\) return;/);
+      expect(source).toMatch(/e\.altKey && \(e\.key === "ArrowUp" \|\| e\.key === "ArrowDown"\)/);
+      expect(source).toMatch(/if \(e\.altKey && !isAltArrowReorder\) return;/);
     });
 
-    it("demotes every native focusable inside each row so the grid is one tab stop", () => {
-      // Without this, the absolute "Select worktree" button, terminal-section
-      // collapse buttons, PR/issue links, etc. all keep their native tab
-      // stops and the keyboard-exhaustion bug is unfixed.
-      expect(source).toMatch(/ROW_DESCENDANT_SELECTOR/);
-      expect(source).toMatch(/demoteRowDescendants/);
-    });
-
-    it("repairs DOM tab stops on window blur (not just modeRef)", () => {
-      // Stale tabIndex=0 on a toolbar item would let the next Tab land back
-      // inside that toolbar instead of on the row. Blur must clear it.
-      const blurEffect = source.match(
-        /useEffect\(\(\)\s*=>\s*\{[\s\S]*?addEventListener\("blur"[\s\S]*?\}\s*,\s*\[[^\]]*\]\)/
+    it("calls the reorder callback with (worktreeId, delta) — not a DOM element", () => {
+      expect(source).toMatch(
+        /onKeyboardReorderRef\.current\?\.\(\s*currentWorktreeId\s*,\s*e\.key === "ArrowDown" \? 1 : -1\s*\)/
       );
-      expect(blurEffect).toBeTruthy();
-      expect(blurEffect?.[0]).toContain("syncRowTabStops");
+    });
+
+    it("clamps the active worktree to one that still exists in the items list", () => {
+      // When a filter removes the previously-active row, the hook must reseat
+      // activeWorktreeId so aria-activedescendant doesn't point at a missing id.
+      expect(source).toMatch(/stillVisible/);
+    });
+
+    it("skips scrollToIndex for pinned rows (they live outside Virtuoso)", () => {
+      // Pinned rows are always mounted, so navigating to one must NOT call
+      // scrollToIndex — that would point at the wrong Virtuoso row.
+      expect(source).toMatch(/item\.isPinned/);
+      expect(source).toMatch(/if \(item\.isPinned\) return/);
+    });
+
+    it("offsets the Virtuoso scrollToIndex by the number of preceding pinned rows", () => {
+      // The flat items list interleaves pinned rows ahead of the virtualized
+      // items; subtract the count so scrollToIndex targets the right row.
+      expect(source).toMatch(/pinnedBefore/);
+      expect(source).toMatch(/index: flatIndex - pinnedBefore/);
+    });
+
+    it("encodes worktree ids before composing the DOM id (paths may contain spaces)", () => {
+      // Worktree ids are filesystem paths; on macOS they often contain spaces
+      // which produce invalid id attributes.
+      expect(source).toMatch(/encodeURIComponent\(worktreeId\)/);
+    });
+  });
+
+  describe("SidebarContent — pinned rows participate in keyboard navigation", () => {
+    let source: string;
+    beforeEach(async () => {
+      source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    });
+
+    it("prepends the main worktree to keyboardItems when visible", () => {
+      expect(source).toMatch(/if \(mainVisible && mainWorktree\)[\s\S]{0,200}isPinned: true/);
+    });
+
+    it("prepends the integration worktree to keyboardItems when visible", () => {
+      expect(source).toMatch(
+        /if \(integrationVisible && integrationWorktree\)[\s\S]{0,200}isPinned: true/
+      );
     });
   });
 
@@ -201,7 +294,6 @@ describe("Worktree list keyboard grid — issue #6422", () => {
       it("computes ariaRowCount including pinned, group header, and data rows", async () => {
         const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
         expect(source).toMatch(/const ariaRowCount =/);
-        // Group header rows must contribute to the count (they carry role="row")
         expect(source).toMatch(
           /groupedSections[\s\S]*?\.reduce\([\s\S]*?1 \+ s\.worktrees\.length/
         );
@@ -240,15 +332,11 @@ describe("Worktree list keyboard grid — issue #6422", () => {
 
       it("removes the (selected) suffix from WorktreeCard's aria-label", async () => {
         const source = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-        // aria-current on the row wrapper replaces the string-spliced cue.
         expect(source).not.toContain('" (selected)"');
       });
 
       it("WorktreeCard sets aria-current on the grid variant (overview modal has no row wrapper)", async () => {
         const source = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-        // Sidebar rows carry aria-current on the role="row" wrapper; the
-        // overview grid has no wrapper, so the card itself must announce
-        // the active state.
         expect(source).toContain(
           'aria-current={variant === "grid" && isActive ? "true" : undefined}'
         );
@@ -261,33 +349,25 @@ describe("Worktree list keyboard grid — issue #6422", () => {
         source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
       });
 
-      it("wraps grouped sections in role='rowgroup'", () => {
-        expect(source).toContain('role="rowgroup"');
-      });
-
-      it("renders each section header as a role='row' with role='rowheader' inside", () => {
-        // Inside the grouped-sections branch
-        const groupedBranch = source.match(/groupedSections \?\s*\([\s\S]*?\) :\s*\(/);
-        expect(groupedBranch).toBeTruthy();
-        expect(groupedBranch?.[0]).toContain('role="row"');
-        expect(groupedBranch?.[0]).toContain('role="rowheader"');
-        expect(groupedBranch?.[0]).toContain("aria-colspan={1}");
+      it("emits header sentinels with role='row' + role='rowheader' from renderSidebarFlatItem", () => {
+        // After virtualization, headers are flat items rather than nested
+        // role='rowgroup' children. They still carry role='row' + 'rowheader'.
+        expect(source).toMatch(/item\.kind === "header"/);
+        expect(source).toContain('role="row"');
+        expect(source).toContain('role="rowheader"');
+        expect(source).toContain("aria-colspan={1}");
       });
 
       it("threads aria-rowindex onto group header rows", () => {
-        const groupedBranch = source.match(/groupedSections \?\s*\([\s\S]*?\) :\s*\(/);
-        expect(groupedBranch?.[0]).toContain("aria-rowindex={headerRowIndex}");
+        // Headers count toward aria-rowcount and carry their own aria-rowindex.
+        expect(source).toMatch(/aria-rowindex=\{item\.ariaRowIndex\}/);
       });
     });
 
     describe("keyboard model — PageUp/PageDown and Ctrl+Home/Ctrl+End", () => {
       let source: string;
       beforeEach(async () => {
-        source = await fs.readFile(HOOK_PATH, "utf-8");
-      });
-
-      it("accepts a scrollContainerRef parameter so PageUp/PageDown can size the page from viewport height", () => {
-        expect(source).toMatch(/scrollContainerRef\??:\s*React\.RefObject<HTMLDivElement \| null>/);
+        source = await fs.readFile(KEYBOARD_HOOK_PATH, "utf-8");
       });
 
       it("handles PageDown and PageUp in the list-mode switch", () => {
@@ -295,30 +375,76 @@ describe("Worktree list keyboard grid — issue #6422", () => {
         expect(source).toMatch(/case "PageUp"/);
       });
 
-      it("computes the page step from viewport height divided by row height", () => {
-        expect(source).toMatch(/computeGridPageSize/);
-      });
-
-      it("allows Ctrl+Home and Ctrl+End through the modifier guard", () => {
-        // The old guard bailed on every Ctrl combo; the new guard whitelists
-        // Home/End so APG's mandatory Ctrl+Home/End shortcuts can fire.
-        expect(source).toMatch(/e\.ctrlKey && e\.key !== "Home" && e\.key !== "End"/);
+      it("computes the page step from the Virtuoso scroller's viewport height", () => {
+        expect(source).toMatch(/computePageSize/);
+        expect(source).toMatch(/scrollerRef/);
       });
 
       it("clamps ArrowUp/ArrowDown at the grid boundary (no wrap)", () => {
-        // Wrapping let users silently jump from the last row to the first;
-        // APG grid row navigation requires boundary-stop.
-        expect(source).not.toMatch(/%\s*rows\.length/);
+        // The advance() helper returns null at the boundary; no modulo arithmetic.
+        expect(source).not.toMatch(/%\s*items\.length/);
       });
     });
+  });
 
-    describe("SidebarContent passes scrollContainerRef into the roving-focus hook", () => {
-      it("calls useWorktreeGridRovingFocus with the scroll container ref and a reorder callback", async () => {
-        const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
-        expect(source).toMatch(
-          /useWorktreeGridRovingFocus\(\s*scrollContainerRef,\s*\{\s*onKeyboardReorder:\s*handleKeyboardReorder\s*\}\s*\)/
-        );
-      });
+  describe("issue #8389 — per-row sidebar subscription stops full-list re-renders", () => {
+    let source: string;
+    let staticSource: string;
+    beforeEach(async () => {
+      source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+      staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
+    });
+
+    it("StaticWorktreeRow subscribes to its own store slice by id (not a prop object)", () => {
+      // The row reads exactly its own snapshot via a primitive Map-get
+      // selector, so an unrelated worktree changing in the poll cycle does
+      // not invalidate this row's selector result.
+      expect(staticSource).toMatch(
+        /useWorktreeStore\(\s*\(state\)\s*=>\s*state\.worktrees\.get\(worktreeId\)\s*\)/
+      );
+      // The row's public prop is the id, never a full WorktreeState object.
+      expect(staticSource).toContain("worktreeId: string;");
+      expect(staticSource).not.toMatch(/worktree:\s*WorktreeState;/);
+    });
+
+    it("removes the per-render renderWorktreeCard closure that re-created every row element each poll", () => {
+      // A closure rebuilt on every SidebarContent render produced a fresh
+      // element factory each poll, defeating the React Compiler's per-row
+      // memoization. Rows must be authored as inline JSX so each element is
+      // memoized by its own (id-only) props.
+      expect(source).not.toMatch(/const renderWorktreeCard\s*=/);
+      expect(source).not.toMatch(/renderWorktreeCard\(/);
+      // Guard against the same anti-pattern resurfacing under a different
+      // name — any per-render closure that returns a <StaticWorktreeRow/>
+      // factory re-creates row elements each poll and defeats memoization.
+      expect(source).not.toMatch(
+        /const \w*(?:render|make|build)\w*(?:Row|Card)\w*\s*=\s*\([^)]*\)\s*=>\s*\(?\s*<StaticWorktreeRow/
+      );
+    });
+
+    it("threads only the worktreeId (not a full worktree object) into StaticWorktreeRow across all render paths", () => {
+      // Integration (pinned) row stays as inline JSX outside the Virtuoso
+      // surface; its id-only prop shape is preserved.
+      expect(source).toMatch(
+        /<StaticWorktreeRow\s+key=\{integrationWorktree\.id\}\s+worktreeId=\{integrationWorktree\.id\}/
+      );
+      // Virtualized rows are produced by renderSidebarFlatItem which reads
+      // `item.worktreeId` off each Virtuoso item — never a full worktree
+      // object — and the sidebarItems memo iterates `section.worktrees` to
+      // push those items.
+      expect(source).toMatch(/<StaticWorktreeRow\s+worktreeId=\{item\.worktreeId\}/);
+      expect(source).toMatch(/for \(const w of section\.worktrees\)/);
+      expect(source).toMatch(/worktreeId:\s*w\.id/);
+      // No render path threads a full worktree object into the row.
+      expect(source).not.toMatch(/<StaticWorktreeRow[^>]*\bworktree=\{/);
+    });
+
+    it("preserves the side-effecting aria-rowindex counter in the grouped path", () => {
+      // The 1-based aria-rowindex slot advances per item the sidebarItems
+      // memo emits (header sentinel + each row). Virtuoso renders the items;
+      // the counter still post-increments inside the iteration so each
+      // emitted item carries the next 1-based row slot.
+      expect(source).toMatch(/ariaRowIndex:\s*nextRowIndex\+\+/);
     });
   });
 
@@ -368,38 +494,6 @@ describe("Worktree list keyboard grid — issue #6422", () => {
       });
     });
 
-    describe("useWorktreeGridRovingFocus Alt+Arrow carve", () => {
-      let source: string;
-      beforeEach(async () => {
-        source = await fs.readFile(HOOK_PATH, "utf-8");
-      });
-
-      it("accepts an onKeyboardReorder option", () => {
-        expect(source).toMatch(/onKeyboardReorder\??:\s*\(/);
-      });
-
-      it("splits the modifier guard so Alt+Arrow carves through but other Alt combos bail", () => {
-        // The guard is split into a metaKey bail and an altKey-non-arrow bail
-        // so Alt+Arrow can reach the list-mode handler.
-        expect(source).toMatch(/if \(e\.metaKey\) return;/);
-        expect(source).toMatch(/e\.altKey && \(e\.key === "ArrowUp" \|\| e\.key === "ArrowDown"\)/);
-        expect(source).toMatch(/if \(e\.altKey && !isAltArrowReorder\) return;/);
-      });
-
-      it("preventDefaults Alt+Arrow so navigation never fires alongside reorder", () => {
-        const reorderBranch = source.match(/if \(isAltArrowReorder\) \{[\s\S]*?return;\s*\}/);
-        expect(reorderBranch).toBeTruthy();
-        expect(reorderBranch?.[0]).toContain("e.preventDefault()");
-        expect(reorderBranch?.[0]).toContain("e.stopPropagation()");
-      });
-
-      it("invokes the reorder callback with the focused row and a -1/+1 delta", () => {
-        expect(source).toMatch(
-          /onKeyboardReorderRef\.current\(row,\s*e\.key === "ArrowDown" \? 1 : -1\)/
-        );
-      });
-    });
-
     describe("SidebarContent wires keyboard reorder to applyManualWorktreeReorder", () => {
       let source: string;
       beforeEach(async () => {
@@ -416,8 +510,10 @@ describe("Worktree list keyboard grid — issue #6422", () => {
         expect(source).toContain("keyboardReorderAnnouncement");
       });
 
-      it("derives the worktree id from data-worktree-row and bounds-clamps the move", () => {
-        expect(source).toContain("rowEl.dataset.worktreeRow");
+      it("receives a worktreeId (not a DOM element) from the keyboard hook and bounds-clamps the move", () => {
+        expect(source).toMatch(
+          /handleKeyboardReorder = useCallback\(\(worktreeId: string, delta: -1 \| 1\)/
+        );
         expect(source).toMatch(/targetIdx < 0 \|\| targetIdx >= visible\.length/);
       });
 
@@ -427,9 +523,6 @@ describe("Worktree list keyboard grid — issue #6422", () => {
       });
 
       it("guards the reorder against grouped-by-type / active-search modes so it never silently mutates manualOrder when the drag handle is hidden", () => {
-        // Grouped mode and active search both flip isSortDisabled true; the
-        // drag handle hides in those modes, so Alt+Arrow must mirror that or
-        // it'd write to the manual order behind the user's back.
         expect(source).toMatch(/isSortDisabledRef\s*=\s*useRef\(false\)/);
         expect(source).toMatch(/isSortDisabledRef\.current\s*=\s*isSortDisabled/);
         const guard = source.match(/handleKeyboardReorder = useCallback\([\s\S]*?\}, \[\]\);/);

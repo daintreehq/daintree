@@ -53,7 +53,6 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     dispose = vi.fn(() => {
       this._isDisposed = true;
     });
-    attachRendererPort = vi.fn(() => true);
 
     setLogLevelOverrides = vi.fn();
 
@@ -104,18 +103,24 @@ vi.mock("../WorkspaceHostProcess.js", () => ({
 }));
 
 vi.mock("electron", () => {
-  class MockMessageChannelMain {
-    port1 = { close: vi.fn() };
-    port2 = { close: vi.fn() };
-  }
   return {
     BrowserWindow: { getAllWindows: vi.fn(() => []) },
-    MessageChannelMain: MockMessageChannelMain,
   };
 });
 
 vi.mock("../events.js", () => ({
   events: { emit: vi.fn() },
+}));
+
+// `WorkspaceHostPool` reads forge settings via `projectStore` to plumb them
+// into the `load-project` payload (#8316). Stub the store so importing the
+// pool doesn't trigger ProjectStore's `app.getPath("userData")` constructor.
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }) },
+}));
+
+vi.mock("../../store.js", () => ({
+  store: { get: vi.fn().mockReturnValue(null), set: vi.fn() },
 }));
 
 import path from "path";

@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import type { RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 interface UseScrollIndicatorParams {
-  scrollContainerRef: RefObject<HTMLDivElement | null>;
-  scrollContentRef: RefObject<HTMLDivElement | null>;
   itemCount: number;
 }
 
@@ -13,29 +10,23 @@ interface UseScrollIndicatorReturn {
   hiddenBelow: number;
   scrollToTop: () => void;
   scrollToBottom: () => void;
+  /** Plug into Virtuoso's `scrollerRef` prop. Captures the scrolling element. */
+  scrollerRef: (el: HTMLElement | Window | null) => void;
+  /** Plug into Virtuoso's `onScroll` prop. */
+  handleScroll: () => void;
 }
 
-function useScrollIndicator({
-  scrollContainerRef,
-  scrollContentRef,
-  itemCount,
-}: UseScrollIndicatorParams): UseScrollIndicatorReturn {
+function useScrollIndicator({ itemCount }: UseScrollIndicatorParams): UseScrollIndicatorReturn {
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
-  const [containerEl, setContainerEl] = useState<HTMLElement | null>(null);
-  const [contentEl, setContentEl] = useState<HTMLElement | null>(null);
-
-  useLayoutEffect(() => {
-    setContainerEl(scrollContainerRef.current);
-    setContentEl(scrollContentRef.current);
-  }, [scrollContainerRef, scrollContentRef]);
+  const scrollerElRef = useRef<HTMLElement | null>(null);
+  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
 
   const updateScrollIndicators = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
+    const scroller = scrollerElRef.current;
+    if (!scroller) return;
 
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const totalItems = itemCount;
+    const { scrollTop, scrollHeight, clientHeight } = scroller;
 
     if (scrollHeight <= clientHeight + 1) {
       setHiddenAbove(0);
@@ -52,56 +43,53 @@ function useScrollIndicator({
 
     const scrollFraction = Math.min(1, Math.max(0, scrollTop / scrollableHeight));
     const visibleFraction = clientHeight / scrollHeight;
-    const approxVisible = Math.max(1, Math.round(totalItems * visibleFraction));
-    const totalHidden = Math.max(0, totalItems - approxVisible);
+    const approxVisible = Math.max(1, Math.round(itemCount * visibleFraction));
+    const totalHidden = Math.max(0, itemCount - approxVisible);
 
     const above = Math.round(totalHidden * scrollFraction);
     const below = totalHidden - above;
 
     setHiddenAbove(above);
     setHiddenBelow(below);
-  }, [scrollContainerRef, itemCount]);
+  }, [itemCount]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     updateScrollIndicators();
   }, [updateScrollIndicators, itemCount]);
 
-  useResizeObserverRaf(containerEl, () => updateScrollIndicators());
-  useResizeObserverRaf(contentEl, () => updateScrollIndicators());
+  useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
+  const handleScroll = useCallback(() => {
+    updateScrollIndicators();
+  }, [updateScrollIndicators]);
 
-    let rafId: number | null = null;
-    const handleScroll = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        updateScrollIndicators();
-        rafId = null;
-      });
-    };
-
-    container.addEventListener("scroll", handleScroll, { passive: true });
-
-    return () => {
-      container.removeEventListener("scroll", handleScroll);
-      if (rafId !== null) cancelAnimationFrame(rafId);
-    };
-  }, [updateScrollIndicators, scrollContainerRef]);
+  const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
+    // Virtuoso forwards either the scroller element or window. We only support
+    // element scrolling here (the sidebar is always an in-container scroller).
+    const next = el instanceof HTMLElement ? el : null;
+    scrollerElRef.current = next;
+    setScrollerEl(next);
+    // When Virtuoso unmounts (filter clears to an empty state), reset the
+    // indicator counts so stale "5 above" badges don't briefly remain over
+    // the empty state placeholder.
+    if (next === null) {
+      setHiddenAbove(0);
+      setHiddenBelow(0);
+    }
+  }, []);
 
   const scrollToTop = useCallback(() => {
-    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, [scrollContainerRef]);
+    scrollerElRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   const scrollToBottom = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    const scroller = scrollerElRef.current;
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
     }
-  }, [scrollContainerRef]);
+  }, []);
 
-  return { hiddenAbove, hiddenBelow, scrollToTop, scrollToBottom };
+  return { hiddenAbove, hiddenBelow, scrollToTop, scrollToBottom, scrollerRef, handleScroll };
 }
 
 export { useScrollIndicator };

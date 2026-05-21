@@ -11,6 +11,8 @@ import { HelpPanel } from "../HelpPanel";
 import { ThemeBrowser } from "../ThemeBrowser";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { FleetArmingRibbon } from "@/components/Fleet";
+import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
@@ -453,6 +455,8 @@ export function AppLayout({
         />
         <FleetArmingRibbon />
       </div>
+      <TerminalDestructiveActionConfirmDialog />
+      <PortalCloseConfirmDialog />
       <div
         {...(isThemeBrowserOpen ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"

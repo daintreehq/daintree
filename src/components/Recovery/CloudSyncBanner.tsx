@@ -37,6 +37,7 @@ export function CloudSyncBanner() {
       setBanner({ service: null, projectId: null });
     } catch (err) {
       logError("Failed to save cloud sync warning preference", err);
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Couldn't save preference",

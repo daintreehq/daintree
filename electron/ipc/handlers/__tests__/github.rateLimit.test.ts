@@ -37,7 +37,7 @@ const gitHubServiceMock = vi.hoisted(() => ({
 }));
 
 const workspaceClientMock = vi.hoisted(() => ({
-  updateGitHubToken: vi.fn(),
+  updateForgeCredentials: vi.fn(),
 }));
 
 const gitHubAuthMock = vi.hoisted(() => ({

@@ -338,12 +338,12 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Create New Folder...")).toBeNull();
   });
 
-  it("does not show Remove hint in modal mode footer", () => {
+  it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
     expect(footer.textContent).not.toContain("Remove");
-    expect(footer.textContent).not.toContain("Right-click for more");
+    expect(footer.textContent).toContain("Right-click for more");
   });
 
   it("shows temporal sections in dropdown mode", () => {

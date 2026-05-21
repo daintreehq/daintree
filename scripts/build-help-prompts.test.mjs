@@ -87,12 +87,39 @@ describe("help prompt outputs", () => {
       }
     });
 
-    it("GEMINI.md and AGENTS.md acknowledge they cannot control terminals", () => {
+    it("GEMINI.md and AGENTS.md describe the wired daintree MCP", () => {
       for (const body of [GEMINI, AGENTS]) {
-        expect(body).toMatch(
+        expect(body).toContain("## What You Can Do");
+        expect(body).toMatch(/`daintree`/);
+        expect(body).toMatch(/`daintree-docs`/);
+      }
+    });
+
+    it("AGENTS.md frames Codex at the action tier with sandbox caveat", () => {
+      expect(AGENTS).toContain("TIER_NOT_PERMITTED");
+      expect(AGENTS).toMatch(/spawn\/close\/kill terminals/);
+      expect(AGENTS).toMatch(/Codex sandbox blocks file writes and arbitrary shell/);
+    });
+
+    it("GEMINI.md pins the daintree MCP to plan-mode read-only", () => {
+      expect(GEMINI).toContain("--approval-mode=plan");
+      expect(GEMINI).toMatch(/read-only/);
+      expect(GEMINI).toMatch(/do not spawn or close terminals/);
+    });
+
+    it("GEMINI.md and AGENTS.md keep the absent-MCP fallback caveat", () => {
+      for (const body of [GEMINI, AGENTS]) {
+        expect(body).toMatch(/May be absent if the user has disabled local MCP/);
+      }
+    });
+
+    it("no generated prompt carries the stale Phase-1 docs-only framing", () => {
+      for (const [, body] of ALL_THREE) {
+        expect(body).not.toMatch(/Phase 1[^\n]*docs-only/);
+        expect(body).not.toMatch(
           /cannot inspect, spawn, close, or send commands to live Daintree terminals/
         );
-        expect(body).toMatch(/Claude help session/);
+        expect(body).not.toMatch(/switch to a Claude help session/);
       }
     });
   });
@@ -100,17 +127,6 @@ describe("help prompt outputs", () => {
   describe("agent-specific framing stays in each head", () => {
     it("AGENTS.md retains the Codex role-override header", () => {
       expect(AGENTS.split("\n")[0]).toBe("# Role Override: Daintree Help Assistant");
-    });
-
-    it("GEMINI.md and AGENTS.md flag live-state guidance as not applicable", () => {
-      for (const body of [GEMINI, AGENTS]) {
-        expect(body).toMatch(/Phase 1[^\n]*docs-only/);
-        expect(body).toMatch(/inspecting live state.*not applicable/);
-      }
-    });
-
-    it("CLAUDE.md does not carry the docs-only Phase 1 disclaimer", () => {
-      expect(CLAUDE).not.toMatch(/Phase 1[^\n]*docs-only/);
     });
   });
 

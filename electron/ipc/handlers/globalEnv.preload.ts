@@ -1,5 +1,11 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
+// Opt out of `scripts/codegen/ipc-renderer.mjs` — `global-env:set` carries a
+// `{ variables }` payload object on the IPC channel while the renderer API
+// keeps the positional `set(variables)` shape. The translation lives in the
+// invoke wrapper below, so the generator must skip this namespace.
+export const RENDERER_API_SKIP = true as const;
+
 export const GLOBAL_ENV_METHOD_CHANNELS = {
   get: "global-env:get",
   set: "global-env:set",

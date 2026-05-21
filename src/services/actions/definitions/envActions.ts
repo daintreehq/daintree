@@ -22,6 +22,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await globalEnvClient.get();
     },
@@ -54,6 +55,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string() }),
+    resultSchema: z.record(z.string(), z.string()),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
       const settings = await projectClient.getSettings(projectId);
@@ -100,6 +102,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string() }),
+    resultSchema: z.record(z.string(), z.unknown()),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
       const settings = await projectClient.getSettings(projectId);

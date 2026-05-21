@@ -204,21 +204,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     const initialCount = await cards.count();
     expect(initialCount).toBeGreaterThanOrEqual(2);
 
-    // Open filter popover and search
-    const filterBtn = modal.locator(SEL.worktree.filterButton);
-    await expect(filterBtn).toBeVisible({ timeout: T_MEDIUM });
-    await filterBtn.click();
-    const popover = window.locator(SEL.worktree.filterPopover);
-
-    // Retry click if popover didn't open (can happen due to focus/z-index race)
-    if (!(await popover.isVisible({ timeout: 2000 }).catch(() => false))) {
-      await filterBtn.click();
-    }
-    await expect(popover).toBeVisible({ timeout: T_MEDIUM });
-
-    // Wait for popover to stabilize before interacting with the search input
-    await window.waitForTimeout(T_SETTLE);
-    const searchInput = popover.locator('[aria-label="Search worktrees"]');
+    const searchInput = modal.getByRole("textbox", { name: "Search worktrees" });
     await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });
 
     // Search for feature branch — should narrow to 1 card
@@ -240,10 +226,6 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     await expect
       .poll(() => cards.count(), { timeout: T_MEDIUM })
       .toBeGreaterThanOrEqual(initialCount);
-
-    // Close popover by clicking filter button again, then close modal
-    await filterBtn.click();
-    await expect(popover).not.toBeVisible({ timeout: T_SHORT });
 
     await modal.locator(SEL.worktree.overviewClose).click();
     await expect(modal).not.toBeVisible({ timeout: T_MEDIUM });

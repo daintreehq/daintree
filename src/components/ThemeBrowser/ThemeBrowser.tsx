@@ -21,9 +21,8 @@ import { useOverlayClaim, useImageError } from "@/hooks";
 const PANEL_WIDTH = 380;
 const EMPTY_WARNINGS: AppThemeValidationWarning[] = [];
 
-// Mirrors `computeGridPageSize` in `useWorktreeGridRovingFocus.ts` — sample a
-// live row to measure row height, divide viewport height. Fall back to 10 when
-// sizes aren't measurable yet (initial layout, jsdom).
+// Sample a live row to measure row height, then divide viewport height.
+// Fall back to 10 when sizes aren't measurable yet (initial layout, jsdom).
 const PAGE_SIZE_FALLBACK = 10;
 function computeListPageSize(
   container: HTMLElement | null,

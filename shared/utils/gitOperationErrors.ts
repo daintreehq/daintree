@@ -148,7 +148,7 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
   "auth-failed": {
     label: "Sign in with GitHub",
     actionId: "app.settings.openTab",
-    args: { tab: "github" },
+    args: { tab: "code-forge", subtab: "github" },
   },
   "push-rejected-outdated": { label: "Pull and rebase", actionId: "git.pullRebase" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },

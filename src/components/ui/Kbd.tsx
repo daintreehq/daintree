@@ -12,7 +12,7 @@ export function Kbd({ children, className }: KbdProps) {
   return (
     <kbd
       className={cn(
-        "px-1.5 py-0.5 rounded text-xs font-mono",
+        "px-1.5 py-0.5 rounded text-xs font-mono tabular-nums",
         "bg-daintree-border text-daintree-text/70",
         "border border-daintree-border/60",
         className
@@ -68,7 +68,7 @@ export function KbdChord({
                 <kbd
                   aria-hidden="true"
                   className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-mono leading-none",
+                    "px-1.5 py-0.5 rounded text-xs font-mono tabular-nums leading-none",
                     "bg-overlay-subtle text-daintree-text/70",
                     "border border-border-subtle"
                   )}

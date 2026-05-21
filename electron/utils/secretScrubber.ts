@@ -15,6 +15,7 @@
  *   8. AgentInstallService progress stdout/stderr scrubbing
  *   9. AgentHelpService command output scrubbing
  *  10. AgentVersionService error-message scrubbing
+ *  11. WorktreeLifecycleService full-output teardown log write (writeTeardownLog)
  *
  * All patterns use bounded quantifiers for ReDoS safety. See the
  * `secretScrubber.test.ts` sibling for the `safe-regex2` assertion that

@@ -108,6 +108,7 @@ export function registerTerminalInputActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    nonRepeatable: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {

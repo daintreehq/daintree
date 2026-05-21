@@ -48,7 +48,6 @@ function getPayloadSummary(event: EventRecord): string {
   const parts: string[] = [];
   if (payload.worktreeId) parts.push(`worktree: ${String(payload.worktreeId).substring(0, 8)}`);
   if (payload.agentId) parts.push(`agent: ${String(payload.agentId).substring(0, 8)}`);
-  if (payload.taskId) parts.push(`task: ${String(payload.taskId).substring(0, 8)}`);
   if (payload.runId) parts.push(`run: ${String(payload.runId).substring(0, 8)}`);
   if (payload.terminalId) parts.push(`terminal: ${String(payload.terminalId).substring(0, 8)}`);
 

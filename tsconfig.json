@@ -28,9 +28,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["./shared/*"]
+      "@shared/*": ["./shared/*"],
+      "@github-renderer/*": ["./plugins/builtin/github/renderer/*"]
     }
   },
-  "include": ["src", "shared"],
+  "include": ["src", "shared", "plugins/builtin/github/renderer"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

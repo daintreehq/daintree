@@ -48,6 +48,24 @@
   border-color: var(--settings-kbd-border, var(--theme-border-default));
 }
 
+.settings-section-header {
+  --_bg: var(
+    --settings-section-header-bg,
+    color-mix(in oklch, var(--theme-surface-panel) 80%, transparent)
+  );
+  background: var(--_bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .settings-section-header {
+    --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 .settings-card {
   background: var(--settings-card-bg, var(--theme-surface-panel));
 }

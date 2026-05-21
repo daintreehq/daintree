@@ -16,7 +16,6 @@ export interface FilterOptions {
   categories?: EventCategory[];
   worktreeId?: string;
   agentId?: string;
-  taskId?: string;
   runId?: string;
   terminalId?: string;
   issueNumber?: number;
@@ -60,7 +59,7 @@ export class EventBuffer {
   }
 
   private sanitizePayload(eventType: keyof DaintreeEventMap, payload: any): any {
-    const sensitiveEventTypes: Array<keyof DaintreeEventMap> = ["agent:output", "task:created"];
+    const sensitiveEventTypes: Array<keyof DaintreeEventMap> = ["agent:output"];
 
     if (!sensitiveEventTypes.includes(eventType)) {
       return payload;
@@ -70,13 +69,6 @@ export class EventBuffer {
       return {
         ...payload,
         data: "[REDACTED - May contain sensitive information]",
-      };
-    }
-
-    if (eventType === "task:created" && payload && typeof payload.description === "string") {
-      return {
-        ...payload,
-        description: "[REDACTED - May contain sensitive information]",
       };
     }
 
@@ -100,7 +92,6 @@ export class EventBuffer {
       const hasContext =
         payload.worktreeId ||
         payload.agentId ||
-        payload.taskId ||
         payload.terminalId ||
         payload.issueNumber ||
         payload.prNumber;
@@ -224,13 +215,6 @@ export class EventBuffer {
       });
     }
 
-    if (options.taskId) {
-      filtered = filtered.filter((event) => {
-        const payload = event.payload;
-        return payload && payload.taskId === options.taskId;
-      });
-    }
-
     if (options.runId) {
       filtered = filtered.filter((event) => {
         const payload = event.payload;
@@ -299,7 +283,6 @@ export class EventBuffer {
     const stats: Record<EventCategory, number> = {
       system: 0,
       agent: 0,
-      task: 0,
       server: 0,
       file: 0,
       ui: 0,

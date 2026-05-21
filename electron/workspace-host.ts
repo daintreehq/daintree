@@ -28,11 +28,23 @@ import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
+import type { RateLimitInfo } from "../shared/types/forge.js";
+import type { GitHubRateLimitPayload } from "../shared/types/ipc/github.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
 import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
+import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
+import { markHostPerformance } from "./utils/hostPerformance.js";
+
+// First user-code statement after all imports settle. ESM hoists native
+// module dlopen (better-sqlite3 via WorkspaceService, @parcel/watcher) ahead
+// of any statement here, so this is the earliest feasible proxy for "native
+// modules loaded". The exact dlopen instant is not reachable from ESM.
+markHostPerformance(PERF_MARKS.WORKSPACE_HOST_NATIVE_MODULE_READY);
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -54,18 +66,20 @@ const DIRECT_RENDERER_EVENTS = new Set([
   "worktree-removed",
   "pr-detected",
   "pr-cleared",
+  "pr-detection-state",
   "issue-detected",
   "issue-not-found",
+  // Watcher degradation/recovery — delivered direct so each per-view store
+  // can drive the persistent degraded indicator. The one-shot toast still
+  // routes through the main-process relay (WorkspaceHostEventRouter); the two
+  // paths are independent and both fire (dual delivery, existing pattern).
+  "inotify-limit-reached",
+  "emfile-limit-reached",
+  "watcher-recovered",
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
-  for (let i = worktreePorts.length - 1; i >= 0; i--) {
-    try {
-      worktreePorts[i].postMessage({ type: "event", event });
-    } catch {
-      worktreePorts.splice(i, 1);
-    }
-  }
+  fanoutEventToWorktreePorts(worktreePorts, event);
 }
 
 async function handleWorktreePortRequest(
@@ -79,7 +93,14 @@ async function handleWorktreePortRequest(
     switch (msg.action) {
       case "get-all-states": {
         const states = workspaceService.getSnapshotsSync();
-        result = { states };
+        const { epoch, seq } = workspaceService.getVersion();
+        result = {
+          states,
+          epoch,
+          seq,
+          watcherDegraded: workspaceService.isWatcherDegraded(),
+          lastAcknowledgedMutationIds: workspaceService.getAcknowledgedMutationIds(),
+        };
         break;
       }
 
@@ -106,11 +127,17 @@ async function handleWorktreePortRequest(
 
       case "delete-worktree": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // `throwOnError: true` — port-backed callers (renderer outbox) need a
+        // semantic failure to reject the port request so the outbox can
+        // classify the error. The legacy IPC path keeps the old behavior
+        // (resolve, emit `delete-worktree-result` event).
         await workspaceService.deleteWorktree(
           requestId,
           msg.payload.worktreeId,
           msg.payload.force,
-          msg.payload.deleteBranch
+          msg.payload.deleteBranch,
+          msg.payload.mutationId,
+          true
         );
         result = { ok: true };
         break;
@@ -148,6 +175,12 @@ async function handleWorktreePortRequest(
           rPort.postMessage({ id, error: actionResult.error ?? "Resource action failed" });
           return;
         }
+        result = { ok: true };
+        break;
+      }
+
+      case "run-lifecycle-setup": {
+        await workspaceService.retryLifecycleSetup(msg.payload.worktreeId);
         result = { ok: true };
         break;
       }
@@ -223,15 +256,29 @@ function attachWorktreePort(newPort: MessagePort): void {
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {
   console.error("[WorkspaceHost] Uncaught Exception:", err);
-  sendEvent({ type: "error", error: err.message });
+  try {
+    sendEvent({ type: "error", error: err.message });
+  } catch {
+    // ignore
+  }
+  // Electron 37+ no longer crashes on unhandled rejection by default — exit explicitly
+  // so the parent's child-process-gone supervision path triggers.
+  setImmediate(() => process.exit(1));
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error("[WorkspaceHost] Unhandled Rejection:", reason);
-  sendEvent({
-    type: "error",
-    error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
-  });
+  try {
+    sendEvent({
+      type: "error",
+      error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
+    });
+  } catch {
+    // ignore
+  }
+  // Electron 37+ no longer crashes on unhandled rejection by default — exit explicitly
+  // so the parent's child-process-gone supervision path triggers.
+  setImmediate(() => process.exit(1));
 });
 
 // Helper to send events to Main process (and directly to renderers for spontaneous events)
@@ -274,15 +321,49 @@ const shutdownController = new AbortController();
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
 
-// Forward GitHub rate-limit state changes observed by utility-process HTTP
-// calls (e.g. PullRequestService polling) up to the main process so they
-// reach the toolbar countdown and block main-process GitHub calls too.
-// `broadcastToRenderer` is BrowserWindow-backed and therefore main-only;
-// this relay is how utility-side limits ever become visible elsewhere.
-// Register synchronously before `ready` is sent — otherwise the first
-// event emitted during startup racing polling would be silently dropped.
+// Convert a GitHubRateLimitPayload (from gitHubRateLimitService.getState())
+// to the provider-agnostic RateLimitInfo shape so the forge-rate-limit-changed
+// event payload is provider-agnostic.
+function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
+  if (!payload.blocked) {
+    // Forward the observed GraphQL budget (if any) so the toolbar can show a
+    // remaining-quota indicator even while requests still flow.
+    return {
+      limit: payload.limit ?? null,
+      remaining: payload.remaining ?? null,
+      resetAt: null,
+    };
+  }
+  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
+  // projection treats `remaining === 0` as the "blocked" signal, so the exact
+  // (1–50) hard-stop-band count must not leak through as a non-zero value.
+  return {
+    limit: payload.limit ?? null,
+    remaining: 0,
+    resetAt: payload.resetAt ?? null,
+    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
+  };
+}
+
+// Forward forge provider rate-limit state changes observed by
+// utility-process HTTP calls (e.g. PullRequestService polling) up to the
+// main process so they reach the toolbar countdown and block main-process
+// calls too. `broadcastToRenderer` is BrowserWindow-backed and therefore
+// main-only; this relay is how utility-side limits ever become visible
+// elsewhere. Register synchronously before `ready` is sent — otherwise the
+// first event emitted during startup racing polling would be silently
+// dropped.
 gitHubRateLimitService.onStateChange((state) => {
-  sendEvent({ type: "github-rate-limit-changed", state });
+  const rateLimitInfo = toRateLimitInfo(state);
+  sendEvent({
+    type: "forge-rate-limit-changed",
+    providerId: BUILTIN_GITHUB_PROVIDER_ID,
+    state: rateLimitInfo,
+  });
+  // Pace background fetch cadence against the observed GraphQL budget so
+  // multiple instances drawing on the same per-user token budget back off in
+  // step as it depletes — and snap back when it resets.
+  workspaceService.applyFetchThrottle(state.throttleMultiplier ?? 1);
 });
 
 // Handle requests from Main
@@ -294,13 +375,6 @@ port.on("message", async (rawMsg: any) => {
 
   // Handle MessagePort transfers (worktree-specific port with request/response correlation)
   const transferredPorts = rawMsg?.ports || [];
-  // Legacy renderer ports are no longer used — worktreePorts replaced them.
-  // Accept and close the port silently to avoid "Unknown message type" warnings.
-  if (msg?.type === "attach-renderer-port" && transferredPorts.length > 0) {
-    transferredPorts[0].close();
-    return;
-  }
-
   if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
     attachWorktreePort(transferredPorts[0] as MessagePort);
     return;
@@ -315,8 +389,25 @@ port.on("message", async (rawMsg: any) => {
           request.requestId,
           request.rootPath,
           request.globalEnvVars,
-          request.wslGitByWorktree
+          request.wslGitByWorktree,
+          request.forgeProviderOverride !== undefined ||
+            request.forgeDefaultProviderId !== undefined ||
+            request.forgeRemote !== undefined
+            ? {
+                forgeProviderOverride: request.forgeProviderOverride ?? null,
+                forgeDefaultProviderId: request.forgeDefaultProviderId ?? null,
+                forgeRemote: request.forgeRemote ?? null,
+              }
+            : undefined
         );
+        break;
+
+      case "update-forge-settings":
+        workspaceService.updateForgeSettings({
+          forgeProviderOverride: request.forgeProviderOverride,
+          forgeDefaultProviderId: request.forgeDefaultProviderId,
+          forgeRemote: request.forgeRemote,
+        });
         break;
 
       case "set-wsl-opt-in":
@@ -554,8 +645,8 @@ port.on("message", async (rawMsg: any) => {
         }
         break;
 
-      case "update-github-token":
-        workspaceService.updateGitHubToken(request.token);
+      case "update-forge-credentials":
+        workspaceService.updateForgeCredentials(request.providerId, request.credentials);
         break;
 
       case "get-file-tree": {
@@ -663,4 +754,5 @@ process.on("SIGTERM", () => {
 
 // Signal ready
 console.log("[WorkspaceHost] Initialized and ready");
+markHostPerformance(PERF_MARKS.WORKSPACE_HOST_READY_POSTED);
 sendEvent({ type: "ready" });

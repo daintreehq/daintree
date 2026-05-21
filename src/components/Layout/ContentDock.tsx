@@ -1,7 +1,7 @@
-import { useMemo, useRef, useCallback } from "react";
+import { useMemo, useRef, useCallback, useLayoutEffect } from "react";
 
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { useDroppable } from "@dnd-kit/core";
+import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,6 +16,7 @@ import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
+import { ErrorsContainer } from "./ErrorsContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { DockLaunchButton } from "./DockLaunchButton";
 import {
@@ -27,7 +28,6 @@ import {
   SortableDockItem,
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
-  useIsDragging,
   useIsWorktreeSortDragging,
 } from "@/components/DragDrop";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -52,7 +52,7 @@ import {
 } from "@/components/ui/context-menu";
 
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
@@ -139,7 +139,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           name: config?.name ?? id,
           icon: config?.icon,
           brandColor: config?.color,
-          isEnabled: isAgentLaunchable(agentAvailability?.[id]),
+          availability: agentAvailability?.[id],
         };
       });
   }, [agentAvailability, agentSettings]);
@@ -147,15 +147,102 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const recipeContext = activeWorktree
     ? {
         issueNumber: activeWorktree.issueNumber,
-        prNumber: activeWorktree.prNumber,
+        prNumber: activeWorktree.linked?.pr?.ref.number,
         branchName: activeWorktree.branch,
         worktreePath: activeWorktree.path,
       }
     : undefined;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const activeDockIndexRef = useRef(0);
   const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } =
     useHorizontalScrollControls(scrollContainerRef);
+
+  // Issue #8170 — roving tabindex over [data-dock-item] chips. The rail is an
+  // ARIA toolbar with a single tab stop; Arrow/Home/End move focus across
+  // chips. Mirrors the canonical pattern in Toolbar.tsx (lines 324-393);
+  // deliberately not lifted into a shared hook — the issue calls that out
+  // until a fourth use case appears.
+  const { active: dndActive } = useDndContext();
+  const isDndActive = dndActive !== null;
+
+  const getDockItems = useCallback(
+    () =>
+      scrollContainerRef.current
+        ? Array.from(
+            scrollContainerRef.current.querySelectorAll<HTMLElement>("[data-dock-item]")
+          ).filter((el) => el.offsetParent !== null)
+        : [],
+    []
+  );
+
+  const syncDockTabStops = useCallback((items: HTMLElement[], activeIdx: number) => {
+    for (const el of items) el.tabIndex = -1;
+    if (items[activeIdx]) items[activeIdx].tabIndex = 0;
+  }, []);
+
+  useLayoutEffect(() => {
+    const items = getDockItems();
+    if (items.length === 0) return;
+    const clamped = Math.min(activeDockIndexRef.current, items.length - 1);
+    activeDockIndexRef.current = clamped;
+    syncDockTabStops(items, clamped);
+  });
+
+  const handleDockFocusCapture = useCallback(
+    (e: React.FocusEvent<HTMLElement>) => {
+      const target = e.target as HTMLElement;
+      const items = getDockItems();
+      const idx = items.indexOf(target);
+      if (idx !== -1) {
+        activeDockIndexRef.current = idx;
+        syncDockTabStops(items, idx);
+      }
+    },
+    [getDockItems, syncDockTabStops]
+  );
+
+  const handleDockKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      // dnd-kit's KeyboardSensor owns Space/Enter (lift) and arrows (move)
+      // while a drag is active. Early-return so reordering still works.
+      if (dndActive !== null) return;
+      if (e.metaKey || e.altKey || e.ctrlKey) return;
+
+      const items = getDockItems();
+      if (items.length === 0) return;
+
+      const currentIdx = activeDockIndexRef.current;
+      let newIdx: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          newIdx = (currentIdx + 1) % items.length;
+          break;
+        case "ArrowLeft":
+          newIdx = (currentIdx - 1 + items.length) % items.length;
+          break;
+        case "Home":
+          newIdx = 0;
+          break;
+        case "End":
+          newIdx = items.length - 1;
+          break;
+      }
+
+      if (newIdx !== null) {
+        e.preventDefault();
+        activeDockIndexRef.current = newIdx;
+        syncDockTabStops(items, newIdx);
+        const target = items[newIdx]!;
+        // .focus() must precede scrollIntoView — the browser's own
+        // scroll-on-focus would otherwise override the explicit instant scroll.
+        target.focus();
+        target.scrollIntoView({ behavior: "instant", block: "nearest", inline: "nearest" });
+      }
+    },
+    [dndActive, getDockItems, syncDockTabStops]
+  );
 
   // Make the dock terminals area droppable
   const { setNodeRef: setDockDropRef, isOver } = useDroppable({
@@ -163,13 +250,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     data: { container: "dock" },
   });
 
-  // Mirror TrashContainer's ghost-scrim ladder: show a subtle in-flight cue for
-  // any panel drag, then a stronger armed cue when actually over the dock.
-  // Worktree-card sort drags also flip isDragging but cannot drop here, so a
-  // phantom drop target would be misleading — exclude them.
-  const isDragging = useIsDragging();
+  // Worktree-card sort drags cannot drop here — signal rejection with cursor-no-drop.
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
-  const isPanelDragging = isDragging && !isWorktreeSortDragging;
 
   // Sync droppable ref with scroll container ref using stable callback
   // This prevents ResizeObserver thrashing that causes infinite update loops
@@ -285,10 +367,17 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             {/* Scrollable Container */}
             <div
               ref={combinedRef}
+              role="toolbar"
+              aria-label="Docked terminals"
+              aria-orientation="horizontal"
+              aria-busy={isDndActive || undefined}
+              onKeyDown={handleDockKeyDown}
+              onFocusCapture={handleDockFocusCapture}
               className={cn(
                 "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1 transition-[color,background-color,box-shadow]",
-                isPanelDragging && "bg-overlay-subtle",
+                isWorktreeSortDragging && "cursor-no-drop",
                 isOver &&
+                  !isWorktreeSortDragging &&
                   "cursor-copy bg-overlay-soft ring-2 ring-border-default ring-inset rounded-[var(--radius-md)]"
               )}
             >
@@ -360,10 +449,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
           )}
 
-          {/* Action containers: Background + Waiting + Trash */}
+          {/* Action containers: Background + Waiting + Errors + Trash */}
           <div className="shrink-0 pl-1 flex items-center gap-2">
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />
+            <ErrorsContainer compact={isCompact} />
             <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
           </div>
         </div>
@@ -377,6 +467,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           cwd={cwd}
           recipeContext={recipeContext}
           onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "context-menu")}
+          settingsSource="context-menu"
         />
         <ContextMenuSeparator />
         <ContextMenuSub>

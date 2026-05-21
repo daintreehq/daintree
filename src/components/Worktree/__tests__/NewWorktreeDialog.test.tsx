@@ -88,7 +88,7 @@ vi.mock("@/store/preferencesStore", () => ({
     }),
 }));
 
-vi.mock("@/store/githubConfigStore", () => ({
+vi.mock("@github-renderer/stores/githubConfigStore", () => ({
   useGitHubConfigStore: Object.assign(
     (selector: (s: Record<string, unknown>) => unknown) =>
       selector({ config: null, initialize: vi.fn(), refresh: vi.fn() }),
@@ -116,11 +116,16 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
+const mockAddPendingCreation = vi.fn();
+const mockFailPendingCreation = vi.fn();
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
       setPendingWorktree: mockSetPendingWorktree,
       selectWorktree: mockSelectWorktree,
+      addPendingCreation: mockAddPendingCreation,
+      failPendingCreation: mockFailPendingCreation,
+      activeWorktreeId: null,
     }),
   },
 }));
@@ -215,8 +220,10 @@ vi.mock("@/components/ui/Spinner", () => ({
   Spinner: () => <span data-testid="spinner" />,
 }));
 
-vi.mock("@/components/GitHub/IssueSelector", () => ({
-  IssueSelector: () => <div data-testid="issue-selector" />,
+vi.mock("@/registry/builtinRendererRegistry", () => ({
+  getBuiltinView: () => () => <div data-testid="issue-selector" />,
+  registerBuiltinView: vi.fn(),
+  unregisterBuiltinView: vi.fn(),
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -464,6 +471,92 @@ describe("NewWorktreeDialog — existing branch mode", () => {
 
     const createButton = screen.getByTestId("create-worktree-button");
     expect(createButton.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("NewWorktreeDialog — pending creation wiring", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("registers a pending creation and closes the dialog before the IPC resolves", async () => {
+    // Hold the dispatch promise unresolved so we can assert the synchronous
+    // close + placeholder seeding happen first.
+    let resolveDispatch: ((value: unknown) => void) | undefined;
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve;
+        })
+    );
+
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/test" } });
+    });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.objectContaining({ branch: "feature/test" })
+    );
+    expect(onClose).toHaveBeenCalled();
+    expect(mockFailPendingCreation).not.toHaveBeenCalled();
+
+    // Drain the in-flight IPC so the test doesn't leak the unresolved promise
+    // across the cleanup boundary.
+    resolveDispatch?.({ ok: true, result: "/test/root-worktrees/feature-test" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  });
+
+  it("calls failPendingCreation with the failure message when the IPC rejects", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "permission denied" } });
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/test" } });
+    });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    // Flush the void-fired async block.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockFailPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.stringContaining("permission denied")
+    );
   });
 });
 

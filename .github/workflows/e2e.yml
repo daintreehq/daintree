@@ -401,8 +401,20 @@ jobs:
       # Persist .last-run.json for a potential job-level retry. Runs even on
       # Playwright failure (if: always()) — that's precisely when the retry
       # needs the prior attempt's results to scope to --last-failed.
-      - name: Save Playwright last-run results
+      - name: Check for Playwright last-run results
+        id: playwright-last-run
         if: always()
+        shell: bash
+        run: |
+          if [ -f test-results/.last-run.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "[e2e] No Playwright last-run file found; skipping retry cache save"
+          fi
+
+      - name: Save Playwright last-run results
+        if: always() && steps.playwright-last-run.outputs.exists == 'true'
         uses: actions/cache/save@v5
         with:
           path: test-results/.last-run.json

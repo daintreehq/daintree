@@ -142,3 +142,29 @@ describe("serializePtyPanel — detectedAgentId is never persisted", () => {
     expect("detectedAgentId" in snapshot).toBe(false);
   });
 });
+
+// `lastActiveAt` (#8703) is the focus-stamp used by the restore predicate to
+// promote each worktree's most-recently-active panel to the priority tier.
+describe("serializePtyPanel — lastActiveAt", () => {
+  it("includes lastActiveAt in the snapshot when set to a real timestamp", () => {
+    const panel = makePanel({ lastActiveAt: 1_700_000_000_000 } as Partial<PtyPanelData> & {
+      lastActiveAt: number;
+    });
+    const snapshot = serializePtyPanel(panel);
+    expect(snapshot.lastActiveAt).toBe(1_700_000_000_000);
+  });
+
+  it("omits lastActiveAt when undefined", () => {
+    const panel = makePanel();
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("lastActiveAt" in snapshot).toBe(false);
+  });
+
+  it("preserves an explicit zero rather than coercing it to undefined", () => {
+    const panel = makePanel({ lastActiveAt: 0 } as Partial<PtyPanelData> & {
+      lastActiveAt: number;
+    });
+    const snapshot = serializePtyPanel(panel);
+    expect(snapshot.lastActiveAt).toBe(0);
+  });
+});

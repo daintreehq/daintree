@@ -90,8 +90,35 @@ export interface NotifyPayload {
   priority?: NotificationPriority;
   /** Groups related notifications into a thread in the notification center */
   correlationId?: string;
+  /**
+   * Logical pairing key. When a later `notify()` carries the same
+   * `supersedeKey`, the prior non-archived inbox entry with that key is
+   * archived automatically — used for resolving-event pairs like
+   * "disconnected" → "reconnected" so the inbox doesn't accumulate stale
+   * stateful rows. Independent of `correlationId`: `correlationId` threads
+   * conversational entries; `supersedeKey` retires them.
+   */
+  supersedeKey?: string;
+  /**
+   * Exact id of a prior inbox entry to archive when this one is added.
+   * Takes precedence over `supersedeKey`. No-op when the target is missing
+   * or already archived.
+   */
+  supersedes?: string;
   /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
   coalesce?: CoalesceOptions;
+  /**
+   * Per-source rate-limit bucket key. When the same key fires more than
+   * RATE_LIMIT_MAX_TOKENS toasts within RATE_LIMIT_REFILL_MS × MAX_TOKENS,
+   * overflow is redirected to a single in-place summary inbox row instead of
+   * the toaster. Distinct from `coalesce.key`: coalesce collapses bursts into
+   * a single updating toast over a short window (~2s); `rateLimitKey` drops
+   * the would-be toast entirely and aggregates the missed signal into an
+   * inbox summary, catching slow-dripping noisy producers that sit outside
+   * the coalesce window. Falls back to `correlationId ?? context.projectId ??
+   * context.worktreeId ?? type` when omitted.
+   */
+  rateLimitKey?: string;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
   countable?: boolean;
   /**
@@ -312,6 +339,157 @@ export function consumeEscalation(error: {
   }
 }
 
+// ── per-source rate-limit (token bucket) ────────────────────────────────────
+//
+// Catches slow-dripping noisy producers that sit outside `coalesce` (2s
+// window) and `shouldEscalateTransientError` (retryability: "auto" only).
+// A bucket holds up to RATE_LIMIT_MAX_TOKENS = 3 tokens and refills at
+// 1 token per RATE_LIMIT_REFILL_MS (10s) → 3-toast burst + ~3/30s long-run
+// average per source. On overflow, the would-be toast is suppressed and an
+// in-place `priority: "low"` summary inbox row tracks the count so the
+// signal still lands.
+//
+// Bypassed for: priority "low" (already inbox-only), transient: true (no
+// inbox fallback — would silently drop), placement "grid-bar" (renders
+// inline and is its own gate), and explicit `urgent: true` (caller has
+// declared the event critical enough to outrun even quiet hours).
+
+const RATE_LIMIT_MAX_TOKENS = 3;
+const RATE_LIMIT_REFILL_MS = 10_000;
+const RATE_LIMIT_MAX_BUCKETS = 200;
+
+interface RateLimitBucket {
+  tokens: number;
+  /**
+   * Token-refill clock — advances only when a refill interval elapses, so
+   * its rate of change reflects token mechanics, not source activity. Don't
+   * use it for LRU pruning; use `lastSeen` instead.
+   */
+  lastRefill: number;
+  /**
+   * Wall-clock of the most recent rate-limit check on this bucket. Updated
+   * on every call (allow or overflow). Used as the LRU sort key so an
+   * actively-overflowing source stays in the map and isn't recycled into a
+   * fresh 3-token bucket by an unrelated insert burst.
+   */
+  lastSeen: number;
+  /** id of the active summary inbox row, or null when no overflow is in flight */
+  overflowEntryId: string | null;
+  overflowCount: number;
+}
+
+const _rateLimitBuckets = new Map<string, RateLimitBucket>();
+
+export function _resetRateLimitBuckets(): void {
+  _rateLimitBuckets.clear();
+}
+
+function pruneRateLimitBuckets(): void {
+  if (_rateLimitBuckets.size <= RATE_LIMIT_MAX_BUCKETS) return;
+
+  const entries = Array.from(_rateLimitBuckets.entries());
+  entries.sort((a, b) => a[1].lastSeen - b[1].lastSeen);
+
+  const toRemove = entries.slice(0, entries.length - RATE_LIMIT_MAX_BUCKETS);
+  for (const [key] of toRemove) {
+    _rateLimitBuckets.delete(key);
+  }
+}
+
+function getRateLimitKey(payload: NotifyPayload): string {
+  return (
+    payload.rateLimitKey ??
+    payload.correlationId ??
+    payload.context?.projectId ??
+    payload.context?.worktreeId ??
+    payload.type
+  );
+}
+
+function buildOverflowSummary(source: string, count: number): string {
+  const eventsWord = count === 1 ? "event" : "events";
+  return `${source} reported ${count} more ${eventsWord} — open inbox`;
+}
+
+/**
+ * Returns true when the would-be toast should be suppressed and the caller
+ * must not write its own inbox entry. Refills tokens based on elapsed time,
+ * consumes one when available, otherwise writes (or updates) an in-place
+ * low-priority summary inbox row keyed by the bucket.
+ */
+function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
+  const key = getRateLimitKey(payload);
+  const now = Date.now();
+  let bucket = _rateLimitBuckets.get(key);
+
+  if (!bucket) {
+    bucket = {
+      tokens: RATE_LIMIT_MAX_TOKENS,
+      lastRefill: now,
+      lastSeen: now,
+      overflowEntryId: null,
+      overflowCount: 0,
+    };
+    _rateLimitBuckets.set(key, bucket);
+    pruneRateLimitBuckets();
+  } else {
+    bucket.lastSeen = now;
+    const elapsed = now - bucket.lastRefill;
+    const refill = Math.floor(elapsed / RATE_LIMIT_REFILL_MS);
+    if (refill > 0) {
+      const newTokens = Math.min(RATE_LIMIT_MAX_TOKENS, bucket.tokens + refill);
+      const wasEmpty = bucket.tokens === 0;
+      bucket.tokens = newTokens;
+      bucket.lastRefill += refill * RATE_LIMIT_REFILL_MS;
+      // Recovered from overflow → next overflow starts a fresh summary row.
+      if (wasEmpty && newTokens > 0) {
+        bucket.overflowEntryId = null;
+        bucket.overflowCount = 0;
+      }
+    }
+  }
+
+  if (bucket.tokens > 0) {
+    bucket.tokens -= 1;
+    return false;
+  }
+
+  bucket.overflowCount += 1;
+  const historyStore = useNotificationHistoryStore.getState();
+
+  // Try to update an existing summary row first. If the row has been
+  // archived, dismissed, or pushed off the end of the 200-entry history
+  // ring, `updateEntryMessage` returns false — fall through and write a
+  // fresh row so the overflow signal isn't silently lost.
+  if (bucket.overflowEntryId) {
+    const updated = historyStore.updateEntryMessage(
+      bucket.overflowEntryId,
+      buildOverflowSummary(key, bucket.overflowCount)
+    );
+    if (!updated) {
+      bucket.overflowEntryId = null;
+      bucket.overflowCount = 1;
+    }
+  }
+  if (!bucket.overflowEntryId) {
+    // No context on the summary row: a bucket can span multiple projects
+    // when its key isn't context-derived (explicit `rateLimitKey`, falls
+    // back to `correlationId` or `type`), so a contextual affordance like
+    // "Mute project X" would dispatch against the first overflow's project
+    // and silently mute the wrong target on later events.
+    bucket.overflowEntryId = historyStore.addEntry({
+      type: payload.type,
+      title: payload.title,
+      message: buildOverflowSummary(key, bucket.overflowCount),
+      correlationId: payload.correlationId,
+      seenAsToast: false,
+      countable: payload.countable,
+    });
+  }
+
+  return true;
+}
+
 let _quietUntil = 0;
 
 export function setStartupQuietPeriod(durationMs: number): void {
@@ -448,18 +626,6 @@ export function notify(payload: NotifyPayload): string {
 
   const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
 
-  if (import.meta.env.DEV && type === "error" && allActions.length === 0) {
-    // CLAUDE.md microcopy contract: error toasts use Title-Message-Action and
-    // need at least one action when there's a real recovery path. Surfaced
-    // here so callers find the gap during development. Not a runtime crash —
-    // some errors are genuinely action-free, but the prompt nudges authors to
-    // confirm before shipping.
-    console.warn(
-      "[notify] error notification has no actions — provide at least one action for the Title-Message-Action contract, or confirm there is no recovery path.",
-      payload
-    );
-  }
-
   // Action-bearing toasts persist by default so users can act; toaster's 3s fallback would otherwise dismiss them.
   if (payload.duration === undefined && allActions.length > 0) {
     payload = { ...payload, duration: 0 };
@@ -500,6 +666,8 @@ export function notify(payload: NotifyPayload): string {
             countable: payload.countable,
             actions: historyActions.length > 0 ? historyActions : undefined,
             context,
+            supersedeKey: payload.supersedeKey,
+            supersedes: payload.supersedes,
           })
         : undefined;
     if (!notificationsEnabled || isQuiet) return "";
@@ -516,6 +684,28 @@ export function notify(payload: NotifyPayload): string {
   const shouldToast = priority === "watch" || (priority === "high" && isFocused && !originVisible);
   const shouldNative = priority === "watch";
 
+  // Per-source rate-limit gate. Only consumes a token (and routes to the
+  // overflow summary inbox row) when the notification would actually toast
+  // in the current state — blurred/quiet/disabled paths already deliver
+  // inbox-only, so rate-limiting them would create a confusing summary row
+  // alongside the normal inbox entries it's meant to replace. Bypasses:
+  // `transient` (no inbox fallback would silently drop), `urgent` (explicit
+  // critical override — `isQuiet` is already false here when `urgent`),
+  // and `coalesce` (its own gate over a shorter window). Runs before the
+  // history-entry write so overflowed events aren't double-recorded as
+  // both an original row and a summary row.
+  if (
+    shouldToast &&
+    notificationsEnabled &&
+    !isQuiet &&
+    !payload.transient &&
+    !payload.urgent &&
+    !payload.coalesce &&
+    checkAndApplyRateLimit(payload)
+  ) {
+    return "";
+  }
+
   const historyEntryId =
     historyMessage && !payload.transient
       ? useNotificationHistoryStore.getState().addEntry({
@@ -527,6 +717,8 @@ export function notify(payload: NotifyPayload): string {
           countable: payload.countable,
           actions: historyActions.length > 0 ? historyActions : undefined,
           context,
+          supersedeKey: payload.supersedeKey,
+          supersedes: payload.supersedes,
         })
       : undefined;
 

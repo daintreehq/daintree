@@ -17,6 +17,7 @@ const createMockProjectClient = () => ({
   prefetchHydrate: vi.fn().mockResolvedValue(undefined),
   openDialog: vi.fn().mockResolvedValue(null),
   onSwitch: vi.fn().mockReturnValue(() => {}),
+  onWorktreeLoadStatus: vi.fn().mockReturnValue(() => {}),
   getSettings: vi.fn().mockResolvedValue({}),
   saveSettings: vi.fn().mockResolvedValue(undefined),
   detectRunners: vi.fn().mockResolvedValue([]),

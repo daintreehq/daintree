@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// existsSync is a controllable vi.fn so tests that need the worktree path to
+// "disappear" mid-run can override it (see the path-missing recompute test).
+const { existsSyncMock } = vi.hoisted(() => ({
+  existsSyncMock: vi.fn(() => true),
+}));
 vi.mock("fs", () => ({
-  existsSync: () => true,
+  existsSync: existsSyncMock,
 }));
 
 type SimpleGitStub = {
@@ -20,12 +25,14 @@ describe("ProjectPulseService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-01-15T12:00:00.000Z"));
+    existsSyncMock.mockReturnValue(true);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
+    existsSyncMock.mockReturnValue(true);
   });
 
   it("dedupes concurrent requests with same cache key", async () => {
@@ -875,8 +882,14 @@ describe("ProjectPulseService", () => {
 
     svc.invalidate("wt-a");
 
-    // wt-a should recompute (cache miss), wt-b should still be cached
-    const logCallsAfter = raw.mock.calls.length;
+    // wt-a should recompute (cache miss), wt-b should still be cached.
+    // Track heatmap calls — the probe now adds a HEAD read on cache hit,
+    // so a raw-count assertion isn't the right shape anymore.
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
     await svc.getPulse({
       worktreePath: "/repo-a",
       worktreeId: "wt-a",
@@ -885,10 +898,13 @@ describe("ProjectPulseService", () => {
       includeDelta: false,
       includeRecentCommits: false,
     });
-    // Additional raw calls for wt-a recompute
-    expect(raw.mock.calls.length).toBeGreaterThan(logCallsAfter);
 
-    const callsBeforeB = raw.mock.calls.length;
+    const heatmapCallsAfterA = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfterA).toBe(heatmapCallsBefore + 1);
+
     await svc.getPulse({
       worktreePath: "/repo-b",
       worktreeId: "wt-b",
@@ -897,8 +913,326 @@ describe("ProjectPulseService", () => {
       includeDelta: false,
       includeRecentCommits: false,
     });
-    // No additional raw calls for wt-b — it was cached
-    expect(raw.mock.calls.length).toBe(callsBeforeB);
+
+    // wt-b was cached — probe matches, no heatmap recompute.
+    const heatmapCallsAfterB = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfterB).toBe(heatmapCallsAfterA);
+  });
+
+  it("serves cached pulse when HEAD-SHA probe matches within TTL", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    await svc.getPulse(opts);
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
+    // Second call within TTL — probe returns same SHA, cache hit served.
+    await svc.getPulse(opts);
+
+    const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore);
+  });
+
+  it("recomputes within TTL when HEAD-SHA has moved", async () => {
+    let currentSha = "sha-aaa";
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+        return `${currentSha}\n`;
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    await svc.getPulse(opts);
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
+    // HEAD moves — next call's probe sees mismatch, falls through to recompute.
+    currentSha = "sha-bbb";
+    await svc.getPulse(opts);
+
+    const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore + 1);
+  });
+
+  it("serves cached empty pulse when repo still has no commits", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+        throw new Error("fatal: ambiguous argument 'HEAD': unknown revision");
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-empty",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    const first = await svc.getPulse(opts);
+    const callsAfterFirst = raw.mock.calls.length;
+
+    // Second call within TTL: probe also throws no-commits → null === null → serve cached.
+    const second = await svc.getPulse(opts);
+
+    expect(second.commitsInRange).toBe(0);
+    expect(second.heatmap).toEqual(first.heatmap);
+    // Only the probe runs — no recompute (which would call rev-parse again then bail).
+    expect(raw.mock.calls.length).toBe(callsAfterFirst + 1);
+  });
+
+  it("recomputes when HEAD is unchanged but the branch has switched", async () => {
+    let currentBranch = "main";
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return `${currentBranch}\n`;
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    await svc.getPulse(opts);
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
+    // `git checkout -b feature` at the same commit: HEAD-SHA is unchanged but
+    // the branch name differs. Cache must invalidate so deltaToMain rebuilds.
+    currentBranch = "feature";
+    await svc.getPulse(opts);
+
+    const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore + 1);
+  });
+
+  it("re-checks cache entry after probe to avoid post-invalidation stale read", async () => {
+    let probeResolve: ((value: string) => void) | undefined;
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        if (probeResolve) {
+          // Suspend the probe so invalidate() can fire mid-await.
+          return new Promise<string>((resolve) => {
+            probeResolve = resolve;
+          });
+        }
+        return "sha-aaa\n";
+      }
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    await svc.getPulse(opts);
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
+    // Arm the probe to suspend on the next sha read.
+    probeResolve = () => {};
+
+    const pulsePromise = svc.getPulse(opts);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Probe is now suspended on the SHA call. Invalidate while it's in flight.
+    svc.invalidate("wt-1");
+
+    // Release the probe with the same SHA. Without the re-check guard, this
+    // would happily return the now-deleted cached pulse.
+    probeResolve!("sha-aaa\n");
+    probeResolve = undefined;
+
+    await pulsePromise;
+
+    // A recompute MUST have happened — the cached entry was invalidated.
+    const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore + 1);
+  });
+
+  it("falls through to recompute when the worktree path disappears", async () => {
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+        throw new Error("fatal: ambiguous argument 'HEAD': unknown revision");
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo-gone",
+      worktreeId: "wt-vanish",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    // First call: empty pulse cached with headSha=null.
+    await svc.getPulse(opts);
+
+    // Path disappears before second call. The probe must NOT return null and
+    // match the cached empty entry; it must signal "missing" so we recompute
+    // and surface the real error from computePulse.
+    existsSyncMock.mockReturnValue(false);
+
+    await expect(svc.getPulse(opts)).rejects.toThrow("Worktree path does not exist");
+  });
+
+  it("recomputes when HEAD-SHA probe throws an unexpected error", async () => {
+    let probeMode: "ok" | "throw" = "ok";
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+        if (probeMode === "throw") throw new Error("fatal: some unexpected git failure");
+        return "sha-aaa\n";
+      }
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+      if (cmd === "log") return "";
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    await svc.getPulse(opts);
+    const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+
+    // Probe throws → fall through. computePulse will also throw (mock returns
+    // same behavior for both calls) so the call rejects; but we just want to
+    // verify it didn't short-circuit to the cached value.
+    probeMode = "throw";
+    await expect(svc.getPulse(opts)).rejects.toThrow();
+
+    // No new heatmap call (computePulse failed at HEAD), but we did go past the cache.
+    const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
+      const argv = args as string[];
+      return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
+    }).length;
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore);
   });
 
   it("getPulse creates a fresh controller after invalidation", async () => {

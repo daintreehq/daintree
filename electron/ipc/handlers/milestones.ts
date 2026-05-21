@@ -1,23 +1,21 @@
-import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { MILESTONES_METHOD_CHANNELS } from "./milestones.preload.js";
 
-export function registerMilestonesHandlers(): () => void {
-  const cleanups: Array<() => void> = [];
-
-  cleanups.push(
-    typedHandle(CHANNELS.MILESTONES_GET, () => {
+export const milestonesNamespace = defineIpcNamespace({
+  name: "milestones",
+  ops: {
+    get: op(MILESTONES_METHOD_CHANNELS.get, (): Record<string, boolean> => {
       return store.get("orchestrationMilestones") ?? {};
-    })
-  );
-
-  cleanups.push(
-    typedHandle(CHANNELS.MILESTONES_MARK_SHOWN, (milestoneId: unknown) => {
+    }),
+    markShown: op(MILESTONES_METHOD_CHANNELS.markShown, (milestoneId: string): void => {
       if (typeof milestoneId !== "string") return;
       const current = store.get("orchestrationMilestones") ?? {};
       store.set("orchestrationMilestones", { ...current, [milestoneId]: true });
-    })
-  );
+    }),
+  },
+});
 
-  return () => cleanups.forEach((c) => c());
+export function registerMilestonesHandlers(): () => void {
+  return milestonesNamespace.register();
 }

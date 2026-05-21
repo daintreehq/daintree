@@ -4,6 +4,7 @@ import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { GitBranch } from "lucide-react";
+import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 
 interface MainWorktreeSecondaryRowProps {
@@ -18,7 +19,7 @@ interface MainWorktreeSecondaryRowProps {
   lastFetchedAt: number | null | undefined;
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
-  isGitHubRemote: boolean;
+  isGitHubProvider: boolean;
   aggregateCounts?: AggregateCounts;
 }
 
@@ -34,9 +35,13 @@ export function MainWorktreeSecondaryRow({
   lastFetchedAt,
   fetchAuthFailed,
   fetchNetworkFailed,
-  isGitHubRemote,
+  isGitHubProvider,
   aggregateCounts,
 }: MainWorktreeSecondaryRowProps) {
+  const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
+  const fetchIntervalBackgroundMs = useResourceProfileStore((s) => s.fetchIntervalBackgroundMs);
+  const fetchIntervalMs = isActive ? fetchIntervalActiveMs : fetchIntervalBackgroundMs;
+
   return (
     <div className="flex items-center gap-2 mt-1" data-testid="main-worktree-meta-row">
       <BranchLabel
@@ -53,8 +58,9 @@ export function MainWorktreeSecondaryRow({
           lastFetchedAt={lastFetchedAt}
           fetchAuthFailed={fetchAuthFailed}
           fetchNetworkFailed={fetchNetworkFailed}
-          isGitHubRemote={isGitHubRemote}
+          isGitHubProvider={isGitHubProvider}
           containerGapClass="gap-1"
+          fetchIntervalMs={fetchIntervalMs}
         />
       )}
       {aggregateCounts && aggregateCounts.worktrees > 0 && (

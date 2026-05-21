@@ -10,6 +10,7 @@ interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id
   label: string;
   description?: ReactNode;
   error?: string;
+  touched?: boolean;
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
@@ -21,6 +22,7 @@ export function SettingsInput({
   label,
   description,
   error,
+  touched = true,
   isModified,
   onReset,
   resetAriaLabel,
@@ -34,9 +36,10 @@ export function SettingsInput({
   const descriptionId = useId();
   const errorId = useId();
   const showReset = isModified && onReset && !disabled;
+  const isError = !!error && touched;
 
   const describedBy =
-    [error ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
+    [isError ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
     undefined;
 
   const scopeBadge = scope ? (
@@ -84,8 +87,8 @@ export function SettingsInput({
         ref={ref}
         disabled={disabled}
         aria-describedby={describedBy}
-        aria-invalid={error ? true : undefined}
-        className={cn(INPUT_CLASSES, error && "border-status-error", className)}
+        aria-invalid={isError ? true : undefined}
+        className={cn(INPUT_CLASSES, isError && "border-status-error", className)}
         {...props}
       />
       {description && (
@@ -93,7 +96,7 @@ export function SettingsInput({
           {description}
         </p>
       )}
-      {error && (
+      {isError && (
         <p id={errorId} className="text-xs text-status-error">
           {error}
         </p>

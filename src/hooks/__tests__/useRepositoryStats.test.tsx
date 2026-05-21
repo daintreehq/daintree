@@ -35,6 +35,8 @@ vi.mock("@/clients", () => ({
 }));
 
 import { useRepositoryStats } from "../useRepositoryStats";
+import { _resetPollingLifecycleForTests } from "../usePollingLifecycle";
+import { useSystemWakeStore } from "@/store/systemWakeStore";
 import {
   _resetForTests as resetGithubResourceCache,
   buildCacheKey,
@@ -56,6 +58,12 @@ function createDeferred<T>() {
 describe("useRepositoryStats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetPollingLifecycleForTests();
+    useSystemWakeStore.setState({
+      wakeEpoch: 0,
+      lastSleepDuration: 0,
+      isWakeRevalidating: false,
+    });
   });
 
   it("force-fetches when daintree:refresh-sidebar event is dispatched", async () => {
@@ -1100,6 +1108,197 @@ describe("useRepositoryStats", () => {
       await waitFor(() => {
         expect(result.current.rateLimitResetAt).toBeNull();
         expect(result.current.rateLimitKind).toBeNull();
+      });
+    });
+  });
+
+  describe("wake-coordinator subscription", () => {
+    it("refreshes when wakeEpoch increments past the value seen at mount", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 1,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it("does not refresh for a wakeEpoch that was already current at mount", async () => {
+      // Simulate a prior wake landing before this consumer mounts.
+      useSystemWakeStore.setState({
+        wakeEpoch: 3,
+        lastSleepDuration: 0,
+        isWakeRevalidating: false,
+      });
+
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 1,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Only the mount fetch ran — the previous wake should not retroactively
+      // trigger this consumer.
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes once per increment when wakeEpoch bumps multiple times", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 1,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
+      });
+    });
+  });
+
+  describe("loading vs isValidating split", () => {
+    it("keeps loading true only for the cold first fetch", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+
+      const firstFetch = createDeferred<RepositoryStats>();
+      getRepoStatsMock.mockImplementationOnce(() => firstFetch.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(true);
+        expect(result.current.isValidating).toBe(true);
+      });
+
+      await act(async () => {
+        firstFetch.resolve({
+          commitCount: 1,
+          issueCount: 2,
+          prCount: 3,
+          loading: false,
+          stale: false,
+          lastUpdated: 1000,
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+        expect(result.current.isValidating).toBe(false);
+        expect(result.current.stats?.commitCount).toBe(1);
+      });
+    });
+
+    it("flips isValidating without flipping loading on a background refetch", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+
+      const stats: RepositoryStats = {
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      };
+
+      const slow = createDeferred<RepositoryStats>();
+      getRepoStatsMock.mockResolvedValueOnce(stats).mockImplementationOnce(() => slow.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(5);
+        expect(result.current.loading).toBe(false);
+        expect(result.current.isValidating).toBe(false);
+      });
+
+      // Trigger a background revalidate via the wake coordinator. The visible
+      // counts must stay on screen — `loading` must remain false — while
+      // `isValidating` flips true.
+      await act(async () => {
+        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(true);
+      });
+      expect(result.current.loading).toBe(false);
+      expect(result.current.stats?.commitCount).toBe(5);
+
+      await act(async () => {
+        slow.resolve({
+          commitCount: 6,
+          issueCount: 2,
+          prCount: 1,
+          loading: false,
+          stale: false,
+          lastUpdated: 2000,
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(false);
+        expect(result.current.stats?.commitCount).toBe(6);
       });
     });
   });

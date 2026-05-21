@@ -142,6 +142,12 @@ export class GitFileWatcher {
         this.watchFile(pathJoin(gitDir, sentinelName));
       }
 
+      // Watch .git/index so external `git add` from a terminal triggers an
+      // event-based refresh instead of waiting for the next timed poll.
+      // matchesTrackedFile() already covers the index.lock → index rename
+      // pattern git uses for atomic index writes.
+      this.watchFile(pathJoin(gitDir, "index"));
+
       if (this.watchWorktree) {
         // Fire-and-forget: subscribe() schedules the native watcher
         // asynchronously. Startup failures (ENOSPC, EMFILE) route through

@@ -57,16 +57,11 @@
 }
 
 /* WCAG 2.3.3 — kill the sweep AND fall back to a flat surface so the static
- * gradient stripe doesn't remain visible. Mirrored in src/index.css for the
- * Daintree-level "Reduce UI animations" toggle. */
-@media (prefers-reduced-motion: reduce) {
+ * gradient stripe doesn't remain visible. Variant emits both the OS media
+ * query and the Daintree-level "Reduce UI animations" toggle. */
+@variant reduce-motion {
   .pulse-skeleton-shimmer {
     animation: none;
     background: var(--pulse-empty-bg, var(--theme-surface-panel));
   }
-}
-
-body[data-reduce-animations="true"] .pulse-skeleton-shimmer {
-  animation: none;
-  background: var(--pulse-empty-bg, var(--theme-surface-panel));
 }

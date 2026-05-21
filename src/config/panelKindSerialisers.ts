@@ -1,7 +1,13 @@
 import type { PanelKind, ViewportPresetId } from "@/types";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
+import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
+
+/** Coerce a persisted viewport-preset string to a known id, dropping stale values. */
+function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | undefined {
+  return value !== undefined && value in VIEWPORT_PRESETS ? (value as ViewportPresetId) : undefined;
+}
 
 const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
   browser: (saved) => ({
@@ -20,7 +26,11 @@ const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
       browserHistory: saved.browserHistory,
       browserZoom: saved.browserZoom,
       devPreviewConsoleOpen: saved.devPreviewConsoleOpen,
-      viewportPreset: saved.viewportPreset as ViewportPresetId | undefined,
+      devPreviewConsoleTab: saved.devPreviewConsoleTab,
+      viewportPreset: sanitizeViewportPreset(saved.viewportPreset),
+      viewportRotated: saved.viewportRotated === true,
+      viewportDpr: saved.viewportDpr === 2 || saved.viewportDpr === 3 ? saved.viewportDpr : 1,
+      viewportFit: saved.viewportFit === true,
       devPreviewScrollPosition: saved.devPreviewScrollPosition,
       createdAt: saved.createdAt,
     };

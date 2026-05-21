@@ -52,13 +52,12 @@ vi.mock("../../../services/FileSearchService.js", () => ({
   fileSearchService: { invalidate: vi.fn() },
 }));
 
-vi.mock("../../../services/TaskWorktreeService.js", () => ({
-  taskWorktreeService: {
+vi.mock("../../../services/GitServiceCache.js", () => ({
+  gitServiceCache: {
     getGitService: vi.fn(() => ({
       findAvailableBranchName: vi.fn().mockResolvedValue("task-123"),
       findAvailablePath: vi.fn(() => "/test/worktrees/task-123"),
     })),
-    addTaskWorktreeMapping: vi.fn(),
   },
 }));
 
@@ -146,34 +145,6 @@ describe("worktree rate limiting", () => {
           options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
         })
       ).rejects.toThrow("Spawn queue full");
-
-      expect(mockWorktreeService.createWorktree).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("worktree:create-for-task", () => {
-    it("calls waitForRateLimitSlot with the same dedicated key", async () => {
-      const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE_FOR_TASK);
-      await handler({} as never, {
-        taskId: "task-123",
-        baseBranch: "main",
-        description: "Test task",
-      });
-
-      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000);
-    });
-
-    it("rejects without calling createWorktree when rate limit slot rejects", async () => {
-      waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("App is shutting down"));
-      const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE_FOR_TASK);
-
-      await expect(
-        handler({} as never, {
-          taskId: "task-123",
-          baseBranch: "main",
-          description: "Test task",
-        })
-      ).rejects.toThrow("App is shutting down");
 
       expect(mockWorktreeService.createWorktree).not.toHaveBeenCalled();
     });

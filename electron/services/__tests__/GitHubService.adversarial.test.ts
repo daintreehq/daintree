@@ -33,9 +33,10 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../github/GitHubAuth.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../github/GitHubAuth.js")>("../github/GitHubAuth.js");
+vi.mock("../../../plugins/builtin/github/main/GitHubAuth.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../plugins/builtin/github/main/GitHubAuth.js")
+  >("../../../plugins/builtin/github/main/GitHubAuth.js");
   return {
     ...actual,
     GitHubAuth: {
@@ -55,10 +56,10 @@ vi.mock("../github/GitHubAuth.js", async () => {
   };
 });
 
-vi.mock("../github/GitHubQueries.js", async () => {
-  const actual = await vi.importActual<typeof import("../github/GitHubQueries.js")>(
-    "../github/GitHubQueries.js"
-  );
+vi.mock("../../../plugins/builtin/github/main/GitHubQueries.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../plugins/builtin/github/main/GitHubQueries.js")
+  >("../../../plugins/builtin/github/main/GitHubQueries.js");
   return {
     ...actual,
     buildBatchPRQuery: vi.fn(actual.buildBatchPRQuery),
@@ -66,10 +67,10 @@ vi.mock("../github/GitHubQueries.js", async () => {
   };
 });
 
-vi.mock("../github/GitHubRateLimitService.js", async () => {
-  const actual = await vi.importActual<typeof import("../github/GitHubRateLimitService.js")>(
-    "../github/GitHubRateLimitService.js"
-  );
+vi.mock("../../../plugins/builtin/github/main/GitHubRateLimitService.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../plugins/builtin/github/main/GitHubRateLimitService.js")
+  >("../../../plugins/builtin/github/main/GitHubRateLimitService.js");
   return {
     ...actual,
     gitHubRateLimitService: {
@@ -128,13 +129,22 @@ function createResponse(options: {
   status: number;
   statusText: string;
   json: () => Promise<unknown>;
+  headers?: Headers;
 }): Response {
+  const headers = options.headers ?? new Headers();
+  const body = JSON.stringify({});
   return {
     ok: options.ok,
     status: options.status,
     statusText: options.statusText,
     json: options.json,
-  } as Response;
+    headers,
+    clone() {
+      return {
+        text: () => Promise.resolve(body),
+      } as unknown as Response;
+    },
+  } as unknown as Response;
 }
 
 function createETagResponse(status: number, etag?: string): Response {
@@ -403,6 +413,13 @@ describe("GitHubService adversarial", () => {
     shared.graphqlClient
       .mockResolvedValueOnce({
         repository: {},
+      })
+      // getProjectHealth runs the slow-cadence merged-PR velocity query before
+      // the health query (issue #8757) — both responses must be queued.
+      .mockResolvedValueOnce({
+        mergedPRs60: { issueCount: 0 },
+        mergedPRs120: { issueCount: 0 },
+        mergedPRs180: { issueCount: 0 },
       })
       .mockResolvedValueOnce({
         repository: {
@@ -706,7 +723,7 @@ describe("GitHubService adversarial", () => {
         createBranchListResponse(200, { etag: 'W/"b"', body: [{ number: 11 }] })
       );
     let capturedCandidates: unknown;
-    const githubIndex = await import("../github/index.js");
+    const githubIndex = await import("../../../plugins/builtin/github/main/index.js");
     const buildBatch = vi.mocked(githubIndex.buildBatchPRQuery);
     buildBatch.mockImplementationOnce((_owner, _repo, candidates) => {
       capturedCandidates = candidates;
@@ -898,7 +915,7 @@ describe("GitHubService adversarial", () => {
   // any PR whose ciStatus was "SUCCESS", which permanently froze the
   // green tick once a PR had ever been green.
   it("LISTPRS_ENRICHES_PRS_EVEN_WHEN_RAW_ROLLUP_IS_SUCCESS", async () => {
-    const githubIndex = await import("../github/index.js");
+    const githubIndex = await import("../../../plugins/builtin/github/main/index.js");
     const buildBatch = vi.mocked(githubIndex.buildBatchRequiredChecksQuery);
     buildBatch.mockReturnValueOnce("BATCH_REQ_QUERY");
 

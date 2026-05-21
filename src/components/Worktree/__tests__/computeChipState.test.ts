@@ -81,12 +81,24 @@ describe("computeChipState", () => {
     });
   });
 
-  describe("active agent suppresses complete", () => {
+  describe("active agent suppresses cleanup and complete", () => {
     it("returns null when isComplete but hasActiveAgent", () => {
       expect(computeChipState({ ...base, isComplete: true, hasActiveAgent: true })).toBeNull();
     });
 
-    it("cleanup beats hasActiveAgent", () => {
+    it("returns null when merged but hasActiveAgent", () => {
+      expect(
+        computeChipState({ ...base, lifecycleStage: "merged", hasActiveAgent: true })
+      ).toBeNull();
+    });
+
+    it("returns null when ready-for-cleanup but hasActiveAgent", () => {
+      expect(
+        computeChipState({ ...base, lifecycleStage: "ready-for-cleanup", hasActiveAgent: true })
+      ).toBeNull();
+    });
+
+    it("active agent suppresses cleanup even when isComplete is also true", () => {
       expect(
         computeChipState({
           ...base,
@@ -94,7 +106,18 @@ describe("computeChipState", () => {
           isComplete: true,
           hasActiveAgent: true,
         })
-      ).toBe("cleanup");
+      ).toBeNull();
+    });
+
+    it("returns waiting when merged, hasActiveAgent, and waitingTerminalCount > 0", () => {
+      expect(
+        computeChipState({
+          ...base,
+          lifecycleStage: "merged",
+          hasActiveAgent: true,
+          waitingTerminalCount: 1,
+        })
+      ).toBe("waiting");
     });
 
     it("returns waiting when isComplete, hasActiveAgent, and waitingTerminalCount > 0", () => {

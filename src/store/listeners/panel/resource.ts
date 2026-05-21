@@ -28,6 +28,19 @@ export function setupResourceListeners(): DisposableStore {
     )
   );
 
+  // Memory pressure: accelerate hibernation of every BACKGROUND-tier terminal
+  // so idle agent panes release memory immediately under OS pressure instead
+  // of waiting out the fixed 30s window. Tier 1 compresses the delay to 5s;
+  // tier 2 fires immediately. The hibernate() safety guard still blocks
+  // actively-writing or recently-active agent terminals.
+  d.add(
+    toDisposable(
+      window.electron.terminal.onAccelerateHibernation(({ level }) => {
+        terminalInstanceService.accelerateHibernation(level);
+      })
+    )
+  );
+
   // Flush pending terminal persistence on window close to prevent data loss
   const beforeUnloadHandler = () => {
     flushPanelPersistence();

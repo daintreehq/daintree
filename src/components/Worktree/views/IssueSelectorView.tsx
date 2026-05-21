@@ -1,5 +1,6 @@
 import type { GitHubIssue } from "@shared/types/github";
-import { IssueSelector } from "@/components/GitHub/IssueSelector";
+import { getBuiltinView } from "@/registry/builtinRendererRegistry";
+import type { IssueSelectorProps } from "@github-renderer/components/IssueSelector";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ export function IssueLinkerView({
   currentUserAvatar,
   disabled,
 }: IssueLinkerViewProps) {
+  const IssueSelector = getBuiltinView<IssueSelectorProps>("github.issueSelector");
   return (
     <>
       <div className="space-y-2">
@@ -51,12 +53,14 @@ export function IssueLinkerView({
             </TooltipContent>
           </Tooltip>
         </div>
-        <IssueSelector
-          projectPath={projectPath}
-          selectedIssue={selectedIssue}
-          onSelect={onSelectIssue}
-          disabled={disabled}
-        />
+        {IssueSelector && (
+          <IssueSelector
+            projectPath={projectPath}
+            selectedIssue={selectedIssue}
+            onSelect={onSelectIssue}
+            disabled={disabled}
+          />
+        )}
       </div>
 
       {canAssignIssue && (

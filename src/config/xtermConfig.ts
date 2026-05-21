@@ -66,6 +66,7 @@ export function getXtermOptions(config: TerminalAppearanceConfig): ITerminalOpti
     scrollback: config.scrollback,
     screenReaderMode: config.screenReaderMode ?? false,
     smoothScrollDuration: 0,
+    overviewRuler: { width: 15 },
   };
 }
 

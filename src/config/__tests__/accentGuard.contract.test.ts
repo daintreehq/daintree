@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
+const PLUGIN_RENDERER_ROOTS = [path.join(REPO_ROOT, "plugins/builtin/github/renderer")];
 
 // ── Forbidden accent token patterns ────────────────────────────────────
 
@@ -158,7 +159,7 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
 
   // #5984: [worktree] Drag handle goes accent during sort
   "#5984": [
-    "src/components/GitHub/BulkCreateWorktreeDialog.tsx",
+    "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
     "src/components/Worktree/NewWorktreeDialog.tsx",
     "src/components/Worktree/views/ExistingBranchPicker.tsx",
     "src/components/Worktree/views/HighlightBranchText.tsx",
@@ -190,10 +191,10 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Diagnostics/TelemetryContent.tsx",
     "src/components/Fleet/FleetArmingRibbon.tsx",
     "src/components/Fleet/FleetPickerContent.tsx",
-    "src/components/GitHub/BulkActionBar.tsx",
-    "src/components/GitHub/GitHubDropdownSkeletons.tsx",
-    "src/components/GitHub/GitHubListItem.tsx",
-    "src/components/GitHub/GitHubResourceList.tsx",
+    "plugins/builtin/github/renderer/components/BulkActionBar.tsx",
+    "plugins/builtin/github/renderer/components/GitHubDropdownSkeletons.tsx",
+    "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
+    "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/LogLevelPalette/LogLevelPalette.tsx",
     "src/components/Notifications/NotificationCenterEntry.tsx",
@@ -268,7 +269,7 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Worktree/WorktreePalette.tsx",
     "src/hooks/useUpdateListener.tsx",
     "src/components/agents/AgentCard.tsx",
-    "src/components/GitHub/CommitList.tsx",
+    "plugins/builtin/github/renderer/components/CommitList.tsx",
     "src/components/Layout/ContentDock.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
@@ -489,7 +490,12 @@ describe("accent guard", () => {
 
     const violations = new Map<string, string[]>();
 
-    for (const filePath of collectSourceFiles(SRC_ROOT)) {
+    const scanRoots = [SRC_ROOT, ...PLUGIN_RENDERER_ROOTS];
+    const allFiles = scanRoots.flatMap((root) =>
+      fs.existsSync(root) ? collectSourceFiles(root) : []
+    );
+
+    for (const filePath of allFiles) {
       const source = fs.readFileSync(filePath, "utf8");
       // Normalize to posix-style separators so allowlist hits match on Windows.
       const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");

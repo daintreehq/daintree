@@ -37,6 +37,7 @@ function makeMockWindow(id: number, webContentsId: number): MockBrowserWindow {
       }
     }),
     isDestroyed: vi.fn(() => win._destroyed),
+    isFocused: vi.fn(() => false),
     _fireClosed: () => {
       win._destroyed = true;
       closedHandlers.forEach((handler) => handler());
@@ -48,6 +49,22 @@ function makeMockWindow(id: number, webContentsId: number): MockBrowserWindow {
   } as unknown as MockBrowserWindow;
 
   return win;
+}
+
+function makeMockApp() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  return {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const arr = listeners.get(event) ?? [];
+      arr.push(listener);
+      listeners.set(event, arr);
+    }),
+    emit: (event: string, ...args: unknown[]) => {
+      for (const listener of listeners.get(event) ?? []) {
+        listener(...args);
+      }
+    },
+  };
 }
 
 describe("WindowRegistry adversarial", () => {
@@ -163,6 +180,98 @@ describe("WindowRegistry adversarial", () => {
     expect(registry.getPrimary()).toBe(liveCtx);
     expect(registry.getByWebContentsId(220)).toBeUndefined();
     expect(registry.getByWebContentsId(330)).toBe(liveCtx);
+  });
+
+  it("FOCUS_AFTER_UNREGISTER_NO_REVIVE", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+
+    mockApp.emit("browser-window-focus", null, win2);
+    expect(registry.getPrimary()?.windowId).toBe(2);
+
+    registry.unregister(2);
+
+    // After unregistration, focus event for the dead window must NOT
+    // revive it as primary.
+    mockApp.emit("browser-window-focus", null, win2);
+
+    expect(registry.getPrimary()?.windowId).toBe(1);
+    expect(registry.getByWindowId(2)).toBeUndefined();
+  });
+
+  it("FOCUS_COLD_START_FALLBACK_PRESERVED", () => {
+    const registry = new WindowRegistry();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    // No wireFocusTracking, no isFocused() returning true — pure cold start.
+    registry.register(win1);
+    registry.register(win2);
+
+    expect(registry.getPrimary()?.windowId).toBe(1);
+  });
+
+  it("UNREGISTER_PRIMARY_PREFERS_FOCUS_ORDER_NOT_MAP_ORDER", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+    const win3 = makeMockWindow(3, 300);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+    registry.register(win3);
+
+    // Focus B, then C. Now close C. Fallback should pick B (last-focused-
+    // surviving), NOT A (first inserted in Map).
+    mockApp.emit("browser-window-focus", null, win2);
+    mockApp.emit("browser-window-focus", null, win3);
+
+    registry.unregister(3);
+
+    expect(registry.getPrimary()?.windowId).toBe(2);
+  });
+
+  it("UNREGISTER_FALLS_BACK_TO_MAP_ORDER_WHEN_FOCUS_HISTORY_EXHAUSTED", () => {
+    const registry = new WindowRegistry();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    // No focus events ever fired.
+    registry.register(win1);
+    registry.register(win2);
+    expect(registry.getPrimary()?.windowId).toBe(1);
+
+    registry.unregister(1);
+
+    // Empty focus history → fall back to Map insertion order (only win2 left).
+    expect(registry.getPrimary()?.windowId).toBe(2);
+  });
+
+  it("FOCUS_EVENT_FOR_DESTROYED_BUT_STILL_REGISTERED_WINDOW_IGNORED", () => {
+    const registry = new WindowRegistry();
+    const mockApp = makeMockApp();
+    const win1 = makeMockWindow(1, 100);
+    const win2 = makeMockWindow(2, 200);
+
+    registry.wireFocusTracking(mockApp);
+    registry.register(win1);
+    registry.register(win2);
+
+    // Simulate the window being destroyed mid-flight without its registry
+    // entry being cleaned up yet.
+    win2._destroyed = true;
+
+    mockApp.emit("browser-window-focus", null, win2);
+
+    expect(registry.getPrimary()?.windowId).toBe(1);
   });
 
   it("UNKNOWN_APP_VIEW_UNREGISTER_NO_OP", () => {

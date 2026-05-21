@@ -160,21 +160,53 @@ interface PluginWorktreeSnapshot {
   readonly isMainWorktree?: boolean;
   readonly aheadCount?: number;
   readonly behindCount?: number;
-  readonly issueNumber?: number;
-  readonly issueTitle?: string;
-  readonly prNumber?: number;
-  readonly prUrl?: string;
-  readonly prState?: "open" | "merged" | "closed";
-  readonly prTitle?: string;
+  readonly linked: PluginWorktreeLinked | null;
   readonly mood?: "stable" | "active" | "stale" | "error";
   readonly lastActivityTimestamp?: number | null;
   readonly createdAt?: number;
 }
+
+interface PluginWorktreeLinked {
+  readonly providerId: string;
+  readonly issue?: PluginWorktreeLinkedIssue;
+  readonly pr?: PluginWorktreeLinkedPR;
+}
+
+interface PluginWorktreeLinkedIssue {
+  readonly ref: ResourceRef;
+  readonly title?: string;
+}
+
+interface PluginWorktreeLinkedPR {
+  readonly ref: ResourceRef;
+  readonly title?: string;
+  readonly url: string;
+  readonly state: NormalizedPRState;
+}
 ```
+
+`linked` is a provider-agnostic projection of the worktree's linked forge resources (issue and/or PR), or `null` when none is linked. It replaces the removed GitHub-shaped `issueNumber` / `issueTitle` / `prNumber` / `prUrl` / `prState` / `prTitle` fields — route through `linked.providerId` and the shared `ResourceRef` shape instead.
 
 All snapshots are frozen — attempting to mutate one throws. Fields are an explicit allowlist; adding a new field requires a Daintree SDK release.
 
 Subscriptions registered during `activate` — before Daintree's worktree service is ready — are queued and replayed once the service comes online. Your callback never misses events.
+
+## `registerForgeProvider`
+
+Binds a runtime `ForgeProviderImpl` to a descriptor declared in `contributes.forgeProviders`.
+
+```ts
+const dispose = host.registerForgeProvider({ id: "linear", name: "Linear" }, impl);
+```
+
+**Rules:**
+
+- Must be called during `activate()` — the host is revoked once activation resolves or times out.
+- `descriptor.id` must match an entry in `contributes.forgeProviders`; undeclared ids are rejected so the impl can't drift away from the manifest's routing table. At runtime the id is namespaced to `{pluginId}.{descriptor.id}`.
+- Returns a disposer that unbinds the single impl. Calling `registerForgeProvider` again with the same `descriptor.id` overwrites the prior binding; the older disposer becomes inert.
+- All bindings are automatically removed on plugin unload.
+
+For the end-to-end walkthrough — manifest entry, implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
 ## `settings` — _Planned_
 

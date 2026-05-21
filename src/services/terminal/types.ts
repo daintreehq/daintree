@@ -6,6 +6,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -70,6 +71,12 @@ export interface ManagedTerminal {
   // suppress the "new output" indicator while the user is actively scrolling.
   lastWheelAt?: number;
 
+  // Timestamp of the most recent completed terminal.write() parse. Used by the
+  // WebGL pool eviction scorer to protect terminals in an active write burst
+  // even when pendingWrites has since drained to 0. Stamped on write-complete,
+  // not write-enqueue, so it tracks rendered output rather than queue depth.
+  lastWriteAt?: number;
+
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;
 
@@ -94,6 +101,16 @@ export interface ManagedTerminal {
 
   // Typing burst timer
   inputBurstTimer?: number;
+
+  // PTY write-burst decay state. `writeBurstDeadline` is a timestamp
+  // (Date.now() + WRITE_BURST_DECAY_MS) refreshed on every write — used as an
+  // O(1) extension instead of churning clearTimeout/setTimeout per write,
+  // which would jank Chromium's timer queue under 60fps output floods. The
+  // single `writeBurstTimer` self-rearms if the deadline was extended while
+  // it was pending; on fire with the deadline elapsed it reverts the tier via
+  // managed.getRefreshTier().
+  writeBurstTimer?: number;
+  writeBurstDeadline?: number;
 
   // Directing state: renderer-only ephemeral state for user typing into waiting agent
   canonicalAgentState?: AgentState;
@@ -122,6 +139,12 @@ export interface ManagedTerminal {
   // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
   scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
   scrollbackRestoreDisposable?: { dispose: () => void };
+  // Out-of-band failure channel set by TerminalRestoreController catch blocks
+  // when the deferred restore replay fails (write timeout, parse error). The
+  // scheduler reads this after fetchAndRestore() resolves to surface the
+  // failure to the panel store. Cleared at the start of each restore attempt
+  // and on the success path. See issue #8535.
+  lastScrollbackRestoreError?: TerminalScrollbackRestoreError;
 
   // Alternate screen buffer state (tracked via xterm.js onBufferChange).
   // Used to adapt UI (remove padding) and resize strategy for TUI applications.
@@ -143,12 +166,25 @@ export interface ManagedTerminal {
   // Hibernation: xterm.js Terminal instance disposed to free memory
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;
+  // Delayed re-check for active-state agent terminals (working/waiting/directing)
+  // that are not yet idle-eligible because their last write was too recent.
+  // Armed once at `lastWriteAt + AGENT_IDLE_SILENCE_MS - now`; on fire it
+  // re-calls scheduleHibernation, which arms the regular hibernationTimer if
+  // the terminal is now eligible. Cleared by cancelHibernation, hibernate, and
+  // tier upgrade alongside hibernationTimer.
+  hibernationEligibilityTimer?: ReturnType<typeof setTimeout>;
   ipcListenerCount: number;
 
-  // Visibility-driven WebGL restore debounce. Hide path releases the WebGL
-  // context immediately; show path waits ~100ms before re-acquiring so rapid
-  // tab/panel toggles don't thrash addon load/unload.
+  // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
+  // re-acquiring so rapid tab/panel toggles don't thrash addon load/unload.
   webGLRestoreTimer?: number;
+
+  // Visibility-driven WebGL release hysteresis. Hide path holds the context
+  // for ~500ms before releasing so rapid hide→show cycles (panel toggles,
+  // focus oscillation) don't churn the WebGL pool. Authoritative release
+  // paths (tier demotion, agent demotion, destroy, hibernation) cancel this
+  // timer and release immediately.
+  webGLHideTimer?: number;
 
   // Timestamp of the most recent successful reduceScrollback() — gates the
   // BACKGROUND-tier scrollback shrink path so rapid tab oscillation doesn't
@@ -160,6 +196,24 @@ export interface ManagedTerminal {
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
 
+// Hysteresis specifically for downgrades caused by *another* working agent
+// arriving in the fleet (issue #8596). A working-agent demotion from FOCUSED
+// to VISIBLE can chain across long-running sub-process pipelines (build →
+// linter → bundler) where each transition is a fast working/idle flip; the
+// 500ms single-terminal hysteresis is too tight for that pattern and produces
+// visible cadence oscillation across the fleet. 1000ms gives the demoted
+// sibling a full second of stable VISIBLE cadence before being eligible for
+// another downgrade pass.
+export const FLEET_DOWNGRADE_HYSTERESIS_MS = 1000;
+
+// Idle window after the last PTY write before the BURST tier decays back to
+// the panel's natural tier (FOCUSED/VISIBLE/...). Independent of
+// TIER_DOWNGRADE_HYSTERESIS_MS — that is the policy's downgrade debounce
+// inside TerminalRendererPolicy; this is the activity-window inside
+// TerminalInstanceService. They are separately tunable even though they
+// happen to share the same default value.
+export const WRITE_BURST_DECAY_MS = 500;
+
 // Cooldown between consecutive reduceScrollback() calls for the same terminal.
 // Each call mutates `terminal.options.scrollback`, which xterm 6.0 turns into
 // a BufferSet.setup() that recreates the internal CircularList — cheap once,
@@ -169,7 +223,35 @@ export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
 // window. The 500ms tier-downgrade hysteresis is additive, not a replacement.
 export const SCROLLBACK_REDUCE_COOLDOWN_MS = 2000;
 
+// Recency window for classifying a terminal as "in an active write burst" in
+// the WebGL pool eviction scorer. A terminal whose lastWriteAt is within this
+// window is protected from eviction even after pendingWrites drains to 0, so a
+// streaming agent doesn't lose its slot in the gap between output chunks.
+// Mirrors SCROLLBACK_REDUCE_COOLDOWN_MS — same 2s burst-cadence assumption.
+export const WRITE_BURST_RECENCY_MS = 2000;
+
 export const HIBERNATION_DELAY_MS = 30_000;
+
+// Silence window after which an agent terminal in an ACTIVE_AGENT_STATE
+// (working/waiting/directing) becomes hibernation-eligible despite a live
+// runtimeAgentId. The fixed permanent exemption used to strand idle agent
+// terminals that had been parked for hours with no output — 5 minutes is the
+// shortest window where it's plausible the agent or downstream tool is truly
+// dormant (long enough to outlast bursty prompt round-trips and long tool
+// invocations, short enough to recover the memory before the user notices).
+// "idle"/"completed"/"exited" are not gated by this — they're treated as
+// resting states and qualify for the normal HIBERNATION_DELAY_MS timer.
+export const AGENT_IDLE_SILENCE_MS = 5 * 60 * 1000;
+
+// Accelerated hibernation delays under OS memory pressure. Tier 1 (mild
+// pressure) drops the BACKGROUND→hibernate delay from HIBERNATION_DELAY_MS to
+// 5 seconds — still enough headroom for an in-flight write burst to drain
+// (WRITE_BURST_RECENCY_MS = 2s) and to absorb tab-flip oscillation. Tier 2
+// (sustained pressure) forces immediate hibernation; pendingWrites/agent-state
+// guards in `hibernate()` still apply so an actively-writing terminal can't be
+// torn down mid-burst.
+export const HIBERNATION_DELAY_PRESSURE_TIER1_MS = 5_000;
+export const HIBERNATION_DELAY_PRESSURE_TIER2_MS = 0;
 
 export const INCREMENTAL_RESTORE_CONFIG = {
   chunkBytes: 32768,

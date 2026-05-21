@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { errorsClient, eventInspectorClient, logsClient, telemetryPreviewClient } from "@/clients";
 import { useErrorStore } from "@/store/errorStore";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useEventStore } from "@/store/eventStore";
 import { useLogsStore } from "@/store/logsStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
@@ -30,9 +31,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ filters: z.any().optional() }).optional(),
+    resultSchema: z.object({ entries: z.array(z.unknown()) }),
     run: async (args: unknown) => {
       const { filters } = (args as { filters?: unknown } | undefined) ?? {};
-      return await logsClient.getAll(filters as any);
+      const result = await logsClient.getAll(filters as any);
+      return { entries: result };
     },
   }));
 
@@ -44,8 +47,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ sources: z.array(z.string()) }),
     run: async () => {
-      return await logsClient.getSources();
+      const result = await logsClient.getSources();
+      return { sources: result };
     },
   }));
 
@@ -87,8 +92,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ verbose: z.boolean() }),
     run: async () => {
-      return await logsClient.getVerbose();
+      const result = await logsClient.getVerbose();
+      return { verbose: result };
     },
   }));
 
@@ -113,6 +120,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await logsClient.getLevelOverrides();
     },
@@ -156,8 +164,10 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ sources: z.array(z.string()) }),
     run: async () => {
-      return await logsClient.getRegistry();
+      const result = await logsClient.getRegistry();
+      return { sources: result };
     },
   }));
 
@@ -187,6 +197,123 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     },
   }));
 
+  actions.set("errors.recent", () => ({
+    id: "errors.recent",
+    title: "Recent Errors",
+    description:
+      "List recent errors from the diagnostics-dock error store (IPC and normalized runtime failures), newest first. Args (all optional): `limit` (1-50, default 20); `includesDismissed` (default false — active only). Returns { errors } — each with id, type, message, details, source, timestamp, retryability, dismissed, worktreeId/terminalId, recoveryHint, occurrenceCount. Never errors. This is a different store from `notifications.recent` (the user inbox) — query both if you need the full picture.",
+    category: "errors",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z
+      .object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .default(20)
+          .optional()
+          .describe("Max errors to return (default: 20, max: 50)"),
+        includesDismissed: z
+          .boolean()
+          .default(false)
+          .optional()
+          .describe("Include dismissed errors (default: false — active errors only)"),
+      })
+      .optional(),
+    resultSchema: z.object({ errors: z.array(z.unknown()) }),
+    run: async (args: unknown) => {
+      const { limit = 20, includesDismissed = false } =
+        (args as { limit?: number; includesDismissed?: boolean } | undefined) ?? {};
+      const errors = useErrorStore.getState().errors;
+      const filtered = includesDismissed ? errors : errors.filter((e) => !e.dismissed);
+      // errorStore dedup updates in place (keeps array slot, refreshes timestamp),
+      // so array order is not strictly newest-first — sort before slicing.
+      const sorted = [...filtered].sort((a, b) => b.timestamp - a.timestamp);
+      return {
+        errors: sorted.slice(0, limit).map((e) => ({
+          id: e.id,
+          type: e.type,
+          message: e.message,
+          details: e.details,
+          source: e.source,
+          timestamp: e.timestamp,
+          retryability: e.retryability,
+          dismissed: e.dismissed,
+          worktreeId: e.context?.worktreeId,
+          terminalId: e.context?.terminalId,
+          recoveryHint: e.recoveryHint,
+          retryExhausted: e.retryExhausted,
+          occurrenceCount: e.occurrenceCount,
+        })),
+      };
+    },
+  }));
+
+  actions.set("notifications.recent", () => ({
+    id: "notifications.recent",
+    title: "Recent Notifications",
+    description:
+      "List recent entries from the durable notification inbox (completion/waiting/info toasts the user saw), newest first. Args (all optional): `limit` (1-50, default 20); `type` ('success'|'error'|'info'|'warning'); `unreadOnly` (default false). Returns { notifications } — each with id, type, title, message, timestamp, seenAsToast. Never errors. This is a different store from `errors.recent` (the diagnostics-dock errors) — query both if you need the full picture.",
+    category: "diagnostics",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z
+      .object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .default(20)
+          .optional()
+          .describe("Max notifications to return (default: 20, max: 50)"),
+        type: z
+          .enum(["success", "error", "info", "warning"])
+          .optional()
+          .describe("Filter by notification type"),
+        unreadOnly: z
+          .boolean()
+          .default(false)
+          .optional()
+          .describe("Only return notifications not yet seen as a toast (default: false)"),
+      })
+      .optional(),
+    resultSchema: z.object({ notifications: z.array(z.unknown()) }),
+    run: async (args: unknown) => {
+      const {
+        limit = 20,
+        type,
+        unreadOnly = false,
+      } = (args as { limit?: number; type?: string; unreadOnly?: boolean } | undefined) ?? {};
+      const entries = useNotificationHistoryStore.getState().entries;
+      const filtered = entries.filter(
+        (e) =>
+          (!type || e.type === type) &&
+          // Mirror the bell-badge unread definition (notificationHistorySlice
+          // counts !seenAsToast && countable !== false) so `unreadOnly` doesn't
+          // surface silent non-countable entries the UI never badges.
+          (!unreadOnly || (!e.seenAsToast && e.countable !== false))
+      );
+      return {
+        notifications: filtered.slice(0, limit).map((e) => ({
+          id: e.id,
+          type: e.type,
+          title: e.title,
+          message: typeof e.message === "string" ? e.message : "[rich content]",
+          timestamp: e.timestamp,
+          seenAsToast: e.seenAsToast,
+          worktreeId: e.context?.worktreeId,
+          panelId: e.context?.panelId,
+          eventKind: e.context?.eventKind,
+        })),
+      };
+    },
+  }));
+
   actions.set("eventInspector.getEvents", () => ({
     id: "eventInspector.getEvents",
     title: "Get Events",
@@ -212,6 +339,13 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .describe("Number of events to skip (default: 0)"),
       })
       .optional(),
+    resultSchema: z.object({
+      events: z.array(z.unknown()),
+      total: z.number(),
+      limit: z.number(),
+      offset: z.number(),
+      hasMore: z.boolean(),
+    }),
     run: async (args: unknown) => {
       const { limit = 50, offset = 0 } =
         (args as { limit?: number; offset?: number } | undefined) ?? {};
@@ -234,11 +368,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     scope: "renderer",
     argsSchema: z.object({
       category: z
-        .enum(["system", "agent", "task", "server", "file", "ui", "watcher", "artifact"])
+        .enum(["system", "agent", "server", "file", "ui", "watcher", "artifact"])
         .optional()
         .describe("Filter by event category"),
       categories: z
-        .array(z.enum(["system", "agent", "task", "server", "file", "ui", "watcher", "artifact"]))
+        .array(z.enum(["system", "agent", "server", "file", "ui", "watcher", "artifact"]))
         .optional()
         .describe("Filter by multiple categories"),
       types: z.array(z.string()).optional().describe("Filter by event type strings"),
@@ -255,6 +389,13 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
         .optional()
         .describe("Max events to return (default: 50, max: 500)"),
       offset: z.number().int().min(0).optional().describe("Number of events to skip (default: 0)"),
+    }),
+    resultSchema: z.object({
+      events: z.array(z.unknown()),
+      total: z.number(),
+      limit: z.number(),
+      offset: z.number(),
+      hasMore: z.boolean(),
     }),
     run: async (args: unknown) => {
       const { limit, offset, ...filters } = args as Record<string, unknown>;

@@ -126,6 +126,7 @@ describe("TerminalResizeController", () => {
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
+    managed.isVisible = false;
     Object.assign(managed.terminal, {
       _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
     });
@@ -154,6 +155,7 @@ describe("TerminalResizeController", () => {
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
+    managed.isVisible = false;
     // No _core attached — cellDims will be null.
 
     const controller = new TerminalResizeController({
@@ -177,6 +179,7 @@ describe("TerminalResizeController", () => {
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
+    managed.isVisible = false;
     Object.assign(managed.terminal, {
       _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
     });
@@ -202,6 +205,7 @@ describe("TerminalResizeController", () => {
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
+    managed.isVisible = false;
     managed.launchAgentId = "codex";
     managed.runtimeAgentId = "codex";
     Object.assign(managed.terminal, {
@@ -228,6 +232,36 @@ describe("TerminalResizeController", () => {
     vi.advanceTimersByTime(500);
     expect(resizeMock).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledWith("term-1", 170, 40);
+  });
+
+  it("background-tier resize reflows xterm when the terminal is visible", () => {
+    // A freshly prewarmed terminal carries lastAppliedTier === BACKGROUND until
+    // applyRendererPolicy promotes it, but it can already be attached and
+    // visible on screen. A visible terminal must keep xterm's grid in sync with
+    // its container — the deferred-reflow path is only for genuinely hidden
+    // (offscreen / content-visibility:hidden) terminals. Regression guard for
+    // the two-pane split second-panel sizing bug.
+    const managed = createManagedTerminal();
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = true;
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    const result = controller.resize("term-1", 1600, 800, { immediate: true });
+    expect(result).toEqual({ cols: 160, rows: 40 });
+    // Visible terminal: xterm's grid is reflowed, not deferred to wake.
+    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
   });
 
   it("flushes and resets ingest buffers before applying resize", () => {

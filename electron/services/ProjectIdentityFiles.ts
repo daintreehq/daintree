@@ -1,8 +1,13 @@
 import type { ProjectSettings, TerminalRecipe } from "../types/index.js";
-import type { RunCommand, CopyTreeSettings } from "../../shared/types/project.js";
+import {
+  PROJECT_SETTINGS_SHAREABILITY,
+  PROJECT_TERMINAL_SETTINGS_SHAREABILITY,
+  type ProjectTerminalSettings,
+} from "../../shared/types/project.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
+import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
@@ -19,6 +24,42 @@ const DAINTREE_PRESETS_DIR = `${DAINTREE_DIR}/presets`;
 // underscore. Prevents path traversal via a crafted `.daintree/presets/../x`
 // subdirectory entry.
 const SAFE_AGENT_ID = /^[a-zA-Z0-9_.-]+$/;
+
+/**
+ * Returns true if the value is "present enough" to write to disk. Mirrors the
+ * legacy hand-coded checks: skip `undefined`, `null`, empty strings, and empty
+ * arrays; keep `0`, `false`, and non-empty objects. Renderer callers
+ * occasionally send `null` for "clear this field", which must not survive into
+ * the committed `.daintree/settings.json` (the reader drops it, but a `null`
+ * entry produces spurious git diffs).
+ */
+function shouldWriteValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * Builds the shareable subset of `ProjectTerminalSettings`, filtered by
+ * `PROJECT_TERMINAL_SETTINGS_SHAREABILITY`. Returns `undefined` if no
+ * shareable sub-fields are present.
+ */
+function buildShareableTerminalSettings(
+  terminalSettings: ProjectTerminalSettings | undefined
+): ProjectTerminalSettings | undefined {
+  if (!terminalSettings) return undefined;
+  const result: ProjectTerminalSettings = {};
+  for (const key of Object.keys(PROJECT_TERMINAL_SETTINGS_SHAREABILITY) as Array<
+    keyof ProjectTerminalSettings
+  >) {
+    if (PROJECT_TERMINAL_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
+    const value = terminalSettings[key];
+    if (!shouldWriteValue(value)) continue;
+    (result as Record<keyof ProjectTerminalSettings, unknown>)[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
@@ -125,47 +166,21 @@ export class ProjectIdentityFiles {
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
 
-    const payload: {
-      version: 1;
-      runCommands?: RunCommand[];
-      devServerCommand?: string;
-      devServerLoadTimeout?: number;
-      turbopackEnabled?: boolean;
-      copyTreeSettings?: CopyTreeSettings;
-      excludedPaths?: string[];
+    const payload: { version: 1 } & Partial<ProjectSettings> = { version: 1 };
 
-      worktreePathPattern?: string;
-      terminalSettings?: {
-        shellArgs?: string[];
-        defaultWorkingDirectory?: string;
-        scrollbackLines?: number;
-      };
-    } = { version: 1 };
-
-    if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
-    if (settings.devServerCommand) payload.devServerCommand = settings.devServerCommand;
-    if (settings.devServerLoadTimeout) payload.devServerLoadTimeout = settings.devServerLoadTimeout;
-    if (typeof settings.turbopackEnabled === "boolean")
-      payload.turbopackEnabled = settings.turbopackEnabled;
-    if (settings.copyTreeSettings) payload.copyTreeSettings = settings.copyTreeSettings;
-    if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
-
-    if (settings.worktreePathPattern) payload.worktreePathPattern = settings.worktreePathPattern;
-
-    if (settings.terminalSettings) {
-      const shareableTerminal: {
-        shellArgs?: string[];
-        defaultWorkingDirectory?: string;
-        scrollbackLines?: number;
-      } = {};
-      if (settings.terminalSettings.shellArgs?.length)
-        shareableTerminal.shellArgs = settings.terminalSettings.shellArgs;
-      if (settings.terminalSettings.defaultWorkingDirectory)
-        shareableTerminal.defaultWorkingDirectory =
-          settings.terminalSettings.defaultWorkingDirectory;
-      if (settings.terminalSettings.scrollbackLines !== undefined)
-        shareableTerminal.scrollbackLines = settings.terminalSettings.scrollbackLines;
-      if (Object.keys(shareableTerminal).length > 0) payload.terminalSettings = shareableTerminal;
+    for (const key of Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>) {
+      if (PROJECT_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
+      if (key === "terminalSettings") {
+        const shareableTerminal = buildShareableTerminalSettings(settings.terminalSettings);
+        if (shareableTerminal !== undefined) payload.terminalSettings = shareableTerminal;
+        continue;
+      }
+      const value = settings[key];
+      if (!shouldWriteValue(value)) continue;
+      // Assigning a wider union into the specific key type — safe because we
+      // pulled `value` straight from `settings[key]`. The cast is a writer-side
+      // concession to keep the loop generic.
+      (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
     }
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
@@ -273,7 +288,7 @@ export class ProjectIdentityFiles {
         if (!result.success) {
           console.warn(
             `[ProjectIdentityFiles] Skipping invalid recipe: ${entry.name}`,
-            result.error.flatten()
+            z.prettifyError(result.error)
           );
           continue;
         }

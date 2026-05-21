@@ -13,6 +13,7 @@ const githubClientMock = vi.hoisted(() => ({
   getIssueByNumber: vi.fn(),
   getPRByNumber: vi.fn(),
   assignIssue: vi.fn(),
+  getConfig: vi.fn(),
 }));
 
 const projectClientMock = vi.hoisted(() => ({
@@ -25,7 +26,6 @@ const copyTreeClientMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const recipeStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
-const githubConfigStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const preferencesStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const currentViewStoreMock = vi.hoisted(() => ({ getCurrentViewStore: vi.fn() }));
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -43,7 +43,6 @@ vi.mock("@/clients", () => ({
 }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
 vi.mock("@/store/recipeStore", () => ({ useRecipeStore: recipeStoreMock }));
-vi.mock("@/store/githubConfigStore", () => ({ useGitHubConfigStore: githubConfigStoreMock }));
 vi.mock("@/store/preferencesStore", () => ({ usePreferencesStore: preferencesStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
@@ -104,7 +103,9 @@ function setMainWorktree(branch: string | null) {
 }
 
 function setGithubUser(username: string | null) {
-  githubConfigStoreMock.getState.mockReturnValue({ config: username ? { username } : null });
+  githubClientMock.getConfig.mockResolvedValue(
+    username ? { hasToken: true, username } : { hasToken: false }
+  );
 }
 
 function setAssignPreference(value: boolean) {
@@ -644,6 +645,21 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.assignmentError).toBe("rate limit");
   });
 
+  it("getConfig() rejection surfaces in assignmentError, worktree still returned", async () => {
+    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+    const result = (await def.run(
+      { issueNumber: 6609, agentId: "claude", assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.terminalId).toBe("term-1");
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignmentError).toBe("IPC unavailable");
+  });
+
   it("derives a sane branch name from the issue title when none is provided", async () => {
     githubClientMock.getIssueByNumber.mockResolvedValue({
       number: 42,
@@ -757,6 +773,19 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
+  });
+
+  it("getConfig() rejection during assignment surfaces in assignmentError, worktree still created", async () => {
+    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { branchName: "feature/foo", issueNumber: 6609, assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignmentError).toBe("IPC unavailable");
   });
 });
 

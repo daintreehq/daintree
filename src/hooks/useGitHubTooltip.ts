@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
 import { TtlCache } from "@/utils/ttlCache";
-import { useGitHubConfigStore } from "@/store/githubConfigStore";
+import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 
 type TooltipState<T> = {
   data: T | null;

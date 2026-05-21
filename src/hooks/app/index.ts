@@ -1,9 +1,10 @@
+export { useAppBoot } from "./useAppBoot";
+export type { AppBootState } from "./useAppBoot";
 export { useAppHydration } from "./useAppHydration";
 export { useProjectSwitchRehydration } from "./useProjectSwitchRehydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
-export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useCloudSyncWarning } from "./useCloudSyncWarning";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
@@ -18,3 +19,4 @@ export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
+export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";

@@ -6,6 +6,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@shared": path.resolve(__dirname, "./shared"),
+      "@github-renderer": path.resolve(__dirname, "./plugins/builtin/github/renderer"),
     },
   },
   test: {
@@ -21,6 +22,7 @@ export default defineConfig({
       "src/**/*.{test,spec}.{js,ts,jsx,tsx}",
       "shared/**/*.{test,spec}.{js,ts}",
       "scripts/**/*.{test,spec}.{js,ts,mjs}",
+      "plugins/**/*.{test,spec}.{js,ts,jsx,tsx}",
     ],
     exclude: [
       "node_modules",

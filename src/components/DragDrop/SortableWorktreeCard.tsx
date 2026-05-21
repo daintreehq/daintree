@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { cn } from "@/lib/utils";
+import { getWorktreeSidebarRowId } from "@/components/Sidebar/useWorktreeSidebarKeyboard";
 
 export interface WorktreeSortDragData {
   type: "worktree-sort";
@@ -110,14 +111,13 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
     dropDirection = draggedMid < overMid ? "above" : "below";
   }
 
+  // Virtuoso's windowing already eliminates layout cost for offscreen rows, so
+  // content-visibility:auto here would only break dnd-kit transforms on the
+  // active drag row (lesson #4438) without buying additional paint savings.
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     isolation: isDragging ? "auto" : "isolate",
-    ...(!isDragging && {
-      contentVisibility: "auto",
-      containIntrinsicSize: "auto 180px",
-    }),
   };
 
   const {
@@ -132,6 +132,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
       ref={setNodeRef}
       style={style}
       role="row"
+      id={getWorktreeSidebarRowId(worktreeId)}
       aria-roledescription="sortable worktree"
       aria-rowindex={ariaRowIndex}
       aria-current={isActive ? "true" : undefined}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import {
   Mic,
   Eye,
@@ -17,17 +17,18 @@ import {
   FileSearch,
   RotateCcw,
 } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsTextarea } from "./SettingsTextarea";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
+import { useTabLoad } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
@@ -81,12 +82,10 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   deviceId: "",
 };
 
-type LoadState = "loading" | "ready" | "error";
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
 
 export function VoiceInputSettingsTab() {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
   const [newDictionaryWord, setNewDictionaryWord] = useState("");
@@ -99,26 +98,18 @@ export function VoiceInputSettingsTab() {
     refresh: refreshDevices,
   } = useAudioDevices();
 
+  const loadSettings = useCallback(async () => {
+    const s = await window.electron?.voiceInput?.getSettings();
+    if (s) setSettings(s);
+  }, []);
+
+  const { isLoading, loadError, retryAction } = useTabLoad({
+    initialize: loadSettings,
+    errorMessage: "Couldn't load voice input settings",
+    timeoutMessage: "Voice input settings took too long to load.",
+  });
+
   useEffect(() => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) setLoadState("error");
-    }, 10_000);
-
-    window.electron?.voiceInput
-      ?.getSettings()
-      .then((s) => {
-        settled = true;
-        clearTimeout(timer);
-        setSettings(s);
-        setLoadState("ready");
-      })
-      .catch(() => {
-        settled = true;
-        clearTimeout(timer);
-        setLoadState("error");
-      });
-
     window.electron?.voiceInput
       ?.checkMicPermission()
       .then((status) => {
@@ -130,8 +121,6 @@ export function VoiceInputSettingsTab() {
           error: formatErrorMessage(err, "Mic permission probe failed"),
         });
       });
-
-    return () => clearTimeout(timer);
   }, []);
 
   const update = (patch: Partial<VoiceInputSettings>) => {
@@ -180,27 +169,12 @@ export function VoiceInputSettingsTab() {
     update({ customDictionary: settings.customDictionary.filter((w) => w !== word) });
   };
 
-  useSettingsTabValidation("voice", loadState === "error");
-
-  if (loadState === "loading") {
-    return (
-      <div className="flex items-center justify-center h-32">
-        <div className="text-daintree-text/60 text-sm">Loading voice input settings...</div>
-      </div>
-    );
-  }
-
-  if (loadState === "error") {
-    return (
-      <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-status-error text-sm">Could not load voice input settings.</div>
-        <p className="text-xs text-daintree-text/50">Restart Daintree and try again.</p>
-      </div>
-    );
-  }
+  useSettingsTabValidation("voice", Boolean(loadError));
 
   return (
     <div className="space-y-6">
+      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+
       {/* ── Speech-to-Text ── */}
       <SettingsSection
         icon={Mic}
@@ -215,6 +189,7 @@ export function VoiceInputSettingsTab() {
           isEnabled={settings.enabled}
           onChange={() => update({ enabled: !settings.enabled })}
           ariaLabel="Toggle voice input"
+          disabled={isLoading}
         />
 
         {settings.enabled && (
@@ -469,12 +444,13 @@ function ApiKeyRow({
         </div>
         <Button
           onClick={() => void handleSave()}
-          disabled={validation === "testing" || !keyInput.trim()}
+          disabled={!keyInput.trim()}
+          loading={validation === "testing"}
           size="sm"
           variant="outline"
           className="text-daintree-text border-daintree-border hover:bg-daintree-border"
         >
-          {validation === "testing" ? <Spinner size="sm" /> : "Save"}
+          Save
         </Button>
         {value && (
           <Button
@@ -587,17 +563,11 @@ function MicPermissionRow({
                   size="sm"
                   variant="outline"
                   onClick={onRequest}
-                  disabled={isRequesting}
+                  loading={isRequesting}
                   className="text-daintree-text border-daintree-border hover:bg-daintree-border"
                 >
-                  {isRequesting ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <>
-                      <Mic className="w-3.5 h-3.5" />
-                      Request
-                    </>
-                  )}
+                  <Mic className="w-3.5 h-3.5" />
+                  Request
                 </Button>
               )}
             </div>

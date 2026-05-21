@@ -3,7 +3,13 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../../helpers/panels";
+import {
+  clickToolbarButton,
+  getFirstGridPanel,
+  getGridPanelCount,
+  openTerminal,
+} from "../../helpers/panels";
+import { SEL } from "../../helpers/selectors";
 import { waitForTerminalText } from "../../helpers/terminal";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -51,9 +57,7 @@ test.describe.serial("Core: Context Injection", () => {
     // Clear clipboard before testing to avoid false positives
     await app.evaluate(({ clipboard }) => clipboard.writeText(""));
 
-    const btn = window.getByRole("toolbar").locator('[aria-label="Copy Context"]');
-    await expect(btn).toBeVisible({ timeout: T_MEDIUM });
-    await btn.click();
+    await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
 
     // Verify clipboard has content after copy
     await expect

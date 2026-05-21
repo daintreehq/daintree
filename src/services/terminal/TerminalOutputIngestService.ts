@@ -1,8 +1,15 @@
 import type { TerminalOutputWorkerInboundMessage } from "@shared/types/terminal-output-worker-messages";
+import { TerminalRefreshTier } from "@shared/types/panel";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { logDebug } from "@/utils/logger";
 
+// Renderer-side backpressure layer that throttles xterm consumption. The
+// IPC-layer counterparts (the burst absorber between PTY host and renderer) live
+// in electron/services/pty/types.ts: IPC_MAX_QUEUE_BYTES (3MB ceiling),
+// IPC_HIGH_WATERMARK_PERCENT (67, pause PTY), IPC_LOW_WATERMARK_PERCENT (33,
+// resume PTY). These two layers are independent: the IPC queue absorbs PTY
+// bursts, these watermarks pace how fast xterm drains them.
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
@@ -25,7 +32,10 @@ export class TerminalOutputIngestService {
   private perfSampleCounter = 0;
   private queues = new Map<string, TerminalIngestQueue>();
 
-  constructor(private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void) {}
+  constructor(
+    private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void,
+    private readonly getTier?: (id: string) => TerminalRefreshTier
+  ) {}
 
   public async initialize(): Promise<void> {
     if (this.initializePromise) return this.initializePromise;
@@ -66,6 +76,7 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
+    if (this.isBackgrounded(id)) return;
     if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
       this.tryDrain(id, queue);
     }
@@ -74,6 +85,20 @@ export class TerminalOutputIngestService {
   public notifyParsed(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0 || queue.drainScheduled) return;
+    if (this.isBackgrounded(id)) return;
+    this.tryDrain(id, queue);
+  }
+
+  /**
+   * Drain bytes held while a panel was backgrounded. Routed through tryDrain
+   * (not forceDrain) so the 256KB COALESCE_BATCH_CAP_BYTES cap is respected —
+   * a backgrounded panel may have accumulated a large in-flight batch, and a
+   * single multi-MB xterm.write() on wake would block the main thread (#4853).
+   */
+  public resumeFlush(id: string): void {
+    if (this.isBackgrounded(id)) return;
+    const queue = this.queues.get(id);
+    if (!queue || queue.chunks.length === 0) return;
     this.tryDrain(id, queue);
   }
 
@@ -115,6 +140,10 @@ export class TerminalOutputIngestService {
     }, 50);
   }
 
+  private isBackgrounded(id: string): boolean {
+    return this.getTier?.(id) === TerminalRefreshTier.BACKGROUND;
+  }
+
   private markTerminalDataReceived(id: string, data: string | Uint8Array): void {
     this.perfSampleCounter += 1;
     if (this.perfSampleCounter % 64 !== 0) return;
@@ -149,6 +178,15 @@ export class TerminalOutputIngestService {
     const bytes = this.chunkByteSize(data);
     queue.chunks.push(data);
     queue.queuedBytes += bytes;
+
+    // Backgrounded panels: hold bytes in the queue without parsing them into
+    // xterm. The producer-side gate in pty-host suppresses most output, but
+    // in-flight MessagePort batches still arrive after backgrounding; parsing
+    // them burns renderer main-thread CPU for a pane the user can't see. The
+    // queue is flushed via resumeFlush() when the tier upgrades back to active.
+    if (this.isBackgrounded(id)) {
+      return;
+    }
 
     const stringData = typeof data === "string" ? data : "";
     if (stringData) {

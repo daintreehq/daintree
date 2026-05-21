@@ -3,6 +3,7 @@ import type * as SelectPrimitiveType from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
+import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -198,6 +199,7 @@ const SelectContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const isDockPopoverChild = useIsDockPopoverChild();
     if (!radix) return null;
     const Portal = radix.SelectPrimitive.Portal;
     const Content = radix.SelectPrimitive.Content;
@@ -221,6 +223,7 @@ const SelectContent = React.forwardRef<
             className
           )}
           {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
         >
           <SelectScrollUpButton />
           <Viewport

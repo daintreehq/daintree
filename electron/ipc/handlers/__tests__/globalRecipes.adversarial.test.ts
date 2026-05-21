@@ -18,7 +18,6 @@ vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStore
 
 import { registerGlobalRecipesHandlers } from "../globalRecipes.js";
 import { CHANNELS } from "../../channels.js";
-import type { HandlerDependencies } from "../../types.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -45,7 +44,7 @@ describe("globalRecipes IPC adversarial", () => {
   beforeEach(() => {
     ipcHandlers.clear();
     vi.clearAllMocks();
-    cleanup = registerGlobalRecipesHandlers({} as HandlerDependencies);
+    cleanup = registerGlobalRecipesHandlers();
   });
 
   afterEach(() => {

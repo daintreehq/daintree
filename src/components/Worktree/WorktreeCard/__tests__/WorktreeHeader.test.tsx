@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
+import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
 
@@ -42,6 +43,25 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 const noop = () => {};
+
+function prLinked(num: number, state: NormalizedPRState = "open") {
+  return {
+    linked: {
+      providerId: "daintree.github.github",
+      pr: {
+        ref: {
+          providerId: "daintree.github.github",
+          owner: "",
+          repo: "",
+          number: num,
+          rawData: null,
+        },
+        state: state as NormalizedPRState,
+        url: `https://github.com/test/repo/pull/${num}`,
+      },
+    },
+  };
+}
 
 const baseWorktree: WorktreeState = {
   id: "test-wt",
@@ -86,6 +106,7 @@ function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
         isPinned={false}
         branchLabel="feature/test"
         badges={{}}
+        gitStateIndicator={null}
         menu={baseMenu}
         {...overrides}
       />
@@ -105,7 +126,7 @@ describe("WorktreeHeader menu button", () => {
     expect(wrapper.className).not.toContain("opacity-0");
     expect(wrapper.className).toContain("opacity-50");
     expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    expect(wrapper.className).toContain("group-has-[:focus-visible]/card:opacity-100");
     expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
   });
 
@@ -220,6 +241,7 @@ describe("WorktreeHeader issue title headline", () => {
         issueTitle: "Fix the thing",
         prNumber: 101,
         prState: "open",
+        ...prLinked(101),
       },
       badges: { onOpenIssue: noop, onOpenPR: noop },
     });
@@ -448,6 +470,7 @@ describe("WorktreeHeader click bubbling", () => {
             isPinned={false}
             branchLabel="feature/test"
             badges={{}}
+            gitStateIndicator={null}
             menu={baseMenu}
             {...overrides}
           />
@@ -488,7 +511,7 @@ describe("WorktreeHeader click bubbling", () => {
   it("PR badge click on inactive card bubbles to parent but does NOT call onOpenPR", () => {
     const onOpenPR = vi.fn();
     const { onParentClick } = renderHeaderInWrapper({
-      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR },
       isActive: false,
     });
@@ -502,7 +525,7 @@ describe("WorktreeHeader click bubbling", () => {
   it("PR badge click on active card calls onOpenPR and bubbles to parent", () => {
     const onOpenPR = vi.fn();
     const { onParentClick } = renderHeaderInWrapper({
-      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR },
       isActive: true,
     });
@@ -549,6 +572,7 @@ describe("WorktreeHeader click bubbling", () => {
         issueTitle: "Test issue",
         prNumber: 101,
         prState: "open",
+        ...prLinked(101),
         hasPlanFile: true,
         planFilePath: "TODO.md",
       },
@@ -572,6 +596,7 @@ describe("WorktreeHeader click bubbling", () => {
         issueTitle: "Test issue",
         prNumber: 101,
         prState: "open",
+        ...prLinked(101),
         hasPlanFile: true,
         planFilePath: "TODO.md",
       },
@@ -624,18 +649,19 @@ describe("WorktreeHeader decorative elements", () => {
     expect(pin!.getAttribute("class")).toContain("pointer-events-none");
   });
 
-  it("(detached) span has pointer-events-none", () => {
+  it("git state badge has pointer-events-none", () => {
     renderHeader({
-      worktree: { ...baseWorktree, isDetached: true },
+      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
     });
-    const detached = screen.getByText("(detached)");
-    expect(detached.className).toContain("pointer-events-none");
+    const badge = screen.getByText("detached");
+    expect(badge.className).toContain("pointer-events-none");
+    expect(badge.className).toContain("text-status-warning");
   });
 });
 
 describe("WorktreeHeader hover:underline on badges", () => {
   const issueWt = { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" };
-  const prWt = { ...baseWorktree, prNumber: 101, prState: "open" as const };
+  const prWt = { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" as const };
   const planWt = { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" };
 
   function getIssueSpan(container: HTMLElement) {
@@ -678,6 +704,7 @@ describe("WorktreeHeader hover:underline on badges", () => {
         ...issueWt,
         prNumber: 101,
         prState: "open",
+        ...prLinked(101),
         hasPlanFile: true,
         planFilePath: "TODO.md",
       },
@@ -694,6 +721,7 @@ describe("WorktreeHeader hover:underline on badges", () => {
         ...issueWt,
         prNumber: 101,
         prState: "open",
+        ...prLinked(101),
         hasPlanFile: true,
         planFilePath: "TODO.md",
       },
@@ -850,7 +878,7 @@ describe("WorktreeHeader cleanup button", () => {
     expect(wrapper.className).toContain("opacity-50");
     expect(wrapper.className).not.toContain("pointer-events-none");
     expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    expect(wrapper.className).toContain("group-has-[:focus-visible]/card:opacity-100");
     expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
     // The cleanup button inherits visibility through the wrapper, not its own classes.
     expect(wrapper.contains(button)).toBe(true);
@@ -886,7 +914,7 @@ describe("WorktreeHeader cleanup button", () => {
     const button = screen.getByTestId("worktree-cleanup-button");
     expect(button.className).toContain("text-status-error/70");
     expect(button.className).toContain("hover:text-status-error");
-    expect(button.className).not.toContain("text-github-merged");
+    expect(button.className).not.toContain("text-pr-merged");
   });
 
   it("calls onCleanupWorktree and stops propagation when clicked", () => {
@@ -902,6 +930,7 @@ describe("WorktreeHeader cleanup button", () => {
             isPinned={false}
             branchLabel="feature/test"
             badges={{}}
+            gitStateIndicator={null}
             menu={baseMenu}
             onCleanupWorktree={onCleanupWorktree}
           />
@@ -913,6 +942,150 @@ describe("WorktreeHeader cleanup button", () => {
     fireEvent.click(button);
     expect(onCleanupWorktree).toHaveBeenCalledOnce();
     expect(onParentClick).not.toHaveBeenCalled();
+  });
+});
+
+function ciFailureLinked(num: number) {
+  return {
+    linked: {
+      providerId: "daintree.github.github",
+      pr: {
+        ref: {
+          providerId: "daintree.github.github",
+          owner: "",
+          repo: "",
+          number: num,
+          rawData: null,
+        },
+        state: "open" as NormalizedPRState,
+        url: `https://github.com/test/repo/pull/${num}`,
+        ciStatus: {
+          state: "failure" as const,
+          total: 1,
+          passed: 0,
+          failed: 1,
+          pending: 0,
+          rawData: null,
+        },
+      },
+    },
+  };
+}
+
+describe("WorktreeHeader collapsed alarm pill", () => {
+  it("renders the pill with CI-failed treatment when collapsed and CI failed", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("ci-failed");
+    expect(pill.className).toContain("text-status-error");
+    expect(pill.textContent).toBe("CI failed");
+  });
+
+  it("renders the pill with warning treatment for GitHub auth-failed remote", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+      },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("auth-failed");
+    expect(pill.className).toContain("text-status-warning");
+  });
+
+  it("suppresses the auth-failed pill for non-GitHub remotes (matches expanded gating)", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: false,
+      },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("renders the pill with warning treatment for behindCount > 0", () => {
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, behindCount: 3 },
+    });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
+    expect(pill.className).toContain("text-status-warning");
+  });
+
+  it("does not duplicate gitStateIndicator for detached HEAD", () => {
+    // gitStateIndicator already labels detached in the title row;
+    // computeAlarmTier deliberately excludes detached so collapsed rows
+    // don't end up with two side-by-side "detached"/"Detached" labels.
+    renderHeader({
+      isCollapsed: true,
+      worktree: { ...baseWorktree, isDetached: true },
+      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+    expect(screen.getByText("detached")).toBeDefined();
+  });
+
+  it("does not render when collapsed but no alarm fires", () => {
+    renderHeader({ isCollapsed: true });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not render when expanded — even with a CI failure", () => {
+    renderHeader({
+      isCollapsed: false,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not fire a stale CI-failed alarm when the linked PR is closed", () => {
+    const closed = ciFailureLinked(101);
+    closed.linked.pr.state = "closed";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...closed } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("does not fire a stale CI-failed alarm when the linked PR is declined", () => {
+    const declined = ciFailureLinked(101);
+    declined.linked.pr.state = "declined";
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...declined } });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("caps to exactly one pill when multiple alarms fire (CI wins over auth)", () => {
+    const { container } = renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        fetchAuthFailed: true,
+        isGitHubRemote: true,
+        behindCount: 5,
+        ...ciFailureLinked(101),
+      },
+    });
+    const pills = container.querySelectorAll("[data-testid='collapsed-alarm-pill']");
+    expect(pills.length).toBe(1);
+    expect(pills[0]!.getAttribute("data-alarm-kind")).toBe("ci-failed");
+  });
+
+  it("renders for main worktree rows too (collapsed + behind)", () => {
+    renderHeader({
+      isCollapsed: true,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      worktree: { ...baseWorktree, isMainWorktree: true, behindCount: 2 },
+    });
+    expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("data-alarm-kind")).toBe(
+      "behind"
+    );
   });
 });
 
@@ -973,7 +1146,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     fireEvent.click(issueButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
       { source: "user" }
     );
     expect(onOpenIssue).not.toHaveBeenCalled();
@@ -982,7 +1155,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
   it("PR badge shows token-missing aria-label when no token configured", () => {
     mockMissingToken = true;
     renderHeader({
-      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR: noop },
       isActive: true,
     });
@@ -1001,7 +1174,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     mockMissingToken = true;
     const onOpenPR = vi.fn();
     renderHeader({
-      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR },
       isActive: true,
     });
@@ -1012,7 +1185,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     fireEvent.click(prButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
       { source: "user" }
     );
     expect(onOpenPR).not.toHaveBeenCalled();
@@ -1143,6 +1316,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         behindCount: 2,
         fetchAuthFailed: true,
         isGitHubRemote: true,
+        linked: { providerId: "daintree.github.github" },
       },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
@@ -1164,6 +1338,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         behindCount: 0,
         fetchAuthFailed: true,
         isGitHubRemote: true,
+        linked: { providerId: "daintree.github.github" },
       },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
@@ -1201,13 +1376,14 @@ describe("WorktreeHeader upstream sync indicator", () => {
         aheadCount: 1,
         fetchAuthFailed: true,
         isGitHubRemote: true,
+        linked: { providerId: "daintree.github.github" },
       },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
     fireEvent.click(indicator);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
       { source: "user" }
     );
   });
@@ -1221,7 +1397,45 @@ describe("WorktreeHeader upstream sync indicator", () => {
       },
     });
     // The badge still renders the count display (transient failure doesn't
-    // replace the indicator — only auth+github gets dimmed).
-    expect(screen.getByTestId("upstream-sync-indicator")).toBeDefined();
+    // replace the indicator like the auth+github path does), but it carries a
+    // partial dim so the failed row is distinguishable from a healthy one at
+    // the row level — without grayscale, which is reserved for the persistent
+    // auth-failure treatment.
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator).toBeDefined();
+    expect(indicator.textContent).toContain("↑1");
+    expect(indicator.className).toContain("opacity-75");
+    expect(indicator.className).not.toContain("grayscale");
+    expect(indicator.className).not.toContain("opacity-50");
+    expect(indicator.getAttribute("data-fetch-network-failed")).toBe("true");
+  });
+
+  it("does not dim the count display on a healthy worktree", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, aheadCount: 1 },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator).toBeDefined();
+    expect(indicator.className).not.toContain("opacity-75");
+    expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
+  });
+
+  it("prefers the auth-failed treatment over the network-failed dim", () => {
+    // Mutually exclusive at source (RepoFetchCoordinator), but pin the
+    // precedence so a regression can't surface both treatments at once.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 1,
+        fetchAuthFailed: true,
+        fetchNetworkFailed: true,
+        isGitHubRemote: true,
+        linked: { providerId: "daintree.github.github" },
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
+    expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
+    expect(indicator.className).not.toContain("opacity-75");
   });
 });

@@ -408,30 +408,154 @@ describe("WorkspaceService external worktree removal", () => {
       vi.useRealTimers();
     });
 
-    it("respects suppression window during app-owned create", async () => {
+    it("suppresses the app-owned create event and drains the pending entry", async () => {
       vi.useFakeTimers();
       const discoverSpy = vi
         .spyOn(service as any, "discoverAndSyncWorktrees")
         .mockResolvedValue(undefined);
 
-      // Simulate suppression set by createWorktree
-      service["topologyWatchSuppressUntil"] = Date.now() + 60000;
+      // Simulate the pending entry createWorktree registers before its own
+      // `git worktree add`.
+      service["topologyMarkPending"]("new-wt", service["topologyPendingCreate"]);
 
       service["startTopologyWatcher"]();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       parcelWatcherCallbacks[0]!(null, [
         { type: "create", path: "/test/root/.git/worktrees/new-wt" },
       ]);
       await vi.advanceTimersByTimeAsync(350);
 
-      // Suppression active — reconciliation should not fire
+      // App-owned event matched the pending entry — no reconciliation.
       expect(discoverSpy).not.toHaveBeenCalled();
+      // ...and the pending entry (plus its safety timer) is drained.
+      expect(service["topologyPendingCreate"].has("new-wt")).toBe(false);
+      expect(service["topologyPendingSafetyTimers"].has("new-wt")).toBe(false);
 
-      // Clear suppression
-      service["topologyWatchSuppressUntil"] = 0;
+      // A later external change to the same name is no longer masked.
       parcelWatcherCallbacks[0]!(null, [
-        { type: "create", path: "/test/root/.git/worktrees/another" },
+        { type: "delete", path: "/test/root/.git/worktrees/new-wt" },
+      ]);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(discoverSpy).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it("does not swallow an external delete during an app-owned create (#8412)", async () => {
+      vi.useFakeTimers();
+      const discoverSpy = vi
+        .spyOn(service as any, "discoverAndSyncWorktrees")
+        .mockResolvedValue(undefined);
+
+      // App-owned create in flight for "my-wt".
+      service["topologyMarkPending"]("my-wt", service["topologyPendingCreate"]);
+
+      service["startTopologyWatcher"]();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Concurrent external `git worktree remove other-wt`.
+      parcelWatcherCallbacks[0]!(null, [
+        { type: "delete", path: "/test/root/.git/worktrees/other-wt" },
+      ]);
+      await vi.advanceTimersByTimeAsync(350);
+
+      // The external delete is not pending → reconciliation fires.
+      expect(discoverSpy).toHaveBeenCalledTimes(1);
+      // The app-owned pending entry is untouched.
+      expect(service["topologyPendingCreate"].has("my-wt")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("reconciles a mixed batch with a matched create and an unmatched delete", async () => {
+      vi.useFakeTimers();
+      const discoverSpy = vi
+        .spyOn(service as any, "discoverAndSyncWorktrees")
+        .mockResolvedValue(undefined);
+
+      service["topologyMarkPending"]("my-wt", service["topologyPendingCreate"]);
+
+      service["startTopologyWatcher"]();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Both events coalesce into one debounce window.
+      const cb = parcelWatcherCallbacks[0]!;
+      cb(null, [{ type: "create", path: "/test/root/.git/worktrees/my-wt" }]);
+      cb(null, [{ type: "delete", path: "/test/root/.git/worktrees/other-wt" }]);
+      await vi.advanceTimersByTimeAsync(350);
+
+      // Unmatched external delete forces exactly one reconciliation...
+      expect(discoverSpy).toHaveBeenCalledTimes(1);
+      // ...and the matched create still drained its pending entry.
+      expect(service["topologyPendingCreate"].has("my-wt")).toBe(false);
+      vi.useRealTimers();
+    });
+
+    it("safety valve clears a pending entry after 5s with no reconcile", async () => {
+      vi.useFakeTimers();
+      const discoverSpy = vi
+        .spyOn(service as any, "discoverAndSyncWorktrees")
+        .mockResolvedValue(undefined);
+
+      service["topologyMarkPending"]("stuck-wt", service["topologyPendingDelete"]);
+      expect(service["topologyPendingDelete"].has("stuck-wt")).toBe(true);
+
+      // No watcher event ever arrives.
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(service["topologyPendingDelete"].has("stuck-wt")).toBe(false);
+      expect(service["topologyPendingSafetyTimers"].has("stuck-wt")).toBe(false);
+      expect(discoverSpy).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("no longer exposes a topologyWatchSuppressUntil field", () => {
+      expect("topologyWatchSuppressUntil" in service).toBe(false);
+      expect((service as any)["topologyWatchSuppressUntil"]).toBeUndefined();
+    });
+
+    it("does not let a pending create swallow an external delete of the same basename", async () => {
+      vi.useFakeTimers();
+      const discoverSpy = vi
+        .spyOn(service as any, "discoverAndSyncWorktrees")
+        .mockResolvedValue(undefined);
+
+      // App-owned create pending for "foo"; an external `git worktree remove`
+      // for a pre-existing worktree whose metadata dir is also "foo" fires a
+      // DELETE event — it must not be drained by the pending *create*.
+      service["topologyMarkPending"]("foo", service["topologyPendingCreate"]);
+
+      service["startTopologyWatcher"]();
+      await vi.advanceTimersByTimeAsync(0);
+
+      parcelWatcherCallbacks[0]!(null, [{ type: "delete", path: "/test/root/.git/worktrees/foo" }]);
+      await vi.advanceTimersByTimeAsync(350);
+
+      expect(discoverSpy).toHaveBeenCalledTimes(1);
+      // The pending create entry is untouched by the unrelated delete.
+      expect(service["topologyPendingCreate"].has("foo")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("clears pending entries and safety timers on stopTopologyWatcher", async () => {
+      vi.useFakeTimers();
+      const discoverSpy = vi
+        .spyOn(service as any, "discoverAndSyncWorktrees")
+        .mockResolvedValue(undefined);
+
+      service["topologyMarkPending"]("paused-wt", service["topologyPendingDelete"]);
+      expect(service["topologyPendingDelete"].has("paused-wt")).toBe(true);
+      expect(service["topologyPendingSafetyTimers"].has("paused-wt")).toBe(true);
+
+      // Pause/teardown clears all pending state.
+      service["stopTopologyWatcher"]();
+      expect(service["topologyPendingDelete"].has("paused-wt")).toBe(false);
+      expect(service["topologyPendingSafetyTimers"].has("paused-wt")).toBe(false);
+
+      // After resume, an external change to that same name still reconciles.
+      service["startTopologyWatcher"]();
+      await vi.advanceTimersByTimeAsync(0);
+      parcelWatcherCallbacks.at(-1)!(null, [
+        { type: "delete", path: "/test/root/.git/worktrees/paused-wt" },
       ]);
       await vi.advanceTimersByTimeAsync(350);
 
@@ -533,6 +657,109 @@ describe("WorkspaceService external worktree removal", () => {
 
       // Active should still be main
       expect(service["activeWorktreeId"]).toBe("/test/main");
+    });
+  });
+
+  describe("periodic safety-net timer (#8510)", () => {
+    it("calls scheduleTopologyReconcile on each interval tick", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+
+      expect(reconcileSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(2);
+
+      vi.useRealTimers();
+    });
+
+    it("is idempotent — a second start does not create a duplicate interval", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service["startPeriodicSafetyTimer"]();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+
+    it("stopTopologyWatcher clears the timer so no further ticks fire", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service["stopTopologyWatcher"]();
+
+      await vi.advanceTimersByTimeAsync(90_000 * 2);
+      expect(reconcileSpy).not.toHaveBeenCalled();
+      expect(service["periodicSafetyTimer"]).toBeNull();
+
+      vi.useRealTimers();
+    });
+
+    it("clears a phantom monitor end-to-end when the interval fires", async () => {
+      createAndRegisterMonitor();
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "list") {
+          // Post-prune list: the externally-removed worktree is gone.
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+      service["listService"].invalidateCache();
+
+      vi.useFakeTimers();
+      service["startPeriodicSafetyTimer"]();
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed", worktreeId: "/test/worktree" })
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("restarts symmetrically across a setPollingEnabled pause/resume cycle", async () => {
+      vi.useFakeTimers();
+      const reconcileSpy = vi
+        .spyOn(service as any, "scheduleTopologyReconcile")
+        .mockImplementation(() => {});
+
+      service["startPeriodicSafetyTimer"]();
+      service.setPollingEnabled(false);
+      expect(service["periodicSafetyTimer"]).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).not.toHaveBeenCalled();
+
+      service.setPollingEnabled(true);
+      // setPollingEnabled(true) also fires an immediate reconcile (line 2186);
+      // clear it so the assertion isolates the restarted timer's tick.
+      reconcileSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(reconcileSpy).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
     });
   });
 });

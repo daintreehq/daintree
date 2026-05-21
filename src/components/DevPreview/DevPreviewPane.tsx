@@ -1,20 +1,32 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
+import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import {
   AlertTriangle,
   RotateCw,
+  ChevronDown,
   ExternalLink,
   Settings,
-  Square,
-  WandSparkles,
+  OctagonAlert,
+  Play,
+  XCircle,
 } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Spinner } from "@/components/ui/Spinner";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
+import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
@@ -22,33 +34,41 @@ import {
   initializeBrowserHistory,
   pushBrowserHistory,
 } from "../Browser/historyUtils";
-import { useDevServer } from "@/hooks/useDevServer";
+import { useDevServer, type UseDevServerReturn } from "@/hooks/useDevServer";
 import { ConsoleDrawer } from "./ConsoleDrawer";
+import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
+import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
-import { shouldAdoptDetectedDevServerUrl } from "./urlSync";
-import { findDevServerCandidate } from "@/utils/devServerDetection";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { computeDevServerUrl } from "./urlSync";
+import { findDevServerCandidate, findAllDevServerCandidates } from "@/utils/devServerDetection";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
+import { getInvalidCommandMessage } from "@shared/utils/devCommandValidation";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
+import {
+  getViewportPreset,
+  getEffectiveViewportSize,
+  computeFitScale,
+} from "@/panels/dev-preview/viewportPresets";
 import type { ViewportPresetId } from "@shared/types/panel";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { logError } from "@/utils/logger";
 import { loadWebviewUrl } from "./loadWebviewUrl";
-import {
-  useDevPreviewLoadLifecycle,
-  type DevPreviewBlockedNav,
-  type SessionStorageEntry,
-} from "./useDevPreviewLoadLifecycle";
+import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
+import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 
 async function captureWebviewSessionStorage(
@@ -86,96 +106,94 @@ async function captureWebviewSessionStorage(
   }
 }
 
-function BlockedNavBanner({
-  blockedNav,
-  panelId,
-  webviewElement,
-  onDismiss,
-}: {
-  blockedNav: {
-    url: string;
-    canOpenExternal: boolean;
-    sessionStorageSnapshot: SessionStorageEntry[];
-  };
-  panelId: string;
-  webviewElement: Electron.WebviewTag | null;
-  onDismiss: () => void;
-}) {
-  const isOAuth = looksLikeOAuthUrl(blockedNav.url);
-  const hostname = (() => {
-    try {
-      return new URL(blockedNav.url).hostname;
-    } catch {
-      return blockedNav.url;
-    }
-  })();
-
-  return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80">
-      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
-      <span className="truncate flex-1">Navigation to external site blocked: {hostname}</span>
-      {isOAuth ? (
-        <button
-          type="button"
-          onClick={async () => {
-            const url = blockedNav.url;
-            onDismiss();
-            // Get webContentsId for CDP interception of the token exchange
-            let wcId: number | undefined;
-            try {
-              wcId = (
-                webviewElement as unknown as { getWebContentsId(): number }
-              )?.getWebContentsId();
-            } catch {
-              /* webview not ready */
-            }
-            if (wcId != null) {
-              try {
-                await window.electron.webview.startOAuthLoopback(
-                  url,
-                  panelId,
-                  wcId,
-                  blockedNav.sessionStorageSnapshot
-                );
-              } catch {
-                // OAuth loopback may fail if the webview is gone or CDP setup
-                // breaks; silently fall through — the dialog has been dismissed.
-              }
-            }
-          }}
-          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
-        >
-          Sign in via Browser
-        </button>
-      ) : blockedNav.canOpenExternal ? (
-        <button
-          type="button"
-          onClick={() => {
-            safeFireAndForget(window.electron.system.openExternal(blockedNav.url), {
-              context: "Opening blocked dev preview URL externally",
-            });
-            onDismiss();
-          }}
-          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
-        >
-          Open in External Browser
-        </button>
-      ) : null}
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
-        aria-label="Dismiss"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
+}
+
+const STUCK_REMEDY_LABELS: Record<string, string> = {
+  "devPreview.restartAndClearCache": "Restart and clear cache",
+  "devPreview.reinstallAndRestart": "Reinstall dependencies",
+};
+
+interface DevPreviewStuckBannerProps {
+  tier: 2 | 3;
+  error: UseDevServerReturn["error"];
+  /** Disables the banner actions while a restart is already in flight. */
+  isRestarting: boolean;
+  onRestart: () => void;
+  onRemedy: (actionId: string) => void;
+}
+
+/**
+ * Staged stuck-start escalation banner (#8276). Replaces the old silent
+ * auto-restart with a user-driven signal: Tier 2 is a warning that the
+ * server is slow, Tier 3 an error that names likely causes and, when the
+ * dev server emitted a recognised error, offers a variant-specific remedy
+ * (`error.recommendedActionId`) alongside a plain restart.
+ */
+function DevPreviewStuckBanner({
+  tier,
+  error,
+  isRestarting,
+  onRestart,
+  onRemedy,
+}: DevPreviewStuckBannerProps) {
+  const restartAction: BannerAction = {
+    id: "dev-preview-stuck-restart",
+    label: "Restart dev server",
+    icon: RotateCw,
+    variant: "primary",
+    disabled: isRestarting,
+    onClick: onRestart,
+  };
+
+  if (tier === 2) {
+    return (
+      <InlineStatusBanner
+        icon={AlertTriangle}
+        severity="warning"
+        title="Dev server is slow to start"
+        description="It's been a while without a URL. Check the terminal logs for what it's waiting on — restarting clears those logs."
+        role="status"
+        ariaLive="polite"
+        actions={[restartAction]}
+      />
+    );
+  }
+
+  const remedyId = error?.recommendedActionId;
+  const remedyLabel = remedyId ? STUCK_REMEDY_LABELS[remedyId] : undefined;
+  const actions: BannerAction[] =
+    remedyId && remedyLabel
+      ? [
+          {
+            id: `dev-preview-stuck-remedy-${remedyId}`,
+            label: remedyLabel,
+            icon: RotateCw,
+            variant: "primary",
+            disabled: isRestarting,
+            onClick: () => onRemedy(remedyId),
+          },
+          restartAction,
+        ]
+      : [restartAction];
+
+  const description = error?.message
+    ? error.message
+    : "Likely causes: the port is still bound by another process, dependencies are missing, or the build cache is stuck. Check the terminal logs.";
+
+  return (
+    <InlineStatusBanner
+      icon={AlertTriangle}
+      severity="error"
+      title="Dev server still hasn't started"
+      description={description}
+      role="alert"
+      ariaLive="assertive"
+      actions={actions}
+    />
+  );
 }
 
 function sanitizePartitionToken(value: string | undefined): string {
@@ -206,7 +224,11 @@ export function DevPreviewPane({
   const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
+  const setDevPreviewConsoleTab = usePanelStore((state) => state.setDevPreviewConsoleTab);
   const setViewportPreset = usePanelStore((state) => state.setViewportPreset);
+  const setViewportRotated = usePanelStore((state) => state.setViewportRotated);
+  const setViewportDpr = usePanelStore((state) => state.setViewportDpr);
+  const setViewportFit = usePanelStore((state) => state.setViewportFit);
   const setDevPreviewScrollPosition = usePanelStore((state) => state.setDevPreviewScrollPosition);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
@@ -217,8 +239,26 @@ export function DevPreviewPane({
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
   const viewportPreset = terminal?.viewportPreset;
+  const viewportRotated = terminal?.viewportRotated ?? false;
+  const viewportDpr = terminal?.viewportDpr ?? 1;
+  const viewportFit = terminal?.viewportFit ?? false;
+  const effectiveViewport = viewportPreset
+    ? getEffectiveViewportSize(viewportPreset, viewportRotated)
+    : null;
 
-  const { status, url, terminalId, error, start, restart, isRestarting } = useDevServer({
+  const {
+    status,
+    url,
+    terminalId,
+    error,
+    phaseLabel,
+    start,
+    stop,
+    restart,
+    isRestarting,
+    stuckTier,
+    forceKilled,
+  } = useDevServer({
     panelId: id,
     devCommand,
     cwd,
@@ -234,6 +274,14 @@ export function DevPreviewPane({
     return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
   }, [currentProjectId, worktreeId, id]);
 
+  const [forceKillBannerDismissed, setForceKillBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    if (forceKilled) {
+      setForceKillBannerDismissed(false);
+    }
+  }, [forceKilled]);
+
   const [history, setHistory] = useState<BrowserHistory>(() => {
     const saved = terminal?.browserHistory;
     return initializeBrowserHistory(saved, "");
@@ -244,7 +292,14 @@ export function DevPreviewPane({
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
 
-  const [blockedNav, setBlockedNav] = useState<DevPreviewBlockedNav | null>(null);
+  const [blockedNav, dispatchBlockedNav] = useReducer(blockedNavReducer, null);
+  const [crashState, setCrashState] = useState<"none" | "crashed" | "unresponsive">("none");
+  const [crashDetails, setCrashDetails] = useState<{
+    reason: string;
+    exitCode: number;
+  } | null>(null);
+  const crashTimestampsRef = useRef<number[]>([]);
+  const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSetUrlRef = useRef<string>("");
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
@@ -253,14 +308,29 @@ export function DevPreviewPane({
   // promise that resolves after the clear must NOT write the stale position back.
   const scrollCaptureGenerationRef = useRef<number>(0);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
+  const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
+  const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
   // Store the original guest UA so we can restore it when clearing a preset
   const originalUaRef = useRef<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const autoDetectRef = useRef(false);
   const { saveSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
+
+  const candidates = useMemo(
+    () => findAllDevServerCandidates(allDetectedRunners, projectSettings?.turbopackEnabled ?? true),
+    [allDetectedRunners, projectSettings?.turbopackEnabled]
+  );
+  const primaryCandidate = candidates[0];
+
+  const [commandInput, setCommandInput] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const savingRef = useRef(false);
+
   const isMountedRef = useRef(true);
   const prevStatusRef = useRef(status);
+
   const loadTimeoutMs =
     Math.min(Math.max(projectSettings?.devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
@@ -274,28 +344,123 @@ export function DevPreviewPane({
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
+  const [isRecoveringFromEviction, setIsRecoveringFromEviction] = useState(false);
+  const previousIsEvictedRef = useRef(false);
+
+  useEffect(() => {
+    if (previousIsEvictedRef.current && !isEvicted && hasBeenVisible) {
+      setIsRecoveringFromEviction(true);
+    }
+    if (isEvicted) {
+      setIsRecoveringFromEviction(false);
+    }
+    previousIsEvictedRef.current = isEvicted;
+  }, [isEvicted, hasBeenVisible]);
+
+  const showRecoverySpinner = useDohertyGate(isRecoveringFromEviction);
+
+  useEffect(() => {
+    const webview = webviewElement;
+    if (!webview || !isRecoveringFromEviction) return;
+
+    const handleRecoveryFinishLoad = () => {
+      try {
+        if (webview.getURL() !== "about:blank") {
+          setIsRecoveringFromEviction(false);
+        }
+      } catch {
+        // Webview detached
+      }
+    };
+
+    webview.addEventListener("did-finish-load", handleRecoveryFinishLoad);
+
+    try {
+      if (webview.getURL() !== "about:blank" && !webview.isLoading()) {
+        setIsRecoveringFromEviction(false);
+      }
+    } catch {
+      // Webview not ready
+    }
+
+    return () => {
+      webview.removeEventListener("did-finish-load", handleRecoveryFinishLoad);
+    };
+  }, [isRecoveringFromEviction, webviewElement]);
+
+  const consoleAutoOpenedErrorRef = useRef<string | null>(null);
+  const consoleAutoOpenedStallRef = useRef(false);
+
+  useEffect(() => {
+    if (status === "error" && error && consoleAutoOpenedErrorRef.current !== error.message) {
+      consoleAutoOpenedErrorRef.current = error.message;
+      setDevPreviewConsoleOpen(id, true);
+    }
+    if (status !== "error") {
+      consoleAutoOpenedErrorRef.current = null;
+    }
+  }, [status, error, id, setDevPreviewConsoleOpen]);
+
+  useEffect(() => {
+    if (status !== "starting" && status !== "installing") {
+      consoleAutoOpenedStallRef.current = false;
+    }
+    if (
+      (status !== "starting" && status !== "installing") ||
+      url ||
+      phaseLabel ||
+      consoleAutoOpenedStallRef.current
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if ((status === "starting" || status === "installing") && !url && !phaseLabel) {
+        consoleAutoOpenedStallRef.current = true;
+        setDevPreviewConsoleOpen(id, true);
+      }
+    }, 15_000);
+
+    return () => clearTimeout(timer);
+  }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
+
+  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
+    const now = Date.now();
+    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+    timestamps.push(now);
+    crashTimestampsRef.current = timestamps;
+
+    setCrashDetails(details);
+    setCrashState("crashed");
+
+    if (timestamps.length < 2) {
+      crashReloadRef.current();
+    }
+  }, []);
+
   const {
     isWebviewReady,
     setIsWebviewReady,
     isLoading,
     setIsLoading,
-    isSlowLoad,
     setIsSlowLoad,
     webviewLoadError,
     setWebviewLoadError,
+    reconnectAttempt,
     clearLoadTimers,
     clearRetryState,
   } = useDevPreviewLoadLifecycle({
     webviewElement,
     id,
+    projectId: currentProjectId,
     loadTimeoutMs,
     zoomFactor,
-    viewportPreset,
     evictingRef,
     lastSetUrlRef,
     originalUaRef,
     setHistory,
-    setBlockedNav,
+    setBlockedNav: dispatchBlockedNav,
+    onRenderProcessGone: handleRenderProcessGone,
   });
 
   useEffect(() => {
@@ -305,6 +470,7 @@ export function DevPreviewPane({
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
+    setCommandInput("");
   }, [isUnconfigured, id, setBrowserUrl, setWebviewLoadError, clearRetryState]);
 
   const setWebviewNode = useCallback(
@@ -315,11 +481,22 @@ export function DevPreviewPane({
           const currentWebviewUrl = prevWebview.getURL();
           if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
             const captureGeneration = scrollCaptureGenerationRef.current;
-            prevWebview
-              .executeJavaScript("window.scrollY")
+            // Use main-process CDP Page.getLayoutMetrics instead of
+            // executeJavaScript("window.scrollY"): hidden dock webviews are
+            // frozen by useWebviewThrottle (via Page.setWebLifecycleState) which
+            // suspends the JS task queue, so the executeJavaScript path hangs
+            // when memory-pressure eviction fires while the page is frozen.
+            const wcId = (
+              prevWebview as unknown as { getWebContentsId(): number }
+            ).getWebContentsId();
+            window.electron.webview
+              .getScrollPosition(wcId)
               .then((scrollY: number) => {
                 if (scrollCaptureGenerationRef.current !== captureGeneration) return;
-                if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+                // Guard `> 0`: a CDP error returns 0, and the user being at top
+                // of page has nothing worth restoring — both cases should leave
+                // any prior stored position untouched rather than clobber it.
+                if (typeof scrollY === "number" && Number.isFinite(scrollY) && scrollY > 0) {
                   setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
                 }
               })
@@ -377,9 +554,10 @@ export function DevPreviewPane({
 
   useEffect(() => {
     if (isUnconfigured) return;
-    if (url && shouldAdoptDetectedDevServerUrl(url, currentUrl)) {
-      setHistory((prev) => pushBrowserHistory(prev, url));
-      lastSetUrlRef.current = url;
+    const nextUrl = url ? computeDevServerUrl(url, currentUrl) : false;
+    if (nextUrl !== false) {
+      setHistory((prev) => pushBrowserHistory(prev, nextUrl));
+      lastSetUrlRef.current = nextUrl;
     }
   }, [url, currentUrl, isUnconfigured]);
 
@@ -433,7 +611,7 @@ export function DevPreviewPane({
     } catch {
       // Webview detached
     }
-    setWebviewLoadError("Load cancelled.");
+    setWebviewLoadError({ code: "aborted", message: "Load cancelled." });
   }, [clearLoadTimers, setIsSlowLoad, setIsLoading, setWebviewLoadError]);
 
   const handleRetryWebviewLoad = useCallback(() => {
@@ -452,9 +630,11 @@ export function DevPreviewPane({
     }
   }, [currentUrl, setWebviewLoadError, setIsSlowLoad, setIsLoading]);
 
-  const handleHardReload = useCallback(() => {
+  const performReload = useCallback(() => {
     const webview = webviewRef.current;
     if (!webview || !isWebviewReady) return;
+    setWebviewLoadError(null);
+    setIsSlowLoad(false);
     try {
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
       safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
@@ -463,7 +643,53 @@ export function DevPreviewPane({
     } catch {
       webview.reload();
     }
-  }, [isWebviewReady, id]);
+  }, [isWebviewReady, id, setWebviewLoadError, setIsSlowLoad]);
+
+  const handleCaptureScreenshot = useCallback(async () => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    let url: string;
+    try {
+      url = webview.getURL();
+    } catch {
+      return;
+    }
+    if (!url || url === "about:blank") return;
+    try {
+      const image = await webview.capturePage();
+      const pngData = new Uint8Array(image.toPNG());
+      await window.electron.clipboard.writeImage(pngData);
+    } catch (err) {
+      logError("[DevPreviewPane] Screenshot capture failed", err);
+    }
+  }, [isWebviewReady]);
+
+  const handleToggleDevTools = useCallback(() => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    if (webview.isDevToolsOpened()) {
+      webview.closeDevTools();
+    } else {
+      webview.openDevTools();
+    }
+  }, [isWebviewReady]);
+
+  const handleToggleConsole = useCallback(() => {
+    setDevPreviewConsoleOpen(id, !isConsoleOpen);
+  }, [id, isConsoleOpen, setDevPreviewConsoleOpen]);
+
+  const handleHardReload = useCallback(() => {
+    setCrashState("none");
+    setCrashDetails(null);
+    crashTimestampsRef.current = [];
+    performReload();
+  }, [performReload]);
+
+  // Keep crashReloadRef in sync so onRenderProcessGone can call performReload
+  // before it exists in the lexical scope.
+  useEffect(() => {
+    crashReloadRef.current = performReload;
+  }, [performReload]);
 
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
@@ -474,19 +700,30 @@ export function DevPreviewPane({
   }, [currentUrl]);
 
   const handleZoomChange = useCallback((newZoom: number) => {
-    setZoomFactor(newZoom);
+    const clamped = Math.max(0.25, Math.min(2.0, newZoom));
+    setZoomFactor(clamped);
     if (webviewRef.current) {
-      webviewRef.current.setZoomFactor(newZoom);
+      webviewRef.current.setZoomFactor(clamped);
     }
   }, []);
 
+  useBrowserActionListeners(id, {
+    onReload: handleReload,
+    onNavigate: handleNavigate,
+    onBack: handleBack,
+    onForward: handleForward,
+    onSetZoom: handleZoomChange,
+    onCaptureScreenshot: handleCaptureScreenshot,
+    onToggleDevTools: handleToggleDevTools,
+    onToggleConsole: handleToggleConsole,
+    onHardReload: handleHardReload,
+  });
+
   const handleRetry = useCallback(() => {
-    start();
+    void start();
   }, [start]);
 
-  const handleHardRestart = useCallback(() => {
-    // Invalidate any in-flight async scroll captures so they can't write
-    // stale data back over the cleared position.
+  const resetPreviewWebviewState = useCallback(() => {
     scrollCaptureGenerationRef.current += 1;
     setDevPreviewScrollPosition(id, undefined);
     clearLoadTimers();
@@ -497,10 +734,11 @@ export function DevPreviewPane({
     setIsSlowLoad(false);
     setIsWebviewReady(false);
     setWebviewLoadError(null);
-    void restart();
+    setCrashState("none");
+    setCrashDetails(null);
+    crashTimestampsRef.current = [];
   }, [
     id,
-    restart,
     setBrowserUrl,
     setDevPreviewScrollPosition,
     clearLoadTimers,
@@ -510,40 +748,137 @@ export function DevPreviewPane({
     setWebviewLoadError,
   ]);
 
-  const handleAutoDetect = useCallback(async () => {
-    if (!currentProjectId || isAutoDetecting) return;
+  const handleRestartDevServer = useCallback(() => {
+    resetPreviewWebviewState();
+    void restart();
+  }, [resetPreviewWebviewState, restart]);
 
-    setIsAutoDetecting(true);
+  const confirmRestartInFlightRef = useRef(false);
+  const [pendingRestartTier, setPendingRestartTier] = useState<
+    "restartAndClearCache" | "reinstallAndRestart" | null
+  >(null);
+  const isRestartConfirmOpen = pendingRestartTier !== null;
+
+  const handleRequestRestartAndClearCache = useCallback(() => {
+    setPendingRestartTier("restartAndClearCache");
+  }, []);
+
+  const handleRequestReinstallAndRestart = useCallback(() => {
+    setPendingRestartTier("reinstallAndRestart");
+  }, []);
+
+  const handleRestartConfirmClose = useCallback(() => {
+    setPendingRestartTier(null);
+  }, []);
+
+  const handleRestartConfirm = useCallback(() => {
+    if (confirmRestartInFlightRef.current) return;
+    const tier = pendingRestartTier;
+    if (!tier || !currentProjectId) return;
+
+    confirmRestartInFlightRef.current = true;
+
+    const onSuccess = () => {
+      resetPreviewWebviewState();
+      confirmRestartInFlightRef.current = false;
+      setPendingRestartTier(null);
+    };
+
+    const onError = (err: unknown) => {
+      console.warn("[DevPreviewPane] Restart confirm failed", err);
+      confirmRestartInFlightRef.current = false;
+      setPendingRestartTier(null);
+    };
+
+    if (tier === "restartAndClearCache") {
+      window.electron.devPreview
+        .restartAndClearCache({ panelId: id, projectId: currentProjectId })
+        .then(onSuccess, onError);
+    } else {
+      window.electron.devPreview
+        .reinstallAndRestart({ panelId: id, projectId: currentProjectId })
+        .then(onSuccess, onError);
+    }
+  }, [pendingRestartTier, currentProjectId, id, resetPreviewWebviewState]);
+
+  const handleStuckRemedy = useCallback((actionId: string) => {
+    if (actionId === "devPreview.restartAndClearCache") {
+      setPendingRestartTier("restartAndClearCache");
+    } else if (actionId === "devPreview.reinstallAndRestart") {
+      setPendingRestartTier("reinstallAndRestart");
+    }
+  }, []);
+
+  const handleAutoDetect = useCallback(
+    async (candidateCommand?: string) => {
+      if (!currentProjectId || autoDetectRef.current) return;
+
+      autoDetectRef.current = true;
+      setIsAutoDetecting(true);
+      try {
+        const latestSettings = await projectClient.getSettings(currentProjectId);
+        if (!latestSettings) return;
+
+        let command = candidateCommand;
+        if (!command) {
+          const freshRunners = await projectClient.detectRunners(currentProjectId);
+          command = findDevServerCandidate(
+            freshRunners,
+            latestSettings.turbopackEnabled ?? true
+          )?.command;
+        }
+
+        if (!command) return;
+
+        await saveSettings({
+          ...latestSettings,
+          devServerCommand: command,
+          devServerAutoDetected: true,
+          devServerDismissed: false,
+        });
+      } catch (err) {
+        logError("Failed to auto-detect dev server", err);
+      } finally {
+        autoDetectRef.current = false;
+        if (isMountedRef.current) {
+          setIsAutoDetecting(false);
+        }
+      }
+    },
+    [currentProjectId, saveSettings]
+  );
+
+  const handlePickCandidate = useCallback(
+    (candidate: { command: string }) => {
+      void handleAutoDetect(candidate.command);
+    },
+    [handleAutoDetect]
+  );
+
+  const handleSaveCommand = useCallback(async () => {
+    if (!currentProjectId || savingRef.current) return;
+    const trimmed = commandInput.trim();
+    if (!trimmed || getInvalidCommandMessage(trimmed)) return;
+
+    savingRef.current = true;
     try {
-      const freshRunners = await projectClient.detectRunners(currentProjectId);
-      const candidate = findDevServerCandidate(
-        freshRunners,
-        projectSettings?.turbopackEnabled ?? true
-      );
-
-      if (!candidate) {
-        return;
-      }
-
       const latestSettings = await projectClient.getSettings(currentProjectId);
-      if (!latestSettings) {
-        return;
-      }
+      if (!latestSettings) return;
 
       await saveSettings({
         ...latestSettings,
-        devServerCommand: candidate.command,
-        devServerAutoDetected: true,
+        devServerCommand: trimmed,
+        devServerAutoDetected: false,
         devServerDismissed: false,
       });
     } catch (err) {
-      logError("Failed to auto-detect dev server", err);
+      logError("Failed to save dev command", err);
     } finally {
-      if (isMountedRef.current) {
-        setIsAutoDetecting(false);
-      }
+      savingRef.current = false;
     }
-  }, [currentProjectId, isAutoDetecting, saveSettings, projectSettings?.turbopackEnabled]);
+  }, [currentProjectId, commandInput, saveSettings]);
+
+  const commandInputError = useMemo(() => getInvalidCommandMessage(commandInput), [commandInput]);
 
   const handleOpenSettings = useCallback(() => {
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
@@ -555,6 +890,55 @@ export function DevPreviewPane({
     },
     [id, setViewportPreset]
   );
+
+  const handleViewportRotateToggle = useCallback(() => {
+    setViewportRotated(id, !viewportRotated);
+  }, [id, setViewportRotated, viewportRotated]);
+
+  const handleViewportDprChange = useCallback(
+    (dpr: 1 | 2 | 3) => {
+      setViewportDpr(id, dpr);
+    },
+    [id, setViewportDpr]
+  );
+
+  const handleViewportFitToggle = useCallback(() => {
+    setViewportFit(id, !viewportFit);
+  }, [id, setViewportFit, viewportFit]);
+
+  // Measure the available preview area so zoom-to-fit can scale the device
+  // frame down to fit both pane dimensions. A static scale would break on
+  // pane resize, so this tracks the container via ResizeObserver.
+  // Callback ref (not useRef) so the observer effect re-runs when the
+  // fit-container div mounts for the first time — it lives in the webview
+  // branch, which only renders once the dev server reaches "running", long
+  // after viewportFit/viewportPreset may have been set.
+  const [fitContainerEl, setFitContainerEl] = useState<HTMLDivElement | null>(null);
+  const [fitContainerSize, setFitContainerSize] = useState<{ w: number; h: number }>({
+    w: 0,
+    h: 0,
+  });
+  useEffect(() => {
+    if (!viewportFit || !viewportPreset || !fitContainerEl) return;
+    const el = fitContainerEl;
+    const measure = () => {
+      setFitContainerSize({ w: el.clientWidth, h: el.clientHeight });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [viewportFit, viewportPreset, fitContainerEl]);
+
+  const fitScale =
+    viewportFit && effectiveViewport
+      ? computeFitScale(
+          fitContainerSize.w,
+          fitContainerSize.h,
+          effectiveViewport.width,
+          effectiveViewport.height
+        )
+      : 1;
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -574,19 +958,44 @@ export function DevPreviewPane({
     }
   }, [currentUrl, isWebviewReady, webviewElement]);
 
+  // Wire the guest-page CDP console capture into the renderer store. The hook
+  // owns start/stop keyed on the ready/eviction lifecycle; here we only mirror
+  // the live webContentsId so lazy object inspection can reach the right guest.
+  useDevPreviewConsoleCapture(id, webviewElement, isWebviewReady, isEvicted);
+
+  useEffect(() => {
+    if (!isWebviewReady || isEvicted) {
+      setGuestWebContentsId(undefined);
+      return;
+    }
+    try {
+      setGuestWebContentsId(webviewRef.current?.getWebContentsId());
+    } catch {
+      setGuestWebContentsId(undefined);
+    }
+  }, [isWebviewReady, isEvicted]);
+
   // Blank the webview and clear timers before React unmounts it for faster memory reclamation
   useEffect(() => {
     if (isEvicted && webviewRef.current) {
       try {
-        // Save scroll position before eviction
+        // Save scroll position before eviction. Use the main-process CDP
+        // Page.getLayoutMetrics path rather than executeJavaScript("window.scrollY"):
+        // useWebviewThrottle freezes hidden webviews after 500ms, and frozen pages
+        // suspend the JS task queue so executeJavaScript hangs indefinitely. CDP
+        // reads layout state directly from Blink, bypassing the freeze.
         const wv = webviewRef.current;
         const currentWebviewUrl = wv.getURL();
         if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
           const captureGeneration = scrollCaptureGenerationRef.current;
-          wv.executeJavaScript("window.scrollY")
+          const wcId = (wv as unknown as { getWebContentsId(): number }).getWebContentsId();
+          window.electron.webview
+            .getScrollPosition(wcId)
             .then((scrollY: number) => {
               if (scrollCaptureGenerationRef.current !== captureGeneration) return;
-              if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+              // See ref-cleanup path above: skip `0` so a CDP error can't
+              // clobber a previously captured position.
+              if (typeof scrollY === "number" && Number.isFinite(scrollY) && scrollY > 0) {
                 setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
               }
             })
@@ -603,45 +1012,56 @@ export function DevPreviewPane({
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
 
-  // Apply UA override when viewport preset changes on an already-ready webview
-  // Initialize to undefined so restored presets trigger the effect on first render
-  const prevViewportPresetRef = useRef<ViewportPresetId | undefined>(undefined);
+  // Apply device emulation when viewport preset, rotation, or DPR changes.
+  // Uses enableDeviceEmulation which drives CSS media queries and window.innerWidth
+  // without a page reload, preserving in-page state across preset switches.
+  const prevEmulationKeyRef = useRef<string | null>(null);
+  const hasAppliedEmulationRef = useRef(false);
   useEffect(() => {
     if (!isWebviewReady || !webviewElement) return;
-    if (prevViewportPresetRef.current === viewportPreset) return;
-    const previousPreset = prevViewportPresetRef.current;
-    prevViewportPresetRef.current = viewportPreset;
+    const emulationKey = `${viewportPreset ?? "none"}-${viewportRotated}-${viewportDpr}`;
+    if (prevEmulationKeyRef.current === emulationKey) return;
+    const hadPrevious = hasAppliedEmulationRef.current;
+
+    const wc = getDevPreviewWebContents(webviewElement);
+    if (!wc) return;
 
     try {
-      const wc = (
-        webviewElement as unknown as {
-          getWebContents(): { setUserAgent(ua: string): void; getUserAgent(): string };
-        }
-      ).getWebContents();
-      // Capture original UA on first override
-      if (originalUaRef.current === null) {
-        originalUaRef.current = wc.getUserAgent();
-      }
       if (viewportPreset) {
-        const preset = getViewportPreset(viewportPreset);
-        wc.setUserAgent(preset.userAgent);
-      } else if (previousPreset !== undefined) {
-        // Only restore if we previously overrode (not first mount with no preset)
-        wc.setUserAgent(originalUaRef.current!);
-      }
-      // Reload so the page re-evaluates with the new UA
-      if (previousPreset !== undefined) {
-        webviewElement.reload();
+        if (originalUaRef.current === null) {
+          originalUaRef.current = wc.getUserAgent();
+        }
+        wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
+        wc.enableDeviceEmulation(
+          buildEmulationParams(viewportPreset, viewportRotated, viewportDpr)!
+        );
+        prevEmulationKeyRef.current = emulationKey;
+        hasAppliedEmulationRef.current = true;
+      } else if (hadPrevious) {
+        try {
+          wc.disableDeviceEmulation();
+        } catch {
+          // disableDeviceEmulation may throw if emulation was never enabled
+        }
+        if (originalUaRef.current) {
+          wc.setUserAgent(originalUaRef.current);
+        }
+        prevEmulationKeyRef.current = emulationKey;
+        hasAppliedEmulationRef.current = false;
       }
     } catch {
       // WebContents not available (webview detached)
     }
-  }, [viewportPreset, isWebviewReady, webviewElement]);
+  }, [viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement]);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
     isWebviewReady && !isEvicted
   );
+
+  // Consolidated emulation effect above handles all preset/rotation/DPR changes.
+  // Cross-origin navigation re-apply is handled in useDevPreviewLoadLifecycle's
+  // did-finish-load handler so emulation survives renderer process swaps.
   const findInPage = useFindInPage(
     id,
     isEvicted ? null : webviewElement,
@@ -649,24 +1069,32 @@ export function DevPreviewPane({
     isFocused
   );
 
-  // Listen for blocked navigation events from main process
+  // Listen for blocked navigation events from main process.
+  // 150ms debounce: latest URL wins — repeated blocks within the window
+  // replace the pending data rather than stacking.
   useEffect(() => {
     let disposed = false;
+    let latestBlockedData: { url: string; canOpenExternal: boolean } | null = null;
+
     const cleanup = window.electron.webview.onNavigationBlocked((data) => {
       if (data.panelId !== id) return;
+      latestBlockedData = { url: data.url, canOpenExternal: data.canOpenExternal };
       const sessionStorageSnapshotPromise = looksLikeOAuthUrl(data.url)
         ? captureWebviewSessionStorage(webviewElement)
         : Promise.resolve<SessionStorageEntry[]>([]);
+
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);
       }
       blockedNavTimerRef.current = setTimeout(() => {
+        const latestData = latestBlockedData;
         void sessionStorageSnapshotPromise
           .then((sessionStorageSnapshot) => {
             if (disposed) return;
-            setBlockedNav({
-              url: data.url,
-              canOpenExternal: data.canOpenExternal,
+            dispatchBlockedNav({
+              type: "BLOCKED",
+              url: latestData?.url ?? data.url,
+              canOpenExternal: latestData?.canOpenExternal ?? data.canOpenExternal,
               sessionStorageSnapshot,
             });
             blockedNavTimerRef.current = null;
@@ -686,12 +1114,30 @@ export function DevPreviewPane({
     };
   }, [id, webviewElement]);
 
-  // Auto-dismiss blocked navigation notification after 10 seconds
+  // Listen for webview unresponsive/responsive events from the main process
   useEffect(() => {
-    if (!blockedNav) return;
-    const timer = setTimeout(() => setBlockedNav(null), 10_000);
-    return () => clearTimeout(timer);
-  }, [blockedNav]);
+    const cleanupUnresponsive = window.electron.webview.onUnresponsive((data) => {
+      if (data.panelId !== id) return;
+      setCrashState((prev) => (prev === "crashed" ? prev : "unresponsive"));
+    });
+    const cleanupResponsive = window.electron.webview.onResponsive((data) => {
+      if (data.panelId !== id) return;
+      setCrashState((prev) => (prev === "unresponsive" ? "none" : prev));
+    });
+    return () => {
+      cleanupUnresponsive();
+      cleanupResponsive();
+    };
+  }, [id]);
+
+  // Clear crash state on successful navigation
+  useEffect(() => {
+    if (crashState === "none") return;
+    if (currentUrl && currentUrl !== "about:blank") {
+      setCrashState("none");
+      setCrashDetails(null);
+    }
+  }, [currentUrl, crashState]);
 
   // Listen for action-driven hard-reload events
   useEffect(() => {
@@ -726,16 +1172,23 @@ export function DevPreviewPane({
       onRestore={onRestore}
       gridPanelCount={gridPanelCount}
       kind="dev-preview"
+      className={stuckTier >= 1 ? "panel-state-working" : undefined}
     >
       <div className="flex flex-col h-full">
         <BrowserToolbar
           terminalId={id}
+          projectId={currentProjectId}
           url={currentUrl}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
           isLoading={isLoading}
           zoomFactor={zoomFactor}
+          isWebviewReady={isWebviewReady}
+          isConsoleOpen={isConsoleOpen}
           viewportPreset={viewportPreset}
+          viewportRotated={viewportRotated}
+          viewportDpr={viewportDpr}
+          viewportFit={viewportFit}
           onNavigate={handleNavigate}
           onBack={handleBack}
           onForward={handleForward}
@@ -743,28 +1196,62 @@ export function DevPreviewPane({
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
           onZoomChange={handleZoomChange}
+          onCaptureScreenshot={handleCaptureScreenshot}
+          onToggleDevTools={handleToggleDevTools}
+          onToggleConsole={handleToggleConsole}
           onViewportPresetChange={handleViewportPresetChange}
+          onViewportRotateToggle={handleViewportRotateToggle}
+          onViewportDprChange={handleViewportDprChange}
+          onViewportFitToggle={handleViewportFitToggle}
         />
 
-        <div className="relative flex-1 min-h-0 bg-surface-canvas overflow-auto">
-          {viewportPreset && (
+        {stuckTier >= 2 && (
+          <DevPreviewStuckBanner
+            tier={stuckTier >= 3 ? 3 : 2}
+            error={error}
+            isRestarting={isRestarting}
+            onRestart={handleRestartDevServer}
+            onRemedy={handleStuckRemedy}
+          />
+        )}
+
+        <div
+          className={cn(
+            "relative flex-1 min-h-0 bg-surface-canvas",
+            viewportPreset && viewportFit ? "overflow-hidden" : "overflow-auto"
+          )}
+        >
+          {viewportPreset && effectiveViewport && (
             <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface/90 text-daintree-text/60 border border-overlay/50">
-              {getViewportPreset(viewportPreset).label} · {getViewportPreset(viewportPreset).width}×
-              {getViewportPreset(viewportPreset).height}
+              {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
+              {effectiveViewport.height}
+              {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
             </div>
           )}
           {isRestarting || status === "starting" || status === "installing" ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg">
-              <Spinner size="2xl" className="text-status-info mb-4" />
-              <p className="text-sm text-daintree-text/60">
-                {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
-                ...
-              </p>
-            </div>
+            <DevPreviewLoadingState
+              variant="full"
+              isLoading={true}
+              phaseLabel={
+                isRestarting
+                  ? "Restarting"
+                  : status === "installing"
+                    ? "Installing dependencies"
+                    : (phaseLabel ?? "Starting dev server")
+              }
+            />
           ) : status === "error" && error ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
               <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Dev Server Error</h3>
+              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                {error.type === "port-conflict"
+                  ? "Port conflict"
+                  : error.type === "missing-dependencies"
+                    ? "Missing dependencies"
+                    : error.type === "permission"
+                      ? "Permission denied"
+                      : "Dev server error"}
+              </h3>
               <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                 {error.message}
               </p>
@@ -776,9 +1263,21 @@ export function DevPreviewPane({
                   className="gap-1.5 px-2.5 py-1.5 group"
                 >
                   <RotateCw className="h-3.5 w-3.5" />
-                  <span className="text-xs">Retry</span>
+                  <span className="text-xs">
+                    {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
+                  </span>
                 </Button>
-                {currentUrl && (
+                {error.type === "missing-dependencies" || error.type === "permission" ? (
+                  <Button
+                    onClick={() => setDevPreviewConsoleOpen(id, true)}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span className="text-xs">View terminal</span>
+                  </Button>
+                ) : currentUrl ? (
                   <Button
                     onClick={handleOpenExternal}
                     variant="ghost"
@@ -786,64 +1285,139 @@ export function DevPreviewPane({
                     className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
-                    <span className="text-xs">Open External</span>
+                    <span className="text-xs">Open external</span>
                   </Button>
-                )}
+                ) : null}
               </div>
             </div>
           ) : !currentUrl || status !== "running" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
               {isUnconfigured ? (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                    Configure Dev Server
-                  </h3>
-                  <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
-                    No dev server command is configured for this project.
-                    {allDetectedRunners &&
-                    findDevServerCandidate(
-                      allDetectedRunners,
-                      projectSettings?.turbopackEnabled ?? true
-                    )
-                      ? " We found a script in your package.json that looks like a dev server."
-                      : " Configure one to preview your application."}
-                  </p>
-                  <div className="flex flex-col items-center gap-2">
-                    {allDetectedRunners &&
-                      findDevServerCandidate(
-                        allDetectedRunners,
-                        projectSettings?.turbopackEnabled ?? true
-                      ) && (
+                  {primaryCandidate ? (
+                    <>
+                      <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                        Start the dev server
+                      </h3>
+                      <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+                        We found a script in your package.json that looks like a dev server.
+                      </p>
+                      <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
+                        <span className="text-[11px] text-daintree-text/40">Auto-detected</span>
+                        <code className="text-xs text-daintree-text/70 font-mono">
+                          {primaryCandidate.command}
+                        </code>
+                      </div>
+                      <div className="flex flex-col items-center gap-2">
                         <Button
-                          onClick={handleAutoDetect}
+                          onClick={() => void handleAutoDetect()}
                           disabled={isAutoDetecting || isSettingsLoading}
                           variant="ghost"
                           size="sm"
-                          className="gap-1.5 px-2.5 py-1.5 group"
+                          className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
                         >
-                          <WandSparkles className="h-3.5 w-3.5" />
+                          <Play className="h-3.5 w-3.5" />
                           <span className="text-xs">
                             {isAutoDetecting
                               ? "Detecting..."
-                              : `Use \`${findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)?.command}\``}
+                              : `Run \`${primaryCandidate.command}\``}
                           </span>
                         </Button>
-                      )}
-                    <Button
-                      onClick={handleOpenSettings}
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
-                    >
-                      <Settings className="h-3.5 w-3.5" />
-                      <span className="text-xs">Open Project Settings</span>
-                    </Button>
-                  </div>
+                        {candidates.length > 1 && (
+                          <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 text-xs text-daintree-text/50 hover:text-daintree-text/70 transition-colors"
+                              >
+                                Use a different script...
+                                <ChevronDown className="h-3 w-3" />
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent align="center" sideOffset={4} className="w-72 p-1">
+                              <div className="flex flex-col max-h-64 overflow-y-auto">
+                                {candidates.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => {
+                                      handlePickCandidate(c);
+                                      setPickerOpen(false);
+                                    }}
+                                    className="flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-overlay-subtle transition-colors text-left"
+                                  >
+                                    <code className="text-daintree-text/70 font-mono text-[11px] flex-1 truncate">
+                                      {c.command}
+                                    </code>
+                                    <span className="text-daintree-text/40 shrink-0">{c.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </PopoverContent>
+                          </Popover>
+                        )}
+                        <Button
+                          onClick={handleOpenSettings}
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                        >
+                          <Settings className="h-3.5 w-3.5" />
+                          <span className="text-xs">Open project settings</span>
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                        Set a dev command
+                      </h3>
+                      <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+                        Configure a command to start a local development server.
+                      </p>
+                      <div className="flex flex-col items-center gap-2 w-full max-w-xs">
+                        <input
+                          type="text"
+                          value={commandInput}
+                          onChange={(e) => setCommandInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              void handleSaveCommand();
+                            }
+                          }}
+                          placeholder="npm run dev"
+                          className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-daintree-text/70 placeholder:text-daintree-text/30 focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
+                        />
+                        <Button
+                          onClick={() => void handleSaveCommand()}
+                          disabled={!commandInput.trim() || commandInputError !== null}
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          <span className="text-xs">Run</span>
+                        </Button>
+                        {commandInput.trim() && commandInputError && (
+                          <p className="text-[11px] text-status-warning">{commandInputError}</p>
+                        )}
+                      </div>
+                      <Button
+                        onClick={handleOpenSettings}
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70 mt-3"
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        <span className="text-xs">Open project settings</span>
+                      </Button>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">
                   <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                    Waiting for Dev Server
+                    Waiting for dev server
                   </h3>
                   <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                     The development server will appear here once it starts and a URL is detected.
@@ -859,10 +1433,21 @@ export function DevPreviewPane({
             </div>
           ) : isEvicted ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
-              <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
+              <p className="text-xs text-daintree-text/50">
+                Preview paused to save memory — will reload when opened
+              </p>
             </div>
           ) : (
-            <div className={cn("h-full", viewportPreset && "flex items-start justify-center pt-5")}>
+            <div
+              ref={setFitContainerEl}
+              className={cn(
+                "h-full",
+                viewportPreset &&
+                  (viewportFit
+                    ? "flex items-center justify-center"
+                    : "flex items-start justify-center pt-5")
+              )}
+            >
               <div
                 className={cn(
                   "relative",
@@ -871,52 +1456,115 @@ export function DevPreviewPane({
                     : "h-full"
                 )}
                 style={
-                  viewportPreset
-                    ? {
-                        maxWidth: getViewportPreset(viewportPreset).width,
-                        width: "100%",
-                        aspectRatio: `${getViewportPreset(viewportPreset).width} / ${getViewportPreset(viewportPreset).height}`,
-                      }
+                  viewportPreset && effectiveViewport
+                    ? viewportFit
+                      ? {
+                          width: effectiveViewport.width * fitScale,
+                          height: effectiveViewport.height * fitScale,
+                        }
+                      : {
+                          maxWidth: effectiveViewport.width,
+                          width: "100%",
+                          aspectRatio: `${effectiveViewport.width} / ${effectiveViewport.height}`,
+                        }
                     : undefined
                 }
               >
                 <>
+                  {reconnectAttempt > 0 && !webviewLoadError && (
+                    <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-t border-status-info/20 text-daintree-text/70">
+                      <Spinner size="xs" />
+                      <span>Reconnecting (attempt {reconnectAttempt} of 5)...</span>
+                    </div>
+                  )}
                   {webviewLoadError && (
                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                       <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                       <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        {webviewLoadError.startsWith("Load timed out") ||
-                        webviewLoadError.startsWith("Connection to")
-                          ? "Page Load Timed Out"
-                          : webviewLoadError.startsWith("Load cancelled")
-                            ? "Load Cancelled"
-                            : "Dev Server Unreachable"}
+                        {webviewLoadError.code === "timeout"
+                          ? "Page load timed out"
+                          : webviewLoadError.code === "aborted"
+                            ? "Load cancelled"
+                            : webviewLoadError.code === "connection_refused"
+                              ? "Dev server unreachable"
+                              : webviewLoadError.code === "name_not_resolved"
+                                ? "Couldn't resolve address"
+                                : webviewLoadError.code === "internet_disconnected"
+                                  ? "No internet connection"
+                                  : "Page load failed"}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
-                        {webviewLoadError}
+                        {webviewLoadError.message}
                       </p>
                       <div className="flex items-center gap-1">
-                        <Button
-                          onClick={
-                            webviewLoadError.startsWith("Load cancelled") ||
-                            webviewLoadError.startsWith("Load timed out") ||
-                            webviewLoadError.startsWith("Connection to")
-                              ? handleRetryWebviewLoad
-                              : handleHardRestart
-                          }
-                          variant="ghost"
-                          size="sm"
-                          className="gap-1.5 px-2.5 py-1.5 group"
-                        >
-                          <RotateCw className="h-3.5 w-3.5" />
-                          <span className="text-xs">
-                            {webviewLoadError.startsWith("Load cancelled") ||
-                            webviewLoadError.startsWith("Load timed out") ||
-                            webviewLoadError.startsWith("Connection to")
-                              ? "Retry"
-                              : "Hard Restart"}
-                          </span>
-                        </Button>
+                        {webviewLoadError.code === "connection_refused" ? (
+                          <>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  onClick={handleRestartDevServer}
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={isRestarting}
+                                  className="gap-1.5 px-2.5 py-1.5 rounded-r-none group"
+                                >
+                                  <RotateCw
+                                    className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")}
+                                  />
+                                  <span className="text-xs">Restart dev server</span>
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">Restart dev server</TooltipContent>
+                            </Tooltip>
+                            <DropdownMenu>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={isRestarting}
+                                      className="px-1.5 rounded-l-none group"
+                                      aria-label="More restart options"
+                                    >
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">More restart options</TooltipContent>
+                              </Tooltip>
+                              <DropdownMenuContent
+                                align="end"
+                                sideOffset={4}
+                                className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+                              >
+                                <DropdownMenuItem onSelect={handleHardReload}>
+                                  Reload preview
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={handleRestartDevServer}>
+                                  Restart dev server
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onSelect={handleRequestRestartAndClearCache}>
+                                  Restart and clear cache
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={handleRequestReinstallAndRestart}>
+                                  Reinstall dependencies
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </>
+                        ) : (
+                          <Button
+                            onClick={handleRetryWebviewLoad}
+                            variant="ghost"
+                            size="sm"
+                            className="gap-1.5 px-2.5 py-1.5 group"
+                          >
+                            <RotateCw className="h-3.5 w-3.5" />
+                            <span className="text-xs">Retry</span>
+                          </Button>
+                        )}
                         {currentUrl && (
                           <Button
                             onClick={handleOpenExternal}
@@ -925,54 +1573,122 @@ export function DevPreviewPane({
                             className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
-                            <span className="text-xs">Open External</span>
+                            <span className="text-xs">Open external</span>
                           </Button>
                         )}
                       </div>
                     </div>
                   )}
-                  {blockedNav && (
-                    <BlockedNavBanner
-                      blockedNav={blockedNav}
-                      panelId={id}
-                      webviewElement={webviewElement}
-                      onDismiss={() => setBlockedNav(null)}
+                  <BlockedNavBanner
+                    state={blockedNav}
+                    panelId={id}
+                    webviewElement={webviewElement}
+                    onDispatch={dispatchBlockedNav}
+                  />
+                  {crashState === "crashed" && (
+                    <InlineStatusBanner
+                      icon={XCircle}
+                      title="Preview process crashed"
+                      description={
+                        crashDetails
+                          ? `Reason: ${crashDetails.reason} (exit code ${crashDetails.exitCode})`
+                          : "The renderer process terminated unexpectedly."
+                      }
+                      severity="error"
+                      animated={false}
+                      actions={[
+                        {
+                          id: "reload",
+                          label: "Reload",
+                          icon: RotateCw,
+                          variant: "dangerFilled",
+                          onClick: handleHardReload,
+                          ariaLabel: "Reload preview page",
+                        },
+                        {
+                          id: "hard-restart",
+                          label: "Hard restart",
+                          icon: RotateCw,
+                          variant: "danger",
+                          onClick: handleRestartDevServer,
+                          ariaLabel: "Hard restart preview",
+                        },
+                      ]}
+                      onClose={() => {
+                        setCrashState("none");
+                        setCrashDetails(null);
+                        crashTimestampsRef.current = [];
+                      }}
+                    />
+                  )}
+                  {crashState === "unresponsive" && (
+                    <InlineStatusBanner
+                      icon={AlertTriangle}
+                      title="Preview is not responding"
+                      description="The page may be stuck in a long-running operation."
+                      severity="warning"
+                      animated={false}
+                      actions={[
+                        {
+                          id: "hard-restart",
+                          label: "Hard restart",
+                          icon: RotateCw,
+                          variant: "danger",
+                          onClick: handleRestartDevServer,
+                          ariaLabel: "Hard restart preview",
+                        },
+                      ]}
+                      onClose={() => setCrashState("none")}
                     />
                   )}
                   {isLoading && (
-                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg gap-3">
-                      <Spinner size="2xl" className="text-status-info" />
-                      {isSlowLoad && (
-                        <>
-                          <p className="text-xs text-daintree-text/50">
-                            Taking longer than usual...
-                          </p>
-                          <Button
-                            onClick={handleCancelLoad}
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
-                          >
-                            <Square className="h-3.5 w-3.5" />
-                            <span className="text-xs">Cancel</span>
-                          </Button>
-                        </>
-                      )}
-                    </div>
+                    <DevPreviewLoadingState
+                      variant="overlay"
+                      isLoading={isLoading}
+                      phaseLabel="Loading preview"
+                      onCancel={handleCancelLoad}
+                    />
+                  )}
+                  {showRecoverySpinner && !webviewLoadError && (
+                    <DevPreviewLoadingState
+                      variant="overlay"
+                      isLoading={isRecoveringFromEviction}
+                      phaseLabel="Rehydrating preview"
+                    />
                   )}
                   {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
                   {findInPage.isOpen && <FindBar find={findInPage} />}
-                  <webview
-                    ref={setWebviewNode}
-                    src={currentUrl}
-                    partition={webviewPartition}
-                    // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                    allowpopups=""
-                    className={cn(
-                      "w-full h-full border-0",
-                      isDragging && "invisible pointer-events-none"
-                    )}
-                  />
+                  {/* Only the webview is scaled by zoom-to-fit; overlays above
+                        stay at full size relative to the outer container so
+                        their action buttons remain readable and clickable. */}
+                  <div
+                    className={
+                      viewportPreset && viewportFit
+                        ? "absolute top-0 left-0 origin-top-left"
+                        : "w-full h-full"
+                    }
+                    style={
+                      viewportPreset && viewportFit && effectiveViewport
+                        ? {
+                            width: effectiveViewport.width,
+                            height: effectiveViewport.height,
+                            transform: `scale(${fitScale})`,
+                          }
+                        : undefined
+                    }
+                  >
+                    <webview
+                      ref={setWebviewNode}
+                      src={currentUrl}
+                      partition={webviewPartition}
+                      // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                      allowpopups=""
+                      className={cn(
+                        "w-full h-full border-0",
+                        isDragging && "invisible pointer-events-none"
+                      )}
+                    />
+                  </div>
                   <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
                 </>
               </div>
@@ -980,16 +1696,57 @@ export function DevPreviewPane({
           )}
         </div>
 
+        {forceKilled && status === "stopped" && !forceKillBannerDismissed && (
+          <InlineStatusBanner
+            icon={OctagonAlert}
+            title="Dev server was force-quit"
+            description="The server did not exit within 5 seconds and was terminated."
+            severity="warning"
+            onClose={() => setForceKillBannerDismissed(true)}
+            actions={[]}
+          />
+        )}
         {consoleTerminalId && (
           <ConsoleDrawer
             terminalId={consoleTerminalId}
+            paneId={id}
+            webContentsId={guestWebContentsId}
             status={status}
             isOpen={isConsoleOpen}
             onOpenChange={(nextOpen) => setDevPreviewConsoleOpen(id, nextOpen)}
+            activeTab={activeConsoleTab}
+            onTabChange={(tab) => setDevPreviewConsoleTab(id, tab)}
             isRestarting={isRestarting}
-            onHardRestart={handleHardRestart}
+            onReloadPreview={handleHardReload}
+            onRestartDevServer={handleRestartDevServer}
+            onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
+            onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+            onStop={stop}
           />
         )}
+        <ConfirmDialog
+          isOpen={isRestartConfirmOpen}
+          onClose={handleRestartConfirmClose}
+          variant="destructive"
+          title={
+            pendingRestartTier === "restartAndClearCache"
+              ? "Clear cache and restart?"
+              : "Reinstall dependencies?"
+          }
+          description={
+            pendingRestartTier === "restartAndClearCache"
+              ? "This will delete framework build caches (.next, .vite, .turbo) and respawn the dev server. Source files and installed dependencies are not affected."
+              : "This will delete node_modules and reinstall all dependencies, then respawn the dev server. Source files and git state are not affected."
+          }
+          confirmLabel={
+            pendingRestartTier === "restartAndClearCache" ? "Clear cache" : "Reinstall dependencies"
+          }
+          onConfirm={handleRestartConfirm}
+        >
+          {pendingRestartTier === "reinstallAndRestart" && (
+            <p className="text-xs text-daintree-text/50 font-mono break-all">{cwd}/node_modules</p>
+          )}
+        </ConfirmDialog>
       </div>
     </ContentPanel>
   );

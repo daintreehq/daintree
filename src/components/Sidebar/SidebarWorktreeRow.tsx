@@ -74,7 +74,8 @@ function SidebarWorktreeRow({
     [worktreeActions, worktreeId]
   );
 
-  const showDragHandle = !isSortDisabled && !isPinned;
+  const showDragHandle = !isPinned;
+  const dragEnabled = !isSortDisabled && !isPinned;
 
   const handleMoveBy = useCallback(
     (delta: -1 | 1) => {
@@ -100,64 +101,20 @@ function SidebarWorktreeRow({
   const isActive = worktreeId === activeWorktreeId;
   const isFocused = worktreeId === focusedWorktreeId;
   const isSingleWorktree = totalWorktreeCount === 1;
-  const moveUpHandler = showDragHandle ? onMoveUp : undefined;
-  const moveDownHandler = showDragHandle ? onMoveDown : undefined;
-  const canMoveUp = showDragHandle && rowIndex > 0;
-  const canMoveDown = showDragHandle && rowIndex < dragStartOrder.length - 1;
-
-  if (showDragHandle) {
-    return (
-      <SortableWorktreeCard
-        worktreeId={worktreeId}
-        dragStartOrder={dragStartOrder}
-        disabled={isSortDisabled || isPinned}
-        ariaRowIndex={ariaRowIndex}
-        isActive={isActive}
-      >
-        {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
-          <ErrorBoundary
-            variant="component"
-            componentName="WorktreeCard"
-            fallback={WorktreeCardErrorFallback}
-            resetKeys={[worktreeId]}
-            context={{ worktreeId }}
-          >
-            <WorktreeCard
-              worktree={worktree}
-              isActive={isActive}
-              isFocused={isFocused}
-              isSingleWorktree={isSingleWorktree}
-              onSelect={onSelect}
-              onCopyTree={onCopyTree}
-              onOpenEditor={onOpenEditor}
-              onSaveLayout={onSaveLayout}
-              onLaunchAgent={onLaunchAgent}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-              dragHandleListeners={dragHandleListeners}
-              dragHandleActivatorRef={dragHandleActivatorRef}
-              isDraggingSort={isDraggingSort}
-              onMoveUp={moveUpHandler}
-              onMoveDown={moveDownHandler}
-              canMoveUp={canMoveUp}
-              canMoveDown={canMoveDown}
-            />
-          </ErrorBoundary>
-        )}
-      </SortableWorktreeCard>
-    );
-  }
+  const moveUpHandler = dragEnabled ? onMoveUp : undefined;
+  const moveDownHandler = dragEnabled ? onMoveDown : undefined;
+  const canMoveUp = dragEnabled && rowIndex > 0;
+  const canMoveDown = dragEnabled && rowIndex < dragStartOrder.length - 1;
 
   return (
     <SortableWorktreeCard
       worktreeId={worktreeId}
       dragStartOrder={dragStartOrder}
-      disabled={true}
+      disabled={isSortDisabled || isPinned}
       ariaRowIndex={ariaRowIndex}
       isActive={isActive}
     >
-      {({ isDraggingSort }) => (
+      {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
         <ErrorBoundary
           variant="component"
           componentName="WorktreeCard"
@@ -178,7 +135,14 @@ function SidebarWorktreeRow({
             agentAvailability={availability}
             agentSettings={agentSettings}
             homeDir={homeDir}
+            dragHandleListeners={showDragHandle ? dragHandleListeners : undefined}
+            dragHandleActivatorRef={showDragHandle ? dragHandleActivatorRef : undefined}
             isDraggingSort={isDraggingSort}
+            isDragHandleDisabled={showDragHandle && isSortDisabled}
+            onMoveUp={moveUpHandler}
+            onMoveDown={moveDownHandler}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
           />
         </ErrorBoundary>
       )}

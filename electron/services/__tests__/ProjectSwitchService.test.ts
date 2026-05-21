@@ -18,8 +18,8 @@ const logBufferMock = vi.hoisted(() => ({
   onProjectSwitch: vi.fn(() => undefined),
 }));
 
-const taskQueueServiceMock = vi.hoisted(() => ({
-  onProjectSwitch: vi.fn(async () => undefined),
+const gitServiceCacheMock = vi.hoisted(() => ({
+  clear: vi.fn(() => undefined),
 }));
 
 const sendToRendererMock = vi.hoisted(() => vi.fn());
@@ -41,12 +41,8 @@ vi.mock("../LogBuffer.js", () => ({
   logBuffer: logBufferMock,
 }));
 
-vi.mock("../TaskQueueService.js", () => ({
-  taskQueueService: taskQueueServiceMock,
-}));
-
-vi.mock("../TaskWorktreeService.js", () => ({
-  taskWorktreeService: { onProjectSwitch: vi.fn() },
+vi.mock("../GitServiceCache.js", () => ({
+  gitServiceCache: gitServiceCacheMock,
 }));
 
 vi.mock("../ContextInjectionTracker.js", () => ({
@@ -114,7 +110,7 @@ describe("ProjectSwitchService", () => {
     );
 
     logBufferMock.onProjectSwitch.mockImplementation(() => undefined);
-    taskQueueServiceMock.onProjectSwitch.mockResolvedValue(undefined);
+    gitServiceCacheMock.clear.mockImplementation(() => undefined);
   });
 
   const MOCK_WINDOW_ID = 42;
@@ -237,8 +233,8 @@ describe("ProjectSwitchService", () => {
     logBufferMock.onProjectSwitch.mockImplementation(() => {
       throw new Error("logBuffer sync throw");
     });
-    taskQueueServiceMock.onProjectSwitch.mockImplementation(() => {
-      throw new Error("taskQueue sync throw");
+    gitServiceCacheMock.clear.mockImplementation(() => {
+      throw new Error("gitServiceCache sync throw");
     });
 
     await expect(service.switchProject("project-new")).resolves.toMatchObject({
@@ -263,13 +259,7 @@ describe("ProjectSwitchService", () => {
     expect(sendToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("starts loading new project while supporting cleanup is still in progress", async () => {
-    let resolveTaskQueue!: () => void;
-    const taskQueuePromise = new Promise<undefined>((resolve) => {
-      resolveTaskQueue = () => resolve(undefined);
-    });
-    taskQueueServiceMock.onProjectSwitch.mockReturnValue(taskQueuePromise);
-
+  it("starts loading new project in parallel with supporting cleanup", async () => {
     const loadProjectMock = vi.fn(async () => undefined);
     const { service } = createService({
       worktreeService: {
@@ -285,7 +275,6 @@ describe("ProjectSwitchService", () => {
 
     expect(loadProjectMock).toHaveBeenCalledWith("/tmp/new", MOCK_WINDOW_ID);
 
-    resolveTaskQueue();
     await expect(switchPromise).resolves.toMatchObject({ id: "project-new" });
   });
 
@@ -309,6 +298,11 @@ describe("ProjectSwitchService", () => {
         worktreeLoadError: "Not a git repository",
       })
     );
+    // Dedicated load-status event the renderer banner listens on (#8400).
+    expect(sendToRendererMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: "project-new",
+      worktreeLoadError: "Not a git repository",
+    });
   });
 
   it("does not include worktreeLoadError when loadProject succeeds", async () => {
@@ -316,8 +310,16 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][1];
-    expect(payload).not.toHaveProperty("worktreeLoadError");
+    const onSwitchPayload = sendToRendererMock.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.PROJECT_ON_SWITCH
+    )?.[1];
+    expect(onSwitchPayload).not.toHaveProperty("worktreeLoadError");
+    // The load-status event still fires, with a null error so a stale banner
+    // on a reactivated view clears.
+    expect(sendToRendererMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: "project-new",
+      worktreeLoadError: null,
+    });
   });
 
   it("includes pre-built hydrateResult in switch payload", async () => {
@@ -325,7 +327,13 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][1];
+    // Use channel-aware lookup: broadcastProjectSwitchUpdates now fires
+    // PROJECT_UPDATED for the departing project before PROJECT_ON_SWITCH,
+    // so index 0 is no longer the switch payload.
+    const payload = sendToRendererMock.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.PROJECT_ON_SWITCH
+    )?.[1];
+    expect(payload).toBeDefined();
     expect(payload.hydrateResult).toBeDefined();
     expect(payload.hydrateResult.settingsRecovery).toBeNull();
     expect(buildSwitchHydrateResultMock).toHaveBeenCalledWith("project-new");
@@ -337,7 +345,10 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][1];
+    const payload = sendToRendererMock.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.PROJECT_ON_SWITCH
+    )?.[1];
+    expect(payload).toBeDefined();
     expect(payload).not.toHaveProperty("hydrateResult");
     expect(payload.project).toMatchObject({ id: "project-new" });
     expect(payload.switchId).toBe("switch-id-1");
@@ -488,18 +499,22 @@ describe("ProjectSwitchService", () => {
     expect(secondResolved).toBe(true);
   });
 
-  it("preserves original switch error when rollback throws", async () => {
+  it("propagates the switch error without attempting a PTY rollback (#8400)", async () => {
     const originalError = new Error("setCurrent failed");
     projectStoreMock.setCurrentProject.mockRejectedValue(originalError);
 
-    const { service } = createService({
-      ptyClient: {
-        onProjectSwitch: () => {
-          throw new Error("rollback failed");
-        },
-      },
-    });
+    const { service, ptyClient } = createService();
 
     await expect(service.switchProject("project-new")).rejects.toThrow("setCurrent failed");
+
+    // The catch branch no longer reverts the PTY to the previous project —
+    // the forward-cleanup call targets the *new* project, never "project-old",
+    // and setActiveProject(null) is never used as a fallback rollback.
+    expect(ptyClient.onProjectSwitch).not.toHaveBeenCalledWith(
+      MOCK_WINDOW_ID,
+      "project-old",
+      expect.anything()
+    );
+    expect(ptyClient.setActiveProject).not.toHaveBeenCalled();
   });
 });

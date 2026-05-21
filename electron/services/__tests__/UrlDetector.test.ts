@@ -319,5 +319,60 @@ describe("UrlDetector", () => {
         expect(result2.url).toBeNull();
       });
     });
+
+    describe("readiness markers", () => {
+      it("detects the Vite ready line", () => {
+        const result = detector.scanOutput("  VITE v5.4.0  ready in 312 ms", "");
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the Vite ready line for Vite 8", () => {
+        const result = detector.scanOutput("  VITE v8.0.1  ready in 87 ms", "");
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the Vite ready line wrapped in ANSI colour codes", () => {
+        const withAnsi = "\x1b[36m  VITE v6.3.1\x1b[39m  \x1b[32mready in 456 ms\x1b[0m";
+        const result = detector.scanOutput(withAnsi, "");
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the Next.js checkmark ready line", () => {
+        const result = detector.scanOutput("\x1b[32m✓\x1b[0m Ready in 1843ms", "");
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the Next.js legacy 'started server on' line", () => {
+        const result = detector.scanOutput(
+          "ready - started server on 0.0.0.0:3000, url: http://localhost:3000",
+          ""
+        );
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the webpack compiled-successfully line", () => {
+        const result = detector.scanOutput("webpack compiled successfully", "");
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("detects the webpack-dev-middleware compiled line", () => {
+        const result = detector.scanOutput(
+          "[webpack-dev-middleware] Compiled successfully in 1203 ms",
+          ""
+        );
+        expect(result.readyMarker).toBe(true);
+      });
+
+      it("returns false for unrelated output", () => {
+        const result = detector.scanOutput("Compiling routes and warming the cache...", "");
+        expect(result.readyMarker).toBe(false);
+      });
+
+      it("returns false on a URL-only line (no regression)", () => {
+        const result = detector.scanOutput("Server at http://localhost:3000", "");
+        expect(result.readyMarker).toBe(false);
+        expect(result.url).toBe("http://localhost:3000/");
+      });
+    });
   });
 });

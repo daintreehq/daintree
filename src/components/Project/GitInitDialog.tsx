@@ -280,44 +280,38 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             </div>
           </div>
         )}
-
-        <div className="flex justify-end gap-2">
-          {isComplete ? (
-            <Button onClick={handleClose} className="gap-2">
-              <Check className="h-4 w-4" />
-              Continue
-            </Button>
-          ) : error ? (
-            <>
-              <Button variant="outline" onClick={onCancel}>
-                Cancel
-              </Button>
-              <Button onClick={() => void startInitialization()} disabled={isInitializing}>
-                Try again
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="outline" onClick={onCancel} disabled={isInitializing}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void startInitialization()}
-                disabled={isInitializing || !canStart}
-              >
-                {isInitializing ? (
-                  <>
-                    <Spinner size="md" />
-                    Initializing...
-                  </>
-                ) : (
-                  "Initialize repository"
-                )}
-              </Button>
-            </>
-          )}
-        </div>
       </AppDialog.Body>
+
+      <AppDialog.Footer>
+        {isComplete ? (
+          <Button onClick={handleClose} className="gap-2">
+            <Check className="h-4 w-4" />
+            Continue
+          </Button>
+        ) : error ? (
+          <>
+            <Button variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button onClick={() => void startInitialization()} disabled={isInitializing}>
+              Try again
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="outline" onClick={onCancel} disabled={isInitializing}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void startInitialization()}
+              disabled={!canStart}
+              loading={isInitializing}
+            >
+              Initialize repository
+            </Button>
+          </>
+        )}
+      </AppDialog.Footer>
     </AppDialog>
   );
 }

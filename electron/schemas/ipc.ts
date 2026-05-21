@@ -62,6 +62,7 @@ export const AppStateTerminalEntrySchema = z
     browserUrl: z.string().optional(),
     devCommand: z.string().optional(),
     devServerStatus: z.enum(["stopped", "starting", "installing", "running", "error"]).optional(),
+    devServerPhaseLabel: z.string().nullable().optional(),
     devServerUrl: z.string().optional(),
     devServerError: z
       .object({
@@ -121,6 +122,7 @@ export const TerminalSnapshotSchema = z
     browserUrl: z.string().optional(),
     devCommand: z.string().optional(),
     devServerStatus: z.enum(["stopped", "starting", "installing", "running", "error"]).optional(),
+    devServerPhaseLabel: z.string().nullable().optional(),
     devServerUrl: z.string().optional(),
     devServerError: z
       .object({
@@ -260,7 +262,7 @@ export function filterValidTerminalEntries<T>(
           ? entry.id
           : `index-${i}`;
 
-      const flattened = result.error.flatten();
+      const flattened = z.flattenError(result.error);
       // Log both field errors and form errors for better diagnostics
       const errorDetails =
         Object.keys(flattened.fieldErrors).length > 0
@@ -550,7 +552,7 @@ export function sanitizeTabGroups(
           ? group.id
           : `index-${i}`;
 
-      const flattened = result.error.flatten();
+      const flattened = z.flattenError(result.error);
       const errorDetails =
         Object.keys(flattened.fieldErrors).length > 0
           ? flattened.fieldErrors

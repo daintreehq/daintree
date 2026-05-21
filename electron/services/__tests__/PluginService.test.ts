@@ -9,12 +9,23 @@ const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const storeMock = vi.hoisted(() => {
+  const state = new Map<string, unknown>();
+  return {
+    get: vi.fn((key: string) => state.get(key)),
+    set: vi.fn((key: string, value: unknown) => state.set(key, value)),
+    _state: state,
+  };
+});
 
 vi.mock("electron", () => ({
   app: appMock,
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+}));
+vi.mock("../../store.js", () => ({
+  store: storeMock,
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
@@ -26,10 +37,20 @@ vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
   unregisterPluginToolbarButtons: vi.fn(),
+  getAllPluginToolbarButtonConfigs: vi.fn(() => []),
 }));
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
   unregisterPluginMenuItems: vi.fn(),
+}));
+vi.mock("../forgeProviderRegistry.js", () => ({
+  registerForgeProviders: vi.fn(),
+  unregisterForgeProviders: vi.fn(),
+  registerForgeProviderImpl: vi.fn(),
+  unregisterForgeProviderImpl: vi.fn(),
+  unregisterForgeProviderImpls: vi.fn(),
+  getForgeProviderImpl: vi.fn(),
+  clearForgeProviderImplRegistry: vi.fn(),
 }));
 
 import { PluginService } from "../PluginService.js";
@@ -47,6 +68,13 @@ import {
   unregisterPluginToolbarButtons,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import {
+  registerForgeProviderImpl,
+  registerForgeProviders,
+  unregisterForgeProviderImpl,
+  unregisterForgeProviderImpls,
+  unregisterForgeProviders,
+} from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -71,6 +99,7 @@ function writePlugin(name: string, manifest: Record<string, unknown>): Promise<v
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
+  storeMock._state.clear();
 });
 
 afterEach(async () => {
@@ -252,6 +281,161 @@ describe("PluginManifestSchema permissions field", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
       permissions: [1, "git:read"],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("PluginManifestSchema forgeProviders contribution", () => {
+  const validBase = { name: "acme.forge", version: "1.0.0" };
+
+  it("defaults contributes.forgeProviders to [] when contributes is absent", () => {
+    const result = PluginManifestSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.forgeProviders).toEqual([]);
+    }
+  });
+
+  it("defaults contributes.forgeProviders to [] when contributes is an empty object", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.forgeProviders).toEqual([]);
+    }
+  });
+
+  it("accepts a fully specified forgeProviders entry", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        forgeProviders: [
+          {
+            id: "github",
+            name: "GitHub",
+            matches: ["github.com"],
+            capabilities: ["issues", "pulls", "reviews", "required-checks", "releases"],
+            settingsScopeRef: "github",
+            viewRefs: ["github-issues", "github-prs"],
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.forgeProviders).toEqual([
+        {
+          id: "github",
+          name: "GitHub",
+          matches: ["github.com"],
+          capabilities: ["issues", "pulls", "reviews", "required-checks", "releases"],
+          settingsScopeRef: "github",
+          viewRefs: ["github-issues", "github-prs"],
+        },
+      ]);
+    }
+  });
+
+  it("accepts a forgeProviders entry with only required fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"] }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a forgeProviders entry with an empty matches array", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        forgeProviders: [{ id: "gh", name: "GitHub", matches: [] }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a forgeProviders entry missing required fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        forgeProviders: [{ id: "gh" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("strips unknown keys on a forgeProviders entry (matches sibling contribution schemas)", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"], unknownKey: true }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.forgeProviders[0]).not.toHaveProperty("unknownKey");
+    }
+  });
+});
+
+describe("PluginManifestSchema fileDecorationProviders contribution", () => {
+  const validBase = { name: "acme.decor", version: "1.0.0" };
+
+  it("defaults contributes.fileDecorationProviders to [] when contributes is absent", () => {
+    const result = PluginManifestSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([]);
+    }
+  });
+
+  it("defaults to [] when contributes is an empty object", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([]);
+    }
+  });
+
+  it("accepts a valid fileDecorationProviders entry", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        fileDecorationProviders: [{ id: "worktree-diff-review", scopes: ["worktree-diff:*"] }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.fileDecorationProviders).toEqual([
+        { id: "worktree-diff-review", scopes: ["worktree-diff:*"] },
+      ]);
+    }
+  });
+
+  it("rejects an entry with an empty scopes array", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { fileDecorationProviders: [{ id: "d", scopes: [] }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an entry missing required fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { fileDecorationProviders: [{ id: "d" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown keys on the entry (strict schema)", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["s:*"], extra: true }],
+      },
     });
     expect(result.success).toBe(false);
   });
@@ -596,6 +780,193 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginService built-in plugin loading", () => {
+  let builtinDir: string;
+
+  async function writeBuiltinPlugin(
+    name: string,
+    manifest: Record<string, unknown>
+  ): Promise<void> {
+    const dir = path.join(builtinDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+  }
+
+  beforeEach(async () => {
+    builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-plugin-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(builtinDir, { recursive: true, force: true });
+  });
+
+  it("tags plugins loaded from the built-in directory with isBuiltin=true", async () => {
+    await writeBuiltinPlugin("daintree.helper", {
+      name: "daintree.helper",
+      version: "1.0.0",
+    });
+    await writePlugin("acme.user-plugin", {
+      name: "acme.user-plugin",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(2);
+    const builtin = plugins.find((p) => p.manifest.name === "daintree.helper");
+    const user = plugins.find((p) => p.manifest.name === "acme.user-plugin");
+    expect(builtin?.isBuiltin).toBe(true);
+    expect(user?.isBuiltin).toBe(false);
+  });
+
+  it("user plugins receive isBuiltin=false even when no built-in dir is configured", async () => {
+    await writePlugin("acme.user-only", {
+      name: "acme.user-only",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].isBuiltin).toBe(false);
+  });
+
+  it("skips built-in scan cleanly when the directory is absent", async () => {
+    const missingDir = path.join(builtinDir, "does-not-exist");
+    await writePlugin("acme.user-plugin", {
+      name: "acme.user-plugin",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: missingDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("acme.user-plugin");
+    expect(plugins[0].isBuiltin).toBe(false);
+  });
+
+  it("built-ins win when a user plugin declares the same manifest name", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeBuiltinPlugin("collision", {
+        name: "daintree.dupe",
+        version: "1.0.0",
+        description: "builtin",
+      });
+      await writePlugin("collision-user", {
+        name: "daintree.dupe",
+        version: "2.0.0",
+        description: "user",
+      });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      const plugins = service.listPlugins();
+      expect(plugins).toHaveLength(1);
+      expect(plugins[0].manifest.description).toBe("builtin");
+      expect(plugins[0].isBuiltin).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Duplicate plugin name "daintree.dupe"`)
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("skips built-ins listed in plugins.disabledBuiltins", async () => {
+    storeMock._state.set("plugins", { disabledBuiltins: ["daintree.muted"] });
+    await writeBuiltinPlugin("muted", {
+      name: "daintree.muted",
+      version: "1.0.0",
+    });
+    await writeBuiltinPlugin("kept", {
+      name: "daintree.kept",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins.map((p) => p.manifest.name)).toEqual(["daintree.kept"]);
+  });
+
+  it("disabledBuiltins does not affect user plugins with the same name", async () => {
+    storeMock._state.set("plugins", { disabledBuiltins: ["acme.user-plugin"] });
+    await writePlugin("acme.user-plugin", {
+      name: "acme.user-plugin",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].isBuiltin).toBe(false);
+  });
+
+  it("treats missing plugins.disabledBuiltins as empty (no exception)", async () => {
+    // store has no "plugins" key at all (in-memory fallback shape)
+    await writeBuiltinPlugin("daintree.helper", {
+      name: "daintree.helper",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+  });
+
+  it("ignores malformed disabledBuiltins values defensively", async () => {
+    storeMock._state.set("plugins", { disabledBuiltins: "not-an-array" });
+    await writeBuiltinPlugin("daintree.helper", {
+      name: "daintree.helper",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+  });
+
+  it("reserves a disabled built-in's namespace against a hijacking user plugin", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      storeMock._state.set("plugins", { disabledBuiltins: ["daintree.github"] });
+      await writeBuiltinPlugin("github", {
+        name: "daintree.github",
+        version: "1.0.0",
+        description: "first-party",
+      });
+      await writePlugin("hijacker", {
+        name: "daintree.github",
+        version: "9.9.9",
+        description: "third-party impostor",
+      });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Duplicate plugin name "daintree.github"`)
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -1022,6 +1393,7 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginMenuItems).toHaveBeenCalledWith("acme.unloadable");
     expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.unloadable");
     expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.unloadable");
+    expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.unloadable");
   });
 
   it("unloadPlugin removes the plugin from hasPlugin and listPlugins", async () => {
@@ -1063,6 +1435,7 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginMenuItems).not.toHaveBeenCalled();
     expect(unregisterPluginToolbarButtons).not.toHaveBeenCalled();
     expect(unregisterPluginPanelKinds).not.toHaveBeenCalled();
+    expect(unregisterForgeProviders).not.toHaveBeenCalled();
   });
 
   it("unloadPlugin is idempotent across repeated calls", async () => {
@@ -1079,6 +1452,7 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginMenuItems).toHaveBeenCalledTimes(1);
     expect(unregisterPluginToolbarButtons).toHaveBeenCalledTimes(1);
     expect(unregisterPluginPanelKinds).toHaveBeenCalledTimes(1);
+    expect(unregisterForgeProviders).toHaveBeenCalledTimes(1);
   });
 
   it("registers plugin before importing main so sync host-API calls see it as loaded", async () => {
@@ -1148,6 +1522,7 @@ type CreateHostShape = (pluginId: string) => {
     pluginId: string;
     registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
+    registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
   revoke: () => void;
 };
@@ -1218,6 +1593,161 @@ describe("createHost (plugin activation API)", () => {
       /host revoked: registerHandler/
     );
     expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked: broadcastToRenderer/);
+    expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
+      /host revoked: registerForgeProvider/
+    );
+  });
+});
+
+describe("createHost — registerForgeProvider", () => {
+  function forgeManifest(
+    name: string,
+    providerIds: string[] = ["github"]
+  ): Record<string, unknown> {
+    return {
+      name,
+      version: "1.0.0",
+      contributes: {
+        forgeProviders: providerIds.map((id) => ({
+          id,
+          name: id,
+          matches: [`${id}.example`],
+        })),
+      },
+    };
+  }
+
+  it("binds the impl via registerForgeProviderImpl with the descriptor id", async () => {
+    await writePlugin("forge-host", forgeManifest("acme.forge-host"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-host"
+    );
+
+    vi.mocked(registerForgeProviderImpl).mockClear();
+    const impl = { tag: "impl-a" };
+    host.registerForgeProvider({ id: "github" }, impl);
+    expect(registerForgeProviderImpl).toHaveBeenCalledWith("acme.forge-host", "github", impl);
+  });
+
+  it("returns a disposer that calls unregisterForgeProviderImpl exactly once", async () => {
+    await writePlugin("forge-dispose", forgeManifest("acme.forge-dispose"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-dispose"
+    );
+
+    vi.mocked(unregisterForgeProviderImpl).mockClear();
+    const impl = { tag: "impl" };
+    const dispose = host.registerForgeProvider({ id: "github" }, impl);
+    dispose();
+    dispose(); // idempotent — only the first call should propagate
+    expect(unregisterForgeProviderImpl).toHaveBeenCalledTimes(1);
+    expect(unregisterForgeProviderImpl).toHaveBeenCalledWith("acme.forge-dispose", "github", impl);
+  });
+
+  it("rejects a descriptor missing an id", async () => {
+    await writePlugin("forge-baddesc", forgeManifest("acme.forge-baddesc"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-baddesc"
+    );
+
+    expect(() =>
+      host.registerForgeProvider({} as unknown as { id: string }, { tag: "impl" })
+    ).toThrow(/descriptor.id must be a non-empty string/);
+  });
+
+  it("rejects a non-object impl", async () => {
+    await writePlugin("forge-badimpl", forgeManifest("acme.forge-badimpl"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-badimpl"
+    );
+
+    expect(() => host.registerForgeProvider({ id: "github" }, null)).toThrow(
+      /impl must be an object/
+    );
+  });
+
+  it("rejects a descriptor.id not declared in contributes.forgeProviders", async () => {
+    // Manifest declares only "github"; "bogus" must be rejected.
+    await writePlugin("forge-undeclared", forgeManifest("acme.forge-undeclared", ["github"]));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-undeclared"
+    );
+
+    expect(() => host.registerForgeProvider({ id: "bogus" }, { tag: "impl" })).toThrow(
+      /not declared in contributes.forgeProviders/
+    );
+  });
+
+  it("re-binding the same descriptor.id makes the older disposer inert", async () => {
+    await writePlugin("forge-rebind", forgeManifest("acme.forge-rebind"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-rebind"
+    );
+
+    vi.mocked(unregisterForgeProviderImpl).mockClear();
+
+    const impl1 = { tag: "first" };
+    const impl2 = { tag: "second" };
+    const dispose1 = host.registerForgeProvider({ id: "github" }, impl1);
+    host.registerForgeProvider({ id: "github" }, impl2);
+
+    // Calling the older disposer must pass the older impl so the registry
+    // can decline to clear an already-overwritten entry. The registry side
+    // of this guard is covered in forgeProviderRegistry.test.ts; here we
+    // only assert the disposer carries the right identity into the call.
+    dispose1();
+    expect(unregisterForgeProviderImpl).toHaveBeenCalledWith("acme.forge-rebind", "github", impl1);
+  });
+
+  it("unloadPlugin fires unregisterForgeProviderImpls alongside unregisterForgeProviders", async () => {
+    await writePlugin("forge-unload", forgeManifest("acme.forge-unload"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    vi.mocked(unregisterForgeProviderImpls).mockClear();
+    vi.mocked(unregisterForgeProviders).mockClear();
+
+    service.unloadPlugin("acme.forge-unload");
+
+    expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.forge-unload");
+    expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.forge-unload");
+  });
+
+  it("unloadPlugin flushes per-provider disposers from pluginEventCleanups", async () => {
+    await writePlugin("forge-flush", forgeManifest("acme.forge-flush"));
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.forge-flush"
+    );
+    const impl = { tag: "impl" };
+    host.registerForgeProvider({ id: "github" }, impl);
+
+    vi.mocked(unregisterForgeProviderImpl).mockClear();
+    service.unloadPlugin("acme.forge-flush");
+    // The per-provider disposer fires through the pluginEventCleanups flush
+    // path during unloadPlugin — independent from the bulk unregisterForgeProviderImpls
+    // belt-and-suspenders call.
+    expect(unregisterForgeProviderImpl).toHaveBeenCalledWith("acme.forge-flush", "github", impl);
   });
 });
 
@@ -1317,6 +1847,83 @@ describe("Plugin action registry", () => {
     expect(() => service.registerPluginAction("acme.my-plugin", validContribution())).toThrow(
       /already registered/
     );
+  });
+
+  it("sets effectiveDanger='safe' when the plugin holds no high-risk permission", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    expect(service.listPluginActions()[0].effectiveDanger).toBe("safe");
+  });
+
+  it("keeps effectiveDanger='confirm' when the plugin self-declares confirm", () => {
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      danger: "confirm" as const,
+    });
+    expect(service.listPluginActions()[0].effectiveDanger).toBe("confirm");
+  });
+
+  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk permission", async () => {
+    await writePlugin("risky", {
+      name: "acme.risky",
+      version: "1.0.0",
+      permissions: ["fs:project-read", "shell:exec"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.risky", {
+      ...validContribution(),
+      id: "acme.risky.doThing",
+      danger: "safe" as const,
+    });
+
+    const action = svc.listPluginActions().find((a) => a.id === "acme.risky.doThing");
+    expect(action?.danger).toBe("safe"); // plugin's advisory declaration preserved
+    expect(action?.effectiveDanger).toBe("confirm"); // host raised it
+  });
+
+  it.each(["shell:exec", "git:write", "fs:project-write", "fs:user-data-write", "agent:invoke"])(
+    "raises a self-declared 'safe' action to confirm when the manifest grants %s",
+    async (permission) => {
+      const name = `acme.perm-${permission.replace(/[^a-z]/g, "-")}`;
+      await writePlugin(`perm-${permission.replace(/[^a-z]/g, "-")}`, {
+        name,
+        version: "1.0.0",
+        permissions: [permission],
+      });
+      const svc = new PluginService(tmpDir);
+      await svc.initialize();
+
+      svc.registerPluginAction(name, {
+        ...validContribution(),
+        id: `${name}.doThing`,
+        danger: "safe" as const,
+      });
+
+      expect(svc.listPluginActions().find((a) => a.id === `${name}.doThing`)?.effectiveDanger).toBe(
+        "confirm"
+      );
+    }
+  );
+
+  it("does not raise effectiveDanger for read-only / reversible permissions", async () => {
+    await writePlugin("readonly", {
+      name: "acme.readonly",
+      version: "1.0.0",
+      permissions: ["fs:project-read", "network:fetch", "clipboard:write", "git:read"],
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.readonly", {
+      ...validContribution(),
+      id: "acme.readonly.doThing",
+      danger: "safe" as const,
+    });
+
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.readonly.doThing")?.effectiveDanger
+    ).toBe("safe");
   });
 
   it("unregisterPluginAction removes a single action and broadcasts", () => {
@@ -1923,20 +2530,26 @@ describe("Plugin worktree host API", () => {
       "id",
       "isCurrent",
       "isMainWorktree",
-      "issueNumber",
-      "issueTitle",
       "lastActivityTimestamp",
+      "linked",
       "mood",
       "name",
       "path",
-      "prNumber",
-      "prState",
-      "prTitle",
-      "prUrl",
       "worktreeId",
     ];
     expect(Object.keys(active).sort()).toEqual(expected);
     expect("_secret" in active).toBe(false);
+    // None of the removed GitHub-shaped fields should leak through.
+    for (const removed of [
+      "issueNumber",
+      "issueTitle",
+      "prNumber",
+      "prState",
+      "prTitle",
+      "prUrl",
+    ]) {
+      expect(removed in active).toBe(false);
+    }
   });
 });
 
@@ -2007,6 +2620,60 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
+  it("registers a contributes.forgeProviders entry with the forge provider registry", async () => {
+    await writePlugin("forge", {
+      name: "acme.forge",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        forgeProviders: [
+          {
+            id: "github",
+            name: "GitHub",
+            matches: ["github.com"],
+            capabilities: ["issues", "pulls", "reviews"],
+            settingsScopeRef: "github",
+            viewRefs: ["github-issues"],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerForgeProviders).toHaveBeenCalledWith("acme.forge", [
+      {
+        id: "github",
+        name: "GitHub",
+        matches: ["github.com"],
+        capabilities: ["issues", "pulls", "reviews"],
+        settingsScopeRef: "github",
+        viewRefs: ["github-issues"],
+      },
+    ]);
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("contributes.forgeProviders"));
+    // A forge-only manifest does not touch the other registries.
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(registerToolbarButton).not.toHaveBeenCalled();
+    expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+
+  it("does not call registerForgeProviders when the manifest declares no forgeProviders", async () => {
+    await writePlugin("forge-none", {
+      name: "acme.forge-none",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerForgeProviders).not.toHaveBeenCalled();
+  });
+
   it("does not warn about reserved points when the manifest omits them", async () => {
     await writePlugin("plain", {
       name: "acme.plain",
@@ -2021,6 +2688,7 @@ describe("reserved contribution point warnings", () => {
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
   it("does not warn when reserved arrays are explicitly present but empty", async () => {
@@ -2028,7 +2696,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.explicit-empty",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
-      contributes: { views: [], mcpServers: [] },
+      contributes: { views: [], mcpServers: [], forgeProviders: [] },
     });
 
     const service = new PluginService(tmpDir, "0.7.5");
@@ -2038,6 +2706,7 @@ describe("reserved contribution point warnings", () => {
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
   it("still processes other contributions when reserved points are present", async () => {

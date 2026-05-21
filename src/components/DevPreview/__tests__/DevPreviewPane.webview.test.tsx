@@ -4,6 +4,13 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 
+type MockWebContents = {
+  setUserAgent: ReturnType<typeof vi.fn>;
+  getUserAgent: ReturnType<typeof vi.fn>;
+  enableDeviceEmulation: ReturnType<typeof vi.fn>;
+  disableDeviceEmulation: ReturnType<typeof vi.fn>;
+};
+
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
@@ -12,6 +19,8 @@ type MockWebviewElement = HTMLElement & {
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
+  getWebContentsId: ReturnType<typeof vi.fn>;
+  getWebContents: () => MockWebContents;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -40,6 +49,14 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   });
   webview.isLoading = vi.fn(() => loading);
   webview.executeJavaScript = vi.fn().mockResolvedValue(0);
+  webview.getWebContentsId = vi.fn(() => 42);
+  const mockWc = {
+    setUserAgent: vi.fn(),
+    getUserAgent: vi.fn(() => "original-ua"),
+    enableDeviceEmulation: vi.fn(),
+    disableDeviceEmulation: vi.fn(),
+  };
+  webview.getWebContents = vi.fn(() => mockWc);
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -51,7 +68,12 @@ type DevServerState = {
   status: "stopped" | "starting" | "installing" | "running" | "error";
   url: string | null;
   terminalId: string | null;
-  error: { type: "unknown" | "port-conflict" | "missing-dependencies"; message: string } | null;
+  error: {
+    type: "unknown" | "port-conflict" | "missing-dependencies" | "permission";
+    message: string;
+    port?: string;
+    module?: string;
+  } | null;
   start: ReturnType<typeof vi.fn>;
   restart: ReturnType<typeof vi.fn>;
   isRestarting: boolean;
@@ -71,11 +93,14 @@ const {
     current: undefined,
   };
   const terminalStoreState = {
+    activeDockTerminalId: undefined as string | undefined,
+    panelsById: {} as Record<string, unknown>,
     getTerminal: vi.fn(),
     setBrowserUrl: vi.fn(),
     setBrowserHistory: vi.fn(),
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
+    setDevPreviewConsoleTab: vi.fn(),
     setViewportPreset: vi.fn(),
     setDevPreviewScrollPosition: vi.fn(
       (_id: string, position: { url: string; scrollY: number } | undefined) => {
@@ -145,6 +170,7 @@ const {
 
 vi.mock("@/store", () => ({
   usePanelStore: usePanelStoreMock,
+  usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -193,15 +219,34 @@ vi.mock("@/components/Panel", () => ({
   ),
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuSeparator: () => null,
+}));
+
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: () => null,
+}));
+
 vi.mock("@/components/DevPreview/ConsoleDrawer", () => ({
-  ConsoleDrawer: ({ onHardRestart }: { onHardRestart?: () => void }) => (
+  ConsoleDrawer: ({ onRestartDevServer }: { onRestartDevServer?: () => void }) => (
     <button
       type="button"
       data-testid="hard-restart"
-      onClick={() => onHardRestart?.()}
+      onClick={() => onRestartDevServer?.()}
       aria-label="hard-restart"
     >
-      Hard restart
+      Restart dev server
     </button>
   ),
 }));
@@ -269,6 +314,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
+    terminalStoreState.activeDockTerminalId = undefined;
     (window as unknown as { electron: Record<string, unknown> }).electron = {
       system: {
         openExternal: vi.fn(),
@@ -281,6 +327,16 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition: vi.fn().mockResolvedValue(0),
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+        reloadIgnoringCache: vi.fn(() => Promise.resolve()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
       },
     };
   });
@@ -381,7 +437,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     expect(webview.stop).toHaveBeenCalledTimes(1);
     expect(webview.reload).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Page Load Timed Out");
+    expect(container.textContent).toContain("Page load timed out");
   });
 
   it("clears stuck-load timeout when loading fails", () => {
@@ -426,6 +482,90 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.stop).not.toHaveBeenCalled();
     expect(devServerStateRef.current.restart).toHaveBeenCalledTimes(1);
     expect(terminalStoreState.setBrowserUrl).toHaveBeenCalledWith("dev-preview-panel-1", "");
+  });
+
+  describe("viewport device emulation", () => {
+    const withPreset = (preset: string | undefined) => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "http://localhost:5173/", future: [] },
+        browserZoom: 1.4,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+        viewportPreset: preset,
+      }));
+    };
+
+    const getEmulationMock = (container: HTMLElement) =>
+      getWebviewElement(container).getWebContents().enableDeviceEmulation;
+    const getDisableEmulationMock = (container: HTMLElement) =>
+      getWebviewElement(container).getWebContents().disableDeviceEmulation;
+
+    it("applies device emulation for the active preset without reloading the page", async () => {
+      withPreset("iphone");
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(getEmulationMock(container)).toHaveBeenCalledWith({
+        screenPosition: "mobile",
+        screenSize: { width: 393, height: 852 },
+        viewPosition: { x: 0, y: 0 },
+        deviceScaleFactor: 1,
+        viewSize: { width: 393, height: 852 },
+        scale: 1,
+      });
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("re-applies device emulation on did-finish-load (cross-origin nav drops it)", async () => {
+      withPreset("galaxy");
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      getEmulationMock(container).mockClear();
+
+      act(() => {
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(getEmulationMock(container)).toHaveBeenCalledWith({
+        screenPosition: "mobile",
+        screenSize: { width: 360, height: 780 },
+        viewPosition: { x: 0, y: 0 },
+        deviceScaleFactor: 1,
+        viewSize: { width: 360, height: 780 },
+        scale: 1,
+      });
+    });
+
+    it("clears device emulation when the viewport preset is removed", async () => {
+      withPreset("iphone");
+      const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      getEmulationMock(container).mockClear();
+      withPreset(undefined);
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(getDisableEmulationMock(container)).toHaveBeenCalled();
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
   });
 
   it("retries loadURL with exponential backoff when did-fail-load fires with ERR_CONNECTION_REFUSED", async () => {
@@ -595,6 +735,161 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.reload).not.toHaveBeenCalled();
 
     if (origSettings) useProjectSettingsStoreMock.mockImplementation(origSettings);
+  });
+
+  it("captures scroll position via CDP when memory-pressure eviction fires (#8281)", async () => {
+    // Eviction-path regression: useWebviewThrottle freezes hidden dock panels via
+    // CDP Page.setWebLifecycleState after 500ms. On a frozen page,
+    // executeJavaScript("window.scrollY") hangs indefinitely (WICG frozen-state
+    // spec suspends the JS task queue), so the previous capture path lost the
+    // scroll position. The fix reads scroll via main-process CDP getLayoutMetrics.
+    terminalStoreState.activeDockTerminalId = "dev-preview-panel-1";
+    let destroyHandler: ((payload: { tier: 1 | 2 }) => void) | undefined;
+    const onDestroyHiddenWebviews = vi.fn((handler: (payload: { tier: 1 | 2 }) => void) => {
+      destroyHandler = handler;
+      return vi.fn();
+    });
+    const getScrollPosition = vi.fn().mockResolvedValue(250);
+    (window as unknown as { electron: Record<string, unknown> }).electron = {
+      system: { openExternal: vi.fn() },
+      window: { onDestroyHiddenWebviews },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition,
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+      },
+    };
+
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} location="dock" />);
+    const webview = getWebviewElement(container);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Panel is no longer the active dock panel — eviction is now valid.
+    terminalStoreState.activeDockTerminalId = "other-panel";
+    rerender(<DevPreviewPane {...baseProps} location="dock" />);
+
+    await act(async () => {
+      destroyHandler?.({ tier: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getScrollPosition).toHaveBeenCalledWith(42);
+    // Capture must run exactly once — the setWebviewNode(null) ref-cleanup and
+    // the eviction useEffect are not allowed to both fire and race with each
+    // other (the slower call could clobber the faster with scrollY=0 if the
+    // page has already committed to about:blank).
+    expect(getScrollPosition).toHaveBeenCalledTimes(1);
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      { url: "http://localhost:5173/", scrollY: 250 }
+    );
+    // The frozen-page path must NOT be used for the eviction capture.
+    expect(webview.executeJavaScript).not.toHaveBeenCalledWith("window.scrollY");
+  });
+
+  it("captures scroll position via CDP in setWebviewNode ref cleanup (#8281)", async () => {
+    // Ref-cleanup regression: when the <webview> JSX is unmounted (e.g. on
+    // panel unmount or eviction-driven branch switch), the React ref callback
+    // fires with null. Previously, this path also relied on
+    // executeJavaScript("window.scrollY"), which hangs on a frozen page. The
+    // fix routes both capture sites through the main-process CDP path.
+    const getScrollPosition = vi.fn().mockResolvedValue(310);
+    (window as unknown as { electron: Record<string, unknown> }).electron = {
+      system: { openExternal: vi.fn() },
+      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition,
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+      },
+    };
+
+    const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Unmount triggers ref-callback(null) → setWebviewNode cleanup path.
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getScrollPosition).toHaveBeenCalledWith(42);
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      { url: "http://localhost:5173/", scrollY: 310 }
+    );
+    // Frozen-page path must NOT be used for ref-cleanup capture.
+    expect(webview.executeJavaScript).not.toHaveBeenCalledWith("window.scrollY");
+  });
+
+  it("does not persist scrollY=0 from CDP (avoids clobbering prior position)", async () => {
+    // Defense: handleGetScrollPosition returns 0 on CDP error. If we persisted
+    // {scrollY: 0}, an earlier captured position could be silently overwritten.
+    // The renderer guard `> 0` keeps the prior value intact.
+    const getScrollPosition = vi.fn().mockResolvedValue(0);
+    (window as unknown as { electron: Record<string, unknown> }).electron = {
+      system: { openExternal: vi.fn() },
+      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
+        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn().mockResolvedValue(undefined),
+        getScrollPosition,
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+      },
+    };
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getScrollPosition).toHaveBeenCalled();
+    expect(terminalStoreState.setDevPreviewScrollPosition).not.toHaveBeenCalled();
   });
 
   it("captures scroll position when status transitions from running", async () => {
@@ -887,7 +1182,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       }
     }
 
-    expect(container.textContent).toContain("Dev Server Unreachable");
+    expect(container.textContent).toContain("Dev server unreachable");
     expect(container.textContent).toContain("Unable to connect to dev server");
   });
 
@@ -912,15 +1207,15 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       }
     }
 
-    expect(container.textContent).toContain("Dev Server Unreachable");
+    expect(container.textContent).toContain("Dev server unreachable");
 
     fireEvent.click(screen.getByTestId("hard-restart"));
 
-    expect(container.textContent).not.toContain("Dev Server Unreachable");
+    expect(container.textContent).not.toContain("Dev server unreachable");
   });
 
   describe("slow-load and timeout escalation", () => {
-    it("shows slow-load message and Cancel after 5s of loading", () => {
+    it("shows phase label and Still working hint after loading threshold", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -929,17 +1224,22 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         emitWebviewEvent(webview, "did-start-loading");
       });
 
-      expect(container.textContent).not.toContain("Taking longer than usual");
+      expect(container.textContent).not.toContain("Loading preview");
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(500);
       });
 
-      expect(container.textContent).toContain("Taking longer than usual");
-      expect(container.textContent).toContain("Cancel");
+      expect(container.textContent).toContain("Loading preview");
+
+      act(() => {
+        vi.advanceTimersByTime(6000);
+      });
+
+      expect(container.textContent).toContain("Still working");
     });
 
-    it("Cancel stops the webview and shows cancelled error", () => {
+    it("Cancel appears after action threshold and stops the webview", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -949,7 +1249,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       act(() => {
-        vi.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(500);
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(16000);
       });
 
       const cancelButton = Array.from(container.querySelectorAll("button")).find((b) =>
@@ -980,7 +1284,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
       expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("Retry from timeout clears error and loads current URL", () => {

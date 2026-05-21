@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockMcpOnTierNotPermitted,
   mockMcpSetSessionTier,
+  mockMcpIssueGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -14,6 +15,12 @@ const {
 } = vi.hoisted(() => ({
   mockMcpOnTierNotPermitted: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
+  mockMcpIssueGrant: vi.fn().mockResolvedValue({
+    sessionId: "",
+    toolId: "",
+    ttlMs: 900_000,
+    expiresAt: Date.now() + 900_000,
+  }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -122,6 +129,13 @@ beforeEach(() => {
   });
   mockMcpSetSessionTier.mockReset();
   mockMcpSetSessionTier.mockResolvedValue(undefined);
+  mockMcpIssueGrant.mockReset();
+  mockMcpIssueGrant.mockResolvedValue({
+    sessionId: "",
+    toolId: "",
+    ttlMs: 900_000,
+    expiresAt: Date.now() + 900_000,
+  });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -164,6 +178,7 @@ beforeEach(() => {
         mcpServer: {
           onTierNotPermitted: mockMcpOnTierNotPermitted,
           setSessionTier: mockMcpSetSessionTier,
+          issueGrant: mockMcpIssueGrant,
         },
         git: { snapshotGet: vi.fn().mockResolvedValue(null) },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
@@ -316,7 +331,7 @@ describe("HelpSessionController — syncInputs", () => {
 });
 
 describe("HelpSessionController — tier-mismatch handlers", () => {
-  it("approveTierOnce() calls setSessionTier and clears banner on success", async () => {
+  it("approveTierOnce() calls issueGrant (per-tool) and clears banner on success", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
     tierListeners[0]?.({
@@ -329,7 +344,10 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
 
     ctrl.approveTierOnce();
     expect(ctrl.getSnapshot().isApprovingTier).toBe(true);
-    expect(mockMcpSetSessionTier).toHaveBeenCalledWith("s1", "action");
+    // "Approve once" is now a per-tool grant (#8442) — it must NOT
+    // elevate the session tier, only mint a grant for this exact tool.
+    expect(mockMcpIssueGrant).toHaveBeenCalledWith({ sessionId: "s1", toolId: "t1" });
+    expect(mockMcpSetSessionTier).not.toHaveBeenCalled();
 
     await vi.waitFor(() => {
       expect(ctrl.getSnapshot().isApprovingTier).toBe(false);
@@ -348,9 +366,9 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
       targetTier: "action",
     });
     ctrl.approveTierOnce();
-    const callsBefore = mockMcpSetSessionTier.mock.calls.length;
+    const callsBefore = mockMcpIssueGrant.mock.calls.length;
     ctrl.approveTierOnce();
-    expect(mockMcpSetSessionTier.mock.calls.length).toBe(callsBefore);
+    expect(mockMcpIssueGrant.mock.calls.length).toBe(callsBefore);
     ctrl.stop();
   });
 

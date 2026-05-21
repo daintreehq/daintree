@@ -54,6 +54,7 @@ export function assertMatrixCoverage(): void {
     "PERF-060",
     "PERF-061",
     "PERF-062",
+    "PERF-063",
     "PERF-070",
     "PERF-071",
     "PERF-072",

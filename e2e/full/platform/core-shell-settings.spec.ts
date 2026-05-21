@@ -2,7 +2,11 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount, openSettings } from "../../helpers/panels";
+import {
+  expectToolbarButtonReachable,
+  getGridPanelCount,
+  openSettings,
+} from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -35,7 +39,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       const { window } = ctx;
       await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_MEDIUM });
       await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_SHORT });
-      await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible({ timeout: T_SHORT });
+      await expectToolbarButtonReachable(window, SEL.toolbar.openSettings, T_SHORT);
     });
 
     test("welcome screen shows Open Folder button", async () => {
@@ -70,8 +74,8 @@ test.describe.serial("Core: Shell & Settings", () => {
           "Worktree",
           "Toolbar",
           "Appearance",
-          "CLI Agents",
-          "GitHub",
+          "CLI agents",
+          "Code Forge",
           "Integrations",
           "Portal",
           "MCP Server",
@@ -81,7 +85,9 @@ test.describe.serial("Core: Shell & Settings", () => {
         ];
 
         for (const nav of navButtons) {
-          const btn = window.locator(`${SEL.settings.navSidebar} button`, { hasText: nav });
+          const btn = window
+            .locator(SEL.settings.navSidebar)
+            .getByRole("tab", { name: nav, exact: true });
           await expect(btn).toBeVisible({ timeout: T_SHORT });
           await btn.click();
           // Brief settle to confirm tab content loads without error

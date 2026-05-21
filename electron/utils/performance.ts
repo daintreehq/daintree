@@ -20,6 +20,14 @@ interface IpcSampleMeta {
 
 export const APP_BOOT_T0 = performance.now();
 export const mainTimeOrigin = performance.timeOrigin;
+/**
+ * Wall-clock (Unix epoch ms, float) at which the main process recorded
+ * `APP_BOOT_T0`. Forwarded to utility-process hosts as
+ * `DAINTREE_PERF_MAIN_BOOT_ABS_MS` so the host's `elapsedMs` can be rebased
+ * onto the same boot-relative timeline that the main process uses,
+ * unblocking cross-process phase-pair analysis.
+ */
+export const mainBootAbsMs = mainTimeOrigin + APP_BOOT_T0;
 const SHOULD_CAPTURE = process.env.DAINTREE_PERF_CAPTURE === "1";
 const METRICS_FILE = process.env.DAINTREE_PERF_METRICS_FILE
   ? path.resolve(process.cwd(), process.env.DAINTREE_PERF_METRICS_FILE)

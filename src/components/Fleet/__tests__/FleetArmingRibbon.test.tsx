@@ -67,6 +67,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </div>
   ),
+  DropdownMenuGroup: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="dropdown-group">{children}</div>
+  ),
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
 }));
@@ -92,6 +95,7 @@ function resetStores() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    previewArmedIds: new Set<string>(),
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetBroadcastConfirmStore.setState({ pending: null });
@@ -806,119 +810,192 @@ describe("FleetArmingRibbon", () => {
       expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
     });
 
-    it("does not render when total is below the visibility threshold", () => {
-      useFleetBroadcastProgressStore.setState({ total: 5, isActive: true });
-      useFleetArmingStore.getState().armIds(["a", "b"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+    it("does not render until the Doherty threshold elapses", () => {
+      // Count no longer gates visibility — duration does. Counter hidden
+      // until the Doherty threshold (400ms) elapses.
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({ total: 3, isActive: true });
+        useFleetArmingStore.getState().armIds(["a", "b"]);
+        render(<FleetArmingRibbon />);
+        expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("renders when isActive and total >= 10", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 5,
-        total: 15,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      const el = screen.getByTestId("fleet-broadcast-progress");
-      expect(el.textContent).toContain("5/15");
+    it("renders when isActive and the Doherty threshold elapses", () => {
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 5,
+          total: 15,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const el = screen.getByTestId("fleet-broadcast-progress");
+        expect(el.textContent).toContain("5/15");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("shows failure count when failed > 0", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 8,
-        total: 12,
-        failed: 2,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      const el = screen.getByTestId("fleet-broadcast-progress");
-      expect(el.textContent).toContain("8/12");
-      expect(el.textContent).toContain("2 failed");
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 8,
+          total: 12,
+          failed: 2,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const el = screen.getByTestId("fleet-broadcast-progress");
+        expect(el.textContent).toContain("8/12");
+        expect(el.textContent).toContain("2 failed");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does not show failure count when failed is 0", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 8,
-        total: 12,
-        failed: 0,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      const el = screen.getByTestId("fleet-broadcast-progress");
-      expect(el.textContent).toContain("8/12");
-      expect(el.textContent).not.toContain("failed");
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 8,
+          total: 12,
+          failed: 0,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const el = screen.getByTestId("fleet-broadcast-progress");
+        expect(el.textContent).toContain("8/12");
+        expect(el.textContent).not.toContain("failed");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("renders at exact threshold boundary (total = 10)", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 3,
-        total: 10,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+    it("renders progress counter for small fleets after Doherty threshold", () => {
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 3,
+          total: 3,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b"]);
+        render(<FleetArmingRibbon />);
+        expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("disappears when isActive becomes false mid-broadcast", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 10,
-        total: 12,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      const { rerender } = render(<FleetArmingRibbon />);
-      expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 10,
+          total: 12,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        const { rerender } = render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
 
-      act(() => {
-        useFleetBroadcastProgressStore.setState({ isActive: false });
-      });
-      rerender(<FleetArmingRibbon />);
-      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+        act(() => {
+          useFleetBroadcastProgressStore.setState({ isActive: false });
+        });
+        rerender(<FleetArmingRibbon />);
+        expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("renders a Cancel button alongside the progress counter when active", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 3,
-        total: 12,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      const cancel = screen.getByTestId("fleet-broadcast-cancel");
-      expect(cancel.getAttribute("aria-label")).toBe("Cancel broadcast");
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 3,
+          total: 12,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const cancel = screen.getByTestId("fleet-broadcast-cancel");
+        expect(cancel.getAttribute("aria-label")).toBe("Cancel broadcast");
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("clicking Cancel flips the progress store cancelled flag", () => {
-      useFleetBroadcastProgressStore.setState({
-        completed: 3,
-        total: 12,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(screen.getByTestId("fleet-broadcast-cancel"));
-      expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 3,
+          total: 12,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        fireEvent.click(screen.getByTestId("fleet-broadcast-cancel"));
+        expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("Cancel button is reachable for batched broadcasts below the counter threshold (6–9 targets)", () => {
-      // Batching kicks in at total > FLEET_LARGE_PASTE_BATCH_SIZE (5), but
-      // the numeric counter only shows at total >= 10. Without a separate
-      // gate, large-paste broadcasts to 6–9 targets had no Cancel surface.
-      useFleetBroadcastProgressStore.setState({
-        completed: 1,
-        total: 7,
-        isActive: true,
-      });
-      useFleetArmingStore.getState().armIds(["a", "b"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.getByTestId("fleet-broadcast-cancel")).toBeTruthy();
-      // Counter still hidden because total < FLEET_PROGRESS_VISIBILITY_THRESHOLD.
-      expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
+    it("Cancel button is reachable for batched broadcasts — counter visible after Doherty", () => {
+      vi.useFakeTimers();
+      try {
+        useFleetBroadcastProgressStore.setState({
+          completed: 1,
+          total: 7,
+          isActive: true,
+        });
+        useFleetArmingStore.getState().armIds(["a", "b"]);
+        render(<FleetArmingRibbon />);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(screen.getByTestId("fleet-broadcast-cancel")).toBeTruthy();
+        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("Cancel button does not render for non-batchable fleets (total ≤ 5)", () => {

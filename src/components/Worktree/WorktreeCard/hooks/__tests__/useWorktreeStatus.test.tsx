@@ -34,6 +34,21 @@ function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
   };
 }
 
+function prLinked(overrides: { prNumber?: number; prState?: string; prTitle?: string } = {}) {
+  const num = overrides.prNumber ?? 10;
+  return {
+    linked: {
+      providerId: "github",
+      pr: {
+        ref: { providerId: "github", owner: "test", repo: "test", number: num, rawData: {} },
+        state: (overrides.prState ?? "open") as "open" | "merged" | "closed" | "declined",
+        url: `https://github.com/test/repo/pull/${num}`,
+        ...(overrides.prTitle ? { title: overrides.prTitle } : {}),
+      },
+    },
+  };
+}
+
 describe("useWorktreeStatus — lifecycleStage", () => {
   function getLifecycleStage(
     overrides: Partial<WorktreeState> = {}
@@ -53,6 +68,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         worktreeChanges: makeChanges({ changedFileCount: 5 }),
         prState: "open",
         prNumber: 10,
+        ...prLinked({ prState: "open" }),
       })
     ).toBeNull();
   });
@@ -67,6 +83,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         worktreeChanges: null,
         prState: "merged",
         prNumber: 10,
+        ...prLinked({ prState: "merged" }),
         issueNumber: 42,
       })
     ).toBeNull();
@@ -86,6 +103,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "open",
         prNumber: 10,
+        ...prLinked({ prState: "open" }),
       })
     ).toBe("in-review");
   });
@@ -96,6 +114,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "merged",
         prNumber: 10,
+        ...prLinked({ prState: "merged" }),
       })
     ).toBe("merged");
   });
@@ -106,6 +125,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "merged",
         prNumber: 10,
+        ...prLinked({ prState: "merged" }),
         issueNumber: 42,
       })
     ).toBe("ready-for-cleanup");
@@ -116,6 +136,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
       getLifecycleStage({
         prState: "merged",
         prNumber: 10,
+        ...prLinked({ prState: "merged" }),
         issueNumber: 42,
       })
     ).toBe("ready-for-cleanup");
@@ -126,6 +147,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
       getLifecycleStage({
         prState: "merged",
         prNumber: 10,
+        ...prLinked({ prState: "merged" }),
       })
     ).toBe("merged");
   });
@@ -135,6 +157,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
       getLifecycleStage({
         prState: "open",
         prNumber: 10,
+        ...prLinked({ prState: "open" }),
       })
     ).toBe("in-review");
   });
@@ -144,6 +167,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
       getLifecycleStage({
         prState: "closed",
         prNumber: 10,
+        ...prLinked({ prState: "closed" }),
       })
     ).toBeNull();
   });
@@ -154,6 +178,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
 
   it("updates from merged to ready-for-cleanup when issueNumber is added", () => {
     const initialWorktree = makeWorktree({
+      ...prLinked({ prState: "merged" }),
       prState: "merged",
       prNumber: 10,
     });
@@ -164,7 +189,12 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     expect(result.current.lifecycleStage).toBe("merged");
 
     rerender({
-      wt: makeWorktree({ prState: "merged", prNumber: 10, issueNumber: 42 }),
+      wt: makeWorktree({
+        ...prLinked({ prState: "merged" }),
+        prState: "merged",
+        prNumber: 10,
+        issueNumber: 42,
+      }),
     });
 
     expect(result.current.lifecycleStage).toBe("ready-for-cleanup");
@@ -501,6 +531,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
         prTitle: "feat: dark mode",
         prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
       })
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
@@ -512,6 +543,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         issueTitle: "Add dark mode support",
         prTitle: "feat: dark mode",
         prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
       })
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
@@ -522,6 +554,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
         prTitle: "feat: dark mode",
         prState: "closed",
+        ...prLinked({ prState: "closed", prTitle: "feat: dark mode" }),
       })
     ).toEqual({ text: "No recent activity", tone: "muted" });
   });
@@ -532,6 +565,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
         prTitle: "feat: dark mode",
         prState: "merged",
+        ...prLinked({ prState: "merged", prTitle: "feat: dark mode" }),
       })
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });

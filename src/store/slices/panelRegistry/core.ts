@@ -42,6 +42,7 @@ export const createCorePanelActions = (
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
+  | "stampLastActive"
   | "getTerminal"
   | "moveTerminalToDock"
   | "moveTerminalToGrid"
@@ -187,6 +188,26 @@ export const createCorePanelActions = (
         return state;
       }
 
+      // Equality short-circuit: skip the write (and crucially `lastStateChange`)
+      // when no user-visible field changed. `lastStateChange` gates the
+      // window-blur badge filter (useTerminalSelectors) and the elapsed-time
+      // header display (TerminalHeaderContent) — bumping it on duplicate
+      // events would falsely reset both. `stateChangeTrigger` is included
+      // because the optimistic controller path (TerminalAgentStateController
+      // onEnterPressed) writes `agentState:"working"` with no trigger, then the
+      // backend confirmation arrives with `trigger:"input"`; without comparing
+      // trigger here the confirmation would be suppressed and HybridInputBar
+      // would never see `agentHasLifecycleEvent === true`. See #8592.
+      const nextWaitingReason = agentState === "waiting" ? waitingReason : undefined;
+      if (
+        terminal.agentState === agentState &&
+        terminal.error === error &&
+        terminal.waitingReason === nextWaitingReason &&
+        terminal.stateChangeTrigger === trigger
+      ) {
+        return state;
+      }
+
       return {
         panelsById: {
           ...state.panelsById,
@@ -197,7 +218,7 @@ export const createCorePanelActions = (
             lastStateChange: lastStateChange ?? Date.now(),
             stateChangeTrigger: trigger,
             stateChangeConfidence: confidence,
-            waitingReason: agentState === "waiting" ? waitingReason : undefined,
+            waitingReason: nextWaitingReason,
             sessionCost:
               (agentState === "completed" || agentState === "exited") && sessionCost != null
                 ? sessionCost
@@ -279,6 +300,19 @@ export const createCorePanelActions = (
           [id]: { ...terminal, isVisible, runtimeStatus },
         },
       };
+    });
+  },
+
+  stampLastActive: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, lastActiveAt: Date.now() },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
     });
   },
 

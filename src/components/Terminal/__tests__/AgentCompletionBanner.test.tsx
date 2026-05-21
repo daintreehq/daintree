@@ -1,7 +1,19 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, type RenderOptions } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { AgentCompletionBanner } from "../AgentCompletionBanner";
+
+// The icon-only "Send to agent" action wraps its button in a Radix Tooltip,
+// which requires a TooltipProvider ancestor (supplied app-wide in App.tsx).
+function Providers({ children }: { children: ReactNode }) {
+  return <TooltipProvider>{children}</TooltipProvider>;
+}
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
+  return rtlRender(ui, { wrapper: Providers, ...options });
+}
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => {
@@ -68,14 +80,66 @@ describe("AgentCompletionBanner", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("stops click propagation on both buttons so the pane doesn't grab focus", () => {
+  it("hides the handoff buttons when their callbacks are omitted", () => {
+    render(<AgentCompletionBanner onReview={() => {}} onDismiss={() => {}} />);
+    expect(screen.queryByRole("button", { name: /send to assistant/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /send to agent/i })).toBeNull();
+  });
+
+  it("renders and fires onSendToAssistant when provided", () => {
+    const onSendToAssistant = vi.fn();
+    render(
+      <AgentCompletionBanner
+        onReview={() => {}}
+        onDismiss={() => {}}
+        onSendToAssistant={onSendToAssistant}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /send to assistant/i }));
+    expect(onSendToAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders and fires onSendToAgent when provided", () => {
+    const onSendToAgent = vi.fn();
+    render(
+      <AgentCompletionBanner
+        onReview={() => {}}
+        onDismiss={() => {}}
+        onSendToAgent={onSendToAgent}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /send to agent/i }));
+    expect(onSendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders all three action buttons when both handoff callbacks are provided", () => {
+    render(
+      <AgentCompletionBanner
+        onReview={() => {}}
+        onDismiss={() => {}}
+        onSendToAssistant={() => {}}
+        onSendToAgent={() => {}}
+      />
+    );
+    expect(screen.getByRole("button", { name: /review/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /send to assistant/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /send to agent/i })).toBeTruthy();
+  });
+
+  it("stops click propagation on all buttons (incl. handoff) so the pane doesn't grab focus", () => {
     const onParentClick = vi.fn();
     const { container } = render(
       <div onClick={onParentClick}>
-        <AgentCompletionBanner onReview={() => {}} onDismiss={() => {}} />
+        <AgentCompletionBanner
+          onReview={() => {}}
+          onDismiss={() => {}}
+          onSendToAssistant={() => {}}
+          onSendToAgent={() => {}}
+        />
       </div>
     );
     const buttons = container.querySelectorAll("button");
+    expect(buttons.length).toBe(4); // review + assistant + agent + dismiss
     buttons.forEach((b) => fireEvent.click(b));
     expect(onParentClick).not.toHaveBeenCalled();
   });

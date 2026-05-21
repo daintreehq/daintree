@@ -21,8 +21,9 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../github/GitHubAuth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../github/GitHubAuth.js")>();
+vi.mock("../../../plugins/builtin/github/main/GitHubAuth.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../plugins/builtin/github/main/GitHubAuth.js")>();
   return {
     ...actual,
     GitHubAuth: {
@@ -38,19 +39,25 @@ vi.mock("../github/GitHubAuth.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../github/GitHubRateLimitService.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../github/GitHubRateLimitService.js")>();
-  return {
-    ...actual,
-    gitHubRateLimitService: {
-      shouldBlockRequest: () => ({ blocked: false }),
-      update: () => {},
-      updateFromGraphQL: () => {},
-      getState: () => ({ blocked: false }),
-      onStateChange: () => () => {},
-    },
-  };
-});
+vi.mock(
+  "../../../plugins/builtin/github/main/GitHubRateLimitService.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../plugins/builtin/github/main/GitHubRateLimitService.js")
+      >();
+    return {
+      ...actual,
+      gitHubRateLimitService: {
+        shouldBlockRequest: () => ({ blocked: false }),
+        update: () => {},
+        updateFromGraphQL: () => {},
+        getState: () => ({ blocked: false }),
+        onStateChange: () => () => {},
+      },
+    };
+  }
+);
 
 vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: {
@@ -63,13 +70,33 @@ vi.mock("../GitHubStatsCache.js", () => ({
   },
 }));
 
-import { getProjectHealth, clearGitHubCaches } from "../github/index.js";
+import { getProjectHealth, clearGitHubCaches } from "../../../plugins/builtin/github/main/index.js";
+import { velocityCache } from "../../../plugins/builtin/github/main/GitHubCaches.js";
+import { buildVelocityCacheKey } from "../../../plugins/builtin/github/main/GitHubHealth.js";
 
 beforeEach(() => {
   clearGitHubCaches();
   vi.restoreAllMocks();
   mockGetRemoteUrl.mockReset();
   mockGraphqlClient.mockReset();
+  // Pre-warm the velocity cache for every repo these tests resolve to. The
+  // slow-cadence merged-PR velocity query (issue #8757) then makes no GraphQL
+  // call, so the retry-guard call counts below count only the health query.
+  for (const owner of [
+    "old-owner",
+    "new-owner",
+    "owner-a",
+    "owner-b",
+    "owner-c",
+    "same-owner",
+    "owner",
+  ]) {
+    velocityCache.set(buildVelocityCacheKey(`${owner}/repo`, new Date()), {
+      60: 0,
+      120: 0,
+      180: 0,
+    });
+  }
 });
 
 describe("getProjectHealth retry guard", () => {

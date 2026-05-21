@@ -57,6 +57,8 @@ export function TypedNameConfirmInput({
         }}
         aria-describedby={hasPreamble ? `${preambleId} ${instructionsId}` : instructionsId}
         aria-label={`Type ${target} to confirm`}
+        aria-required="true"
+        aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
         className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-daintree-border rounded focus:outline-hidden focus:ring-2 focus:ring-status-error"

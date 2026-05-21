@@ -1,4 +1,4 @@
-export { usePanelStore, isAgentReady, getTerminalRefreshTier } from "./panelStore";
+export { usePanelStore, panelStoreApi, isAgentReady, getTerminalRefreshTier } from "./panelStore";
 export type { TerminalInstance, AddPanelOptions, QueuedCommand } from "./panelStore";
 export type { CrashType } from "@shared/types/pty-host";
 export { MAX_GRID_TERMINALS } from "./slices/panelRegistrySlice";
@@ -65,8 +65,6 @@ export { useUIStore } from "./uiStore";
 export { usePaletteStore } from "./paletteStore";
 export type { PaletteId } from "./paletteStore";
 
-export { useGitHubConfigStore, cleanupGitHubConfigStore } from "./githubConfigStore";
-
 export {
   useAgentSettingsStore,
   cleanupAgentSettingsStore,
@@ -100,3 +98,11 @@ export { useScreenReaderStore } from "./screenReaderStore";
 export type { ScreenReaderMode } from "./screenReaderStore";
 
 export { useLayoutUndoStore } from "./layoutUndoStore";
+
+export {
+  useSystemWakeStore,
+  setupSystemWakeListeners,
+  cleanupSystemWakeListeners,
+  WAKE_NOOP_THRESHOLD_MS,
+  WAKE_LONG_SLEEP_THRESHOLD_MS,
+} from "./systemWakeStore";

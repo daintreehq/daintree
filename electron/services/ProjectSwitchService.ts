@@ -3,11 +3,11 @@ import type { Project } from "../types/index.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { projectStore, DEFAULT_PROJECT_EMOJI } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
-import { taskQueueService } from "./TaskQueueService.js";
-import { taskWorktreeService } from "./TaskWorktreeService.js";
+import { gitServiceCache } from "./GitServiceCache.js";
 import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastProjectSwitchUpdates } from "../ipc/projectSwitchBroadcast.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -80,6 +80,12 @@ export class ProjectSwitchService {
       // hasn't customised the project name/emoji (still has defaults).
       await this.applyInRepoIdentity(project);
 
+      // Fan out the persisted `lastOpened`/`status` flips to every renderer,
+      // including LRU-cached project views. PROJECT_ON_SWITCH below only
+      // carries the active project; the departing project's bumped
+      // `lastOpened` would otherwise stay stale in cached stores (#8561).
+      broadcastProjectSwitchUpdates(previousProjectId, projectId);
+
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {
         throw new Error(`Project not found after update: ${projectId}`);
@@ -119,27 +125,26 @@ export class ProjectSwitchService {
         ...(hydrateResult ? { hydrateResult } : {}),
       });
 
+      // Dedicated load-status event consumed by the renderer's Tier 3 banner
+      // (#8400). Mirrors the targeted send on the production view-swap path so
+      // both paths drive the same listener; null clears any stale banner.
+      broadcastToRenderer(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+        projectId,
+        worktreeLoadError: worktreeLoadError ?? null,
+      });
+
       console.log("[ProjectSwitch] Project switch complete, switchId:", switchId);
       return updatedProject;
     } catch (error) {
       // Drain the in-flight save so it can't race with a subsequent switch's
       // write to the same outgoing project state file.
       await saveOutgoingPromise.catch(() => {});
-      console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
-      try {
-        if (previousProjectId) {
-          const previousProject = projectStore.getProjectById(previousProjectId);
-          this.deps.ptyClient!.onProjectSwitch(
-            this.windowId!,
-            previousProjectId,
-            previousProject?.path
-          );
-        } else {
-          this.deps.ptyClient!.setActiveProject(this.windowId!, null);
-        }
-      } catch (rollbackError) {
-        console.error("[ProjectSwitch] Rollback failed:", rollbackError);
-      }
+      // No PTY rollback: the project store, git cache, log buffer, and context
+      // tracker have already committed to the new project by the time we get
+      // here. Reverting only the PTY would leave a split-brain state. Forward-
+      // fail to the new project instead and surface the failure to the renderer
+      // via the worktreeLoadError payload (see #8400).
+      console.error("[ProjectSwitch] Project switch failed:", error);
       throw error;
     } finally {
       markPerformance(PERF_MARKS.PROJECT_SWITCH_END, {
@@ -197,8 +202,7 @@ export class ProjectSwitchService {
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
         : Promise.resolve(),
-      safeCall(() => taskQueueService.onProjectSwitch(projectId)),
-      safeCall(() => taskWorktreeService.onProjectSwitch()),
+      safeCall(() => gitServiceCache.clear()),
       safeCall(() => contextInjectionTracker.onProjectSwitch()),
     ]);
 
@@ -208,8 +212,7 @@ export class ProjectSwitchService {
           "PtyClient",
           "LogBuffer",
           "EventBuffer",
-          "TaskQueueService",
-          "TaskWorktreeService",
+          "GitServiceCache",
           "ContextInjectionTracker",
         ];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);

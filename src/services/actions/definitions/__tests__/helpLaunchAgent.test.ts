@@ -3,6 +3,7 @@ import type { CliAvailability } from "@shared/types";
 
 const {
   mockDispatch,
+  mockGetContext,
   mockNotify,
   mockGetAgentPrefsState,
   mockGetCliAvailabilityState,
@@ -11,6 +12,7 @@ const {
   mockLogError,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
+  mockGetContext: vi.fn(() => ({})),
   mockNotify: vi.fn().mockReturnValue(""),
   mockGetAgentPrefsState: vi.fn(),
   mockGetCliAvailabilityState: vi.fn(),
@@ -20,7 +22,7 @@ const {
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: mockDispatch },
+  actionService: { dispatch: mockDispatch, getContext: mockGetContext },
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -301,6 +303,7 @@ describe("help.launchAgent", () => {
       projectId: "proj-1",
       projectPath: "/repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -315,6 +318,34 @@ describe("help.launchAgent", () => {
         },
       }),
       { source: "user" }
+    );
+  });
+
+  it("snapshots the action context synchronously before the getFolderPath await (#8317)", async () => {
+    // getContext returns the value captured at call time. Resolve
+    // getFolderPath only after we've mutated what getContext would return —
+    // proving the capture happened on the synchronous first line, not after
+    // the await (the stale-read race this fix closes; lesson #5087).
+    mockGetContext.mockReturnValue({ focusedWorktreeId: "wt-at-launch" });
+    let resolveFolder: (v: string) => void = () => {};
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<string>((r) => {
+        resolveFolder = r;
+      })
+    );
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-1", path: "/repo" },
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    const runPromise = action.run(undefined, stubCtx);
+    // Focus drifts while getFolderPath is still pending.
+    mockGetContext.mockReturnValue({ focusedWorktreeId: "wt-drifted" });
+    resolveFolder("/mock/help");
+    await runPromise;
+
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ context: { focusedWorktreeId: "wt-at-launch" } })
     );
   });
 

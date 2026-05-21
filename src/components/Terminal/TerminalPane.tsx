@@ -14,6 +14,7 @@ import type {
   TerminalRestartError,
   SpawnError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
+import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
@@ -46,6 +48,7 @@ import {
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -57,6 +60,11 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
+import { logWarn } from "@/utils/logger";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
+import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -207,11 +215,13 @@ export interface TerminalPaneProps {
   onTitleChange?: (newTitle: string) => void;
   onMinimize?: () => void;
   onRestore?: () => void;
+  showRestoreControl?: boolean;
   location?: "grid" | "dock";
   restartKey?: number;
   restartError?: TerminalRestartError;
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   gridPanelCount?: number;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
@@ -251,11 +261,13 @@ function TerminalPaneComponent({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   location = "grid",
   restartKey = 0,
   restartError,
   reconnectError,
   spawnError,
+  scrollbackRestoreError,
   gridPanelCount,
   detectedProcessId,
   ambientAgentState,
@@ -315,6 +327,7 @@ function TerminalPaneComponent({
   const removePanel = usePanelStore((state) => state.removePanel);
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
+  const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -390,6 +403,9 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
+  const isHostConnected = backendStatus === "connected";
+
+  const isHibernated = useIsHibernated(id);
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
@@ -399,6 +415,24 @@ function TerminalPaneComponent({
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
+  // Derived per-render so listeners that bypass `updateAgentState` (raw
+  // setState from identity reducers, exit handlers) can't desync a maintained
+  // counter (#8596 review feedback). Scoped to grid-visible panels — dock /
+  // trash / background / explicitly-hidden panels don't contribute to fleet
+  // pressure on the user's screen.
+  const workingPanelCount = usePanelStore((state) => {
+    let count = 0;
+    for (const tid in state.panelsById) {
+      const t = state.panelsById[tid];
+      if (!t) continue;
+      if (t.agentState !== "working") continue;
+      const location = t.location ?? "grid";
+      if (location !== "grid") continue;
+      if (t.isVisible === false) continue;
+      count++;
+    }
+    return count;
+  });
 
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>
@@ -644,8 +678,16 @@ function TerminalPaneComponent({
 
   const getRefreshTierCallback = useCallback(() => {
     const terminal = getTerminal(id);
-    return getTerminalRefreshTier(terminal, isFocused, { isFleetArmed: isArmed });
-  }, [getTerminal, id, isArmed, isFocused]);
+    return getTerminalRefreshTier(terminal, isFocused, {
+      isFleetArmed: isArmed,
+      workingCount: workingPanelCount,
+    });
+  }, [getTerminal, id, isArmed, isFocused, workingPanelCount]);
+
+  // True when this pane is a working agent currently demoted from FOCUSED to
+  // VISIBLE because another working agent is competing for the budget
+  // (issue #8596). Drives the policy's longer fleet-driven hysteresis.
+  const isFleetDemoted = agentState === "working" && !isFocused && workingPanelCount > 1;
 
   const handleClick = (e?: React.MouseEvent) => {
     const target = e?.target as HTMLElement | null;
@@ -714,7 +756,6 @@ function TerminalPaneComponent({
     }
 
     setFocused(id);
-    terminalInstanceService.boostRefreshRate(id);
   };
 
   const handleXtermPointerDownCapture = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -732,6 +773,7 @@ function TerminalPaneComponent({
       location,
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
+      isShiftKey: e.shiftKey,
     });
 
     if (!shouldSuppress) {
@@ -744,10 +786,21 @@ function TerminalPaneComponent({
     e.preventDefault();
     e.stopPropagation();
 
+    // Capture the pointer so follow-on pointermove/pointerup events route to
+    // this wrapper instead of xterm's canvas. Without this, suppressing only
+    // pointerdown still lets drag motion leak into PTY mouse-reporting modes
+    // (DECSET 1002/1003) as escape sequences.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Element was detached (e.g. LRU view eviction). Safe to ignore.
+    }
+
     setFocused(id);
-    terminalInstanceService.boostRefreshRate(id);
     requestAnimationFrame(() => terminalInstanceService.focus(id));
   };
+
+  const handleXtermPointerNoop = () => {};
 
   const handleRestart = () => {
     restartTerminal(id);
@@ -764,6 +817,10 @@ function TerminalPaneComponent({
 
   const handleDismissReconnectError = () => {
     clearReconnectError(id);
+  };
+
+  const handleDismissScrollbackRestoreError = () => {
+    clearScrollbackRestoreError(id);
   };
 
   useEffect(() => {
@@ -796,6 +853,7 @@ function TerminalPaneComponent({
         cancelled = true;
         cancelAnimationFrame(outerRafId);
         if (innerRafId !== undefined) cancelAnimationFrame(innerRafId);
+        inputBarRef.current?.cancelPendingFocus();
       };
     }
 
@@ -890,6 +948,66 @@ function TerminalPaneComponent({
     }
   };
 
+  // "Send to assistant" relays this agent's completion output into the active
+  // assistant session. It's only offered when the assistant terminal exists
+  // and is idle/waiting — writing into a working or directing agent would
+  // corrupt its input mid-stream.
+  const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
+  const helpAgentState = usePanelStore((s) =>
+    helpTerminalId ? s.panelsById[helpTerminalId]?.agentState : undefined
+  );
+  const helpInputLocked = usePanelStore((s) =>
+    helpTerminalId ? s.panelsById[helpTerminalId]?.isInputLocked === true : false
+  );
+  const assistantAvailable =
+    !!helpTerminalId &&
+    helpTerminalId !== id &&
+    !helpInputLocked &&
+    (helpAgentState === "idle" || helpAgentState === "waiting");
+
+  // The "Send to agent" palette has nothing to offer when this is the only
+  // eligible PTY pane — hide it rather than render a button that no-ops.
+  const hasAgentTargets = usePanelStore((s) =>
+    s.panelIds.some((tid) => {
+      const t = s.panelsById[tid];
+      return (
+        !!t &&
+        t.id !== id &&
+        t.location !== "trash" &&
+        t.location !== "background" &&
+        (t.kind ? panelKindHasPty(t.kind) : true) &&
+        t.hasPty !== false
+      );
+    })
+  );
+
+  const handleSendToAssistant = useCallback(() => {
+    const help = useHelpPanelStore.getState();
+    const helpTid = help.terminalId;
+    if (!helpTid || helpTid === id) return;
+    const state = terminalInstanceService.getAgentState(helpTid);
+    if (state !== "idle" && state !== "waiting") return;
+    if (usePanelStore.getState().panelsById[helpTid]?.isInputLocked === true) return;
+    const text = terminalInstanceService.captureBufferText(id, 20000);
+    if (!text) return;
+
+    const managed = terminalInstanceService.get(helpTid);
+    if (managed && !managed.terminal.modes.bracketedPasteMode) {
+      terminalClient.write(helpTid, text.replace(/\r?\n/g, "\r"));
+    } else {
+      terminalClient.write(helpTid, formatWithBracketedPaste(text));
+    }
+    terminalInstanceService.notifyUserInput(helpTid);
+    help.setOpen(true);
+    help.requestFocus();
+  }, [id]);
+
+  const handleSendToAgent = useCallback(() => {
+    const text = terminalInstanceService.captureBufferText(id, 20000);
+    if (!text) return;
+    openSendToAgentPaletteWithText(text, id);
+  }, [id]);
+
   const isWorking = agentState === "working";
   const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
 
@@ -923,10 +1041,17 @@ function TerminalPaneComponent({
     exitBehavior,
     reconnectError,
     spawnError,
+    backendStatus,
   });
-  const showRestartError = Boolean(restartError);
-  const showSpawnError = Boolean(spawnError) && !showRestartError;
-  const showReconnectError = Boolean(reconnectError) && !showRestartError && !showSpawnError;
+  const showRestartError = isHostConnected && Boolean(restartError);
+  const showSpawnError = isHostConnected && Boolean(spawnError) && !restartError;
+  const showReconnectError =
+    isHostConnected && Boolean(reconnectError) && !restartError && !spawnError;
+  // Scrollback restore is independent of PTY launch state (spawn/reconnect),
+  // so it can co-exist with those banners. Only restartError, which already
+  // implies a destroyed-and-respawning PTY, suppresses it.
+  const showScrollbackRestoreError =
+    isHostConnected && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
   return (
@@ -951,6 +1076,7 @@ function TerminalPaneComponent({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       headerActions={agentHeaderActions}
       onRestart={handleRestart}
       isExited={isExited}
@@ -968,6 +1094,7 @@ function TerminalPaneComponent({
       ambientAgentState={ambientAgentState}
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
+      isHibernated={isHibernated}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
@@ -1056,6 +1183,18 @@ function TerminalPaneComponent({
         )}
       </BannerSlot>
 
+      <BannerSlot visible={showScrollbackRestoreError}>
+        {scrollbackRestoreError && (
+          <ScrollbackRestoreErrorBanner
+            terminalId={id}
+            error={scrollbackRestoreError}
+            onDismiss={handleDismissScrollbackRestoreError}
+            onRestart={handleRestart}
+            isRestarting={isRestarting}
+          />
+        )}
+      </BannerSlot>
+
       <BannerSlot visible={showRestartStatus}>
         <TerminalRestartStatusBanner
           variant={restartBannerVariant}
@@ -1080,6 +1219,8 @@ function TerminalPaneComponent({
                   (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
                 )}
                 onPointerDownCapture={handleXtermPointerDownCapture}
+                onPointerMove={handleXtermPointerNoop}
+                onPointerUp={handleXtermPointerNoop}
               >
                 <Suspense fallback={null}>
                   <XtermAdapter
@@ -1093,6 +1234,7 @@ function TerminalPaneComponent({
                     onInput={handleInput}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
+                    isFleetDemoted={isFleetDemoted}
                     cwd={cwd}
                     hasBottomBar={showHybridInputBar}
                   />
@@ -1158,6 +1300,8 @@ function TerminalPaneComponent({
                 fileCount={changedFileCount}
                 onReview={handleOpenReviewHub}
                 onDismiss={() => setCompletionBannerDismissed(true)}
+                onSendToAssistant={assistantAvailable ? handleSendToAssistant : undefined}
+                onSendToAgent={hasAgentTargets ? handleSendToAgent : undefined}
               />
             )}
 
@@ -1176,7 +1320,13 @@ function TerminalPaneComponent({
                   onSend={({ trackerData, text }) => {
                     if (!isInputLocked) {
                       terminalInstanceService.notifyUserInput(id);
-                      terminalClient.submit(id, text);
+                      // submit now rejects when the PTY is gone (#8706); the
+                      // single-pane path has no recovery UI for that, so
+                      // swallow to log instead of leaking an unhandled
+                      // rejection. Banners/agent-state surface the dead pane.
+                      terminalClient.submit(id, text).catch((err) => {
+                        logWarn("[TerminalPane] submit failed", { id, error: err });
+                      });
                       handleInput(trackerData);
                     }
                   }}

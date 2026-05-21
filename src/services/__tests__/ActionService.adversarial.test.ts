@@ -120,7 +120,7 @@ describe("ActionService adversarial", () => {
     const result = await service.dispatch("actions.list" as ActionId);
 
     expect(result.ok).toBe(true);
-    expect(observed).toEqual({});
+    expect(observed).toEqual({ dispatchSource: "user" });
   });
 
   it("events.emit throwing during teardown does not block handler execution", async () => {

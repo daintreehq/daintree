@@ -102,32 +102,6 @@ export const config: AgentConfig = {
     promptConfidence: 0.85,
     debounceMs: 6000,
   },
-  routing: {
-    capabilities: [
-      "javascript",
-      "typescript",
-      "python",
-      "go",
-      "rust",
-      "react",
-      "node",
-      "debugging",
-      "refactoring",
-      "code-review",
-      "architecture",
-      "general-purpose",
-    ],
-    domains: {
-      frontend: 0.85,
-      backend: 0.85,
-      testing: 0.8,
-      refactoring: 0.9,
-      debugging: 0.9,
-      architecture: 0.85,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   // Amp resumes a thread by ID via `amp threads continue <id>`. There's no
   // session-ID emission on quit and no slash-quit command — Ctrl+C is the
   // graceful exit signal.

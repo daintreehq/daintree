@@ -1,14 +1,16 @@
 import { Clock } from "lucide-react";
 import type { FreshnessLevel } from "@/hooks/useRepositoryStats";
 
-export function freshnessOpacityClass(level: FreshnessLevel): string {
+export type BadgeFreshnessCause = "stale" | "rate-limit" | "circuit-breaker";
+
+export function freshnessClass(level: FreshnessLevel): string {
   switch (level) {
     case "aging":
       return "opacity-75";
     case "stale-disk":
-      return "opacity-60";
+      return "border-l-2 border-border-default italic";
     case "errored":
-      return "opacity-50";
+      return "border-l-2 border-border-default italic";
     case "fresh":
     default:
       return "";
@@ -16,7 +18,7 @@ export function freshnessOpacityClass(level: FreshnessLevel): string {
 }
 
 export function FreshnessGlyph({ level }: { level: FreshnessLevel }) {
-  if (level === "stale-disk") {
+  if (level === "stale-disk" || level === "aging") {
     return <Clock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
   }
   return null;
@@ -49,6 +51,33 @@ export function freshnessSuffix(
     case "errored":
       return " · couldn't reach GitHub";
     case "fresh":
+    default:
+      return "";
+  }
+}
+
+export function badgeFreshnessSuffix(
+  cause: BadgeFreshnessCause | undefined,
+  lastUpdated: number | null,
+  now: number,
+  resetAt?: number | null
+): string {
+  switch (cause) {
+    case "stale":
+      return ` · updated ${formatTimeSince(lastUpdated, now)}`;
+    case "rate-limit": {
+      let suffix = " · rate limited";
+      if (resetAt != null && resetAt > now) {
+        const retryTime = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(new Date(resetAt));
+        suffix += `, retry at ${retryTime}`;
+      }
+      return suffix;
+    }
+    case "circuit-breaker":
+      return " · data may be stale — PR detection paused";
     default:
       return "";
   }

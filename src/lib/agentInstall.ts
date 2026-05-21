@@ -46,6 +46,18 @@ export function isManualOnlyCommand(command: string): boolean {
   return /\|\s*(bash|sh|zsh)\b/.test(command) || /\|\s*iex\b/.test(command);
 }
 
+// For `curl … | bash` / `irm … | iex`-style commands, return the install
+// script URL so the UI can offer an inspect-before-running affordance.
+// Returns undefined for commands without a pipe-to-shell or without a URL.
+export function extractInspectUrl(command: string): string | undefined {
+  if (!isManualOnlyCommand(command)) return undefined;
+  const match = command.match(/https?:\/\/[^\s|]+/);
+  if (!match) return undefined;
+  // Trim trailing punctuation that often surrounds inline URLs, e.g. the `)`
+  // in `bash <(curl https://x/install.sh)`.
+  return match[0].replace(/[)\]'">]+$/, "");
+}
+
 export function isBlockExecutable(block: AgentInstallBlock): boolean {
   if (!block.commands || block.commands.length === 0) return false;
   return block.commands.every((cmd) => !isManualOnlyCommand(cmd));

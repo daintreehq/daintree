@@ -35,8 +35,7 @@ port.on("message", (raw) => {
       return;
 
     case "set-log-level-overrides":
-    case "update-github-token":
-    case "attach-renderer-port":
+    case "update-forge-credentials":
     case "attach-worktree-port":
     case "dispose":
     case "load-project":

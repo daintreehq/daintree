@@ -85,9 +85,16 @@ function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
   for (const tab of SETTINGS_REGISTRY as readonly AnySettingsTabEntry[]) {
     if (tab.scope === "project") continue;
     entries.push(
+      // Use tab.label (the short form, e.g. "GitHub") rather than
+      // tab.headerTitle (e.g. "GitHub Integration") for the search-side
+      // tabLabel. headerTitle is the in-panel H1 — it's longer and more
+      // descriptive but it never matches what the user types (they type
+      // "github", not "github integration"), and project-scope tabs only
+      // expose the short label, so this also keeps tabLabel consistent
+      // across scopes for the result-row breadcrumb.
       ...buildEntriesForTab(
         tab.id,
-        tab.headerTitle ?? tab.label,
+        tab.label,
         tab.scope,
         tab.searchNavDescription ?? "",
         tab.searchNavKeywords,

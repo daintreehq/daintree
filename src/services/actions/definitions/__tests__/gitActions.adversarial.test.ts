@@ -1,6 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+
+/**
+ * `git.push` now awaits a deferred-Promise confirm gate (#8242). In a unit
+ * context there is no mounted `GitPushConfirmDialog`, so resolve the pending
+ * request explicitly once `run()` has registered it.
+ */
+async function resolvePushConfirm(ok: boolean): Promise<void> {
+  await vi.waitFor(() => {
+    expect(useGitPushConfirmStore.getState().pendingConfirm).not.toBeNull();
+  });
+  useGitPushConfirmStore.getState().resolveConfirmation(ok);
+}
+
+/** Same deferred-Promise gate, for `git.pullRebase` (#8242). */
+async function resolvePullRebaseConfirm(ok: boolean): Promise<void> {
+  await vi.waitFor(() => {
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).not.toBeNull();
+  });
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(ok);
+}
 
 type GitStub = {
   [K in
@@ -10,6 +32,7 @@ type GitStub = {
     | "unstageFile"
     | "commit"
     | "push"
+    | "pullRebase"
     | "getFileDiff"
     | "listCommits"
     | "getStagingStatus"
@@ -28,6 +51,7 @@ function makeGitStub(): GitStub {
     unstageFile: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue({ sha: "abc" }),
     push: vi.fn().mockResolvedValue({ ok: true }),
+    pullRebase: vi.fn().mockResolvedValue(undefined),
     getFileDiff: vi.fn().mockResolvedValue("diff"),
     listCommits: vi.fn().mockResolvedValue([]),
     getStagingStatus: vi.fn().mockResolvedValue({}),
@@ -106,14 +130,51 @@ describe("gitActions adversarial", () => {
 
   it("git.push preserves explicit setUpstream:false (doesn't convert it to undefined)", async () => {
     const { run, git } = setupActions();
-    await run("git.push", { cwd: "/repo", setUpstream: false });
+    const p = run("git.push", { cwd: "/repo", setUpstream: false });
+    await resolvePushConfirm(true);
+    await p;
     expect(git.push).toHaveBeenCalledWith("/repo", false);
   });
 
   it("git.push preserves explicit setUpstream:true", async () => {
     const { run, git } = setupActions();
-    await run("git.push", { cwd: "/repo", setUpstream: true });
+    const p = run("git.push", { cwd: "/repo", setUpstream: true });
+    await resolvePushConfirm(true);
+    await p;
     expect(git.push).toHaveBeenCalledWith("/repo", true);
+  });
+
+  it("git.push does not reach IPC when the confirm gate is declined", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.push", { cwd: "/repo" });
+    await resolvePushConfirm(false);
+    await p;
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", { cwd: "/repo" });
+    expect(git.pullRebase).not.toHaveBeenCalled();
+    await resolvePullRebaseConfirm(true);
+    await p;
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+  });
+
+  it("git.pullRebase does not reach IPC when the confirm gate is declined", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", { cwd: "/repo" });
+    await resolvePullRebaseConfirm(false);
+    await p;
+    expect(git.pullRebase).not.toHaveBeenCalled();
+  });
+
+  it("git.pullRebase falls back to ctx.activeWorktreePath when no cwd arg is given", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", undefined, { activeWorktreePath: "/repo" });
+    await resolvePullRebaseConfirm(true);
+    await p;
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
   });
 
   it("git.getFileDiff forwards cwd, filePath, and status positionally without mutation", async () => {

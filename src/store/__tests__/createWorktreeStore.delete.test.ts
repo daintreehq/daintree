@@ -1,0 +1,369 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
+
+// Host-minted versions are now `(epoch, seq)` tuples (#8403). Tests mint a
+// monotonic seq under a fixed epoch; each fresh store starts at epoch "" so
+// the first non-empty epoch is always accepted as an epoch transition.
+const TEST_EPOCH = "test-epoch";
+let _seq = 0;
+function nextV(): WorktreeEventVersion {
+  return { epoch: TEST_EPOCH, seq: ++_seq };
+}
+
+const { worktreeClientDeleteMock, closeTerminalsForWorktreeMock, notifyMock } = vi.hoisted(() => ({
+  worktreeClientDeleteMock:
+    vi.fn<
+      (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
+    >(),
+  closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
+  notifyMock: vi.fn(),
+}));
+
+vi.mock("@/clients", async () => {
+  const actual = await vi.importActual<typeof import("@/clients")>("@/clients");
+  return {
+    ...actual,
+    worktreeClient: {
+      ...actual.worktreeClient,
+      delete: worktreeClientDeleteMock,
+    },
+  };
+});
+
+vi.mock("@/components/Worktree/worktreeDeleteHelper", () => ({
+  closeTerminalsForWorktree: closeTerminalsForWorktreeMock,
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
+}));
+
+// Import after mocks so the store picks up the mocked deps.
+import { createWorktreeStore } from "@/store/createWorktreeStore";
+
+function makeSnapshot(id: string): WorktreeSnapshot {
+  return {
+    id,
+    name: id,
+    branch: "main",
+    path: `/repo/${id}`,
+    isCurrent: false,
+    isMainWorktree: false,
+    modifiedCount: 0,
+    changes: [],
+    summary: "",
+    mood: null,
+    gitDir: "",
+  } as unknown as WorktreeSnapshot;
+}
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("createWorktreeStore — delete in-flight state (#8417)", () => {
+  beforeEach(() => {
+    worktreeClientDeleteMock.mockReset();
+    closeTerminalsForWorktreeMock.mockReset();
+    notifyMock.mockReset();
+    worktreeClientDeleteMock.mockResolvedValue();
+    closeTerminalsForWorktreeMock.mockResolvedValue();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("initializes with empty delete maps", () => {
+    const store = createWorktreeStore();
+    expect(store.getState().deletingIds.size).toBe(0);
+    expect(store.getState().deleteErrors.size).toBe(0);
+    expect(store.getState().deleteErrorArgs.size).toBe(0);
+  });
+
+  it("startDelete marks deletingIds and stores args atomically", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true, deleteBranch: false });
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({
+      force: true,
+      deleteBranch: false,
+    });
+  });
+
+  it("startDelete is idempotent — a second call while in flight is a no-op", () => {
+    const store = createWorktreeStore();
+    store.getState().startDelete("wt-1", { force: false });
+    store.getState().startDelete("wt-1", { force: true });
+    // Args from the first call must persist — the second start was suppressed.
+    expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({ force: false });
+  });
+
+  it("startDelete with closeTerminals routes through closeTerminalsForWorktree before IPC", async () => {
+    const store = createWorktreeStore();
+    store.getState().startDelete("wt-1", { closeTerminals: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(closeTerminalsForWorktreeMock).toHaveBeenCalledWith("wt-1");
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
+      "wt-1",
+      undefined,
+      undefined,
+      expect.any(String)
+    );
+  });
+
+  it("startDelete without closeTerminals skips terminal cleanup", async () => {
+    const store = createWorktreeStore();
+    store.getState().startDelete("wt-1", { force: true, deleteBranch: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", true, true, expect.any(String));
+  });
+
+  it("on success, deletingIds and error maps are cleared by applyRemove", async () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+
+    await flushPromises();
+    await flushPromises();
+
+    // Simulating the worktree-removed event handler invoking applyRemove.
+    store.getState().applyRemove("wt-1", nextV());
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+  });
+
+  it("on failure, deletingIds is cleared and deleteErrors records the message", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: unmerged paths"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrors.get("wt-1")).toContain("git error: unmerged paths");
+    expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({ force: false });
+  });
+
+  it("retryDelete re-fires with the stored args", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("first fail"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true, deleteBranch: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+    worktreeClientDeleteMock.mockResolvedValueOnce();
+
+    store.getState().retryDelete("wt-1");
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
+    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith(
+      "wt-1",
+      true,
+      true,
+      expect.any(String)
+    );
+    // retryDelete reuses the original mutationId so the host's ack map can
+    // dedupe across the retry boundary (#8405).
+    const firstId = worktreeClientDeleteMock.mock.calls[0]![3];
+    const secondId = worktreeClientDeleteMock.mock.calls[1]![3];
+    expect(firstId).toBeDefined();
+    expect(secondId).toBe(firstId);
+  });
+
+  it("retryDelete with no stored args is a no-op", () => {
+    const store = createWorktreeStore();
+    store.getState().retryDelete("wt-1");
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("clearDeleteError purges error and stored args without touching deletingIds", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("boom"));
+
+    const store = createWorktreeStore();
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+
+    store.getState().clearDeleteError("wt-1");
+
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
+  });
+
+  it("partial-success path: when worktree-removed arrives first, failure routes to notify() so it is not swallowed", async () => {
+    // The backend emits `worktree-removed` BEFORE `git branch -d`. A branch
+    // deletion failure thus arrives after `applyRemove` has cleared the card.
+    // Falling back to a toast preserves user feedback for the branch leak.
+    let rejectIpc: (reason: unknown) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectIpc = reject;
+        })
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
+    await flushPromises();
+
+    // Simulate `worktree-removed` arriving before the IPC rejection — common
+    // when the backend removed the worktree but the bridge is still resolving
+    // a stale promise.
+    store.getState().applyRemove("wt-1", nextV());
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+
+    rejectIpc(new Error("Branch 'feature/x' has unmerged changes"));
+    await flushPromises();
+    await flushPromises();
+
+    // No dangling Map entries (card is gone).
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
+
+    // But the user MUST see the branch-leak error somewhere.
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      message: string;
+      context: { worktreeId: string };
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.title).toContain("branch");
+    expect(payload.message).toContain("unmerged");
+    expect(payload.context.worktreeId).toBe("wt-1");
+  });
+
+  it("closeTerminalsForWorktree rejection short-circuits IPC and records the error on the card", async () => {
+    closeTerminalsForWorktreeMock.mockRejectedValueOnce(
+      new Error("Timed out waiting for 2 terminal(s) to close before deleting worktree")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    expect(store.getState().deleteErrors.get("wt-1")).toContain("Timed out waiting");
+    expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({
+      closeTerminals: true,
+      force: false,
+    });
+  });
+
+  it("concurrent deletes for different worktrees do not leak state across rows", async () => {
+    let resolveWt1: () => void = () => {};
+    let rejectWt2: (err: Error) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWt1 = resolve;
+        })
+    );
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWt2 = reject;
+        })
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1"), makeSnapshot("wt-2")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    store.getState().startDelete("wt-2", { force: true });
+
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+    expect(store.getState().deletingIds.has("wt-2")).toBe(true);
+
+    rejectWt2(new Error("wt-2 failed"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().deletingIds.has("wt-2")).toBe(false);
+    expect(store.getState().deleteErrors.get("wt-2")).toContain("wt-2 failed");
+    // wt-1 stays in flight — its row is not affected by wt-2's failure.
+    expect(store.getState().deletingIds.has("wt-1")).toBe(true);
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+
+    resolveWt1();
+    store.getState().applyRemove("wt-1", nextV());
+    expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+    // wt-2's error survives wt-1's removal.
+    expect(store.getState().deleteErrors.get("wt-2")).toContain("wt-2 failed");
+  });
+
+  it("startDelete is idempotent — a second call while in flight does not fire a second IPC", async () => {
+    let resolveDelete: () => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        })
+    );
+
+    const store = createWorktreeStore();
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
+      "wt-1",
+      false,
+      undefined,
+      expect.any(String)
+    );
+
+    resolveDelete();
+    await flushPromises();
+  });
+
+  it("applyRemove still works for worktrees with no in-flight delete (no regression)", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().applyRemove("wt-1", nextV());
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+  });
+});

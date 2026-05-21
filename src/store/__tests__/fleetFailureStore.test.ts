@@ -61,6 +61,17 @@ describe("useFleetFailureStore", () => {
     expect(s.recordedAt).toBeNull();
   });
 
+  it("recordFailure accepts a null payload for non-replayable failures", () => {
+    // Raw-input broadcasts use null to signal "no meaningful retry" — the
+    // `Retry failed` action checks `payload == null` and skips the IPC
+    // write. Using "" here would slip through that guard (#8705).
+    useFleetFailureStore.getState().recordFailure(null, ["a", "b"]);
+    const s = useFleetFailureStore.getState();
+    expect(s.failedIds).toEqual(new Set(["a", "b"]));
+    expect(s.payload).toBeNull();
+    expect(s.recordedAt).toBeGreaterThan(0);
+  });
+
   it("dismissId removes a single id and preserves the rest", () => {
     useFleetFailureStore.getState().recordFailure("p", ["a", "b", "c"]);
     useFleetFailureStore.getState().dismissId("b");

@@ -390,6 +390,133 @@ describe("PortBatcher", () => {
     expect(Buffer.from(emitted).toString("utf8")).toBe("foobarbaz");
   });
 
+  describe("owned zero-copy fast path (#8367)", () => {
+    // A chunk that fully owns its ArrayBuffer, mirroring pty-host.ts ingestion
+    // (`new Uint8Array(...)` produces a fresh exact-length buffer, byteOffset 0).
+    function ownedBytes(text: string): Uint8Array {
+      return new Uint8Array(Buffer.from(text, "utf8"));
+    }
+
+    it("owned single-chunk flush transfers the chunk's own buffer without copying", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      const chunk = ownedBytes("flood");
+      expect(chunk.byteOffset).toBe(0);
+      expect(chunk.byteLength).toBe(chunk.buffer.byteLength);
+
+      batcher.write("t1", chunk, 5, true);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      expect(postMessage).toHaveBeenCalledOnce();
+      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
+
+      // No allocation: the emitted view is backed by the input chunk's buffer.
+      expect(emitted).toBe(chunk);
+      expect(emitted.buffer).toBe(chunk.buffer);
+      expect(Buffer.from(emitted).toString("utf8")).toBe("flood");
+    });
+
+    it("non-owned single-chunk flush still copies into a fresh buffer", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      const chunk = ownedBytes("copyme");
+      batcher.write("t1", chunk, 6); // owned defaults to false
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
+
+      expect(emitted).not.toBe(chunk);
+      expect(emitted.buffer).not.toBe(chunk.buffer);
+      expect(Buffer.from(emitted).toString("utf8")).toBe("copyme");
+    });
+
+    it("owned chunk that is a slab subview still copies (PR #4639 invariant)", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      // A 4-byte view into an 8KB slab: transferring its buffer would detach
+      // the slab. Even with owned=true the fast path must reject it.
+      const slab = new ArrayBuffer(8192);
+      const chunk = new Uint8Array(slab, 16, 4);
+      chunk.set([9, 8, 7, 6]);
+
+      batcher.write("t1", chunk, 4, true);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
+
+      expect(emitted.buffer).not.toBe(slab);
+      expect(emitted.buffer.byteLength).toBe(4);
+      expect(Array.from(emitted)).toEqual([9, 8, 7, 6]);
+    });
+
+    it("owned multi-chunk flush copies — fast path is single-chunk only", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      const a = ownedBytes("foo");
+      const b = ownedBytes("bar");
+      batcher.write("t1", a, 3, true);
+      batcher.write("t1", b, 3, true); // second chunk → throughput, multi-chunk
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
+
+      expect(emitted).not.toBe(a);
+      expect(emitted.buffer).not.toBe(a.buffer);
+      expect(emitted.byteLength).toBe(6);
+      expect(Buffer.from(emitted).toString("utf8")).toBe("foobar");
+    });
+
+    it("owned + non-owned writes to the same terminal still concatenate correctly", () => {
+      // Two writes accumulate into one multi-chunk entry, so the fast path
+      // (single-chunk only) never engages regardless of the owned flags — the
+      // merge must still produce a correct fresh contiguous copy. (The
+      // `entry.owned &&= owned` accumulation is defensive: a single-chunk entry
+      // only ever has one write, so it has no observable effect today; it
+      // guards a future fast path that might span multiple chunks.)
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      const a = ownedBytes("aa");
+      const b = ownedBytes("bb");
+      batcher.write("t1", a, 2, true);
+      batcher.write("t1", b, 2, false);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
+
+      expect(emitted.buffer).not.toBe(a.buffer);
+      expect(Buffer.from(emitted).toString("utf8")).toBe("aabb");
+    });
+
+    it("owned zero-length chunk fast-paths without breaking ACK accounting", () => {
+      // A 0-byte owned chunk satisfies the predicate (byteOffset 0,
+      // byteLength 0 === buffer.byteLength) — it must pass through cleanly and
+      // ACK exactly 0 bytes, not crash or miscount.
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      const empty = new Uint8Array(0);
+      batcher.write("t1", empty, 0, true);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      expect(postMessage).toHaveBeenCalledOnce();
+      const [, emitted, ackBytes] = postMessage.mock.calls[0];
+      expect(emitted).toBe(empty);
+      expect((emitted as Uint8Array).byteLength).toBe(0);
+      expect(ackBytes).toBe(0);
+    });
+  });
+
   describe("per-terminal isolation", () => {
     it("quiet terminal is not stalled by a busy sibling's throughput cadence", () => {
       // Regression for #7652: previously a single class-level mode meant t1 entering

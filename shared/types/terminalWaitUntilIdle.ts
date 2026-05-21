@@ -61,4 +61,4 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Wait until the agent transitions from working state or the timeout elapses";
+  "Block until the agent in one terminal leaves the working state (or the timeout elapses), then return its resolved state. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot, otherwise max ms to block, default 30 minutes, clamped to 2 hours). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', present only while waiting_for_user), timedOut }. An untracked `terminalId` is not an error — it returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. Do NOT use this to poll many terminals — call `terminal.getStatus` for fleet-wide state, or pass timeoutMs:0 here for a single non-blocking check.";

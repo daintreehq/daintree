@@ -1,5 +1,7 @@
 export const PERF_MARKS = {
   APP_BOOT_START: "app_boot_start",
+  EARLY_PATH_REFRESH_START: "early_path_refresh_start",
+  EARLY_PATH_REFRESH_COMPLETE: "early_path_refresh_complete",
   MAIN_WINDOW_CREATED: "main_window_created",
   RENDERER_READY: "renderer_ready",
   RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
@@ -14,11 +16,24 @@ export const PERF_MARKS = {
   DEFERRED_SERVICES_START: "deferred_services_start",
   DEFERRED_SERVICES_COMPLETE: "deferred_services_complete",
 
+  PTY_HOST_FORK_DISPATCHED: "pty_host_fork_dispatched",
+  PTY_HOST_MODULE_EVAL_COMPLETE: "pty_host_module_eval_complete",
+  PTY_HOST_NATIVE_MODULE_READY: "pty_host_native_module_ready",
+  PTY_HOST_READY_POSTED: "pty_host_ready_posted",
+
+  WORKSPACE_HOST_FORK_DISPATCHED: "workspace_host_fork_dispatched",
+  WORKSPACE_HOST_MODULE_EVAL_COMPLETE: "workspace_host_module_eval_complete",
+  WORKSPACE_HOST_NATIVE_MODULE_READY: "workspace_host_native_module_ready",
+  WORKSPACE_HOST_READY_POSTED: "workspace_host_ready_posted",
+
+  CRASH_RECOVERY_GATE: "crash_recovery_gate",
   HYDRATE_START: "hydrate_start",
   HYDRATE_RESTORE_PANELS_START: "hydrate_restore_panels_start",
   HYDRATE_RESTORE_PANELS_END: "hydrate_restore_panels_end",
   HYDRATE_RESTORE_TAB_GROUPS_END: "hydrate_restore_tab_groups_end",
   HYDRATE_BOOTSTRAP: "hydrate_bootstrap",
+  HYDRATE_BOOTSTRAP_LOAD_OVERRIDES: "hydrate_bootstrap_load_overrides",
+  HYDRATE_BOOTSTRAP_INIT_USER_AGENTS: "hydrate_bootstrap_init_user_agents",
   HYDRATE_APP_CLIENT: "hydrate_app_client",
   HYDRATE_GET_TERMINALS: "hydrate_get_terminals",
   HYDRATE_RESTORE_SNAPSHOTS_CRITICAL: "hydrate_restore_snapshots_critical",

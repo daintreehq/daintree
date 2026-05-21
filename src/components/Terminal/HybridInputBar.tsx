@@ -63,6 +63,7 @@ import { useHostReparent } from "./hooks/useHostReparent";
 export interface HybridInputBarHandle {
   focus: () => void;
   focusWithCursorAtEnd: () => void;
+  cancelPendingFocus: () => void;
 }
 
 export interface HybridInputBarProps {
@@ -160,6 +161,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
+    const focusGenerationRef = useRef(0);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
     const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
@@ -485,7 +487,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.focus();
-      requestAnimationFrame(() => view.focus());
+      const gen = focusGenerationRef.current;
+      requestAnimationFrame(() => {
+        if (focusGenerationRef.current !== gen) return;
+        if (editorViewRef.current !== view) return;
+        if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        view.focus();
+      });
     };
 
     const handleHistoryNavigation = (direction: "up" | "down"): boolean => {
@@ -538,14 +546,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         focusWithCursorAtEnd: () => {
           const view = editorViewRef.current;
           if (!view) return;
+          const gen = focusGenerationRef.current;
           requestAnimationFrame(() => {
+            if (focusGenerationRef.current !== gen) return;
             if (editorViewRef.current !== view) return;
+            if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
             view.dispatch({
               selection: EditorSelection.cursor(view.state.doc.length),
               scrollIntoView: true,
             });
             view.focus();
           });
+        },
+        cancelPendingFocus: () => {
+          focusGenerationRef.current += 1;
         },
       }),
       [focusEditor]

@@ -53,7 +53,10 @@ describe("SortableWorktreeCard", () => {
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.style.isolation).toBe("isolate");
-    expect(wrapper.style.contentVisibility).toBe("auto");
+    // content-visibility:auto is intentionally NOT set on the card — Virtuoso
+    // owns row windowing and content-visibility:auto would break dnd-kit
+    // transforms on the dragged row (lesson #4438 + issue #8393).
+    expect(wrapper.style.contentVisibility).toBe("");
   });
 
   it("clears isolation during drag so dnd-kit transforms compose with the card root", () => {

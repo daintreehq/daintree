@@ -52,6 +52,20 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.restart(request);
         }
       ),
+      restartAndClearCache: op(
+        DEV_PREVIEW_METHOD_CHANNELS.restartAndClearCache,
+        async (request: DevPreviewSessionRequest) => {
+          const svc = await getSessionService();
+          return svc.restartAndClearCache(request);
+        }
+      ),
+      reinstallAndRestart: op(
+        DEV_PREVIEW_METHOD_CHANNELS.reinstallAndRestart,
+        async (request: DevPreviewSessionRequest) => {
+          const svc = await getSessionService();
+          return svc.reinstallAndRestart(request);
+        }
+      ),
       stop: op(DEV_PREVIEW_METHOD_CHANNELS.stop, async (request: DevPreviewSessionRequest) => {
         const svc = await getSessionService();
         return svc.stop(request);

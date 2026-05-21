@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn(),
+    on: vi.fn(),
+  },
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
@@ -27,6 +31,7 @@ const registerMocks = vi.hoisted(() => ({
   registerProjectRecipesHandlers: vi.fn(),
   registerProjectPresetsHandlers: vi.fn(),
   registerGlobalRecipesHandlers: vi.fn(),
+  registerGlobalEnvHandlers: vi.fn(),
   registerTerminalLayoutHandlers: vi.fn(),
   registerProjectInRepoSettingsHandlers: vi.fn(),
   registerGithubHandlers: vi.fn(),
@@ -52,20 +57,26 @@ const registerMocks = vi.hoisted(() => ({
   registerGitReadHandlers: vi.fn(),
   registerTelemetryHandlers: vi.fn(),
   registerPrivacyHandlers: vi.fn(),
+  registerSentryHandlers: vi.fn(),
   registerOnboardingHandlers: vi.fn(),
   registerMilestonesHandlers: vi.fn(),
   registerShortcutHintsHandlers: vi.fn(),
+  registerForgeSettingsHandlers: vi.fn(),
   registerVoiceInputHandlers: vi.fn(),
   registerMcpServerHandlers: vi.fn(),
+  registerHelpAssistantHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
   registerDiagnosticsHandlers: vi.fn(),
 
   registerAccessibilityHandlers: vi.fn(),
   registerDemoHandlers: vi.fn(),
   registerRecoveryHandlers: vi.fn(),
+  registerSafeModeHandlers: vi.fn(),
   registerPluginHandlers: vi.fn(),
   registerPerfHandlers: vi.fn(),
+  registerConnectivityHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
+  registerWatchdogHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree/index.js", () => ({
@@ -106,6 +117,9 @@ vi.mock("../handlers/projectPresets.js", () => ({
 }));
 vi.mock("../handlers/globalRecipes.js", () => ({
   registerGlobalRecipesHandlers: registerMocks.registerGlobalRecipesHandlers,
+}));
+vi.mock("../handlers/globalEnv.js", () => ({
+  registerGlobalEnvHandlers: registerMocks.registerGlobalEnvHandlers,
 }));
 vi.mock("../handlers/terminalLayout.js", () => ({
   registerTerminalLayoutHandlers: registerMocks.registerTerminalLayoutHandlers,
@@ -182,6 +196,9 @@ vi.mock("../handlers/telemetry.js", () => ({
 vi.mock("../handlers/privacy.js", () => ({
   registerPrivacyHandlers: registerMocks.registerPrivacyHandlers,
 }));
+vi.mock("../handlers/sentry.js", () => ({
+  registerSentryHandlers: registerMocks.registerSentryHandlers,
+}));
 vi.mock("../handlers/onboarding.js", () => ({
   registerOnboardingHandlers: registerMocks.registerOnboardingHandlers,
 }));
@@ -191,11 +208,17 @@ vi.mock("../handlers/milestones.js", () => ({
 vi.mock("../handlers/shortcutHints.js", () => ({
   registerShortcutHintsHandlers: registerMocks.registerShortcutHintsHandlers,
 }));
+vi.mock("../handlers/forgeSettings.js", () => ({
+  registerForgeSettingsHandlers: registerMocks.registerForgeSettingsHandlers,
+}));
 vi.mock("../handlers/voiceInput.js", () => ({
   registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
 }));
 vi.mock("../handlers/mcpServer.js", () => ({
   registerMcpServerHandlers: registerMocks.registerMcpServerHandlers,
+}));
+vi.mock("../handlers/helpAssistant.js", () => ({
+  registerHelpAssistantHandlers: registerMocks.registerHelpAssistantHandlers,
 }));
 vi.mock("../handlers/webview.js", () => ({
   registerWebviewHandlers: registerMocks.registerWebviewHandlers,
@@ -212,14 +235,23 @@ vi.mock("../handlers/demo.js", () => ({
 vi.mock("../handlers/recovery.js", () => ({
   registerRecoveryHandlers: registerMocks.registerRecoveryHandlers,
 }));
+vi.mock("../handlers/safeMode.js", () => ({
+  registerSafeModeHandlers: registerMocks.registerSafeModeHandlers,
+}));
 vi.mock("../handlers/plugin.js", () => ({
   registerPluginHandlers: registerMocks.registerPluginHandlers,
 }));
 vi.mock("../handlers/perf.js", () => ({
   registerPerfHandlers: registerMocks.registerPerfHandlers,
 }));
+vi.mock("../handlers/connectivity.js", () => ({
+  registerConnectivityHandlers: registerMocks.registerConnectivityHandlers,
+}));
 vi.mock("../handlers/scratch/index.js", () => ({
   registerScratchHandlers: registerMocks.registerScratchHandlers,
+}));
+vi.mock("../handlers/watchdog.js", () => ({
+  registerWatchdogHandlers: registerMocks.registerWatchdogHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },

@@ -24,6 +24,7 @@ import {
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  SquareArrowOutUpRight,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -104,6 +105,13 @@ export interface PanelHeaderProps {
   onTitleChange?: (newTitle: string) => void;
   onMinimize?: () => void;
   onRestore?: () => void;
+  /**
+   * Render the inline "Open in grid" control in the dock header. Gated so it
+   * isn't duplicated by DockedTabGroup's own restore button on grouped panels
+   * (single-panel dock only). onRestore still powers double-click + the
+   * overflow-menu "Restore to Grid" item regardless of this flag.
+   */
+  showRestoreControl?: boolean;
   onRestart?: () => void;
 
   // Visual states
@@ -171,6 +179,7 @@ function PanelHeaderComponent({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   onRestart,
   isPinged,
   wasJustSelected = false,
@@ -358,7 +367,7 @@ function PanelHeaderComponent({
     if (location === "dock") {
       onRestore?.();
     } else {
-      void actionService.dispatch("nav.toggleFocusMode");
+      onToggleMaximize?.();
     }
   };
 
@@ -999,28 +1008,53 @@ function PanelHeaderComponent({
           </Tooltip>
         )}
 
-        {/* Middle control: Collapse-to-Dock / Maximize / Exit Focus */}
-        {location === "dock" && onMinimize ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onMinimize();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                aria-label="Collapse to Dock"
-                aria-keyshortcuts={toggleDockAriaShortcut}
-                data-testid="panel-collapse-to-dock"
-              >
-                <PanelBottomClose className="w-3 h-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent("Collapse to Dock", toggleDockShortcut)}
-            </TooltipContent>
-          </Tooltip>
+        {/* Middle control: Collapse-to-Dock + Open-in-grid (dock) / Maximize / Restore.
+            Dock panels never receive onToggleMaximize, so this branch owns the
+            slot whenever location is "dock" regardless of onMinimize. */}
+        {location === "dock" ? (
+          <>
+            {onMinimize && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onMinimize();
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    aria-label="Collapse to Dock"
+                    aria-keyshortcuts={toggleDockAriaShortcut}
+                    data-testid="panel-collapse-to-dock"
+                  >
+                    <PanelBottomClose className="w-3 h-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent("Collapse to Dock", toggleDockShortcut)}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {onRestore && showRestoreControl && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRestore();
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    aria-label="Open in grid"
+                    data-testid="panel-open-in-grid"
+                  >
+                    <SquareArrowOutUpRight className="w-3 h-3" aria-hidden="true" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Open in grid</TooltipContent>
+              </Tooltip>
+            )}
+          </>
         ) : onToggleMaximize && isMaximized ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1032,11 +1066,11 @@ function PanelHeaderComponent({
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="flex items-center gap-1.5 px-2 py-1 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                aria-label="Exit Focus mode and restore grid view"
+                aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
                 <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-                <span className="font-medium">Exit Focus</span>
+                <span className="font-medium">Restore</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

@@ -35,7 +35,7 @@ export type {
 export type { NotificationType, Notification, NotificationPayload } from "./notification.js";
 
 // Agent types
-export type { AgentState, TaskState, RunRecord, AgentStateChangeTrigger } from "./agent.js";
+export type { AgentState, AgentStateChangeTrigger } from "./agent.js";
 
 // Panel types
 export type {
@@ -48,6 +48,7 @@ export type {
   PanelTitleMode,
   TerminalRestartError,
   TerminalReconnectError,
+  TerminalScrollbackRestoreError,
   TerminalRuntimeStatus,
   PersistableFlowStatus,
   TerminalSpawnSource,
@@ -177,6 +178,9 @@ export type {
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   GitHubTokenHealthStatus,
+  ForgeRateLimitKind,
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
   // Per-service connectivity types
   ConnectivityServiceKey,
   ServiceConnectivityStatus,
@@ -324,11 +328,18 @@ export {
 // Per-service connectivity helpers
 export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
 
-// MCP server audit log + runtime state
+// MCP server audit log + runtime state + turn outcomes
 export type {
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,
+  McpAuditSeverity,
+  McpConfirmationDecision,
+  AssistantTurnRecord,
+  TurnOutcomeClass,
+  McpAnomalySeverity,
+  McpAnomalyKind,
+  McpAnomalySignal,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "./ipc/mcpServer.js";
@@ -410,6 +421,7 @@ export type {
   WorkspaceHostEvent,
   WorkspaceClientConfig,
   WorktreeSnapshot,
+  WorktreeEventVersion,
   MonitorConfig as WorkspaceMonitorConfig,
   CreateWorktreeOptions as WorkspaceCreateWorktreeOptions,
   BranchInfo as WorkspaceBranchInfo,
@@ -507,16 +519,6 @@ export type {
   HelpAssistantTier,
 } from "./ipc/maps.js";
 
-// Task Queue types - DAG-based task management
-export type {
-  TaskResult,
-  TaskRecord,
-  CreateTaskParams,
-  TaskFilter,
-  DagValidationResult,
-  TaskStateChangePayload,
-} from "./task.js";
-
 // Editor integration types - external editor configuration and discovery
 export type {
   KnownEditorId,
@@ -542,3 +544,15 @@ export type {
   SanitizedAnalyticsEvent,
   TelemetryPreviewState,
 } from "./ipc/telemetryPreview.js";
+
+// Forge provider types — plugin-contributed forge integrations
+export type {
+  ForgeProviderContribution,
+  ForgeProviderDescriptor,
+  ForgeProviderEntry,
+  ForgeProviderResolutionVia,
+  ForgeCapabilityHint,
+  ResolvedForgeProvider,
+  CredentialField,
+  CredentialFieldType,
+} from "./forge.js";

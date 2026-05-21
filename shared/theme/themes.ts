@@ -18,24 +18,24 @@ export const DEFAULT_APP_SCHEME_ID = "daintree";
 export const ANSI_MAGENTA_FALLBACK = "#a855f7";
 export const ANSI_CYAN_FALLBACK = "#22d3ee";
 
-const GITHUB_DARK_TOKENS: Pick<
+const PR_STATE_DARK_TOKENS: Pick<
   AppColorSchemeTokens,
-  "github-open" | "github-merged" | "github-closed" | "github-draft"
+  "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
-  "github-open": "#3fb950",
-  "github-merged": "#a371f7",
-  "github-closed": "#f85149",
-  "github-draft": "#8b949e",
+  "pr-open": "#3fb950",
+  "pr-merged": "#a371f7",
+  "pr-closed": "#f85149",
+  "pr-draft": "#8b949e",
 };
 
-const GITHUB_LIGHT_TOKENS: Pick<
+const PR_STATE_LIGHT_TOKENS: Pick<
   AppColorSchemeTokens,
-  "github-open" | "github-merged" | "github-closed" | "github-draft"
+  "pr-open" | "pr-merged" | "pr-closed" | "pr-draft"
 > = {
-  "github-open": "#1A7F37",
-  "github-merged": "#8250DF",
-  "github-closed": "#CF222E",
-  "github-draft": "#8B949E",
+  "pr-open": "#1A7F37",
+  "pr-merged": "#8250DF",
+  "pr-closed": "#CF222E",
+  "pr-draft": "#8B949E",
 };
 
 export function createDaintreeTokens(
@@ -107,7 +107,7 @@ export function createDaintreeTokens(
   const accentSecondaryMuted =
     tokens["accent-secondary-muted"] ?? withAlpha(accentSecondary, dark ? 0.25 : 0.18);
 
-  const githubDefaults = dark ? GITHUB_DARK_TOKENS : GITHUB_LIGHT_TOKENS;
+  const prStateDefaults = dark ? PR_STATE_DARK_TOKENS : PR_STATE_LIGHT_TOKENS;
 
   const searchHighlightBg =
     tokens["search-highlight-background"] ?? withAlpha(tokens["accent-primary"], dark ? 0.2 : 0.12);
@@ -155,7 +155,7 @@ export function createDaintreeTokens(
       };
 
   return {
-    ...githubDefaults,
+    ...prStateDefaults,
     ...categoryDefaults,
     "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.05),
     "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.14),

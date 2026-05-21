@@ -116,6 +116,7 @@ export const theme: BuiltInThemeSource = {
     "sidebar-active-bg": "rgba(255,255,255,0.05)",
     "sidebar-hover-bg": "rgba(255,255,255,0.03)",
     "toolbar-agent-hover-bg": "rgba(200,180,150,0.05)",
+    "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",
     "toolbar-control-hover-bg": "rgba(200,180,150,0.06)",
     "toolbar-divider": "rgba(51,45,37,0.5)",
     "toolbar-project-bg": "rgba(200,180,150,0.035)",

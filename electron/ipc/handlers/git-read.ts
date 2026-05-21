@@ -4,7 +4,7 @@ import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.js";
-import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
+import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
@@ -40,7 +40,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid useMergeBase");
     }
 
-    const gitService = taskWorktreeService.getGitService(cwd);
+    const gitService = gitServiceCache.getGitService(cwd);
     return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees));

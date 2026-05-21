@@ -1040,6 +1040,7 @@ describe("SettingsShortcutCapture", () => {
         duration: 5000,
         priority: "high",
         urgent: true,
+        transient: true,
         action: expect.objectContaining({
           label: "Undo",
           onClick: expect.any(Function),

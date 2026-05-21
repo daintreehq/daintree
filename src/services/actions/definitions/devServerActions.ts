@@ -35,4 +35,29 @@ export function registerDevServerActions(
       });
     },
   }));
+
+  actions.set("devPreview.stop", () => ({
+    id: "devPreview.stop",
+    title: "Stop Dev Server",
+    description: "Stop the currently focused dev preview server",
+    category: "devServer",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async (_args: unknown, ctx: ActionContext) => {
+      if (!ctx.projectId) {
+        throw new Error("No project is currently open");
+      }
+
+      const panelId = ctx.focusedTerminalId;
+      if (!panelId) {
+        throw new Error("No dev preview panel is focused");
+      }
+
+      await window.electron.devPreview.stop({
+        panelId,
+        projectId: ctx.projectId,
+      });
+    },
+  }));
 }

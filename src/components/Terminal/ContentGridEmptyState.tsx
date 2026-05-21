@@ -1,9 +1,13 @@
-import { GitBranch, Settings } from "lucide-react";
+import { FolderOpen, GitBranch, Settings } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncate } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
@@ -13,6 +17,7 @@ const PATH_TRUNCATE_LENGTH = 52;
 export function ContentGridEmptyState({
   hasActiveWorktree,
   hasWorktrees,
+  isWorktreeInitialized,
   activeWorktreeName,
   activeWorktreeId,
   activeWorktreeBranch,
@@ -27,6 +32,7 @@ export function ContentGridEmptyState({
 }: {
   hasActiveWorktree: boolean;
   hasWorktrees: boolean;
+  isWorktreeInitialized: boolean;
   activeWorktreeName?: string | null;
   activeWorktreeId?: string | null;
   activeWorktreeBranch?: string | null;
@@ -49,6 +55,13 @@ export function ContentGridEmptyState({
       );
     })
   );
+  // Suppress RecipeRunner until the recipe store has settled for the current
+  // project — `loadRecipes()` sets `currentProjectId` synchronously before any
+  // IPC resolves, so we also need `!isLoading` to avoid flashing
+  // `RecipeRunnerEmpty` ("Create your first recipe") while in-repo recipes are
+  // still in flight.
+  const recipesProjectId = useRecipeStore((state) => state.currentProjectId);
+  const recipesLoading = useRecipeStore((state) => state.isLoading);
   const { homeDir } = useHomeDir();
 
   const branchLabel =
@@ -137,19 +150,38 @@ export function ContentGridEmptyState({
           </div>
         )}
 
-        {!hasActiveWorktree && (
-          <p
-            className="text-sm text-daintree-text/60 max-w-md leading-relaxed text-center"
-            role="status"
-            aria-live="polite"
-          >
-            {hasWorktrees
-              ? "Select a worktree in the sidebar to get started"
-              : "Open a directory in the sidebar to get started"}
-          </p>
+        {!hasActiveWorktree && !isWorktreeInitialized && null}
+        {!hasActiveWorktree && isWorktreeInitialized && hasWorktrees && (
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FolderOpen />}
+            title="Select a worktree"
+            description="Choose a worktree from the sidebar to open it in the canvas."
+          />
+        )}
+        {!hasActiveWorktree && isWorktreeInitialized && !hasWorktrees && (
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FolderOpen />}
+            title="Open a Git repository to get started"
+            description="Worktrees let you work on multiple tasks in isolated environments."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void actionService.dispatch("project.add", undefined, { source: "user" });
+                }}
+              >
+                Open directory...
+              </Button>
+            }
+          />
         )}
 
-        {hasActiveWorktree && hasEverLaunchedAgent && (
+        {hasActiveWorktree && recipesProjectId !== null && !recipesLoading && (
           <div className="mb-6 w-full flex justify-center">
             <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
           </div>

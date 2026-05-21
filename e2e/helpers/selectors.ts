@@ -45,7 +45,7 @@ export const SEL = {
     shortcutResetAllButton: 'button:has-text("Reset All")',
     fontSizeInput: '[aria-label="Terminal font size"]',
     developerModeToggle: '[aria-label="Developer Mode Toggle"]',
-    agentDropdownTrigger: '[aria-haspopup="listbox"]',
+    agentDropdownTrigger: '[data-testid="agent-selector-trigger"]',
     agentDropdownList: "#agent-selector-list",
     notifCompletedCheckbox: "#notif-completed",
     notifWaitingCheckbox: "#notif-waiting",
@@ -58,7 +58,7 @@ export const SEL = {
     anyPanel: "[data-panel-id]",
     close: '[data-testid="panel-close"]',
     maximize: '[aria-label*="Maximize"]',
-    exitFocus: '[aria-label*="Exit Focus"]',
+    restore: '[aria-label*="Restore grid view"]',
     overflowMenu: '[aria-label="More panel actions"]',
     minimize: '[data-testid="panel-move-to-dock"]',
     restoreFromDock: 'button[aria-label*="move to grid"]',
@@ -124,7 +124,9 @@ export const SEL = {
     findClose: '[aria-label="Close find bar"]',
   },
   devPreview: {
-    consoleToggle: '[aria-label="Show Terminal"], [aria-label="Hide Terminal"]',
+    consoleToggle: '[aria-label="Toggle output drawer"]',
+    consoleTab: '[role="tab"][data-tab="console"]',
+    outputTab: '[role="tab"][data-tab="output"]',
   },
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
@@ -140,6 +142,7 @@ export const SEL = {
     heatmap: '[data-testid="pulse-heatmap"]',
     rangeTrigger: '[aria-label="Activity range"]',
     refreshButton: '[aria-label="Refresh"]',
+    lastUpdated: '[data-testid="pulse-last-updated"]',
   },
   reviewHub: {
     container: '[data-testid="review-hub"]',
@@ -170,14 +173,14 @@ export const SEL = {
   },
   agent: {
     panel: '[aria-label^="Claude agent:"]',
-    startButton: '[aria-label="Start Claude Agent"]',
+    startButton: '[aria-label="Start Claude"]',
     trayButton: '[aria-label^="Agent tray"]',
     chromeAgentPanel: (agentId: string) => `[data-chrome-agent-id="${agentId}"]`,
     everDetectedAgentPanel: '[data-ever-detected-agent="true"]',
   },
   opencodeAgent: {
     panel: '[aria-label^="OpenCode agent:"]',
-    startButton: '[aria-label="Start OpenCode Agent"]',
+    startButton: '[aria-label="Start OpenCode"]',
   },
   fileViewer: {
     dialog: '[data-testid="file-viewer-dialog"]',

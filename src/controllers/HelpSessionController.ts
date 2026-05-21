@@ -249,6 +249,7 @@ function asStringRecord(value: unknown): Record<string, string> | undefined {
 function notifyLaunchFailed(agentId: string, reason: string): void {
   const cfg = getAgentConfig(agentId);
   const name = cfg?.name ?? agentId;
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
   notify({
     type: "error",
     title: "Assistant launch failed",
@@ -627,26 +628,31 @@ export class HelpSessionController {
   approveTierOnce(): void {
     const current = this._snapshot.tierMismatch;
     if (!current?.targetTier || this._snapshot.isApprovingTier) return;
-    const { targetTier, sessionId, toolId } = current;
+    const { sessionId, toolId } = current;
     this._patch({ isApprovingTier: true });
     safeFireAndForget(
       window.electron.mcpServer
-        .setSessionTier(sessionId, targetTier)
+        // "Approve once" mints a per-tool, time-bounded grant for this
+        // session — it does NOT elevate the session tier. The "Always
+        // allow" path is the only remaining caller of `setSessionTier`
+        // (#8442).
+        .issueGrant({ sessionId, toolId })
         .then(() => {
           this._clearTierMismatchIfStillCurrent(sessionId, toolId);
         })
         .catch((err) => {
-          logError("HelpPanel: setSessionTier failed", err);
+          logError("HelpPanel: issueGrant failed", err);
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Couldn't approve tool",
-            message: formatErrorMessage(err, "Couldn't elevate the assistant's tier."),
+            message: formatErrorMessage(err, "Couldn't grant access to this tool."),
           });
         })
         .finally(() => {
           this._patch({ isApprovingTier: false });
         }),
-      { context: "HelpPanel:setSessionTier" }
+      { context: "HelpPanel:issueGrant" }
     );
   }
 
@@ -673,11 +679,12 @@ export class HelpSessionController {
           ...settings,
           daintreeMcpTier: targetTier,
         });
-        await window.electron.mcpServer.setSessionTier(sessionId, targetTier);
+        await window.electron.mcpServer.setSessionTier({ sessionId, tier: targetTier });
         this._clearTierMismatchIfStillCurrent(sessionId, toolId);
       })()
         .catch((err) => {
           logError("HelpPanel: always-allow tier write failed", err);
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Couldn't save permission",

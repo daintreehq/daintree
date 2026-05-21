@@ -58,14 +58,19 @@ function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
 export function getTerminalRefreshTier(
   terminal: TerminalInstance | undefined,
   isFocused: boolean,
-  options: { isFleetArmed?: boolean } = {}
+  options: { isFleetArmed?: boolean; workingCount?: number } = {}
 ): TerminalRefreshTier {
   if (!terminal) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
-  // Always use maximum refresh rate when agent is working to prevent render jitter
   if (terminal.agentState === "working") {
+    // When multiple agents are simultaneously working, only the focused pane
+    // keeps FOCUSED. Sibling working agents drop to VISIBLE so the renderer
+    // budget isn't split N ways at the top tier.
+    if (!isFocused && (options.workingCount ?? 0) > 1) {
+      return TerminalRefreshTierEnum.VISIBLE;
+    }
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
@@ -115,6 +120,14 @@ export function getTerminalRefreshTier(
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";
 
+export type WatchdogStatus = "active" | "disabled";
+
+export interface WatchdogDisabledInfo {
+  attemptCount: number;
+  lastExitCode: number | null;
+  timestamp: number;
+}
+
 export interface PanelGridState
   extends
     PanelRegistrySlice,
@@ -125,8 +138,12 @@ export interface PanelGridState
     WatchedPanelsSlice {
   backendStatus: BackendStatus;
   lastCrashType: CrashType | null;
+  watchdogStatus: WatchdogStatus;
+  watchdogDisabledInfo: WatchdogDisabledInfo | null;
   setBackendStatus: (status: BackendStatus) => void;
   setLastCrashType: (crashType: CrashType | null) => void;
+  setWatchdogDisabled: (info: WatchdogDisabledInfo) => void;
+  clearWatchdogDisabled: () => void;
   reset: () => Promise<void>;
   resetWithoutKilling: (options?: { preserveTerminalIds?: Set<string> }) => Promise<void>;
   detachTerminalsForProjectSwitch: () => void;
@@ -157,7 +174,9 @@ export const usePanelStore = create<PanelGridState>()(
     })(set, get, api);
 
     const getActiveWorktreeId = () => useWorktreeSelectionStore.getState().activeWorktreeId;
-    const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId)(set, get, api);
+    const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId, (id) =>
+      get().stampLastActive(id)
+    )(set, get, api);
     const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
     const mruSlice = createTerminalMruSlice(set, get, api);
     const watchedPanelsSlice = createWatchedPanelsSlice()(set, get, api);
@@ -183,9 +202,14 @@ export const usePanelStore = create<PanelGridState>()(
 
       backendStatus: "connected" as BackendStatus,
       lastCrashType: null as CrashType | null,
+      watchdogStatus: "active" as WatchdogStatus,
+      watchdogDisabledInfo: null as WatchdogDisabledInfo | null,
       lastClosedConfig: null as AddPanelOptions | null,
       setBackendStatus: (status: BackendStatus) => set({ backendStatus: status }),
       setLastCrashType: (crashType: CrashType | null) => set({ lastCrashType: crashType }),
+      setWatchdogDisabled: (info: WatchdogDisabledInfo) =>
+        set({ watchdogStatus: "disabled", watchdogDisabledInfo: info }),
+      clearWatchdogDisabled: () => set({ watchdogStatus: "active", watchdogDisabledInfo: null }),
 
       addPanel: async (options: AddPanelOptions) => {
         // Capture the pre-create focus so we can restore previousFocusedId for the
@@ -720,5 +744,13 @@ export const usePanelStore = create<PanelGridState>()(
     };
   })
 );
+
+/**
+ * Non-hook alias for the panel store's vanilla API. Use this for imperative
+ * `getState()`/`subscribe()` access inside React Compiler-processed code
+ * (`"use memo"` components, `useMemo` bodies) where referencing the
+ * `usePanelStore` hook as a value is disallowed.
+ */
+export const panelStoreApi = usePanelStore;
 
 export { setupTerminalStoreListeners, cleanupTerminalStoreListeners } from "./panelStoreListeners";

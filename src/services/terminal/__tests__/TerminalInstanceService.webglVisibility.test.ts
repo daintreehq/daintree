@@ -122,6 +122,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     deferredOutput: [] as Array<string | Uint8Array>,
     hibernationTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     webGLRestoreTimer: undefined as number | undefined,
+    webGLHideTimer: undefined as number | undefined,
     isInputLocked: false,
     ipcListenerCount: 0,
     attachGeneration: 0,
@@ -164,7 +165,7 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     vi.useRealTimers();
   });
 
-  it("setVisible(false) immediately releases the WebGL context", () => {
+  it("setVisible(false) holds the WebGL context for the dwell window, then releases", () => {
     const managed = makeMockManaged();
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
     service.webGLManager.ensureContext("t1", managed);
@@ -172,8 +173,28 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     service.setVisible("t1", false);
 
-    // No timer advance — release happens synchronously on the hide path
+    // Within the dwell window — context still held.
+    vi.advanceTimersByTime(499);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    // Dwell elapses — context released.
+    vi.advanceTimersByTime(1);
     expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("setVisible(true) within dwell window cancels the hide timer and keeps WebGL", () => {
+    const managed = makeMockManaged();
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+
+    service.setVisible("t1", false);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(500);
+
+    // Hide timer was cancelled on show — context still held.
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
   it("setVisible(false) does not call terminal.refresh after WebGL release", () => {
@@ -230,23 +251,24 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
-  it("rapid hide→show→hide before debounce expires keeps context released", () => {
+  it("rapid hide→show→hide keeps context held through dwell, then releases", () => {
     const managed = makeMockManaged();
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
     service.webGLManager.ensureContext("t1", managed);
 
     service.setVisible("t1", false);
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    // Hide dwell in flight — context still held.
+    expect(service.webGLManager.isActive("t1")).toBe(true);
 
     service.setVisible("t1", true);
-    // Within debounce — not yet restored
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    // Show cancels the hide timer — context never lost.
+    expect(service.webGLManager.isActive("t1")).toBe(true);
 
     service.setVisible("t1", false);
-    // Restore timer cancelled, still released
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    // Restore timer cancelled and a new hide dwell scheduled — still held.
+    expect(service.webGLManager.isActive("t1")).toBe(true);
 
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(500);
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 
@@ -321,10 +343,12 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     // Stale generation from a previous mount — should be ignored entirely
     service.setVisible("t1", false, 4);
+    vi.advanceTimersByTime(500);
     expect(service.webGLManager.isActive("t1")).toBe(true);
 
-    // Matching generation — release proceeds
+    // Matching generation — release proceeds (deferred by the dwell window).
     service.setVisible("t1", false, 5);
+    vi.advanceTimersByTime(500);
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 
@@ -367,6 +391,46 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     expect(service.webGLManager.isActive("t1")).toBe(true);
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
+  });
+
+  it("destroy cancels the pending WebGL hide-dwell timer", () => {
+    const managed = makeMockManaged();
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+
+    service.setVisible("t1", false);
+    expect(managed.webGLHideTimer).toBeDefined();
+
+    service.destroy("t1");
+
+    // Timer cleared (won't fire and won't crash after instances.delete)
+    vi.advanceTimersByTime(500);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("tier demotion during hide-dwell releases WebGL and leaves no dangling timer", () => {
+    // Tier demotion is an authoritative signal — when it fires (via the
+    // TIER_DOWNGRADE_HYSTERESIS_MS=500 timer) the onTierApplied BACKGROUND
+    // branch calls cancelWebGLHideTimer + releaseContext. Both the hide-dwell
+    // (500ms) and the tier-hysteresis (500ms) timers are scheduled in the
+    // same tick, so the cancel here is the defensive guarantee that the dwell
+    // timer can't fire later on a stale pool slot.
+    const managed = makeMockManaged({
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+
+    service.setVisible("t1", false);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+    expect(managed.webGLHideTimer).toBeDefined();
+
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+    vi.advanceTimersByTime(500);
+
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(managed.webGLHideTimer).toBeUndefined();
   });
 
   it("agent demotion during debounce window cancels WebGL restore", () => {

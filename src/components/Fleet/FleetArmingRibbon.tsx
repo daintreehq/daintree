@@ -4,17 +4,16 @@ import { AnimatePresence, m, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { useEscapeStack } from "@/hooks";
+import { useEscapeStack, useDeferredLoading } from "@/hooks";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import "./fleetRawInputBroadcast";
 import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
+import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
-import {
-  FLEET_LARGE_PASTE_BATCH_SIZE,
-  FLEET_PROGRESS_VISIBILITY_THRESHOLD,
-} from "./fleetBroadcast";
+import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
   useFleetArmingStore,
@@ -61,6 +60,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   const progressTotal = useFleetBroadcastProgressStore((s) => s.total);
   const progressFailed = useFleetBroadcastProgressStore((s) => s.failed);
   const progressActive = useFleetBroadcastProgressStore((s) => s.isActive);
+  const showProgress = useDeferredLoading(progressActive, UI_DOHERTY_THRESHOLD);
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   // The selection menu is controlled so a fleet-delete request can close it
@@ -271,6 +271,18 @@ export function FleetArmingRibbon(): ReactElement | null {
     [setPreviewArmedIds, clearPreviewArmedIds]
   );
 
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
+  usePanelStore((s) => s.panelIds);
+  usePanelStore((s) => s.panelsById);
+
+  const presetCounts = {
+    waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
+    waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId).length,
+    workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId).length,
+    workingAll: computeArmByStateIds("working", "all", activeWorktreeId).length,
+    eligibleCurrent: collectEligibleIds("current", activeWorktreeId).length,
+  };
+
   const selectionMenuItems = (
     <>
       <DropdownMenuLabel>Select by state</DropdownMenuLabel>
@@ -281,6 +293,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
       >
         All waiting — this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.waitingCurrent}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -289,6 +304,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
       >
         All waiting — all worktrees
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.waitingAll}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -297,6 +315,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
       >
         All working — this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.workingCurrent}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
@@ -305,6 +326,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
       >
         All working — all worktrees
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.workingAll}
+        </span>
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -314,6 +338,9 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewAll("current"))}
       >
         All in this worktree
+        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+          {presetCounts.eligibleCurrent}
+        </span>
       </DropdownMenuItem>
       {armedCount > 0 ? (
         <>
@@ -364,7 +391,9 @@ export function FleetArmingRibbon(): ReactElement | null {
   // Render confirmation before the armedCount<2 null guard so single-agent
   // keybindings (fleet.restart / fleet.kill always require confirmation)
   // stay reachable — and so draining 3→1 while a confirm is pending
-  // doesn't strand a live Enter listener with no visible UI.
+  // doesn't strand a live Enter listener with no visible UI. The failure
+  // banner is rendered alongside so a prior partial-failure surface stays
+  // visible while the user is in the confirm flow.
   if (armedCount > 0 && pending !== null) {
     const message = buildConfirmMessage(
       pending.kind,
@@ -372,34 +401,37 @@ export function FleetArmingRibbon(): ReactElement | null {
       pending.sessionLossCount
     );
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className={cn(
-          "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
-          // Keep the Fleet surface continuous through confirm-pending so the
-          // mode chrome doesn't visually exit and re-enter during a confirm.
-          "bg-category-amber-subtle",
-          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
-        )}
-        data-testid="fleet-arming-ribbon"
-        data-pending-action={pending.kind}
-      >
-        <span className="font-medium text-daintree-accent">{message}</span>
-        <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
-          <span>
-            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-              Enter
-            </kbd>{" "}
-            to confirm
-          </span>
-          <span>
-            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-              Esc
-            </kbd>{" "}
-            to cancel
-          </span>
+      <div data-testid="fleet-arming-ribbon-group">
+        <FleetFailureBanner />
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={cn(
+            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
+            // Keep the Fleet surface continuous through confirm-pending so the
+            // mode chrome doesn't visually exit and re-enter during a confirm.
+            "bg-category-amber-subtle",
+            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
+          )}
+          data-testid="fleet-arming-ribbon"
+          data-pending-action={pending.kind}
+        >
+          <span className="font-medium text-daintree-accent">{message}</span>
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Enter
+              </kbd>{" "}
+              to confirm
+            </span>
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Esc
+              </kbd>{" "}
+              to cancel
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -434,11 +466,27 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
 
-  // When a destructive broadcast (paste or Enter) is pending, the right-side
-  // controls collapse to the confirm question so we keep one ribbon row
-  // instead of stacking a second strip below. Per-pane red dots (PanelHeader)
-  // carry any post-broadcast failure state — no retry/dismiss buttons here.
-  const isBroadcastConfirmActive = pendingBroadcast !== null;
+  // Two confirm shapes share the same pending entry:
+  //   - warnings-only (destructive/multi-line/byte-limit) → inline ribbon
+  //     strip with a single warning sentence — fast, low-friction. The
+  //     right-side controls collapse to the confirm question so we keep one
+  //     ribbon row instead of stacking a second strip below. Per-pane red
+  //     dots (PanelHeader) still carry per-target failure state; the
+  //     `FleetFailureBanner` below adds the Tier-2 multi-terminal surface
+  //     with the retry action.
+  //   - divergence (per-target overrides, skips, unresolved vars) →
+  //     ConfirmDialog modal with a scrollable per-target preview so the
+  //     user sees exactly what each terminal will receive (D2 from
+  //     CLAUDE.md, #8691). The modal also folds in any warning reasons.
+  const isDivergenceConfirmActive =
+    pendingBroadcast !== null && pendingBroadcast.divergence !== undefined;
+  const isBroadcastConfirmActive = pendingBroadcast !== null && !isDivergenceConfirmActive;
+
+  const divergenceTargets = pendingBroadcast?.divergence?.targets ?? [];
+  const activeDivergenceTargets = divergenceTargets.filter((t) => !t.skipped && !t.excluded);
+  const divergenceConfirmDescription = pendingBroadcast?.warningReasons.length
+    ? `${pendingBroadcast.warningReasons.join(", ")}. Review what each target will receive.`
+    : "Per-target payloads diverge from your draft. Review what each target will receive.";
 
   return (
     <div data-testid="fleet-arming-ribbon-group">
@@ -460,6 +508,81 @@ export function FleetArmingRibbon(): ReactElement | null {
         }}
         onClose={() => setPendingDeleteFleetId(null)}
       />
+      <FleetFailureBanner />
+      <ConfirmDialog
+        isOpen={isDivergenceConfirmActive}
+        variant={
+          pendingBroadcast?.warningReasons.some((r) => r.startsWith("destructive"))
+            ? "destructive"
+            : "default"
+        }
+        title={`Send broadcast to ${activeDivergenceTargets.length}?`}
+        description={divergenceConfirmDescription}
+        confirmLabel="Send broadcast"
+        onConfirm={confirmPendingBroadcast}
+        onClose={cancelPendingBroadcast}
+      >
+        {pendingBroadcast?.destructiveMatch ? (
+          <div
+            data-testid="fleet-broadcast-destructive-callout"
+            className="mb-2 rounded border border-category-rose-border bg-category-rose-subtle px-2 py-1.5 text-[11px] text-category-rose-text"
+          >
+            Destructive command detected:{" "}
+            <code className="font-mono">{pendingBroadcast.destructiveMatch.substring}</code>
+          </div>
+        ) : null}
+        <ul
+          data-testid="fleet-divergence-preview-list"
+          className="max-h-[280px] overflow-y-auto rounded border border-daintree-border bg-tint/[0.03]"
+        >
+          {divergenceTargets.map((t) => (
+            <li
+              key={t.terminalId}
+              data-testid="fleet-divergence-preview-row"
+              data-skipped={t.skipped ? "true" : undefined}
+              className={cn(
+                "border-b border-daintree-border/40 px-2 py-1.5 text-[11px] last:border-b-0",
+                t.skipped && "opacity-50"
+              )}
+            >
+              <div className="flex items-center gap-1.5 font-medium text-daintree-text/80">
+                <span className={cn("truncate", t.skipped && "line-through")}>{t.title}</span>
+                {t.skipped && (
+                  <span className="ml-auto shrink-0 text-[10px] text-daintree-text/50">
+                    Skipped
+                  </span>
+                )}
+                {t.overridden && !t.skipped && (
+                  <span className="ml-auto shrink-0 text-[10px] text-category-amber-text">
+                    Edited
+                  </span>
+                )}
+              </div>
+              {!t.skipped && (
+                <div className="mt-0.5 leading-relaxed break-all text-daintree-text">
+                  {t.payload === "" ? (
+                    <span className="text-daintree-text/40">(empty)</span>
+                  ) : (
+                    t.payload
+                  )}
+                </div>
+              )}
+              {!t.skipped && t.unresolvedVars.length > 0 && (
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {t.unresolvedVars.map((v) => (
+                    <span
+                      key={v}
+                      className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] bg-category-rose-subtle text-category-rose-text"
+                    >
+                      {`{{${v}}}`} unresolved
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </ConfirmDialog>
       <AnimatePresence initial={false}>
         <m.div
           ref={ribbonRef}
@@ -497,7 +620,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
           />
-          {progressActive && progressTotal >= FLEET_PROGRESS_VISIBILITY_THRESHOLD && (
+          {showProgress && (
             <span
               className="text-[11px] tabular-nums text-daintree-text/70"
               data-testid="fleet-broadcast-progress"

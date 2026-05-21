@@ -20,10 +20,14 @@ function makeAuditRecord(overrides: Partial<McpAuditRecord>): McpAuditRecord {
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
     durationMs: overrides.durationMs ?? 12,
+    schemaVersion: overrides.schemaVersion ?? 1,
+    severity: overrides.severity ?? "info",
     ...(overrides.errorCode !== undefined ? { errorCode: overrides.errorCode } : {}),
     ...(overrides.confirmationDecision !== undefined
       ? { confirmationDecision: overrides.confirmationDecision }
       : {}),
+    ...(overrides.turnId !== undefined ? { turnId: overrides.turnId } : {}),
+    ...(overrides.repeatCount !== undefined ? { repeatCount: overrides.repeatCount } : {}),
   };
 }
 
@@ -131,6 +135,78 @@ describe("classifyTurnOutcome", () => {
         transition: makeTransition(),
         recentOutput: "Done.".padEnd(120, " "),
         recentAuditRecords: [audit],
+        sessionId: "session-1",
+      })
+    ).toBe("tool-error");
+  });
+
+  it("returns reasoning-loop when 3+ identical (toolId, argsSummary) calls exist in the turn window", () => {
+    const records = [
+      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
+    ];
+    expect(
+      classifyTurnOutcome({
+        transition: makeTransition(),
+        recentOutput: "Let me check the state again.".padEnd(120, " "),
+        recentAuditRecords: records,
+        sessionId: "session-1",
+      })
+    ).toBe("reasoning-loop");
+  });
+
+  it("does not trigger reasoning-loop below the threshold (2 identical calls)", () => {
+    const records = [
+      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
+    ];
+    expect(
+      classifyTurnOutcome({
+        transition: makeTransition(),
+        recentOutput: "Here is the answer you asked for: the file was updated and tests pass.",
+        recentAuditRecords: records,
+        sessionId: "session-1",
+      })
+    ).toBe("answered");
+  });
+
+  it("counts interleaved identical calls toward the reasoning-loop threshold", () => {
+    const records = [
+      makeAuditRecord({ id: "r5", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r4", toolId: "files.list", argsSummary: '{"path":"/foo"}' }),
+      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "terminal.run", argsSummary: '{"cmd":"ls"}' }),
+      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+    ];
+    expect(
+      classifyTurnOutcome({
+        transition: makeTransition(),
+        recentOutput: "Let me check once more.".padEnd(120, " "),
+        recentAuditRecords: records,
+        sessionId: "session-1",
+      })
+    ).toBe("reasoning-loop");
+  });
+
+  it("returns tool-error over reasoning-loop when the most recent record is an error", () => {
+    const records = [
+      makeAuditRecord({
+        id: "r4",
+        toolId: "agent.getState",
+        argsSummary: "{}",
+        result: "error",
+        errorCode: "DISPATCH_THREW",
+      }),
+      makeAuditRecord({ id: "r3", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r1", toolId: "agent.getState", argsSummary: "{}" }),
+    ];
+    expect(
+      classifyTurnOutcome({
+        transition: makeTransition(),
+        recentOutput: "Let me try again.".padEnd(120, " "),
+        recentAuditRecords: records,
         sessionId: "session-1",
       })
     ).toBe("tool-error");
@@ -524,7 +600,7 @@ describe("TurnOutcomeService.clear", () => {
     vi.useRealTimers();
   });
 
-  it("empties records and resets stuck guard + buffers", () => {
+  it("empties records but preserves live classifier state", () => {
     const f = makeFixture();
     f.service.appendOutput("term-1", "x".repeat(80));
     f.service.handleTransition(
@@ -533,10 +609,136 @@ describe("TurnOutcomeService.clear", () => {
     expect(f.service.getRecords()).toHaveLength(1);
     f.service.clear();
     expect(f.service.getRecords()).toHaveLength(0);
-    // Stuck guard cleared — next timeout records again
+    // Stuck guard preserved — duplicate timeout does not re-record
     f.service.handleTransition(
       makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
     );
-    expect(f.service.getRecords()).toHaveLength(1);
+    expect(f.service.getRecords()).toHaveLength(0);
+  });
+});
+
+describe("TurnOutcomeService turnId lifecycle", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mints a turnId on active entry and stamps the outcome record", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and tests pass cleanly.");
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    f.flushPersist();
+    const records = f.service.getRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.turnId).toBeDefined();
+    expect(records[0]?.turnId?.length).toBeGreaterThan(0);
+  });
+
+  it("getCurrentTurnIdForSession returns the active turnId", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    const turnId = f.service.getCurrentTurnIdForSession("session-1");
+    expect(turnId).toBeDefined();
+    expect(typeof turnId).toBe("string");
+  });
+
+  it("getCurrentTurnIdForSession returns null for unknown session", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("nonexistent")).toBeNull();
+  });
+
+  it("getCurrentTurnIdForSession returns null when session not bound at mint time", () => {
+    const f = makeFixture({ sessionId: null });
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
+
+  it("rapid consecutive active transitions produce distinct turnIds", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
+    // First turn
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    // Second turn
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    const records = f.service.getRecords();
+    expect(records).toHaveLength(2);
+    expect(records[0]?.turnId).toBeDefined();
+    expect(records[1]?.turnId).toBeDefined();
+    expect(records[0]?.turnId).not.toBe(records[1]?.turnId);
+  });
+
+  it("dropTerminal clears turnId entries", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    f.service.dropTerminal("term-1");
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
+  });
+
+  it("clear preserves active turnId so in-progress turns survive log wipe", () => {
+    const f = makeFixture();
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    const beforeClear = f.service.getCurrentTurnIdForSession("session-1");
+    expect(beforeClear).toBeDefined();
+    f.service.clear();
+    // Live classifier state is preserved across clear() — the active turn
+    // continues to be stamped so dispatches mid-turn stay correlated.
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBe(beforeClear);
+  });
+
+  it("turnId is absent on recordDirectOutcome (pre-turn failures)", () => {
+    const f = makeFixture();
+    f.service.recordDirectOutcome({
+      outcome: "mcp-not-ready",
+      sessionId: "sess-failed",
+      detail: "Probe failed",
+    });
+    const records = f.service.getRecords();
+    expect(records[0]?.outcome).toBe("mcp-not-ready");
+    expect(records[0]?.turnId).toBeUndefined();
+  });
+
+  it("clears turnIdBySession after turn end so post-turn dispatches are not stamped", () => {
+    const f = makeFixture();
+    f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
+    // Turn start
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
+    );
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeDefined();
+    // Turn end
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    // After turn ends, session should have no active turnId
+    expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
   });
 });

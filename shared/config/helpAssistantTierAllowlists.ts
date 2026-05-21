@@ -1,11 +1,14 @@
 import type { HelpAssistantTier } from "../types/ipc/maps.js";
+import type { BuiltInActionId } from "../types/actions.js";
 
 const ACTIONS_LIST_TOOL = "actions.list";
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 
-export const WORKBENCH_TIER_TOOLS: readonly string[] = [
+export const WORKBENCH_TIER_TOOLS = [
   ACTIONS_LIST_TOOL,
   "actions.getContext",
+  "actions.search",
+  "actions.getSchema",
 
   "project.getAll",
   "project.getCurrent",
@@ -53,9 +56,12 @@ export const WORKBENCH_TIER_TOOLS: readonly string[] = [
 
   "system.checkCommand",
   "system.checkDirectory",
-];
 
-export const ACTION_TIER_ADDONS: readonly string[] = [
+  "notifications.recent",
+  "errors.recent",
+] as const satisfies readonly BuiltInActionId[];
+
+export const ACTION_TIER_ADDONS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
@@ -67,6 +73,9 @@ export const ACTION_TIER_ADDONS: readonly string[] = [
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
+  "terminal.moveToDock",
+  "terminal.moveToGrid",
+  "terminal.toggleDock",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "recipe.list",
@@ -93,9 +102,9 @@ export const ACTION_TIER_ADDONS: readonly string[] = [
   "project.update",
   "project.saveSettings",
   "project.muteNotifications",
-];
+] as const satisfies readonly BuiltInActionId[];
 
-export const SYSTEM_TIER_ADDONS: readonly string[] = [
+export const SYSTEM_TIER_ADDONS = [
   "worktree.delete",
 
   "copyTree.generateAndCopyFile",
@@ -109,9 +118,14 @@ export const SYSTEM_TIER_ADDONS: readonly string[] = [
   "git.snapshotRevert",
   "git.snapshotDelete",
 
-  "github.openIssue",
+  "forge.openIssues",
+  "forge.openPRs",
+  "forge.openCommits",
+  "forge.openIssue",
+  "forge.assignIssue",
+  "forge.validateToken",
   "github.openPR",
-];
+] as const satisfies readonly BuiltInActionId[];
 
 /**
  * Tools added at each tier on top of the previous one. Useful for the

@@ -11,24 +11,28 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type {
-  OnboardingState,
-  ChecklistState,
-  ChecklistItemId,
-  HelpAssistantTier,
-  IpcEventBusMap,
-} from "./maps.js";
+import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } from "./maps.js";
+import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
+import type {
+  AuthValidation,
+  ForgeProviderEntry,
+  ResolvedForgeProvider,
+  PushErrorClassification,
+  Issue,
+  PR,
+  Page,
+  RepoMetadata,
+  ListOptions,
+} from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
   CreateWorktreeOptions,
   BranchInfo,
   WorktreeConfig,
-  CreateForTaskPayload,
-  CleanupTaskOptions,
   AttachIssuePayload,
   IssueAssociation,
 } from "./worktree.js";
@@ -86,10 +90,10 @@ import type {
   PrerequisiteSpec,
   PrerequisiteCheckResult,
 } from "./system.js";
-import type { AppState, HydrateResult } from "./app.js";
+import type { AppState, BootResult, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
-import type { EventRecord, EventFilterOptions } from "./events.js";
+import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
   ProjectStats,
@@ -116,9 +120,8 @@ import type {
   IssueNotFoundPayload,
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { KeyAction } from "../keymap.js";
 
 export interface KeybindingImportResult {
@@ -136,33 +139,15 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
   FileReadPayload,
   FileReadResult,
 } from "./files.js";
-import type { SlashCommand, SlashCommandListRequest } from "../slashCommands.js";
-import type {
-  DevPreviewEnsureRequest,
-  DevPreviewSessionRequest,
-  DevPreviewStopByPanelRequest,
-  DevPreviewSessionState,
-  DevPreviewStateChangedPayload,
-  DevPreviewGetByWorktreeRequest,
-} from "./devPreview.js";
-import type {
-  CommandContext,
-  CommandManifestEntry,
-  CommandResult,
-  CommandExecutePayload,
-  CommandGetPayload,
-  BuilderStep,
-} from "../commands.js";
+import type { DevPreviewStateChangedPayload } from "./devPreview.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 
@@ -193,11 +178,21 @@ export interface NotificationSettings {
 
 // ElectronAPI Type (exposed via preload)
 
-/** Complete Electron API exposed to renderer */
-export interface ElectronAPI {
+/**
+ * Complete Electron API exposed to renderer.
+ *
+ * Namespaces backed by `defineIpcNamespace` + a `*.preload.ts` shim are
+ * generated into `GeneratedElectronAPI` by `scripts/codegen/ipc-renderer.mjs`.
+ * Hand-maintained entries below either layer event listeners and other non-
+ * invoke methods on top of a generated namespace (intersected with
+ * `GeneratedElectronAPI[<ns>]`) or cover namespaces that are not generated
+ * (legacy `ipcMain.handle` registrations, variadic plugin invocations, the
+ * positional-arg `demo` namespace, etc.).
+ */
+export interface ElectronAPI extends GeneratedElectronAPI {
   worktree: {
     getAll(): Promise<WorktreeState[]>;
-    refresh(): Promise<void>;
+    refresh(worktreeId?: string): Promise<void>;
     refreshPullRequests(): Promise<void>;
     getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
     setActive(worktreeId: string): Promise<void>;
@@ -208,29 +203,12 @@ export interface ElectronAPI {
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
     getAvailableBranch(rootPath: string, branchName: string): Promise<string>;
     delete(worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void>;
-    /**
-     * Create a worktree for a specific task with auto-generated collision-safe branch name.
-     * @param payload - Contains taskId, optional baseBranch, and optional description
-     * @returns The created worktree state including the assigned taskId
-     */
-    createForTask(payload: CreateForTaskPayload): Promise<WorktreeState>;
-    /**
-     * Get all worktrees linked to a specific task.
-     * @param taskId - The task ID to filter by
-     * @returns Array of worktree states matching the taskId
-     */
-    getByTaskId(taskId: string): Promise<WorktreeState[]>;
-    /**
-     * Cleanup worktrees associated with a task.
-     * @param taskId - The task ID whose worktrees should be cleaned up
-     * @param options - Optional: { force: boolean, deleteBranch: boolean } (defaults: force=true, deleteBranch=true)
-     */
-    cleanupTask(taskId: string, options?: CleanupTaskOptions): Promise<void>;
     attachIssue(payload: AttachIssuePayload): Promise<void>;
     detachIssue(worktreeId: string): Promise<void>;
     getIssueAssociation(worktreeId: string): Promise<IssueAssociation | null>;
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     restartService(): Promise<void>;
+    retryProjectLoad(): Promise<void>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
@@ -255,7 +233,7 @@ export interface ElectronAPI {
     gracefulKill(id: string): Promise<string | null>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
-    setActivityTier(id: string, tier: PtyHostActivityTier): void;
+    setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
     wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
@@ -319,14 +297,24 @@ export interface ElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
+    onAccelerateHibernation(callback: (data: { level: 1 | 2 }) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
     read(payload: FileReadPayload): Promise<FileReadResult>;
   };
-  slashCommands: {
-    list(payload: SlashCommandListRequest): Promise<SlashCommand[]>;
+  watchdog: {
+    restart(): Promise<void>;
+    onDisabled(
+      callback: (data: {
+        attemptCount: number;
+        lastExitCode: number | null;
+        timestamp: number;
+      }) => void
+    ): () => void;
+    onActive(callback: () => void): () => void;
   };
+  // slashCommands is generated — see GeneratedElectronAPI.
   artifact: {
     onDetected(callback: (data: ArtifactDetectedPayload) => void): () => void;
     saveToFile(options: SaveArtifactOptions): Promise<SaveArtifactResult | null>;
@@ -401,18 +389,25 @@ export interface ElectronAPI {
     setState(partialState: Partial<AppState>): Promise<void>;
     getVersion(): Promise<string>;
     hydrate(): Promise<HydrateResult>;
+    boot(): Promise<BootResult>;
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     resetAndRelaunch(): Promise<void>;
+    /**
+     * Clear a single panel's quarantine entry from the suspect ledger so it
+     * hydrates normally on the next launch. Returns `{ cleared: true }` if the
+     * ledger had a record for the given panel ID, `false` otherwise (e.g.,
+     * already cleared or never quarantined). Next-restart-only — does not
+     * re-hydrate the panel in the current session.
+     */
+    clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
-    onMenuAction(callback: (action: string) => void): () => void;
+    onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
   };
-  menu: {
-    showContext(payload: ShowContextMenuPayload): Promise<string | null>;
-  };
+  // menu is generated — see GeneratedElectronAPI.
   logs: {
     getAll(filters?: LogFilterOptions): Promise<LogEntry[]>;
     getSources(): Promise<string[]>;
@@ -440,10 +435,9 @@ export interface ElectronAPI {
     openLogs(): Promise<void>;
     getPending(): Promise<ErrorRecord[]>;
   };
-  eventInspector: {
-    getEvents(): Promise<EventRecord[]>;
-    getFiltered(filters: EventFilterOptions): Promise<EventRecord[]>;
-    clear(): Promise<void>;
+  // getEvents / getFiltered / clear come from GeneratedElectronAPI; the
+  // remaining methods are renderer-only subscription helpers.
+  eventInspector: GeneratedElectronAPI["eventInspector"] & {
     subscribe(): void;
     unsubscribe(): void;
     onEventBatch(callback: (events: EventRecord[]) => void): () => void;
@@ -461,7 +455,11 @@ export interface ElectronAPI {
     add(path: string): Promise<Project>;
     remove(projectId: string): Promise<void>;
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
-    switch(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
+    switch(
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { focusIntent?: "focus-next-waiting" }
+    ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
      * the main process builds the `HydrateResult` for the given project and
@@ -478,11 +476,21 @@ export interface ElectronAPI {
         hydrateResult?: import("./app.js").HydrateResult;
       }) => void
     ): () => void;
+    onWorktreeLoadStatus(
+      callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
+    ): () => void;
+    onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
+    /**
+     * List all git remotes for a working directory, with an optional parsed
+     * owner/repo for remotes whose URL looks like a forge repo. Provider-
+     * agnostic replacement for the legacy `github.listRemotes` (#8456).
+     */
+    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
     /**
      * Close/background a project.
      * @param projectId - Project ID to close
@@ -642,6 +650,9 @@ export interface ElectronAPI {
     ): Promise<void>;
     deleteRecipe(recipeId: string): Promise<void>;
   };
+  // globalEnv keeps a positional `set(variables)` renderer signature even
+  // though the IPC channel carries a wrapped `{ variables }` payload — the
+  // preload shim does the translation, so it stays hand-written here.
   globalEnv: {
     get(): Promise<Record<string, string>>;
     set(variables: Record<string, string>): Promise<void>;
@@ -656,7 +667,7 @@ export interface ElectronAPI {
      * (#7673). Idempotent: a no-op when the stored version is already ≥
      * the requested value.
      */
-    stampVersion(version: number): Promise<AgentSettings>;
+    stampVersion(version: number): Promise<Record<string, unknown>>;
   };
   userAgentRegistry: {
     get(): Promise<import("../userAgentRegistry.js").UserAgentRegistry>;
@@ -718,7 +729,9 @@ export interface ElectronAPI {
     ): Promise<import("../github.js").GitHubIssue | null>;
     getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
     getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
+    /** @deprecated Use `project.listRemotes` instead (#8456). */
     listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    resolveAuthorAvatar(email: string): Promise<string | null>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
@@ -729,19 +742,15 @@ export interface ElectronAPI {
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
-  connectivity: {
-    getState(): Promise<import("./connectivity.js").ServiceConnectivitySnapshot>;
+  // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
+  connectivity: GeneratedElectronAPI["connectivity"] & {
     onServiceChanged(
       callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
   };
-  devPreview: {
-    ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState>;
-    restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
-    stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
-    stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void>;
-    getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
-    getByWorktree(request: DevPreviewGetByWorktreeRequest): Promise<DevPreviewSessionState | null>;
+  // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
+  // onStateChanged is a renderer-only subscription.
+  devPreview: GeneratedElectronAPI["devPreview"] & {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };
   git: {
@@ -828,21 +837,15 @@ export interface ElectronAPI {
     setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
     setCachedProjectViews(cachedProjectViews: number): Promise<void>;
   };
-  accessibility: {
-    getEnabled(): Promise<boolean>;
+  // getEnabled comes from GeneratedElectronAPI; onSupportChanged is a
+  // renderer-only subscription.
+  accessibility: GeneratedElectronAPI["accessibility"] & {
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };
-  portal: {
-    create(payload: import("../portal.js").PortalCreatePayload): Promise<void>;
-    show(payload: import("../portal.js").PortalShowPayload): Promise<void>;
-    hide(): Promise<void>;
-    resize(bounds: import("../portal.js").PortalBounds): Promise<void>;
-    closeTab(payload: import("../portal.js").PortalCloseTabPayload): Promise<void>;
-    navigate(payload: import("../portal.js").PortalNavigatePayload): Promise<void>;
-    goBack(tabId: string): Promise<boolean>;
-    goForward(tabId: string): Promise<boolean>;
-    reload(tabId: string): Promise<void>;
-    showNewTabMenu(payload: import("../portal.js").PortalShowNewTabMenuPayload): Promise<void>;
+  // create / show / hide / resize / navigate / goBack / goForward / reload /
+  // closeTab / showNewTabMenu come from GeneratedElectronAPI; the rest are
+  // renderer-only subscriptions.
+  portal: GeneratedElectronAPI["portal"] & {
     onNavEvent(callback: (data: import("../portal.js").PortalNavEvent) => void): () => void;
     onFocus(callback: () => void): () => void;
     onBlur(callback: () => void): () => void;
@@ -877,13 +880,37 @@ export interface ElectronAPI {
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
     ): () => void;
+    /** Subscribe to unresponsive events from webview guest render processes */
+    onUnresponsive(callback: (payload: { panelId: string }) => void): () => void;
+    onResponsive(callback: (payload: { panelId: string }) => void): () => void;
     /** Start OAuth loopback flow: system browser for IdP, ephemeral server for callback, CDP for token exchange */
     startOAuthLoopback(
       authUrl: string,
       panelId: string,
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>
-    ): Promise<{ success: true } | null>;
+    ): Promise<
+      | {
+          success: true;
+          callbackUrl: string;
+          loopbackRedirectUri: string;
+          originalRedirectUri: string;
+        }
+      | {
+          success: false;
+          cause: "cancelled" | "timed-out" | "server-error" | "open-external-failed";
+        }
+    >;
+    /** Cancel an in-progress OAuth loopback flow for a panel */
+    cancelOAuthLoopback(panelId: string): Promise<void>;
+    /** Subscribe to OAuth loopback phase transitions from main process */
+    onOAuthLoopbackStatus(
+      callback: (payload: {
+        panelId: string;
+        phase: "token-exchange-intercepted" | "completed" | "timed-out" | "error";
+        message?: string;
+      }) => void
+    ): () => void;
     /** Start CDP console capture for a webview panel */
     startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Stop CDP console capture for a webview panel */
@@ -905,28 +932,33 @@ export interface ElectronAPI {
     ): () => void;
     /** Reload a webview bypassing HTTP cache */
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
+    /** Read the current scroll position from Blink layout — works on frozen pages */
+    getScrollPosition(webContentsId: number): Promise<number>;
   };
-  hibernation: {
-    getConfig(): Promise<HibernationConfig>;
-    updateConfig(config: Partial<HibernationConfig>): Promise<HibernationConfig>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  hibernation: GeneratedElectronAPI["hibernation"] & {
     onProjectHibernated(
       callback: (payload: HibernationProjectHibernatedPayload) => void
     ): () => void;
   };
+  // Channel is `idle-terminal:*` (singular) but the renderer surface uses
+  // `idleTerminals` (plural). The preload opts out of the API codegen via
+  // RENDERER_API_SKIP — methods are hand-typed here against IpcInvokeMap.
   idleTerminals: {
-    getConfig(): Promise<IdleTerminalNotifyConfig>;
-    updateConfig(config: Partial<IdleTerminalNotifyConfig>): Promise<IdleTerminalNotifyConfig>;
-    closeProject(projectId: string): Promise<void>;
-    dismissProject(projectId: string): Promise<void>;
+    getConfig(): Promise<IpcInvokeMap["idle-terminal:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["idle-terminal:update-config"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:update-config"]["result"]>;
+    closeProject(
+      ...args: IpcInvokeMap["idle-terminal:close-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:close-project"]["result"]>;
+    dismissProject(
+      ...args: IpcInvokeMap["idle-terminal:dismiss-project"]["args"]
+    ): Promise<IpcInvokeMap["idle-terminal:dismiss-project"]["result"]>;
     onNotify(callback: (payload: IdleTerminalNotifyPayload) => void): () => void;
   };
-  systemSleep: {
-    /** Get metrics about system sleep tracking */
-    getMetrics(): Promise<SystemSleepMetrics>;
-    /** Get elapsed awake time since timestamp, excluding sleep periods */
-    getAwakeTimeSince(startTimestamp: number): Promise<number>;
-    /** Reset accumulated sleep tracking */
-    reset(): Promise<void>;
+  // Invoke methods come from GeneratedElectronAPI; suspend/wake are renderer-only subscriptions.
+  systemSleep: GeneratedElectronAPI["systemSleep"] & {
     /** Subscribe to suspend events */
     onSuspend(callback: () => void): () => void;
     /** Subscribe to wake events with sleep duration */
@@ -1077,22 +1109,8 @@ export interface ElectronAPI {
     /** Toggle Store update notifications on/off. */
     setSettings(enabled: boolean): Promise<{ enabled: boolean }>;
   };
-  gemini: {
-    /** Get Gemini config status (exists, alternate buffer enabled) */
-    getStatus(): Promise<{ exists: boolean; alternateBufferEnabled: boolean; error?: string }>;
-    /** Enable alternate buffer in Gemini settings */
-    enableAlternateBuffer(): Promise<{ success: boolean }>;
-  };
-  commands: {
-    /** List all registered commands */
-    list(context?: CommandContext): Promise<CommandManifestEntry[]>;
-    /** Get a specific command by ID */
-    get(payload: CommandGetPayload): Promise<CommandManifestEntry | null>;
-    /** Execute a command */
-    execute(payload: CommandExecutePayload): Promise<CommandResult>;
-    /** Get builder configuration for a command */
-    getBuilder(commandId: string): Promise<{ steps: BuilderStep[] } | null>;
-  };
+  // gemini is generated — see GeneratedElectronAPI.
+  // commands is generated — see GeneratedElectronAPI.
   appAgent: {
     /** Get the current app agent config (without API key) */
     getConfig(): Promise<Omit<AppAgentConfig, "apiKey">>;
@@ -1132,16 +1150,8 @@ export interface ElectronAPI {
     /** Send confirmation response back to main process */
     sendConfirmationResponse(payload: { requestId: string; approved: boolean }): void;
   };
-  agentCapabilities: {
-    /** Get effective registry (built-in + user overrides) */
-    getRegistry(): Promise<AgentRegistry>;
-    /** Get list of effective agent IDs */
-    getAgentIds(): Promise<string[]>;
-    /** Get metadata for specific agent */
-    getAgentMetadata(agentId: string): Promise<AgentMetadata | null>;
-    /** Check if agent is enabled/available */
-    isAgentEnabled(agentId: string): Promise<boolean>;
-    /** Subscribe to CCR preset updates from main process */
+  // Invoke methods come from GeneratedElectronAPI; onPresetsUpdated is a renderer-only subscription.
+  agentCapabilities: GeneratedElectronAPI["agentCapabilities"] & {
     onPresetsUpdated(
       callback: (payload: {
         agentId: string;
@@ -1158,33 +1168,12 @@ export interface ElectronAPI {
         }>;
       }) => void
     ): () => void;
-    /** Fetch current CCR presets from main process */
-    getCcrPresets(): Promise<
-      Array<{
-        id: string;
-        name: string;
-        description?: string;
-        env?: Record<string, string>;
-        args?: string[];
-        color?: string;
-        dangerousEnabled?: boolean;
-        customFlags?: string;
-        inlineMode?: boolean;
-      }>
-    >;
   };
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
   };
-  clipboard: {
-    saveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }>;
-    thumbnailFromPath(filePath: string): Promise<{ filePath: string; thumbnailDataUrl: string }>;
-    writeImage(pngData: Uint8Array): Promise<void>;
-    writeText(text: string): Promise<void>;
-    writeSelection(text: string): Promise<void>;
-    readSelection(): Promise<{ text: string }>;
-  };
+  // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {
     getPathForFile(file: File): string;
   };
@@ -1219,54 +1208,119 @@ export interface ElectronAPI {
     };
   };
   gpu: {
-    getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
+    getStatus(): Promise<{ hardwareAccelerationDisabled: boolean; angleFallbackActive: boolean }>;
     setHardwareAcceleration(enabled: boolean): Promise<void>;
   };
-  privacy: {
-    getSettings(): Promise<{
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 7 | 30 | 90 | 0;
-      dataFolderPath: string;
-    }>;
-    setTelemetryLevel(level: "off" | "errors" | "full"): Promise<void>;
-    setLogRetention(days: 7 | 30 | 90 | 0): Promise<void>;
-    openDataFolder(): Promise<void>;
-    clearCache(): Promise<void>;
-    resetAllData(): Promise<void>;
-    getDataFolderPath(): Promise<string>;
+  // Invoke methods come from GeneratedElectronAPI; onTelemetryConsentChanged is a renderer-only subscription.
+  privacy: GeneratedElectronAPI["privacy"] & {
     onTelemetryConsentChanged(
       callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
     ): () => void;
   };
-  sentry: {
-    getConsentState(): Promise<{
-      level: "off" | "errors" | "full";
-      hasSeenPrompt: boolean;
-    }>;
-  };
-  onboarding: {
-    get(): Promise<OnboardingState>;
-    setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
-    complete(): Promise<void>;
-    markToastSeen(): Promise<void>;
-    markNewsletterSeen(): Promise<void>;
-    markWaitingNudgeSeen(): Promise<void>;
-    markAgentsSeen(agentIds: string[]): Promise<OnboardingState>;
-    dismissWelcomeCard(): Promise<OnboardingState>;
-    dismissSetupBanner(): Promise<OnboardingState>;
-    getChecklist(): Promise<ChecklistState>;
-    dismissChecklist(): Promise<void>;
-    markChecklistItem(item: ChecklistItemId): Promise<void>;
-    markChecklistCelebrationShown(): Promise<void>;
+  // sentry is generated — see GeneratedElectronAPI.
+  // Invoke methods come from GeneratedElectronAPI; onChecklistPush is a renderer-only subscription.
+  onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
-  milestones: {
-    get(): Promise<Record<string, boolean>>;
-    markShown(id: string): Promise<void>;
-  };
-  shortcutHints: {
-    getCounts(): Promise<Record<string, number>>;
-    incrementCount(actionId: string): Promise<void>;
+  // milestones is generated — see GeneratedElectronAPI.
+  // shortcutHints is generated — see GeneratedElectronAPI.
+  forge: {
+    /** Read the persisted forge settings (global default provider id). */
+    getSettings(): Promise<{ defaultProviderId: string | null }>;
+    /**
+     * Persist the global default forge provider id. Pass `null` to clear the
+     * default and fall back to hostname auto-match. Server treats empty
+     * strings as `null`.
+     */
+    setDefaultProvider(providerId: string | null): Promise<{ defaultProviderId: string | null }>;
+    /**
+     * List forge providers contributed by currently-loaded plugins. Reflects
+     * the live registry — plugins loaded after settings open should appear
+     * on the next call without restart.
+     */
+    getProviders(): Promise<ForgeProviderEntry[]>;
+    /**
+     * Resolve the active forge provider for the given project, applying the
+     * per-project override → global default → first hostname match precedence
+     * chain. `entry` is `null` when no rule resolves (override or default
+     * points at an unavailable provider, no hostname match) and `resolvedVia`
+     * is `null` in lock-step. Consumers treat `entry === null` the same as
+     * "no provider registered".
+     *
+     * `remoteUrl`, when supplied, replaces the project's `origin` for the
+     * hostname-match step — used by per-remote routing UIs that need a
+     * resolution per remote rather than the project default.
+     */
+    resolveProvider(projectId: string, remoteUrl?: string): Promise<ResolvedForgeProvider>;
+    /** Open the issues list page for the resolved forge provider. */
+    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
+    /** Open the pull requests list page for the resolved forge provider. */
+    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
+    /** Open the commits page for the resolved forge provider. */
+    openCommits(cwd: string, branch?: string): Promise<void>;
+    /** Open a single issue in the system browser via the resolved forge provider. */
+    openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
+    /** Resolve the canonical URL for a single issue via the resolved forge provider. */
+    getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
+    /** Assign an issue to a user via the resolved forge provider. */
+    assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /** Validate a token against the global default forge provider. */
+    validateToken(token: string): Promise<AuthValidation>;
+    /**
+     * Validate and persist credentials for a specific forge provider, keyed
+     * by its canonical `{pluginId}.{contributionId}` id. `credentials` is a
+     * map of the provider's declared `credentialFields` ids to entered
+     * values. The primary field is validated via the provider impl; on
+     * success the full record is persisted and synced to the workspace host.
+     * Returns the validation result — credentials are persisted only when
+     * `valid` is `true`.
+     */
+    setCredential(providerId: string, credentials: Record<string, string>): Promise<AuthValidation>;
+    /** Report whether credentials are stored for the given forge provider id. */
+    getCredentialStatus(providerId: string): Promise<{ hasCredential: boolean }>;
+    /** Clear stored credentials for the given forge provider id. */
+    clearCredential(providerId: string): Promise<void>;
+    /**
+     * List issues for the resolved forge provider. Provider-agnostic — returns
+     * normalized {@link Issue} rows, not GitHub-shaped types. Listing filters
+     * go through `opts`, never client-side across pages.
+     */
+    listIssues(payload: { cwd: string; opts?: ListOptions }): Promise<Page<Issue>>;
+    /** List pull/merge requests for the resolved forge provider. */
+    listPRs(payload: { cwd: string; opts?: ListOptions }): Promise<Page<PR>>;
+    /** Fetch a single normalized issue, or `null` when it doesn't exist. */
+    getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
+    /** Fetch a single normalized PR, or `null` when it doesn't exist. */
+    getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /** Fetch the normalized repository metadata roll-up. */
+    getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
+    /**
+     * Provider-keyed rate-limit state push. Every forge provider (GitHub
+     * included) flows through this channel tagged with its canonical
+     * `providerId`; consumers filter to the provider they care about.
+     */
+    onRateLimitChanged(
+      callback: (data: import("./forge.js").ForgeRateLimitChangedPayload) => void
+    ): () => void;
+    /**
+     * Provider-keyed token-health state push. Forward-compat — no provider
+     * implementation emits this yet; GitHub token health still flows over
+     * `github.onTokenHealthChanged`.
+     */
+    onTokenHealthChanged(
+      callback: (data: import("./forge.js").ForgeTokenHealthChangedPayload) => void
+    ): () => void;
+    /**
+     * Classify a `git push` failure via the resolved forge provider. Returns
+     * the provider's `contribution.id` (for routing the push-error banner's
+     * settings CTA) plus the provider's classification (a stable error code,
+     * or `null` when the provider doesn't recognize the stderr). Resolves to
+     * `null` when no forge provider can be resolved for `cwd`.
+     */
+    classifyPushError(payload: {
+      cwd: string;
+      stderr: string;
+    }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;
@@ -1295,70 +1349,13 @@ export interface ElectronAPI {
       callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
     ): () => void;
   };
-  mcpServer: {
-    /** Get current MCP server status and configuration */
-    getStatus(): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Enable or disable the MCP server */
-    setEnabled(enabled: boolean): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /** Set a fixed port (null = auto-assign ephemeral port) */
-    setPort(port: number | null): Promise<{
-      enabled: boolean;
-      port: number | null;
-      configuredPort: number | null;
-      apiKey: string;
-    }>;
-    /**
-     * Mint a fresh bearer token, persist it to electron-store, and return the
-     * new key. Clients pick up the new key on their next request — no server
-     * restart is needed. External clients holding the old bearer in their own
-     * config break and must re-paste from Settings.
-     */
-    rotateApiKey(): Promise<string>;
-    /** Get the JSON config snippet to paste into an MCP client config */
-    getConfigSnippet(): Promise<string>;
-    /** Read the audit-log ring buffer (newest first). */
-    getAuditRecords(): Promise<import("./mcpServer.js").McpAuditRecord[]>;
-    /** Get the persisted audit-log configuration. */
-    getAuditConfig(): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Read the session-scoped audit health counters (currently the
-     * since-launch 401 counter). Resets on app restart.
-     */
-    getAuditStats(): Promise<import("./mcpServer.js").McpAuditStats>;
-    /** Clear all audit records from the ring buffer and persistence. */
-    clearAuditLog(): Promise<void>;
-    /** Toggle audit-log capture without losing existing records. */
-    setAuditEnabled(enabled: boolean): Promise<{ enabled: boolean; maxRecords: number }>;
-    /** Update the ring-buffer cap (clamped to MCP_AUDIT_MIN/MAX). */
-    setAuditMaxRecords(max: number): Promise<{ enabled: boolean; maxRecords: number }>;
-    /**
-     * Get the derived runtime-state snapshot
-     * (`disabled|starting|ready|failed`). Distinct from `getStatus()` —
-     * surfaces the dock-pip readiness state and last-failure reason.
-     */
-    getRuntimeState(): Promise<import("./mcpServer.js").McpRuntimeSnapshot>;
+  // Invoke methods come from GeneratedElectronAPI; the rest are
+  // renderer-only event subscriptions.
+  mcpServer: GeneratedElectronAPI["mcpServer"] & {
     /** Subscribe to runtime-state transitions. */
     onRuntimeStateChanged(
       callback: (snapshot: import("./mcpServer.js").McpRuntimeSnapshot) => void
     ): () => void;
-    /**
-     * Elevate an active help-session's tier (Approve once). Server-side
-     * validates that the new tier is not a downgrade.
-     */
-    setSessionTier(
-      sessionId: string,
-      tier: "workbench" | "action" | "system"
-    ): Promise<{ sessionId: string; tier: "workbench" | "action" | "system" }>;
     /**
      * Subscribe to tier-not-permitted pushes for the pinned help-session in
      * this WebContents. The callback fires when a tool call is denied because
@@ -1372,11 +1369,16 @@ export interface ElectronAPI {
         targetTier: "workbench" | "action" | "system" | null;
       }) => void
     ): () => void;
+    /**
+     * Subscribe to grant lifecycle events (`issued`, `expired`, `revoked`)
+     * for the pinned help-session in this WebContents. Targeted send —
+     * grant state is session-scoped (#8442).
+     */
+    onGrantLifecycle(
+      callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
+    ): () => void;
   };
-  helpAssistant: {
-    getSettings(): Promise<HelpAssistantSettings>;
-    setSettings(settings: Partial<HelpAssistantSettings>): Promise<void>;
-  };
+  // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;
@@ -1392,6 +1394,12 @@ export interface ElectronAPI {
         actionId: string;
         args?: unknown;
         confirmed?: boolean;
+        /**
+         * Provision-time `ActionContext` snapshot bound to pinned
+         * help-session dispatch (#8317). Undefined for unpinned
+         * external/api-key dispatch, which keeps live renderer context.
+         */
+        context?: ActionContext;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -1401,39 +1409,37 @@ export interface ElectronAPI {
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
-  plugin: {
-    list(): Promise<import("../plugin.js").LoadedPluginInfo[]>;
+  // list / toolbarButtons / menuItems / validateActionIds / get|register|
+  // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
+  // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC
+  // helpers that aren't expressible through IpcInvokeMap, and the on*
+  // entries are renderer-only subscriptions.
+  plugin: GeneratedElectronAPI["plugin"] & {
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
     on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
-    toolbarButtons(): Promise<
-      import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[]
-    >;
-    menuItems(): Promise<
-      Array<{
-        pluginId: string;
-        item: import("../plugin.js").MenuItemContribution;
-      }>
-    >;
-    validateActionIds(actionIds: string[]): Promise<void>;
-    /** Pull the current set of plugin-registered actions. */
-    getActions(): Promise<import("../plugin.js").PluginActionDescriptor[]>;
-    /** Register a plugin-contributed action. Intended to be called from main-side bridges; not for direct UI use. */
-    registerAction(
-      pluginId: string,
-      contribution: import("../plugin.js").PluginActionContribution
-    ): Promise<void>;
-    /** Unregister a single plugin-contributed action. */
-    unregisterAction(pluginId: string, actionId: string): Promise<void>;
     /** Subscribe to plugin-action registry changes. Returns a cleanup. */
     onActionsChanged(
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
     ): () => void;
-    /** Pull the current set of plugin-contributed panel kinds. */
-    getPanelKinds(): Promise<import("../../config/panelKindRegistry.js").PanelKindConfig[]>;
+    /**
+     * Subscribe to file-decoration invalidations. The callback fires with the
+     * changed scope (and optionally the narrowed paths) — it carries no
+     * decoration data; re-pull via {@link getDecorations}. Returns a cleanup.
+     */
+    onDecorationsChanged(
+      callback: (payload: { scope: string; paths?: string[] }) => void
+    ): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {
         kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
+    onToolbarButtonsChanged(
+      callback: (payload: {
+        buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+        complete: boolean;
       }) => void
     ): () => void;
   };
@@ -1445,31 +1451,7 @@ export interface ElectronAPI {
       config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
     ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
   };
-  help: {
-    getFolderPath(): Promise<string | null>;
-    markTerminal(terminalId: string): Promise<void>;
-    unmarkTerminal(terminalId: string): Promise<void>;
-    provisionSession(input: { projectId: string; projectPath: string; agentId: string }): Promise<{
-      sessionId: string;
-      sessionPath: string;
-      token: string;
-      tier: import("./maps.js").HelpAssistantTier;
-      mcpUrl: string | null;
-      windowId: number;
-    } | null>;
-    revokeSession(sessionId: string): Promise<void>;
-    /**
-     * Pull and atomically clear the main-captured pending hibernation entry
-     * for a project. Main captures these on LRU eviction / window close via
-     * `gracefulKill` so the conversation can be resumed the next time the
-     * user reopens the project. Returns null when there is no pending entry.
-     */
-    takePendingHibernation(projectId: string): Promise<{
-      agentId: string;
-      agentSessionId: string;
-      cwd: string;
-    } | null>;
-  };
+  // help is generated — see GeneratedElectronAPI.
   perf: {
     flushMarks(payload: import("../../perf/marks.js").RendererPerfFlushPayload): void;
   };

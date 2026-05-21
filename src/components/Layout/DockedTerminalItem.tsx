@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
 import {
   useTerminalInputStore,
   usePanelStore,
-  usePortalStore,
   useFocusStore,
   type TerminalInstance,
 } from "@/store";
@@ -30,6 +28,7 @@ import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedS
 import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -63,14 +62,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
-    useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
-  );
-
   // Tracks whether the worktree sidebar is hidden by the chrome gesture, so
   // popover collision padding can extend left when there's no sidebar there.
   // The assistant lives on the right, so its gesture state doesn't affect
-  // left-side padding.
+  // left-side padding. Right padding is handled by PopoverContent's
+  // collisionBoundary (width: 100vw − --right-obstruction-offset), so the
+  // assistant/portal exclusion is not re-counted here.
   const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
 
   const collisionPadding = useMemo(() => {
@@ -79,68 +76,51 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       top: basePadding,
       left: sidebarHidden ? 8 : basePadding,
       bottom: basePadding,
-      right: portalOpen ? portalWidth + basePadding : basePadding,
+      right: basePadding,
     };
-  }, [sidebarHidden, portalOpen, portalWidth]);
+  }, [sidebarHidden]);
 
-  // Toggle buffering based on popover open state
+  const portalTarget = useDockPanelPortal();
+  const portalContainerElementRef = useRef<HTMLDivElement | null>(null);
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
+
+  // Use callback ref to capture the DOM element when it mounts
+  const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
+    portalContainerElementRef.current = node;
+    setPortalContainer(node);
+  }, []);
+
+  // Toggle buffering based on popover open state. The terminal stays mounted
+  // in DockPanelOffscreenContainer across open/close cycles; the popover only
+  // shuttles the host element into a visible container. One layout pass after
+  // the portal-target ref settles is enough for `checkVisibility()` inside
+  // `fit()` to flip — no retry loop needed.
   useEffect(() => {
-    let cancelled = false;
-
-    const applyBufferingState = async () => {
+    if (!isOpen) {
       try {
-        if (isOpen) {
-          if (!cancelled) {
-            // Wait for Popover DOM to be fully mounted and XtermAdapter to attach the terminal.
-            // A single RAF is not enough - React needs multiple frames to mount the component tree.
-            // We retry fitting until the terminal is attached to a visible container.
-            const MAX_RETRIES = 10;
-            const RETRY_DELAY_MS = 16; // ~1 frame
-
-            let dims: { cols: number; rows: number } | null = null;
-            for (let attempt = 0; attempt < MAX_RETRIES && !cancelled; attempt++) {
-              // Wait for next frame
-              await new Promise((resolve) => requestAnimationFrame(resolve));
-              if (cancelled) return;
-
-              // Try to fit - will return null if terminal is still in offscreen container
-              dims = terminalInstanceService.fit(terminal.id);
-              if (dims) break;
-
-              // If fit failed (terminal still offscreen), wait a bit and retry
-              if (attempt < MAX_RETRIES - 1) {
-                await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-              }
-            }
-
-            if (cancelled) return;
-
-            if (!dims) {
-              // Terminal never became visible - this can happen if popover closed quickly
-              return;
-            }
-
-            terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
-          }
-        } else {
-          if (!cancelled) {
-            terminalInstanceService.applyRendererPolicy(
-              terminal.id,
-              TerminalRefreshTier.BACKGROUND
-            );
-          }
-        }
+        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND);
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
-    };
+      return;
+    }
 
-    applyBufferingState();
+    if (!portalContainer) return;
+
+    const rafId = requestAnimationFrame(() => {
+      try {
+        const dims = terminalInstanceService.fit(terminal.id);
+        if (!dims) return;
+        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
+      } catch (error) {
+        console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
+      }
+    });
 
     return () => {
-      cancelled = true;
+      cancelAnimationFrame(rafId);
     };
-  }, [isOpen, terminal.id]);
+  }, [isOpen, portalContainer, terminal.id]);
 
   // Auto-close popover when drag starts for this terminal
   useDndMonitor({
@@ -150,14 +130,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       }
     },
   });
-
-  const portalTarget = useDockPanelPortal();
-  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
-
-  // Use callback ref to capture the DOM element when it mounts
-  const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
-    setPortalContainer(node);
-  }, []);
 
   // Register/unregister portal target when popover opens and container is available
   useEffect(() => {
@@ -282,125 +254,130 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     (!agentState || agentState === "idle" || agentState === "completed" || agentState === "exited");
 
   return (
-    <Popover open={isOpen} onOpenChange={handleOpenChange}>
-      <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
-        <PopoverTrigger asChild>
-          <button
-            className={cn(
-              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
-              "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
-              "cursor-grab active:cursor-grabbing",
-              isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
-              !isOpen &&
-                showDockAgentHighlights &&
-                blockedState === "waiting" &&
-                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-              isDeprioritized && "opacity-50"
-            )}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.detail >= 2) return;
-              if (isOpen) {
-                closeDockTerminal();
-              } else {
-                openDockTerminal(terminal.id);
-              }
-            }}
-            onDoubleClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const moved = moveTerminalToGrid(terminal.id);
-              if (moved) closeDockTerminal();
-            }}
-            aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
-          >
-            <div className="flex items-center justify-center shrink-0">
-              <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
-            </div>
-            <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-              {displayTitle}
-            </span>
+    <DockPopoverChildProvider>
+      <Popover open={isOpen} onOpenChange={handleOpenChange}>
+        <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
+          <PopoverTrigger asChild>
+            <button
+              data-dock-item=""
+              className={cn(
+                "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
+                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+                "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                "cursor-grab active:cursor-grabbing",
+                isOpen &&
+                  "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                !isOpen &&
+                  showDockAgentHighlights &&
+                  blockedState === "waiting" &&
+                  "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+                isDeprioritized && "opacity-50"
+              )}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.detail >= 2) return;
+                if (isOpen) {
+                  closeDockTerminal();
+                } else {
+                  openDockTerminal(terminal.id);
+                }
+              }}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const moved = moveTerminalToGrid(terminal.id);
+                if (moved) closeDockTerminal();
+              }}
+              aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
+            >
+              <div className="flex items-center justify-center shrink-0">
+                <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
+              </div>
+              <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
+                {displayTitle}
+              </span>
 
-            {isActive && commandText && (
-              <>
-                <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+              {isActive && commandText && (
+                <>
+                  <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                        {commandText}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{commandText}</TooltipContent>
+                  </Tooltip>
+                </>
+              )}
+
+              {/* State icon (compact spacing from title) */}
+              {displayAgentState && StateIcon && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                      {commandText}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{commandText}</TooltipContent>
-                </Tooltip>
-              </>
-            )}
-
-            {/* State icon (compact spacing from title) */}
-            {displayAgentState && StateIcon && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex items-center shrink-0",
-                      getEffectiveStateColor(displayAgentState)
-                    )}
-                  >
-                    <StateIcon
+                    <div
                       className={cn(
-                        "w-3.5 h-3.5",
-                        displayAgentState === "working" && "animate-spin-slow",
-                        "motion-reduce:animate-none"
+                        "flex items-center shrink-0",
+                        getEffectiveStateColor(displayAgentState)
                       )}
-                      aria-hidden="true"
-                    />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
-              </Tooltip>
-            )}
-          </button>
-        </PopoverTrigger>
-      </TerminalContextMenu>
+                    >
+                      <StateIcon
+                        className={cn(
+                          "w-3.5 h-3.5",
+                          displayAgentState === "working" && "animate-spin-slow",
+                          "motion-reduce:animate-none"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
+                </Tooltip>
+              )}
+            </button>
+          </PopoverTrigger>
+        </TerminalContextMenu>
 
-      <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2"
-        side="top"
-        align="start"
-        sideOffset={10}
-        collisionPadding={collisionPadding}
-        onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
-        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          if (terminal.spawnedBy === "mcp") {
-            return;
-          }
-          const focusTarget = getTerminalFocusTarget({
-            preferredTarget: preferredTerminalFocusTarget,
-            hasHybridInputSurface: chrome.isAgent,
-            isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
-            hybridInputEnabled,
-          });
+        <PopoverContent
+          className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2"
+          side="top"
+          align="start"
+          sideOffset={10}
+          collisionPadding={collisionPadding}
+          onInteractOutside={(e) => handleDockInteractOutside(e, portalContainerElementRef.current)}
+          onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (terminal.spawnedBy === "mcp") {
+              return;
+            }
+            const focusTarget = getTerminalFocusTarget({
+              preferredTarget: preferredTerminalFocusTarget,
+              hasHybridInputSurface: chrome.isAgent,
+              isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
+              hybridInputEnabled,
+            });
 
-          if (focusTarget === "hybridInput") {
-            return;
-          }
+            if (focusTarget === "hybridInput") {
+              return;
+            }
 
-          // Small delay to ensure xterm is fully mounted before focusing
-          setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
-        }}
-      >
-        {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
-        <div
-          ref={portalContainerRef}
-          className="w-full h-full flex flex-col"
-          data-dock-portal-target={terminal.id}
-        />
-      </PopoverContent>
-    </Popover>
+            // Small delay to ensure xterm is fully mounted before focusing
+            setTimeout(() => terminalInstanceService.focus(terminal.id), 50);
+          }}
+        >
+          <div className="relative w-full h-full group">
+            {/* Portal target - content is rendered in DockPanelOffscreenContainer and portaled here */}
+            <div
+              ref={portalContainerRef}
+              className="w-full h-full flex flex-col"
+              data-dock-portal-target={terminal.id}
+            />
+          </div>
+        </PopoverContent>
+      </Popover>
+    </DockPopoverChildProvider>
   );
 }

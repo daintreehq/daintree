@@ -457,6 +457,7 @@ export function addActionBreadcrumb(crumb: ActionBreadcrumb): void {
         durationMs: crumb.durationMs,
         ...(crumb.count > 1 ? { count: crumb.count } : {}),
         ...(crumb.args ? { args: crumb.args } : {}),
+        ...(crumb.confirmed !== undefined ? { confirmed: crumb.confirmed } : {}),
       },
     });
   } catch {

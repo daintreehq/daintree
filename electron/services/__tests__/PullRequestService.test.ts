@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type { DaintreeEventMap } from "../events.js";
-import type { PRCheckCandidate } from "../github/types.js";
+import type { ForgeProviderImpl, RepoRef, PR as ForgePR } from "../../../shared/types/forge.js";
 
 function makeWorktreeSnapshot(
   overrides: Partial<WorktreeSnapshot> & Pick<WorktreeSnapshot, "worktreeId">
@@ -14,6 +14,107 @@ function makeWorktreeSnapshot(
     isCurrent: false,
     ...overrides,
   };
+}
+
+function makeMockRepoRef(): RepoRef {
+  return { host: "github.com", owner: "testowner", repo: "testrepo", rawData: null };
+}
+
+function makeMockForgePR(overrides?: Partial<ForgePR>): ForgePR {
+  return {
+    number: 42,
+    title: "Add new feature",
+    body: "",
+    state: "open",
+    rawState: "OPEN",
+    isDraft: false,
+    merged: false,
+    url: "https://github.com/o/r/pull/42",
+    baseRef: "main",
+    headRef: "feature/test",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    rawData: null,
+    ...overrides,
+  };
+}
+
+function mockForgeProviderResolved(
+  findPRByBranch?: () => Promise<ForgePR | null>,
+  findPRsByBranches?: (repo: RepoRef, branches: string[]) => Promise<Map<string, ForgePR | null>>
+) {
+  const mockImpl: ForgeProviderImpl = {
+    getCredentials: vi.fn(),
+    validateCredentials: vi.fn(),
+    parseRemote: vi.fn(() => makeMockRepoRef()),
+    listIssues: vi.fn(),
+    listPRs: vi.fn(),
+    getIssue: vi.fn().mockResolvedValue(null),
+    getPR: vi.fn().mockResolvedValue(null),
+    findPRByBranch: vi
+      .fn<() => Promise<ForgePR | null>>()
+      .mockImplementation(findPRByBranch ?? (async () => makeMockForgePR())),
+    ...(findPRsByBranches
+      ? {
+          findPRsByBranches: vi
+            .fn<(repo: RepoRef, branches: string[]) => Promise<Map<string, ForgePR | null>>>()
+            .mockImplementation(findPRsByBranches),
+        }
+      : {}),
+    getCIStatus: vi.fn().mockResolvedValue(null),
+    getRepoMetadata: vi.fn(),
+    buildIssueUrl: vi.fn(),
+    buildPRUrl: vi.fn(),
+    buildIssuesUrl: vi.fn(),
+    buildPRsUrl: vi.fn(),
+    buildCommitsUrl: vi.fn(),
+    assignIssue: vi.fn(),
+    validateToken: vi.fn(),
+    getRateLimit: vi.fn().mockResolvedValue({ limit: null, remaining: null, resetAt: null }),
+  };
+
+  vi.doMock("../forgeProviderResolver.js", () => ({
+    resolveForgeProvider: vi.fn().mockReturnValue({
+      entry: {
+        pluginId: "daintree.github",
+        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+      },
+      resolvedVia: "hostname",
+    }),
+  }));
+  vi.doMock("../forgeProviderRegistry.js", () => ({
+    getForgeProviderImpl: vi.fn().mockReturnValue(mockImpl),
+    registerForgeProviders: vi.fn(),
+    unregisterForgeProviders: vi.fn(),
+    clearForgeProviderRegistry: vi.fn(),
+  }));
+  vi.doMock("../projectStorePaths.js", () => ({
+    generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+  }));
+  vi.doMock("../../utils/hardenedGit.js", () => ({
+    createHardenedGit: vi.fn().mockReturnValue({
+      getConfig: vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git"),
+    }),
+  }));
+
+  return mockImpl;
+}
+
+function mockForgeProviderUnresolved() {
+  vi.doMock("../forgeProviderResolver.js", () => ({
+    resolveForgeProvider: vi.fn().mockReturnValue({ entry: null, resolvedVia: null }),
+  }));
+  vi.doMock("../forgeProviderRegistry.js", () => ({
+    getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+  }));
+  vi.doMock("../projectStorePaths.js", () => ({
+    generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+  }));
+  vi.doMock("../../utils/hardenedGit.js", () => ({
+    createHardenedGit: vi.fn().mockReturnValue({
+      getConfig: vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git"),
+    }),
+  }));
 }
 
 describe("PullRequestService", () => {
@@ -28,27 +129,10 @@ describe("PullRequestService", () => {
   });
 
   it("detects PRs for non-default branches without issue numbers", async () => {
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => ({
-      results: new Map([
-        [
-          candidates[0].worktreeId,
-          {
-            issueNumber: candidates[0].issueNumber,
-            branchName: candidates[0].branchName,
-            pr: {
-              number: 42,
-              title: "Add new feature",
-              url: "https://github.com/o/r/pull/42",
-              state: "open",
-              isDraft: false,
-            },
-          },
-        ],
-      ]),
-    }));
     const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
 
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+    const mockImpl = mockForgeProviderResolved();
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -65,10 +149,11 @@ describe("PullRequestService", () => {
 
     await pullRequestService.refresh();
 
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
-    expect(batchCheckLinkedPRs.mock.calls[0][1]).toEqual([
-      { worktreeId: "wt-1", issueNumber: undefined, branchName: "feature/no-issue" },
-    ]);
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "testowner", repo: "testrepo" }),
+      "feature/no-issue"
+    );
 
     expect(detected).toHaveLength(1);
     expect(detected[0]).toMatchObject({
@@ -77,6 +162,11 @@ describe("PullRequestService", () => {
       prUrl: "https://github.com/o/r/pull/42",
       prState: "open",
       prTitle: "Add new feature",
+      providerId: "daintree.github.github",
+      // #8452: the canonical repo identity must ride the event from the
+      // resolved repoRef, not be synthesized downstream with empty strings.
+      owner: "testowner",
+      repo: "testrepo",
     });
     expect(detected[0].issueNumber).toBeUndefined();
 
@@ -84,10 +174,127 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
-  it("does not track default branches like main/master", async () => {
-    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
+  it("emits sys:issue:detected carrying the canonical owner/repo (#8452)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getIssue = vi.fn().mockResolvedValue({
+      number: 88,
+      title: "Widget request",
+      state: "open",
+      rawState: "OPEN",
+      url: "https://github.com/o/r/issues/88",
+      rawData: null,
+    });
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const issues: DaintreeEventMap["sys:issue:detected"][] = [];
+    const unsubscribe = events.on("sys:issue:detected", (payload) => issues.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/widget", issueNumber: 88 })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      worktreeId: "wt-1",
+      issueNumber: 88,
+      issueTitle: "Widget request",
+      providerId: "daintree.github.github",
+      owner: "testowner",
+      repo: "testrepo",
+    });
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("resolves the provider against the selected forgeRemote, not origin (#8456)", async () => {
     const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
+    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
+    vi.doMock("../forgeProviderRegistry.js", () => ({
+      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+    }));
+    vi.doMock("../projectStorePaths.js", () => ({
+      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+    }));
+    const getConfig = vi.fn(async (key: string) =>
+      key === "remote.upstream.url"
+        ? "https://github.com/upstreamowner/upstreamrepo.git"
+        : "https://github.com/originowner/originrepo.git"
+    );
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
+    }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.setForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: "upstream",
+    });
+
+    await pullRequestService.refresh();
+
+    expect(getConfig).toHaveBeenCalledWith("remote.upstream.url");
+    expect(resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/upstreamowner/upstreamrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("falls back to origin when the selected forgeRemote has no URL (#8456)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
+    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
+    vi.doMock("../forgeProviderRegistry.js", () => ({
+      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+    }));
+    vi.doMock("../projectStorePaths.js", () => ({
+      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
+    }));
+    const getConfig = vi.fn(async (key: string) =>
+      key === "remote.origin.url" ? "https://github.com/originowner/originrepo.git" : null
+    );
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
+    }));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.setForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: "missing",
+    });
+
+    await pullRequestService.refresh();
+
+    expect(resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/originowner/originrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("does not track default branches like main/master", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+    const mockImpl = mockForgeProviderResolved();
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -105,32 +312,17 @@ describe("PullRequestService", () => {
 
     await pullRequestService.refresh();
 
-    expect(batchCheckLinkedPRs).not.toHaveBeenCalled();
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
 
     pullRequestService.destroy();
   });
 
   it("clears PR state only when branch changes (not when issue number changes)", async () => {
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => ({
-      results: new Map(
-        candidates.map((c) => [
-          c.worktreeId,
-          {
-            issueNumber: c.issueNumber,
-            branchName: c.branchName,
-            pr: {
-              number: 7,
-              title: "Fix bug",
-              url: "https://github.com/o/r/pull/7",
-              state: "open",
-              isDraft: false,
-            },
-          },
-        ])
-      ),
-    }));
     const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+    mockForgeProviderResolved(async () =>
+      makeMockForgePR({ number: 7, title: "Fix bug", url: "https://github.com/o/r/pull/7" })
+    );
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -165,17 +357,236 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
-  it("auto-recovers from circuit breaker after backoff period", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      if (callCount <= 3) {
-        return { results: new Map(), error: "API rate limit exceeded" };
-      }
-      return { results: new Map() };
-    });
+  it("uses findPRsByBranches batch capability when present (single round-trip for many branches)", async () => {
     const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({
+            number: branch === "feature/a" ? 1 : 2,
+            headRef: branch,
+            url: `https://github.com/o/r/pull/${branch === "feature/a" ? 1 : 2}`,
+          })
+        );
+      }
+      return map;
+    });
+
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(batchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "testowner", repo: "testrepo" }),
+      expect.arrayContaining(["feature/a", "feature/b"])
+    );
+    // Per-branch path must NOT be used when the batch capability is present and succeeds.
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
+    expect(detected).toHaveLength(2);
+
+    const byWorktree = new Map(detected.map((d) => [d.worktreeId, d]));
+    expect(byWorktree.get("wt-1")).toMatchObject({
+      prNumber: 1,
+      prUrl: expect.stringMatching(/\/1$/),
+    });
+    expect(byWorktree.get("wt-2")).toMatchObject({
+      prNumber: 2,
+      prUrl: expect.stringMatching(/\/2$/),
+    });
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("fans out a single batched PR result to every worktree on the same branch", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(branch, makeMockForgePR({ number: 99, headRef: branch }));
+      }
+      return map;
+    });
+
+    mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-a", branch: "shared/branch" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-b", branch: "shared/branch" })
+    );
+
+    await pullRequestService.refresh();
+
+    // Branch deduplication: one batch call with a single unique branch
+    expect(batchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining(["shared/branch"])
+    );
+    // Both worktrees get a detection event from the single PR
+    expect(detected).toHaveLength(2);
+    const worktreeIds = detected.map((d) => d.worktreeId).sort();
+    expect(worktreeIds).toEqual(["wt-a", "wt-b"]);
+    expect(detected.every((d) => d.prNumber === 99)).toBe(true);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("falls back to per-branch findPRByBranch when batch capability throws", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const batchSpy = vi.fn(async () => {
+      throw new Error("transient batch failure");
+    });
+
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    // Per-branch fallback fires for each unique branch on batch failure.
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(2);
+    // Detection still completes — a single transient batch error must not blank every row.
+    expect(detected).toHaveLength(2);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("uses per-branch fallback for branches the batch result omits", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      // Resolve only the first branch — omit the second to exercise the partial-result path.
+      if (branches.length > 0) {
+        map.set(branches[0], makeMockForgePR({ number: 10 }));
+      }
+      return map;
+    });
+
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    // Exactly one per-branch fallback call — for the omitted branch.
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "testowner", repo: "testrepo" }),
+      "feature/b"
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("no-ops when no forge provider is resolved (null linkage, no toast, no error)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+    mockForgeProviderUnresolved();
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+    );
+
+    await pullRequestService.refresh();
+
+    // No PR detected — unresolved provider means null linkage
+    expect(detected).toHaveLength(0);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("skips polling when provider reports remaining: 0 with a future resetAt", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const futureReset = Date.now() + 30_000;
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getRateLimit = vi.fn().mockResolvedValue({
+      limit: 5000,
+      remaining: 0,
+      resetAt: futureReset,
+    });
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -187,116 +598,29 @@ describe("PullRequestService", () => {
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
     );
 
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Step through the first two backoff polls. Using
-    // advanceTimersToNextTimerAsync avoids the overlap window where a second
-    // timer could fire within a single advanceTimersByTimeAsync block.
-    await vi.advanceTimersToNextTimerAsync();
-    expect(callCount).toBe(2);
-
-    await vi.advanceTimersToNextTimerAsync();
-    expect(callCount).toBe(3);
-    expect(pullRequestService.getStatus().isEnabled).toBe(false);
-    expect(pullRequestService.getStatus().consecutiveErrors).toBe(3);
-
-    // Advance past BACKOFF_CAP_MS (5 min) to guarantee the circuit-breaker
-    // recovery window fires. The revalidation timer (90s from start) may
-    // also fire during this window, so don't assert exact callCount — verify
-    // the circuit breaker state recovered.
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(pullRequestService.getStatus().isEnabled).toBe(true);
-    expect(pullRequestService.getStatus().consecutiveErrors).toBe(0);
-
-    pullRequestService.destroy();
-  });
-
-  it("revalidates resolved PRs at 90-second intervals", async () => {
-    let checkCallCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => {
-      checkCallCount++;
-      return {
-        results: new Map(
-          candidates.map((c) => [
-            c.worktreeId,
-            {
-              issueNumber: c.issueNumber,
-              branchName: c.branchName,
-              pr: {
-                number: 10,
-                title: "My PR",
-                url: "https://github.com/o/r/pull/10",
-                state: "open" as const,
-                isDraft: false,
-              },
-            },
-          ])
-        ),
-      };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/reval" })
-    );
-
-    await pullRequestService.start();
-    // start() calls checkForPRs (resolves wt-1), then schedules revalidation
-    expect(checkCallCount).toBe(1);
-
-    // Advance 90 seconds — revalidation should fire
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(checkCallCount).toBe(2);
-
-    // Advance another 90 seconds — another revalidation
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(checkCallCount).toBe(3);
-
-    pullRequestService.destroy();
-  });
-
-  it("calls clearPRCaches on manual refresh", async () => {
-    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-
-    pullRequestService.initialize("/repo");
-
     await pullRequestService.refresh();
 
-    expect(clearPRCaches).toHaveBeenCalledTimes(1);
+    expect(mockImpl.getRateLimit).toHaveBeenCalled();
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
+    expect(mockImpl.getIssue).not.toHaveBeenCalled();
+
+    const status = pullRequestService.getStatus();
+    expect(status.isEnabled).toBe(false);
 
     pullRequestService.destroy();
   });
 
-  it("reschedules polling when checkForPRs throws unexpectedly", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, _candidates: PRCheckCandidate[]) => {
-      callCount++;
-      if (callCount === 2) {
-        throw new Error("Unexpected kaboom");
-      }
-      return {
-        results: new Map(),
-      };
-    });
+  it("skips polling when provider reports secondaryThrottled: true", async () => {
     const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-    vi.doMock("../../utils/logger.js", () => ({
-      logInfo: vi.fn(),
-      logWarn: vi.fn(),
-      logDebug: vi.fn(),
-    }));
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getRateLimit = vi.fn().mockResolvedValue({
+      limit: 5000,
+      remaining: 200,
+      resetAt: null,
+      secondaryThrottled: true,
+    });
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -305,491 +629,52 @@ describe("PullRequestService", () => {
 
     events.emit(
       "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/throw-test" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Advance to the normal poll timer (30s focused default) — checkForPRs throws
-    await vi.advanceTimersToNextTimerAsync();
-    expect(callCount).toBe(2);
-
-    // Advance to the backoff timer — the poll loop should have rescheduled
-    // despite the throw.
-    await vi.advanceTimersToNextTimerAsync();
-    expect(callCount).toBe(3);
-
-    pullRequestService.destroy();
-  });
-
-  it("reschedules revalidation when revalidateResolvedPRs throws unexpectedly", async () => {
-    let revalidationCallCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => {
-      // First call is from start() — resolve the PR so revalidation has something to do
-      // Subsequent calls are revalidation
-      if (revalidationCallCount === 0) {
-        revalidationCallCount++;
-        return {
-          results: new Map(
-            candidates.map((c) => [
-              c.worktreeId,
-              {
-                issueNumber: c.issueNumber,
-                branchName: c.branchName,
-                pr: {
-                  number: 10,
-                  title: "My PR",
-                  url: "https://github.com/o/r/pull/10",
-                  state: "open" as const,
-                  isDraft: false,
-                },
-              },
-            ])
-          ),
-        };
-      }
-      revalidationCallCount++;
-      if (revalidationCallCount === 2) {
-        throw new Error("Revalidation kaboom");
-      }
-      return {
-        results: new Map(
-          candidates.map((c) => [
-            c.worktreeId,
-            {
-              issueNumber: c.issueNumber,
-              branchName: c.branchName,
-              pr: {
-                number: 10,
-                title: "My PR",
-                url: "https://github.com/o/r/pull/10",
-                state: "open" as const,
-                isDraft: false,
-              },
-            },
-          ])
-        ),
-      };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-    const logWarnMock = vi.fn();
-    vi.doMock("../../utils/logger.js", () => ({
-      logInfo: vi.fn(),
-      logWarn: logWarnMock,
-      logDebug: vi.fn(),
-    }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/reval-throw" })
-    );
-
-    await pullRequestService.start();
-    expect(revalidationCallCount).toBe(1);
-
-    // Advance 90s — first revalidation fires and throws
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(revalidationCallCount).toBe(2);
-    expect(logWarnMock).toHaveBeenCalledWith("Revalidation check error", {
-      error: "Revalidation kaboom",
-    });
-
-    // Advance another 90s — revalidation should have rescheduled despite the throw
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(revalidationCallCount).toBe(3);
-
-    pullRequestService.destroy();
-  });
-
-  it("logs warning but does not double-schedule when debounced check throws", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      if (callCount === 2) {
-        throw new Error("Debounce kaboom");
-      }
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-    const logWarnMock = vi.fn();
-    vi.doMock("../../utils/logger.js", () => ({
-      logInfo: vi.fn(),
-      logWarn: logWarnMock,
-      logDebug: vi.fn(),
-    }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-
-    // Register the worktree and start polling
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/debounce-throw" })
-    );
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Trigger a branch change to cause a debounced check
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/debounce-throw-2" })
-    );
-
-    // Advance past debounce timer (100ms) to trigger the throwing checkForPRs
-    await vi.advanceTimersByTimeAsync(100);
-    expect(callCount).toBe(2);
-    expect(logWarnMock).toHaveBeenCalledWith("PR check failed", {
-      error: "Debounce kaboom",
-      consecutiveErrors: 1,
-    });
-
-    pullRequestService.destroy();
-  });
-
-  it("does not track root worktree even on non-default branch", async () => {
-    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-root", branch: "develop", isMainWorktree: true })
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
     );
 
     await pullRequestService.refresh();
 
-    expect(batchCheckLinkedPRs).not.toHaveBeenCalled();
+    expect(mockImpl.getRateLimit).toHaveBeenCalled();
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
+    expect(mockImpl.getIssue).not.toHaveBeenCalled();
 
     pullRequestService.destroy();
   });
 
-  it("evicts root worktree from candidates when isMainWorktree becomes true", async () => {
-    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
+  it("proceeds normally when getRateLimit is absent from the provider", async () => {
     const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    delete (mockImpl as unknown as Record<string, unknown>).getRateLimit;
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
     pullRequestService.initialize("/repo");
 
-    // First update without isMainWorktree — gets tracked as candidate
     events.emit(
       "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-root", branch: "develop" })
-    );
-    await pullRequestService.refresh();
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
-    expect(pullRequestService.getStatus().candidateCount).toBe(1);
-
-    // Second update with isMainWorktree: true — evicted from candidates
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-root", branch: "develop", isMainWorktree: true })
-    );
-
-    expect(pullRequestService.getStatus().candidateCount).toBe(0);
-
-    // Subsequent refresh should not check any candidates
-    batchCheckLinkedPRs.mockClear();
-    await pullRequestService.refresh();
-    expect(batchCheckLinkedPRs).not.toHaveBeenCalled();
-
-    pullRequestService.destroy();
-  });
-
-  it("tracks non-main worktree on develop branch normally", async () => {
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => ({
-      results: new Map(
-        candidates.map((c) => [
-          c.worktreeId,
-          {
-            issueNumber: c.issueNumber,
-            branchName: c.branchName,
-            pr: {
-              number: 55,
-              title: "Develop PR",
-              url: "https://github.com/o/r/pull/55",
-              state: "open" as const,
-              isDraft: false,
-            },
-          },
-        ])
-      ),
-    }));
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
-    const unsubDetected = events.on("sys:pr:detected", (p) => detected.push(p));
-
-    pullRequestService.initialize("/repo");
-
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-linked", branch: "develop", isMainWorktree: false })
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
     );
 
     await pullRequestService.refresh();
 
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
-    expect(detected).toHaveLength(1);
-    expect(detected[0]).toMatchObject({ worktreeId: "wt-linked", prNumber: 55 });
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
 
-    unsubDetected();
     pullRequestService.destroy();
   });
 
-  it("setFocusCadence(false) lengthens the next poll to the blurred interval", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      return { results: new Map() };
+  it("proceeds normally when remaining is null (provider doesn't report that dimension)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getRateLimit = vi.fn().mockResolvedValue({
+      limit: null,
+      remaining: null,
+      resetAt: null,
     });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/cadence" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    pullRequestService.setFocusCadence(false);
-
-    // 30s elapsed should NOT trigger a poll under the 120s blurred cadence
-    await vi.advanceTimersByTimeAsync(30 * 1000);
-    expect(callCount).toBe(1);
-
-    // 120s total elapsed should trigger the next poll
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(callCount).toBe(2);
-
-    pullRequestService.destroy();
-  });
-
-  it("setFocusCadence(true) fires an immediate catch-up poll on focus regain", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/catchup" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Blur, then focus — should immediately catch up
-    pullRequestService.setFocusCadence(false);
-    await vi.advanceTimersByTimeAsync(10 * 1000);
-    expect(callCount).toBe(1);
-
-    pullRequestService.setFocusCadence(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callCount).toBe(2);
-
-    pullRequestService.destroy();
-  });
-
-  it("throttles repeated focus catch-ups within 5s", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/throttle" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // First focus → catch-up fires
-    pullRequestService.setFocusCadence(false);
-    pullRequestService.setFocusCadence(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callCount).toBe(2);
-
-    // Second blur→focus within 5s → no extra poll
-    await vi.advanceTimersByTimeAsync(2 * 1000);
-    pullRequestService.setFocusCadence(false);
-    pullRequestService.setFocusCadence(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callCount).toBe(2);
-
-    // After 5s+ has elapsed since the last catch-up, focus regain fires again
-    await vi.advanceTimersByTimeAsync(4 * 1000);
-    pullRequestService.setFocusCadence(false);
-    pullRequestService.setFocusCadence(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callCount).toBe(3);
-
-    pullRequestService.destroy();
-  });
-
-  it("setFocusCadence is a no-op while not polling but still updates the stored interval", async () => {
-    const batchCheckLinkedPRs = vi.fn(async () => ({ results: new Map() }));
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/idle" })
-    );
-
-    pullRequestService.setFocusCadence(false);
-    expect(batchCheckLinkedPRs).not.toHaveBeenCalled();
-
-    await pullRequestService.start();
-    // start() preserves the blurred cadence set while idle
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(30 * 1000);
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-    expect(batchCheckLinkedPRs).toHaveBeenCalledTimes(2);
-
-    pullRequestService.destroy();
-  });
-
-  it("does not leak a duplicate timer when blur arrives mid-catchup", async () => {
-    // Regression: blur during in-flight focus catch-up used to orphan the
-    // background-cadence timer set by updatePollInterval(120s) when the
-    // catch-up's .finally re-entered scheduleNextPoll without first clearing
-    // the existing pollTimer.
-    let resolveCheck: (() => void) | null = null;
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      // Hold the catch-up promise open so blur can interleave.
-      if (callCount === 2) {
-        await new Promise<void>((resolve) => {
-          resolveCheck = resolve;
-        });
-      }
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/leak" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Focus regain — fires catch-up that hangs awaiting `resolveCheck`.
-    pullRequestService.setFocusCadence(true);
-    await Promise.resolve();
-    expect(callCount).toBe(2);
-
-    // Blur arrives mid-catchup — sets the 120s timer.
-    pullRequestService.setFocusCadence(false);
-
-    // Resolve the in-flight catch-up; .finally calls scheduleNextPoll again.
-    resolveCheck!();
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Advance one full blurred cycle. With the leak, two timers would fire
-    // → callCount becomes 4. Fixed: exactly one timer fires → callCount = 3.
-    await vi.advanceTimersByTimeAsync(120 * 1000);
-    expect(callCount).toBe(3);
-
-    pullRequestService.destroy();
-  });
-
-  it("polls at 30s by default after start() with no interval argument", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/default" })
-    );
-
-    await pullRequestService.start();
-    expect(callCount).toBe(1);
-
-    // Under the old 60s clamp this would have required 60s
-    await vi.advanceTimersByTimeAsync(30 * 1000);
-    expect(callCount).toBe(2);
-
-    pullRequestService.destroy();
-  });
-
-  it("circuit breaker recovers within BACKOFF_CAP_MS (5 min)", async () => {
-    let callCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async () => {
-      callCount++;
-      if (callCount <= 3) {
-        return { results: new Map(), error: "Server error" };
-      }
-      return { results: new Map() };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
 
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
@@ -798,129 +683,78 @@ describe("PullRequestService", () => {
 
     events.emit(
       "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/backoff" })
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
     );
 
-    await pullRequestService.start();
-    expect(pullRequestService.getStatus().consecutiveErrors).toBe(1);
-
-    // Step two backoff polls to trip the circuit breaker.
-    await vi.advanceTimersToNextTimerAsync();
-    expect(pullRequestService.getStatus().consecutiveErrors).toBe(2);
-
-    await vi.advanceTimersToNextTimerAsync();
-    expect(pullRequestService.getStatus().consecutiveErrors).toBe(3);
-    expect(pullRequestService.getStatus().isEnabled).toBe(false);
-
-    // Advance past BACKOFF_CAP_MS (5 min). The 4th call succeeds, which
-    // resets consecutiveErrors and re-enables the service. The cap is
-    // verified by the fact recovery happens within this window: without it,
-    // computeBackoff would grow unbounded for high consecutiveErrors.
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(pullRequestService.getStatus().isEnabled).toBe(true);
-
-    pullRequestService.destroy();
-  });
-
-  it("re-emits sys:pr:detected when only prCiStatus changes during revalidation", async () => {
-    let pollCount = 0;
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => {
-      pollCount++;
-      const ciStatus = pollCount === 1 ? "PENDING" : "SUCCESS";
-      return {
-        results: new Map([
-          [
-            candidates[0].worktreeId,
-            {
-              issueNumber: candidates[0].issueNumber,
-              branchName: candidates[0].branchName,
-              pr: {
-                number: 11,
-                title: "CI changes",
-                url: "https://github.com/o/r/pull/11",
-                state: "open" as const,
-                isDraft: false,
-                ciStatus: ciStatus as "PENDING" | "SUCCESS",
-              },
-            },
-          ],
-        ]),
-      };
-    });
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
-    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-rev", branch: "feature/rev" })
-    );
-
-    // start() schedules the 90s revalidation timer (refresh() alone doesn't).
-    await pullRequestService.start();
-    expect(detected.at(-1)?.prCiStatus).toBe("PENDING");
-
-    // Force revalidation by advancing past the 90s interval.
-    // After CI flips to SUCCESS, the change-detection should re-emit.
-    await vi.advanceTimersByTimeAsync(90 * 1000);
-
-    expect(detected.length).toBeGreaterThanOrEqual(2);
-    expect(detected.at(-1)?.prCiStatus).toBe("SUCCESS");
-
-    unsubscribe();
-    pullRequestService.destroy();
-  });
-
-  it("forwards prCiStatus from batchCheckLinkedPRs to the sys:pr:detected event", async () => {
-    const batchCheckLinkedPRs = vi.fn(async (_cwd: string, candidates: PRCheckCandidate[]) => ({
-      results: new Map([
-        [
-          candidates[0].worktreeId,
-          {
-            issueNumber: candidates[0].issueNumber,
-            branchName: candidates[0].branchName,
-            pr: {
-              number: 99,
-              title: "CI status threading",
-              url: "https://github.com/o/r/pull/99",
-              state: "open" as const,
-              isDraft: false,
-              ciStatus: "FAILURE" as const,
-            },
-          },
-        ],
-      ]),
-    }));
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ batchCheckLinkedPRs, clearPRCaches }));
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
-    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-ci", branch: "feature/ci-failing" })
-    );
     await pullRequestService.refresh();
 
-    expect(detected).toHaveLength(1);
-    expect(detected[0]).toMatchObject({
-      worktreeId: "wt-ci",
-      prNumber: 99,
-      prCiStatus: "FAILURE",
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+
+    pullRequestService.destroy();
+  });
+
+  it("proceeds normally when getRateLimit rejects (fails open)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    mockImpl.getRateLimit = vi.fn().mockRejectedValue(new Error("timeout"));
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+
+    pullRequestService.destroy();
+  });
+
+  it("skips revalidation when provider reports rate-limited", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    // First call succeeds to get a resolved PR, then rate-limit kicks in
+    // so revalidation blocks
+    let callCount = 0;
+    mockImpl.getRateLimit = vi.fn().mockImplementation(() => {
+      callCount++;
+      return Promise.resolve(
+        callCount <= 1
+          ? { limit: null, remaining: null, resetAt: null }
+          : { limit: 5000, remaining: 0, resetAt: Date.now() + 60_000 }
+      );
     });
 
-    unsubscribe();
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+    );
+
+    await pullRequestService.refresh();
+
+    // PR was detected (first getRateLimit was clear)
+    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+
+    // Manually revalidate — now getRateLimit returns blocked
+    await (pullRequestService as any).revalidateResolvedPRs();
+
+    // Revalidation was blocked by rate-limit gate; provider PR ops were NOT called
+    expect(mockImpl.getPR).not.toHaveBeenCalled();
+
     pullRequestService.destroy();
   });
 });

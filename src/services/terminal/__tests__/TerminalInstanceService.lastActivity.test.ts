@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -80,6 +81,9 @@ interface MockManaged {
   isSerializedRestoreInProgress: boolean;
   isUserScrolledBack: boolean;
   pendingWrites?: number;
+  isHibernated?: boolean;
+  lastAppliedTier?: TerminalRefreshTier;
+  getRefreshTier?: () => TerminalRefreshTier;
 }
 
 type LastActivityTestService = {
@@ -112,6 +116,12 @@ function makeMockManaged(overrides: Partial<MockManaged> = {}): MockManaged {
     isAltBuffer: false,
     isSerializedRestoreInProgress: false,
     isUserScrolledBack: false,
+    // Pre-set to BURST so the write-driven tier promotion in writeToTerminal
+    // (decoupled from focus in #8085) is an idempotent no-op for this test
+    // — these specs exercise lastActivityMarker bookkeeping, not tier
+    // transitions or the downstream addon/scrollback restore path.
+    lastAppliedTier: TerminalRefreshTier.BURST,
+    getRefreshTier: () => TerminalRefreshTier.FOCUSED,
     ...overrides,
   };
 }

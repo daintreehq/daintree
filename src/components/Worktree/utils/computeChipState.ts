@@ -10,7 +10,10 @@ export interface ComputeChipStateInput {
 }
 
 export function computeChipState(input: ComputeChipStateInput): ChipState {
-  if (input.lifecycleStage === "merged" || input.lifecycleStage === "ready-for-cleanup")
+  if (
+    (input.lifecycleStage === "merged" || input.lifecycleStage === "ready-for-cleanup") &&
+    !input.hasActiveAgent
+  )
     return "cleanup";
   if (input.isComplete && !input.hasActiveAgent) return "complete";
   if (input.waitingTerminalCount > 0) return "waiting";

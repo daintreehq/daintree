@@ -14,6 +14,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
+import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
 interface DockPanelContextValue {
   portalTarget: (terminalId: string, target: HTMLElement | null) => void;
@@ -235,23 +236,33 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         const existingGroup = getPanelGroup(terminal.id);
         const isSinglePanel = !existingGroup || existingGroup.panelIds.length <= 1;
 
+        // Wrap the portaled panel body in DockPopoverChildProvider so any
+        // Radix overlay opened from inside the docked panel (e.g.
+        // TerminalContextMenu via ContentPanel, panel header dropdowns,
+        // tooltips on action buttons) inherits the context. Without this,
+        // those overlays would not be stamped with data-dock-popover-child
+        // and the dock popover would dismiss when the user clicks a menu
+        // item — see #8161.
         const content = (
-          <div
-            data-dock-panel-id={terminal.id}
-            className="dock-panel-slot"
-            style={{
-              width: "100%",
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <DockedPanel
-              terminal={terminal}
-              onPopoverClose={handlePopoverClose}
-              onAddTab={isSinglePanel ? () => handleAddTabForPanel(terminal) : undefined}
-            />
-          </div>
+          <DockPopoverChildProvider>
+            <div
+              data-dock-panel-id={terminal.id}
+              className="dock-panel-slot"
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <DockedPanel
+                terminal={terminal}
+                onPopoverClose={handlePopoverClose}
+                onAddTab={isSinglePanel ? () => handleAddTabForPanel(terminal) : undefined}
+                showRestoreControl={isSinglePanel}
+              />
+            </div>
+          </DockPopoverChildProvider>
         );
 
         // Always use createPortal with same key to prevent unmount/remount

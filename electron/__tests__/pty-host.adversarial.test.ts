@@ -615,6 +615,17 @@ function terminalStatusPayloads(parentPort: MockParentPort): Array<Record<string
     );
 }
 
+function dataPayloads(parentPort: MockParentPort): Array<Record<string, unknown>> {
+  return parentPort.postMessage.mock.calls
+    .map((call: unknown[]) => call[0])
+    .filter(
+      (payload: unknown): payload is Record<string, unknown> =>
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as { type?: string }).type === "data"
+    );
+}
+
 describe("pty-host adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -793,6 +804,28 @@ describe("pty-host adversarial", () => {
     expect(dataLoss).toHaveLength(2);
     expect(dataLoss[0].droppedBytes).toBe(50);
     expect(dataLoss[1].droppedBytes).toBe(80);
+  });
+
+  it("IPC_DATA_MIRROR_DELIVERS_BACKGROUND_TERMINAL_OUTPUT", async () => {
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "background" });
+    await flushMicrotasks();
+
+    parentPort.postMessage.mockClear();
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "http://localhost:4173\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toEqual([
+      expect.objectContaining({
+        type: "data",
+        id: "t1",
+        data: "http://localhost:4173\n",
+      }),
+    ]);
   });
 
   it("LATE_ACK_AFTER_TIMEOUT_IS_IGNORED", async () => {

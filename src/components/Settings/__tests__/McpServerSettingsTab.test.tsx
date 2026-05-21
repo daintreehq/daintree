@@ -79,9 +79,17 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
     getAuditRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    getAuditStats: vi.fn().mockResolvedValue({
+      auth401Count: 0,
+      anomalySignals: [],
+      anomalySuppressed: true,
+      anomalyRecordFloor: 50,
+    }),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
     setAuditEnabled: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     setAuditMaxRecords: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
+    clearTurnOutcomeLog: vi.fn().mockResolvedValue(undefined),
     onRuntimeStateChanged: vi.fn().mockReturnValue(vi.fn()),
     ...overrides,
   };
@@ -608,7 +616,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
@@ -644,7 +652,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -680,7 +688,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /^clear log$/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -895,6 +903,138 @@ describe("McpServerSettingsTab", () => {
     const select = screen.getByLabelText("Filter audit by result") as HTMLSelectElement;
     expect(select).toBeTruthy();
     expect(Array.from(select.options).map((o) => o.value)).toContain("unauthorized");
+  });
+
+  it("renders anomaly banner when getAuditStats returns signals", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "latency-drift:1",
+            kind: "latency-drift",
+            toolId: "slow.tool",
+            severity: "danger",
+            timestamp: Date.now() - 3_600_001,
+            recordIds: ["r1"],
+            zScore: 4.2,
+            durationMs: 5000,
+            baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+      getAuditRecords: vi.fn().mockResolvedValue([
+        {
+          id: "r1",
+          toolId: "slow.tool",
+          argsSummary: "{}",
+          result: "success" as const,
+          timestamp: Date.now(),
+          durationMs: 5000,
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "anomaly signal");
+  });
+
+  it("hides anomaly banner when suppressed", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "latency-drift:1",
+            kind: "latency-drift",
+            toolId: "slow.tool",
+            severity: "danger",
+            timestamp: Date.now(),
+            recordIds: ["r1"],
+            zScore: 4.2,
+            durationMs: 5000,
+            baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: true,
+        anomalyRecordFloor: 50,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "API key active");
+    expect(container.textContent).not.toContain("anomaly signal");
+  });
+
+  it("Ignore last hour chip appears when signals exist and is not suppressed", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "latency-drift:1",
+            kind: "latency-drift",
+            toolId: "slow.tool",
+            severity: "danger",
+            timestamp: Date.now() - 3_600_001,
+            recordIds: ["r1"],
+            zScore: 4.2,
+            durationMs: 5000,
+            baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Ignore last hour");
+  });
+
+  it("anomaly signals do not trigger notify()", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "latency-drift:1",
+            kind: "latency-drift",
+            toolId: "slow.tool",
+            severity: "danger",
+            timestamp: Date.now(),
+            recordIds: ["r1"],
+            zScore: 4.2,
+            durationMs: 5000,
+            baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "anomaly signal");
+    expect(mockedNotify).not.toHaveBeenCalled();
   });
 
   it("copy config and copy API key have independent Copied! timeouts", async () => {

@@ -167,3 +167,76 @@ describe("FileChangeList — row-recency cue (#6544)", () => {
     expect(newRows(container)).toEqual([]);
   });
 });
+
+describe("FileChangeList — stale state (#8069)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function scroll(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>(".overflow-y-auto");
+    if (!el) throw new Error("scroll container not found");
+    return el;
+  }
+
+  it("does not apply stale styling when isStale is absent", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+    );
+    const el = scroll(container);
+    expect(el.classList.contains("surface-stale")).toBe(false);
+    expect(el.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("applies surface-stale and aria-busy in the flat branch when isStale", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} isStale />
+    );
+    const el = scroll(container);
+    expect(el.classList.contains("surface-stale")).toBe(true);
+    expect(el.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("treats an explicit isStale={false} the same as an absent prop", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} isStale={false} />
+    );
+    const el = scroll(container);
+    expect(el.classList.contains("surface-stale")).toBe(false);
+    expect(el.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("applies surface-stale and aria-busy in the grouped branch when isStale", () => {
+    const { container } = render(
+      <FileChangeList
+        changes={[file("src/a.ts"), file("test/b.ts")]}
+        rootPath={ROOT}
+        groupByFolder
+        isStale
+      />
+    );
+    const el = scroll(container);
+    expect(el.classList.contains("surface-stale")).toBe(true);
+    expect(el.getAttribute("aria-busy")).toBe("true");
+    // Prove the grouped code path was entered, not the flat fallback.
+    expect(el.querySelectorAll(".font-mono").length).toBeGreaterThan(0);
+    // Exactly one container carries the stale class — never both branches.
+    expect(container.querySelectorAll(".surface-stale").length).toBe(1);
+  });
+
+  it("clears stale styling when isStale toggles back to false", () => {
+    const changes = [file("a.ts"), file("b.ts")];
+    const { container, rerender } = render(
+      <FileChangeList changes={changes} rootPath={ROOT} isStale />
+    );
+    expect(scroll(container).classList.contains("surface-stale")).toBe(true);
+
+    act(() => {
+      rerender(<FileChangeList changes={changes} rootPath={ROOT} isStale={false} />);
+    });
+
+    const el = scroll(container);
+    expect(el.classList.contains("surface-stale")).toBe(false);
+    expect(el.getAttribute("aria-busy")).toBeNull();
+  });
+});

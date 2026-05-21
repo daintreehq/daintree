@@ -20,6 +20,7 @@ import {
   useConflictedWorktrees,
   useWaitingTerminals,
   useBackgroundedTerminals,
+  useErrorTerminals,
   useWaitingTerminalIds,
   isTerminalVisible,
   isTerminalOrphaned,
@@ -42,6 +43,8 @@ function setupTerminals(
     agentState?: string;
     location?: string;
     lastStateChange?: number;
+    exitCode?: number;
+    hasPty?: boolean;
   }>
 ) {
   const state = {
@@ -67,6 +70,8 @@ function setupBoth(
     agentState?: string;
     location?: string;
     lastStateChange?: number;
+    exitCode?: number;
+    hasPty?: boolean;
   }>,
   worktrees?: Map<string, { worktreeId?: string }>
 ) {
@@ -441,6 +446,87 @@ describe("useBackgroundedTerminals", () => {
     const { result } = renderHook(() => useBackgroundedTerminals());
     expect(result.current).toHaveLength(1);
     expect(result.current[0]!.id).toBe("t1");
+  });
+});
+
+describe("useErrorTerminals", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+  });
+
+  it("returns terminals that exited with a non-zero exit code", () => {
+    setupBoth([
+      { id: "t-error", agentState: "exited", location: "grid", exitCode: 1 },
+      { id: "t-clean", agentState: "exited", location: "grid", exitCode: 0 },
+      { id: "t-running", agentState: "working", location: "grid" },
+      { id: "t-waiting", agentState: "waiting", location: "grid" },
+    ]);
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current.map((t) => t.id)).toEqual(["t-error"]);
+  });
+
+  it("excludes exited terminals without a numeric exitCode", () => {
+    setupBoth([
+      { id: "t-noexit", agentState: "exited", location: "grid" },
+      { id: "t-error", agentState: "exited", location: "grid", exitCode: 1 },
+    ]);
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]!.id).toBe("t-error");
+  });
+
+  it("excludes errored terminals in trash, background, or dock", () => {
+    setupBoth([
+      { id: "t-grid", agentState: "exited", location: "grid", exitCode: 1 },
+      { id: "t-trash", agentState: "exited", location: "trash", exitCode: 1 },
+      { id: "t-bg", agentState: "exited", location: "background", exitCode: 1 },
+      { id: "t-dock", agentState: "exited", location: "dock", exitCode: 1 },
+    ]);
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current.map((t) => t.id)).toEqual(["t-grid"]);
+  });
+
+  it("excludes terminals where hasPty is explicitly false", () => {
+    setupBoth([
+      { id: "t-ok", agentState: "exited", location: "grid", exitCode: 1 },
+      { id: "t-nopty", agentState: "exited", location: "grid", exitCode: 1, hasPty: false },
+    ]);
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]!.id).toBe("t-ok");
+  });
+
+  it("returns an empty array when no terminals match", () => {
+    setupBoth([{ id: "t1", agentState: "working", location: "grid" }]);
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current).toEqual([]);
+  });
+
+  it("excludes orphaned errored terminals when worktree IDs are known", () => {
+    const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t-live", agentState: "exited", location: "grid", exitCode: 1, worktreeId: "wt-1" },
+        {
+          id: "t-orphan",
+          agentState: "exited",
+          location: "grid",
+          exitCode: 1,
+          worktreeId: "wt-gone",
+        },
+      ],
+      worktrees
+    );
+
+    const { result } = renderHook(() => useErrorTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]!.id).toBe("t-live");
   });
 });
 

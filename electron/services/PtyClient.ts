@@ -657,7 +657,7 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "resize", id, cols, rows });
   }
 
-  kill(id: string, reason?: string): void {
+  kill(id: string, reason?: string, options?: { escalationDelayMs?: number }): void {
     getTrashedPidTracker().removeTrashed(id);
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
@@ -684,7 +684,7 @@ export class PtyClient extends EventEmitter {
     }
     // Always send the kill IPC. The host-side handler kills the terminal if
     // it exists and removes any persisted session state for the id.
-    this.send({ type: "kill", id, reason });
+    this.send({ type: "kill", id, reason, escalationDelayMs: options?.escalationDelayMs });
   }
 
   /** Check if a terminal exists (based on local tracking) */
@@ -709,8 +709,8 @@ export class PtyClient extends EventEmitter {
     return wasTracked;
   }
 
-  setActivityTier(id: string, tier: PtyHostActivityTier): void {
-    this.send({ type: "set-activity-tier", id, tier });
+  setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void {
+    this.send({ type: "set-activity-tier", id, tier, pollingIntervalMs });
   }
 
   setResourceMonitoring(enabled: boolean): void {
@@ -819,10 +819,13 @@ export class PtyClient extends EventEmitter {
     return promise.catch((error: unknown) => {
       // Sending a kill to a host that isn't there only mutates local bookkeeping.
       // Skip whenever the host is known to be gone — either because the broker
-      // clear told us (typed BrokerError), or because we notice it ourselves
-      // (null child or disposed client, e.g. restart pending, max restarts
-      // exhausted, or app quit arriving during the 5s timeout window).
-      if (error instanceof BrokerError || !this.lifecycle.child || this.isDisposed) {
+      // clear told us via a typed BrokerError (HOST_EXITED / APP_SHUTDOWN), or
+      // because we notice it ourselves (null child or disposed client, e.g.
+      // restart pending, max restarts exhausted, or app quit arriving during
+      // the 5s timeout window). TIMEOUT is excluded: a per-request timeout
+      // with a live host should still escalate to a forced kill.
+      const isHostGoneBrokerError = error instanceof BrokerError && error.code !== "TIMEOUT";
+      if (isHostGoneBrokerError || !this.lifecycle.child || this.isDisposed) {
         return null;
       }
       this.kill(id, "graceful-kill-timeout");

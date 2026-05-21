@@ -24,6 +24,10 @@ const {
   agentSettingsState,
   projectStoreState,
   preferencesState,
+  terminalInputState,
+  mockTerminalSubmit,
+  mockTerminalSendKey,
+  mockNotifyUserInput,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -95,6 +99,10 @@ const {
     currentProject: null as { id: string; path: string } | null,
   },
   preferencesState: { reduceAnimations: false },
+  terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
+  mockTerminalSubmit: vi.fn(),
+  mockTerminalSendKey: vi.fn(),
+  mockNotifyUserInput: vi.fn(),
 }));
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -115,6 +123,26 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
   XtermAdapter: () => <div data-testid="xterm-adapter" />,
 }));
 
+vi.mock("@/components/Terminal/HybridInputBar", () => ({
+  HybridInputBar: ({ terminalId }: { terminalId: string }) => (
+    <div data-testid="hybrid-input-bar" data-terminal-id={terminalId} />
+  ),
+}));
+
+vi.mock("@/clients", () => ({
+  terminalClient: {
+    submit: (...args: unknown[]) => mockTerminalSubmit(...args),
+    sendKey: (...args: unknown[]) => mockTerminalSendKey(...args),
+  },
+}));
+
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    focus: vi.fn(),
+    notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
+  },
+}));
+
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
     <div data-testid="missing-cli-gate" data-agent={agentId}>
@@ -125,9 +153,14 @@ vi.mock("@/components/Terminal/MissingCliGate", () => ({
   ),
 }));
 
-vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude"],
-}));
+vi.mock("@shared/config/agentIds", () => {
+  const ids = ["claude"];
+  return {
+    BUILT_IN_AGENT_IDS: ids,
+    isBuiltInAgentId: (value: unknown): value is "claude" =>
+      typeof value === "string" && ids.includes(value),
+  };
+});
 
 vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: {
@@ -140,7 +173,6 @@ vi.mock("@/config/agents", () => ({
 
 vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
-  AgentRoutingConfigSchema: { optional: () => undefined },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -196,6 +228,10 @@ vi.mock("@/store", () => {
     selector ? selector(worktreeSelectionState) : worktreeSelectionState;
   worktreeSelectionStore.getState = () => worktreeSelectionState;
 
+  const terminalInputStore = (selector?: (state: typeof terminalInputState) => unknown) =>
+    selector ? selector(terminalInputState) : terminalInputState;
+  terminalInputStore.getState = () => terminalInputState;
+
   return {
     usePanelStore: panelStore,
     useCliAvailabilityStore: cliStore,
@@ -203,6 +239,7 @@ vi.mock("@/store", () => {
     useProjectStore: projectStore,
     usePreferencesStore: preferencesStore,
     useWorktreeSelectionStore: worktreeSelectionStore,
+    useTerminalInputStore: terminalInputStore,
     getTerminalRefreshTier: () => 0,
   };
 });
@@ -287,6 +324,11 @@ function resetState() {
 
   projectStoreState.currentProject = null;
   preferencesState.reduceAnimations = false;
+  terminalInputState.hybridInputEnabled = true;
+  mockTerminalSubmit.mockReset();
+  mockTerminalSubmit.mockResolvedValue(undefined);
+  mockTerminalSendKey.mockReset();
+  mockNotifyUserInput.mockReset();
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -362,6 +404,12 @@ beforeEach(() => {
         mcpServer: {
           onTierNotPermitted: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          issueGrant: vi.fn().mockResolvedValue({
+            sessionId: "",
+            toolId: "",
+            ttlMs: 900_000,
+            expiresAt: Date.now() + 900_000,
+          }),
         },
         git: {
           snapshotGet: vi.fn().mockResolvedValue(null),

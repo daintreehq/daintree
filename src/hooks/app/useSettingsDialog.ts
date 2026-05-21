@@ -16,10 +16,35 @@ export function useSettingsDialog() {
   }, []);
 
   const handleOpenSettingsTab = useCallback((target: SettingsNavTarget) => {
-    const tab = isSettingsTab(target.tab) ? target.tab : "general";
+    // TODO(#8329): remove stale-ID normalization after 1 release
+    let normalized = target;
+    if (target.tab === "github") {
+      if (import.meta.env.DEV) {
+        console.warn(
+          "[useSettingsDialog] stale tab ID 'github' normalized to 'code-forge' — update the call site"
+        );
+      }
+      normalized = {
+        tab: "code-forge",
+        subtab: target.subtab ?? "github",
+        sectionId: target.sectionId,
+      };
+    } else if (target.tab === "forge") {
+      if (import.meta.env.DEV) {
+        console.warn(
+          "[useSettingsDialog] stale tab ID 'forge' normalized to 'code-forge' — update the call site"
+        );
+      }
+      normalized = {
+        tab: "code-forge",
+        subtab: target.subtab ?? "general",
+        sectionId: target.sectionId,
+      };
+    }
+    const tab = isSettingsTab(normalized.tab) ? normalized.tab : "general";
     setSettingsTab(tab);
-    setSettingsSubtab(target.subtab);
-    setSettingsSectionId(target.sectionId);
+    setSettingsSubtab(normalized.subtab);
+    setSettingsSectionId(normalized.sectionId);
     setIsSettingsOpen(true);
   }, []);
 

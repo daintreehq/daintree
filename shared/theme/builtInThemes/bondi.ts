@@ -109,7 +109,6 @@ export const theme: BuiltInThemeSource = {
   },
   extensions: {
     "dock-bg": "#F0F1F4",
-    "dock-shadow": "0 -1px 4px rgba(0,0,0,0.04)",
     "panel-grid-bg": "#FFFFFF",
     "pulse-before-bg": "#EDEFF2",
     "pulse-card-bg": "#FDFDFE",

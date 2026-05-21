@@ -4,7 +4,6 @@ import {
   Command,
   FileCode,
   GitBranch,
-  Github,
   LayoutGrid,
   Mic,
   PanelRight,
@@ -85,8 +84,8 @@ export interface ProjectSettingsTabSearchMeta {
 const importAgentSettings = () => import("./AgentSettings");
 const importTerminalSettingsTab = () => import("./TerminalSettingsTab");
 const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
-const importGitHubSettingsTab = () => import("./GitHubSettingsTab");
 const importTroubleshootingTab = () => import("./TroubleshootingTab");
+const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
 const importPortalSettingsTab = () => import("./PortalSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
@@ -105,7 +104,7 @@ const importProjectAutomationTab = () => import("@/components/Project/Automation
 const importProjectRecipesTab = () => import("@/components/Project/RecipesTab");
 const importProjectCommandsTab = () => import("./CommandOverridesTab");
 const importProjectNotificationsTab = () => import("@/components/Project/ProjectNotificationsTab");
-const importProjectGitHubTab = () => import("@/components/Project/GitHubTab");
+const importProjectCodeForgeTab = () => import("@/components/Project/CodeForgeTab");
 
 // ── Lazy components (module-level — React requires stable lazy() refs) ──
 
@@ -117,9 +116,6 @@ const LazyTerminalSettingsTab = lazy(() =>
 );
 const LazyTerminalAppearanceTab = lazy(() =>
   importTerminalAppearanceTab().then((m) => ({ default: m.TerminalAppearanceTab }))
-);
-const LazyGitHubSettingsTab = lazy(() =>
-  importGitHubSettingsTab().then((m) => ({ default: m.GitHubSettingsTab }))
 );
 const LazyTroubleshootingTab = lazy(() =>
   importTroubleshootingTab().then((m) => ({ default: m.TroubleshootingTab }))
@@ -141,6 +137,9 @@ const LazyToolbarSettingsTab = lazy(() =>
 );
 const LazyIntegrationsTab = lazy(() =>
   importIntegrationsTab().then((m) => ({ default: m.IntegrationsTab }))
+);
+const LazyCodeForgeSettingsTab = lazy(() =>
+  importCodeForgeSettingsTab().then((m) => ({ default: m.CodeForgeSettingsTab }))
 );
 const LazyVoiceInputSettingsTab = lazy(() =>
   importVoiceInputSettingsTab().then((m) => ({ default: m.VoiceInputSettingsTab }))
@@ -178,8 +177,8 @@ const LazyProjectCommandsTab = lazy(() =>
 const LazyProjectNotificationsTab = lazy(() =>
   importProjectNotificationsTab().then((m) => ({ default: m.ProjectNotificationsTab }))
 );
-const LazyProjectGitHubTab = lazy(() =>
-  importProjectGitHubTab().then((m) => ({ default: m.GitHubTab }))
+const LazyProjectCodeForgeTab = lazy(() =>
+  importProjectCodeForgeTab().then((m) => ({ default: m.CodeForgeTab }))
 );
 
 // ── Voice requiresEnabled gates (referenced repeatedly) ─────────────────
@@ -1026,24 +1025,79 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
-    id: "github",
+    id: "code-forge",
     scope: "global",
     group: "Integrations",
-    label: "GitHub",
-    headerTitle: "GitHub Integration",
-    icon: <Github className="w-4 h-4" />,
+    label: "Code Forge",
+    headerTitle: "Code Forge",
+    icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importGitHubSettingsTab,
-    LazyComponent: LazyGitHubSettingsTab,
-    searchNavDescription: "GitHub personal access token and authentication",
-    searchNavKeywords: ["integrations", "github", "token", "authentication"],
+    importer: importCodeForgeSettingsTab,
+    LazyComponent: LazyCodeForgeSettingsTab,
+    needsSubtabs: true,
+    searchNavDescription:
+      "Configure forge providers (GitHub, GitLab, Gitea, ...) and authentication",
+    searchNavKeywords: [
+      "forge",
+      "provider",
+      "code",
+      "github",
+      "gitlab",
+      "gitea",
+      "bitbucket",
+      "authentication",
+      "token",
+      "default",
+      "integrations",
+    ],
     sections: [
       {
         id: "github-token",
+        subtab: "github",
+        subtabLabel: "GitHub",
         section: "Personal access token",
         title: "GitHub personal access token",
         description: "Configure GitHub authentication token. Required scopes: repo, read:org",
         keywords: ["github", "token", "authentication", "auth", "PAT", "access", "scopes", "API"],
+      },
+      {
+        id: "forge-default-provider",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Default forge provider",
+        title: "Default forge provider",
+        description:
+          "Choose the forge provider used for newly opened projects when no per-project setting wins.",
+        keywords: [
+          "forge",
+          "provider",
+          "default",
+          "global",
+          "github",
+          "gitlab",
+          "gitea",
+          "auto-detect",
+          "hostname",
+        ],
+      },
+      {
+        id: "forge-active-project-routing",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Active project routing",
+        title: "Active project routing",
+        description:
+          "Inspect which forge provider each remote of the active project routes to and why.",
+        keywords: [
+          "forge",
+          "remote",
+          "routing",
+          "provider",
+          "match",
+          "hostname",
+          "override",
+          "active project",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -1417,7 +1471,6 @@ export const SETTINGS_REGISTRY = [
     importer: importProjectAutomationTab,
     LazyComponent: LazyProjectAutomationTab,
     needsProjectForm: true,
-    needsOnNavigateToTab: true,
   } satisfies LazySettingsTabEntry,
 
   {
@@ -1457,14 +1510,14 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
-    id: "project:github",
+    id: "project:code-forge",
     scope: "project",
     group: "Project",
-    label: "GitHub",
-    icon: <Github className="w-4 h-4" />,
+    label: "Code Forge",
+    icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
-    importer: importProjectGitHubTab,
-    LazyComponent: LazyProjectGitHubTab,
+    importer: importProjectCodeForgeTab,
+    LazyComponent: LazyProjectCodeForgeTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
 ] as const satisfies readonly AnySettingsTabEntry[];
@@ -1597,8 +1650,17 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   },
   "project:recipes": {
     tabLabel: "Recipes",
-    searchNavDescription: "Manage terminal recipes for the project",
-    searchNavKeywords: ["project", "recipes", "template", "terminal"],
+    searchNavDescription: "Manage terminal recipes and pin a default recipe for new worktrees",
+    searchNavKeywords: ["project", "recipes", "template", "terminal", "default", "worktree", "pin"],
+    sections: [
+      {
+        id: "project-default-recipe",
+        section: "Terminal Recipes",
+        title: "Default worktree recipe",
+        description: "Pin a recipe to run automatically when creating new worktrees",
+        keywords: ["default", "recipe", "worktree", "auto", "launch", "startup", "pin"],
+      },
+    ],
   },
   "project:commands": {
     tabLabel: "Commands",
@@ -1610,11 +1672,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     searchNavDescription: "Project-specific notification overrides",
     searchNavKeywords: ["project", "notifications", "alerts", "sounds", "overrides"],
   },
-  "project:github": {
-    tabLabel: "GitHub",
-    searchNavDescription: "Per-project GitHub remote configuration for issues, PRs, and pulse data",
+  "project:code-forge": {
+    tabLabel: "Code Forge",
+    searchNavDescription: "Per-project forge remote configuration for issues, PRs, and pulse data",
     searchNavKeywords: [
       "project",
+      "forge",
+      "code",
       "github",
       "remote",
       "origin",
@@ -1624,11 +1688,21 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     ],
     sections: [
       {
-        id: "project-github-remote",
-        section: "GitHub Remote",
-        title: "GitHub Remote",
-        description: "Select which git remote to use for GitHub integration",
-        keywords: ["github", "remote", "origin", "git", "repository", "fetch", "push"],
+        id: "project-code-forge-remote",
+        section: "Forge Remote",
+        title: "Forge Remote",
+        description: "Select which git remote to use for forge integration",
+        keywords: [
+          "forge",
+          "code",
+          "github",
+          "remote",
+          "origin",
+          "git",
+          "repository",
+          "fetch",
+          "push",
+        ],
       },
     ],
   },
@@ -1660,7 +1734,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
-  github: <Github className="w-5 h-5 text-text-secondary" />,
+  "code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
@@ -1686,7 +1760,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
   "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
-  "project:github": <Github className="w-5 h-5 text-text-secondary" />,
+  "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
 };
 
 export function scopeForTab(tab: SettingsTab): SettingsScope {

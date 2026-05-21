@@ -4,7 +4,7 @@
  * Tests the full Review Hub commit lifecycle:
  * - File list visibility with status badges
  * - Staging files (Changes → Staged)
- * - Commit message input and commit button enablement
+ * - Commit message input and commit button readiness
  * - Committing and post-commit clean state
  * - Diff mode toggle (working tree vs base branch)
  * - Hub close
@@ -22,6 +22,7 @@ import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
+const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 
 test.describe.serial("Core: Review Hub Workflow", () => {
   test.beforeAll(async () => {
@@ -105,7 +106,7 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     await expect(hub.locator(SEL.reviewHub.noUnstagedChanges)).toBeVisible({ timeout: T_SHORT });
   });
 
-  test("commit message input appears and commit button becomes enabled", async () => {
+  test("commit message input appears and commit button becomes actionable", async () => {
     const { window } = ctx;
 
     const hub = window.locator(SEL.reviewHub.container);
@@ -113,17 +114,20 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     // CommitPanel renders when totalChanges > 0 in working-tree mode
     const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
     await expect(textarea).toBeVisible({ timeout: T_MEDIUM });
+    await textarea.click();
+    await textarea.press(selectAllShortcut);
+    await textarea.press("Backspace");
+    await expect.poll(() => textarea.inputValue(), { timeout: T_SHORT }).toBe("");
 
-    // Commit button should be disabled before typing a message
+    // Blocked buttons stay focusable so their tooltip can explain what is missing.
     const commitBtn = hub.locator(SEL.reviewHub.commitButton(1));
     await expect(commitBtn).toBeVisible({ timeout: T_SHORT });
-    await expect(commitBtn).toBeDisabled({ timeout: T_SHORT });
+    await expect(commitBtn).toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
 
     // Type a commit message
     await textarea.fill("test: add uncommitted file");
 
-    // Commit button should now be enabled
-    await expect(commitBtn).toBeEnabled({ timeout: T_SHORT });
+    await expect(commitBtn).not.toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
   });
 
   test("committing clears file list and shows clean state", async () => {

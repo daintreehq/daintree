@@ -438,10 +438,9 @@ export function setupBrowserWindow(
       !input.alt;
     if (isTerminalFocusShortcut) {
       event.preventDefault();
-      appWebContents.send(
-        CHANNELS.MENU_ACTION,
-        input.shift ? "focus-previous-terminal" : "focus-next-terminal"
-      );
+      appWebContents.send(CHANNELS.MENU_ACTION, {
+        actionId: input.shift ? "terminal.focusPrevious" : "terminal.focusNext",
+      });
       return;
     }
 

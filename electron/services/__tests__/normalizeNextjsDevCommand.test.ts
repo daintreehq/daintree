@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeNextjsDevCommand } from "../DevPreviewCommandNormalizer.js";
+import { extractPort, normalizeNextjsDevCommand } from "../DevPreviewCommandNormalizer.js";
 
 const mockReadFile = vi.fn<(path: string, encoding: string) => Promise<string>>();
 
@@ -226,5 +226,137 @@ describe("normalizeNextjsDevCommand", () => {
         "npm run dev"
       );
     });
+  });
+});
+
+describe("extractPort", () => {
+  const CWD = "/project";
+
+  it("extracts --port flag with space", async () => {
+    expect(await extractPort("next dev --port 3001", CWD)).toBe(3001);
+  });
+
+  it("extracts --port flag with equals", async () => {
+    expect(await extractPort("next dev --port=3002", CWD)).toBe(3002);
+  });
+
+  it("extracts -p flag", async () => {
+    expect(await extractPort("vite -p 5174", CWD)).toBe(5174);
+  });
+
+  it("extracts PORT= env var", async () => {
+    expect(await extractPort("PORT=8080 node server.js", CWD)).toBe(8080);
+  });
+
+  it("extracts port from ${PORT:-N} shell variable form", async () => {
+    expect(await extractPort('next dev --port "${PORT:-4321}"', CWD)).toBe(4321);
+  });
+
+  it("extracts port from single-quoted ${PORT:-N}", async () => {
+    expect(await extractPort("next dev --port '${PORT:-3000}'", CWD)).toBe(3000);
+  });
+
+  it("returns null for shell control character &&", async () => {
+    expect(await extractPort("next dev && echo done", CWD)).toBeNull();
+  });
+
+  it("returns null for shell control character ;", async () => {
+    expect(await extractPort("next dev; echo ready", CWD)).toBeNull();
+  });
+
+  it("returns null for shell comment #", async () => {
+    expect(await extractPort("next dev # with port 3000", CWD)).toBeNull();
+  });
+
+  it("returns null for pipe |", async () => {
+    expect(await extractPort("next dev | tee log", CWD)).toBeNull();
+  });
+
+  it("returns Next.js default port 3000", async () => {
+    expect(await extractPort("next dev", CWD)).toBe(3000);
+  });
+
+  it("returns Vite default port 5173", async () => {
+    expect(await extractPort("vite", CWD)).toBe(5173);
+  });
+
+  it("returns SvelteKit default port 5173", async () => {
+    expect(await extractPort("svelte-kit dev", CWD)).toBe(5173);
+  });
+
+  it("returns Astro default port 4321", async () => {
+    expect(await extractPort("astro dev", CWD)).toBe(4321);
+  });
+
+  it("returns Rails default port 3000", async () => {
+    expect(await extractPort("rails server", CWD)).toBe(3000);
+  });
+
+  it("returns Django default port 8000", async () => {
+    expect(await extractPort("python manage.py runserver", CWD)).toBe(8000);
+  });
+
+  it("returns Phoenix default port 4000", async () => {
+    expect(await extractPort("mix phx.server", CWD)).toBe(4000);
+  });
+
+  it("returns Laravel default port 8000", async () => {
+    expect(await extractPort("php artisan serve", CWD)).toBe(8000);
+  });
+
+  it("resolves pkg manager command through package.json for port extraction", async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ scripts: { dev: "next dev -p 3001" } }));
+    expect(await extractPort("npm run dev", CWD)).toBe(3001);
+  });
+
+  it("bails out when resolved pkg script has shell control", async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ scripts: { dev: "next dev && echo done" } }));
+    expect(await extractPort("npm run dev", CWD)).toBeNull();
+  });
+
+  it("returns framework default when pkg script has no explicit port", async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ scripts: { dev: "astro dev" } }));
+    expect(await extractPort("npm run dev", CWD)).toBe(4321);
+  });
+
+  it("returns null when no match and no framework default", async () => {
+    expect(await extractPort("echo hello", CWD)).toBeNull();
+  });
+
+  it("returns null when no package.json exists for pkg manager command", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    expect(await extractPort("npm run dev", CWD)).toBeNull();
+  });
+
+  it("returns null for port 0 (invalid)", async () => {
+    expect(await extractPort("next dev --port 0", CWD)).toBeNull();
+  });
+
+  it("returns null for port 65536 (invalid)", async () => {
+    expect(await extractPort("next dev --port 65536", CWD)).toBeNull();
+  });
+
+  it("returns Remix default port 3000", async () => {
+    expect(await extractPort("remix dev", CWD)).toBe(3000);
+  });
+
+  it("returns null when Remix command is not a dev invocation", async () => {
+    expect(await extractPort("remix routes", CWD)).toBeNull();
+  });
+
+  it("returns null for SUPPORT=8080 (PORT= substring in longer env var)", async () => {
+    expect(await extractPort("SUPPORT=8080 node server.js", CWD)).toBeNull();
+  });
+
+  it("returns null for --port 3000abc (partial digit extraction)", async () => {
+    expect(await extractPort("next dev --port 3000abc", CWD)).toBeNull();
+  });
+
+  it("returns null for --port 3000.5 (partial float extraction)", async () => {
+    expect(await extractPort("next dev --port 3000.5", CWD)).toBeNull();
+  });
+
+  it("returns null for --port with non-numeric value", async () => {
+    expect(await extractPort("next dev --port abc", CWD)).toBeNull();
   });
 });

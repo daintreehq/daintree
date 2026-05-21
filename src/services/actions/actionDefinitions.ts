@@ -4,6 +4,7 @@ import { registerAgentActions } from "./definitions/agentActions";
 import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
 import { registerBrowserActions } from "./definitions/browserActions";
+import { registerDevPreviewActions } from "./definitions/devPreviewActions";
 import { registerDevServerActions } from "./definitions/devServerActions";
 import { registerEnvActions } from "./definitions/envActions";
 import { registerGithubActions } from "./definitions/githubActions";
@@ -25,8 +26,10 @@ import { registerTerminalInputActions } from "./definitions/terminalInputActions
 import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeActions";
 import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
+import { registerWatchdogActions } from "./definitions/watchdogActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
+import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
@@ -49,12 +52,14 @@ export function createActionDefinitions(
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);
   registerWorktreeSessionActions(actions, callbacks);
+  registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
   registerEnvActions(actions, callbacks);
   registerGithubActions(actions, callbacks);
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);
+  registerWatchdogActions(actions);
   registerLogActions(actions, callbacks);
   registerNavigationActions(actions, callbacks);
   registerAppActions(actions, callbacks);
@@ -62,6 +67,7 @@ export function createActionDefinitions(
   registerBrowserActions(actions, callbacks);
   registerIntrospectionActions(actions, callbacks);
   registerDevServerActions(actions, callbacks);
+  registerDevPreviewActions(actions, callbacks);
   registerWorkflowActions(actions, callbacks);
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);

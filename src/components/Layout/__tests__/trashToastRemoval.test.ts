@@ -26,13 +26,11 @@ describe("Trash Toast Removal - Issue #3113", () => {
     expect(content).toContain(".animate-trash-pulse");
   });
 
-  it("should include animate-trash-pulse in prefers-reduced-motion override", async () => {
+  it("should include animate-trash-pulse in the reduce-motion variant override", async () => {
     const filePath = path.resolve(__dirname, "../../../index.css");
     const content = await fs.readFile(filePath, "utf-8");
-    const reducedMotionMatch = content.match(
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([^}]*\{[^}]*\})*[^}]*/
+    expect(content).toMatch(
+      /@variant\s+reduce-motion\s*\{[\s\S]*?\.animate-trash-pulse[\s\S]*?animation:\s*none/
     );
-    expect(reducedMotionMatch).not.toBeNull();
-    expect(reducedMotionMatch![0]).toContain("animate-trash-pulse");
   });
 });

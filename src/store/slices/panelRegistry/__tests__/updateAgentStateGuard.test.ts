@@ -119,6 +119,165 @@ describe("updateAgentState store action (#3217)", () => {
 
     expect(usePanelStore.getState().panelsById).toBe(before);
   });
+
+  // #8592: same-state re-delivery must not bump `lastStateChange` and must
+  // preserve `panelsById` reference (so subscribers don't fire).
+  it("preserves panelsById ref and lastStateChange when re-delivered with same state", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "working" as const,
+      lastStateChange: 12345,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+    const terminalBefore = before[seededTerminal.id];
+
+    usePanelStore.getState().updateAgentState(seededTerminal.id, "working");
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).toBe(before);
+    expect(after[seededTerminal.id]).toBe(terminalBefore);
+    expect(after[seededTerminal.id]!.lastStateChange).toBe(12345);
+  });
+
+  it("preserves panelsById ref when re-delivered waiting with the same waitingReason", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "waiting" as const,
+      waitingReason: "prompt" as const,
+      lastStateChange: 9999,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+
+    usePanelStore
+      .getState()
+      .updateAgentState(
+        seededTerminal.id,
+        "waiting",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "prompt"
+      );
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).toBe(before);
+    expect(after[seededTerminal.id]!.lastStateChange).toBe(9999);
+  });
+
+  it("writes when waiting is re-delivered with a different waitingReason", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "waiting" as const,
+      waitingReason: "prompt" as const,
+      lastStateChange: 100,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+
+    usePanelStore
+      .getState()
+      .updateAgentState(
+        seededTerminal.id,
+        "waiting",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "question"
+      );
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).not.toBe(before);
+    expect(after[seededTerminal.id]!.waitingReason).toBe("question");
+    expect(after[seededTerminal.id]!.lastStateChange).not.toBe(100);
+  });
+
+  // #8592: TerminalAgentStateController.onEnterPressed() writes the optimistic
+  // `agentState:"working"` with no trigger, and the backend confirmation arrives
+  // with `trigger:"input"`. The guard must let that trigger transition through,
+  // otherwise HybridInputBar never sees `agentHasLifecycleEvent === true`.
+  it("writes through a backend trigger confirmation after an optimistic same-state write", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "working" as const,
+      stateChangeTrigger: undefined,
+      lastStateChange: 200,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+
+    usePanelStore
+      .getState()
+      .updateAgentState(seededTerminal.id, "working", undefined, 1500, "input", 0.9);
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).not.toBe(before);
+    expect(after[seededTerminal.id]!.stateChangeTrigger).toBe("input");
+    expect(after[seededTerminal.id]!.lastStateChange).toBe(1500);
+  });
+
+  it("preserves panelsById ref when re-delivered same state + same trigger", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "working" as const,
+      stateChangeTrigger: "input" as const,
+      lastStateChange: 300,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+
+    usePanelStore
+      .getState()
+      .updateAgentState(seededTerminal.id, "working", undefined, undefined, "input", 0.9);
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).toBe(before);
+    expect(after[seededTerminal.id]!.lastStateChange).toBe(300);
+  });
+
+  it("writes when the error message differs even though agentState is unchanged", () => {
+    const seededTerminal = {
+      ...baseTerminal,
+      agentState: "exited" as const,
+      error: "ECONNRESET",
+      lastStateChange: 500,
+    };
+    usePanelStore.setState({
+      panelsById: { [seededTerminal.id]: seededTerminal },
+      panelIds: [seededTerminal.id],
+    });
+
+    const before = usePanelStore.getState().panelsById;
+
+    usePanelStore.getState().updateAgentState(seededTerminal.id, "exited", "EPIPE");
+
+    const after = usePanelStore.getState().panelsById;
+    expect(after).not.toBe(before);
+    expect(after[seededTerminal.id]!.error).toBe("EPIPE");
+  });
 });
 
 describe("setupTerminalStoreListeners directing guard (#3217)", () => {

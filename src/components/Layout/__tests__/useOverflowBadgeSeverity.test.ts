@@ -5,9 +5,11 @@
  * The toolbar's `…` overflow trigger needs a single dot whose color reflects
  * the most-severe hidden state, plus left/right independence. These tests
  * mock every store the hook reads and assert the priority fold:
- *   critical (errorCount + problems) > warning (agent waiting/directing,
- *   active voice recording) > info (notification unread, agent-tray
- *   discovery) > null.
+ *   critical (errorCount + problems) > warning (agent waiting/directing)
+ *   > info (notification unread, agent-tray discovery) > null.
+ *
+ * voice-recording is pinned out of overflow (issue #8158) so it never
+ * appears in `overflowIds` — no branch in the hook handles it.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
@@ -118,11 +120,6 @@ describe("useOverflowBadgeSeverity", () => {
   it("returns null when problems is overflowed but errorCount is 0", () => {
     const { result } = renderHook(() => useOverflowBadgeSeverity(["problems"], 0));
     expect(result.current).toBeNull();
-  });
-
-  it("returns warning when voice-recording is overflowed (its presence implies active recording)", () => {
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["voice-recording"], 0));
-    expect(result.current).toBe("warning");
   });
 
   it("returns warning when an overflowed agent has a waiting panel", () => {
@@ -266,9 +263,13 @@ describe("useOverflowBadgeSeverity", () => {
   });
 
   it("prefers warning over info when both are present", () => {
+    mockPanelsById = {
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
+    };
+    mockPanelIds = ["p-1"];
     mockNotificationUnreadCount = 2;
     const { result } = renderHook(() =>
-      useOverflowBadgeSeverity(["voice-recording", "notification-center"], 0)
+      useOverflowBadgeSeverity(["claude", "notification-center"], 0)
     );
     expect(result.current).toBe("warning");
   });

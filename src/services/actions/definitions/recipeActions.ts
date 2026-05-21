@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, RecipeSummarySchema } from "./schemas";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () =>
@@ -17,6 +17,10 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      resultSchema: z.object({
+        recipes: z.array(RecipeSummarySchema),
+        isLoading: z.boolean(),
+      }),
       run: async (args) => {
         const worktreeId = args?.worktreeId;
         const recipeState = useRecipeStore.getState();
@@ -68,7 +72,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
 
         const recipeContext = {
           issueNumber: worktree?.issueNumber,
-          prNumber: worktree?.prNumber,
+          prNumber: worktree?.linked?.pr?.ref.number,
           worktreePath,
           branchName: worktree?.branch,
         };
@@ -140,6 +144,24 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         const store = useRecipeStore.getState();
         if (!store.currentProjectId) throw new Error("No project open");
         await store.saveToRepo(recipeId, deleteOriginal);
+      },
+    })
+  );
+
+  actions.set("recipe.delete", () =>
+    defineAction({
+      id: "recipe.delete",
+      title: "Delete Recipe",
+      description: "Delete a recipe permanently",
+      category: "recipes",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      dangerRationale:
+        "Permanently deletes a recipe. The recipe configuration cannot be recovered.",
+      argsSchema: z.object({ recipeId: z.string() }),
+      run: async ({ recipeId }) => {
+        await useRecipeStore.getState().deleteRecipe(recipeId);
       },
     })
   );

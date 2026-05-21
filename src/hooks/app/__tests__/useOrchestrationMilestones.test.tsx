@@ -178,8 +178,12 @@ describe("useOrchestrationMilestones", () => {
     renderHook(() => useOrchestrationMilestones(true));
     await vi.advanceTimersByTimeAsync(0);
 
-    const prev = { worktrees: new Map([["wt1", { prState: "open" }]]) };
-    const next = { worktrees: new Map([["wt1", { prState: "merged" }]]) };
+    const prev = {
+      worktrees: new Map([["wt1", { prState: "open", linked: { pr: { state: "open" } } }]]),
+    };
+    const next = {
+      worktrees: new Map([["wt1", { prState: "merged", linked: { pr: { state: "merged" } } }]]),
+    };
     for (const sub of worktreeSubscribers) {
       sub(next, prev);
     }

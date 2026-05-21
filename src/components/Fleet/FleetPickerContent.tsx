@@ -31,10 +31,15 @@ export interface FleetPickerContentProps {
 }
 
 /**
- * Layer-agnostic picker UI: search input + regex toggle + group-by-worktree
- * listbox. Hosts in either `AppPaletteDialog` (centered cold-start) or a
- * Radix `PopoverContent` (chip-anchored add mode). Selection logic lives in
+ * Layer-agnostic picker UI: search input + group-by-worktree listbox. Hosts
+ * in either `AppPaletteDialog` (centered cold-start) or a Radix
+ * `PopoverContent` (chip-anchored add mode). Selection logic lives in
  * `useFleetPicker`; this component is purely presentational.
+ *
+ * Search is fuzzy across terminal title, worktree name, branch, and path —
+ * `useFleetPicker` builds a Fuse index over those fields. Semantic-buffer
+ * matches (terminals whose scrollback contains the query) always pass
+ * through alongside fuzzy hits.
  *
  * Keyboard model: search input is focused for typing (Space types space,
  * Cmd+A selects query text). Tab moves focus into the listbox; once there,
@@ -50,9 +55,6 @@ export function FleetPickerContent({
   const {
     query,
     setQuery,
-    isRegexMode,
-    toggleRegexMode,
-    regexError,
     selectedIds,
     focusedId,
     eligibleTerminals,
@@ -105,50 +107,16 @@ export function FleetPickerContent({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={
-              isRegexMode
-                ? "Search terminals (regex)"
-                : "Search terminals, worktrees, or recent output"
-            }
+            placeholder="Search terminals, worktrees, branches, or recent output"
             aria-label="Search terminals"
-            aria-invalid={regexError !== null}
             className={cn(
-              "w-full rounded border bg-daintree-bg pl-8 pr-12 py-1.5 text-[13px] text-daintree-text",
+              "w-full rounded border border-daintree-border bg-daintree-bg pl-8 pr-3 py-1.5 text-[13px] text-daintree-text",
               "placeholder:text-daintree-text/40",
-              regexError !== null ? "border-status-error" : "border-daintree-border",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
             )}
             data-testid={`${testIdPrefix}-search`}
           />
-          <button
-            type="button"
-            onClick={toggleRegexMode}
-            aria-pressed={isRegexMode}
-            aria-label={
-              isRegexMode ? "Switch to substring search" : "Switch to regular expression search"
-            }
-            title={isRegexMode ? "Regex (click for substring)" : "Substring (click for regex)"}
-            data-testid={`${testIdPrefix}-regex-toggle`}
-            className={cn(
-              "absolute right-1.5 top-1/2 -translate-y-1/2 h-6 px-1.5 rounded text-[11px] font-mono tabular-nums",
-              "transition-colors",
-              isRegexMode
-                ? "bg-overlay-subtle text-daintree-text"
-                : "text-daintree-text/55 hover:text-daintree-text hover:bg-tint/[0.08]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-            )}
-          >
-            {isRegexMode ? ".*" : "Aa"}
-          </button>
         </div>
-        {regexError !== null && (
-          <p
-            className="mt-1 text-[11px] text-status-error"
-            data-testid={`${testIdPrefix}-regex-error`}
-          >
-            Invalid regular expression
-          </p>
-        )}
       </div>
 
       <div

@@ -12,6 +12,12 @@ import {
   MonitorPlay,
   Ellipsis,
   GitBranch,
+  Pin,
+  PinOff,
+  Clipboard,
+  Square,
+  Unplug,
+  X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Folders, McpServerIcon } from "@/components/icons";
@@ -31,16 +37,34 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { middleTruncate } from "@/utils/textParsing";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import {
+  useAriaKeyshortcuts,
+  useDohertyGate,
+  useKeybindingDisplay,
+  useShortcutHintHover,
+} from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type {
+  ToolbarButtonId,
+  AnyToolbarButtonId,
+  PluginToolbarButtonId,
+} from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -69,15 +93,19 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
-// voice-recording has no actionable overflow item — it's a persistent
-// indicator that only appears while recording is already active. Surface the
-// label via tooltip text only; suppress from the dropdown list itself.
-const OVERFLOW_DROPDOWN_SKIP: ReadonlySet<string> = new Set(["voice-recording"]);
-
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
 const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "github-stats"]);
+
+// Hardware-privacy indicators stay out of the overflow dropdown while their
+// signal is active — collapsing them under `…` would hide the only visual
+// cue that the host is recording. Voice recording joins this set only when
+// the user is actively recording (see `pinnedRightIds` derivation below);
+// future mic/camera/screen-share indicators that follow the same principle
+// should be added here.
+const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
+const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 // How long the copy-tree button shows the green "context copied" feedback
 // before reverting to its idle state. Long enough to register the success,
@@ -108,44 +136,53 @@ export function PluginToolbarButton({
   config,
   "data-toolbar-item": dataToolbarItem,
 }: {
-  pluginId: string;
+  pluginId: PluginToolbarButtonId;
   config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
   "data-toolbar-item"?: string;
 }) {
   const hover = useShortcutHintHover(config.actionId as string);
+  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          {...hover}
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={() => {
-            void actionService.dispatch(
-              config.actionId as Parameters<typeof actionService.dispatch>[0],
-              undefined,
-              { source: "user" }
-            );
-          }}
-          className={toolbarIconButtonClass}
-          aria-label={config?.label ?? pluginId}
-        >
-          <McpServerIcon />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-    </Tooltip>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              {...hover}
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={() => {
+                void actionService.dispatch(
+                  config.actionId as Parameters<typeof actionService.dispatch>[0],
+                  undefined,
+                  { source: "user" }
+                );
+              }}
+              className={toolbarIconButtonClass}
+              aria-label={config?.label ?? pluginId}
+            >
+              <McpServerIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+        </Tooltip>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        <ContextMenuItem onSelect={() => toggleButtonVisibility(pluginId, "right")}>
+          <Unplug className="mr-2 h-3.5 w-3.5" />
+          Unpin from Toolbar
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
-// Adapter view over the unified `TOOLBAR_BUTTON_METADATA` registry. Skips
-// entries that should never render as overflow menu items (see
-// `OVERFLOW_DROPDOWN_SKIP`) — those are still surfaced in tooltip text.
+// Adapter view over the unified `TOOLBAR_BUTTON_METADATA` registry.
 const overflowMenuMetaInit: Record<string, OverflowMenuMeta> = {};
 for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
-  if (!meta || OVERFLOW_DROPDOWN_SKIP.has(id)) continue;
+  if (!meta) continue;
   overflowMenuMetaInit[id] = { label: meta.label, icon: meta.icon };
 }
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> =
@@ -186,6 +223,7 @@ export function Toolbar({
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
+  const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
 
   useEffect(() => {
     loadProjects();
@@ -202,6 +240,9 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
+  const toggleButtonVisibility = useToolbarPreferencesStore(
+    (state) => state.toggleButtonVisibility
+  );
   // Live subscription so pin/unpin toggles from the AgentTrayButton immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
@@ -212,6 +253,7 @@ export function Toolbar({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
+  const showCopyingSpinner = useDohertyGate(isCopyingTree);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -227,6 +269,12 @@ export function Toolbar({
   const leftGroupRef = useRef<HTMLDivElement>(null);
   const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
+  // Tracks the last toolbar item that received focus. Read in the
+  // layout-effect tab-stop sync to detect when that item has been evicted
+  // (moved into overflow or unmounted) — in that case the browser drops
+  // focus to document.body, and we redirect it to the overflow trigger or
+  // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
+  const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const githubStatsRef = useRef<GitHubStatsHandle>(null);
   // Set in onPointerDownOutside, read in onCloseAutoFocus on the overflow
   // dropdown. Suppresses focus restoration for pointer dismissals so the
@@ -260,6 +308,13 @@ export function Toolbar({
   const handleCloseProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.removeProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
+  const handleLocateProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.locateProject(projectId);
     },
     [projectSwitcher]
   );
@@ -325,8 +380,17 @@ export function Toolbar({
     () =>
       toolbarRef.current
         ? Array.from(
-            toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not(:disabled)")
-          ).filter((el) => el.offsetParent !== null)
+            toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not([disabled])")
+          ).filter(
+            // Overflow-hidden buttons use `invisible absolute` Tailwind
+            // classes plus aria-hidden="true" on their wrapper. visibility:
+            // hidden alone does not null offsetParent, so the aria-hidden
+            // ancestor check is the canonical "this item is overflow-hidden,
+            // skip it" signal — without it, evicted items stay in the list,
+            // get tabIndex assigned, and the overflow focus redirect can
+            // never fire.
+            (el) => el.offsetParent !== null && el.closest('[aria-hidden="true"]') === null
+          )
         : [],
     []
   );
@@ -342,6 +406,26 @@ export function Toolbar({
     const clamped = Math.min(activeToolbarIndexRef.current, items.length - 1);
     activeToolbarIndexRef.current = clamped;
     syncToolbarTabStops(items, clamped);
+
+    const prevFocused = prevFocusedToolbarItemRef.current;
+    if (prevFocused && !items.includes(prevFocused)) {
+      // Clear the ref unconditionally on eviction. If the user has since
+      // moved focus into a Radix portal (activeElement !== body), the
+      // redirect below is skipped — but the ref must still be cleared so
+      // a later unrelated re-render doesn't trigger a phantom redirect.
+      prevFocusedToolbarItemRef.current = null;
+      if (document.activeElement === document.body) {
+        // Redirect to the overflow trigger on the SAME side as the
+        // evicted item; falling back to the other side's trigger would
+        // pull focus across the toolbar to the wrong group.
+        const side = leftGroupRef.current?.contains(prevFocused) ? "left" : "right";
+        const sideTrigger = toolbarRef.current?.querySelector<HTMLElement>(
+          `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"]`
+        );
+        const redirect = sideTrigger && items.includes(sideTrigger) ? sideTrigger : items[clamped];
+        redirect?.focus();
+      }
+    }
   });
 
   const handleToolbarFocusCapture = useCallback(
@@ -351,6 +435,7 @@ export function Toolbar({
       const idx = items.indexOf(target);
       if (idx !== -1) {
         activeToolbarIndexRef.current = idx;
+        prevFocusedToolbarItemRef.current = target;
         syncToolbarTabStops(items, idx);
       }
     },
@@ -359,6 +444,14 @@ export function Toolbar({
 
   const handleToolbarKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
+      // React synthetic events bubble through the React tree, so keydowns
+      // inside portaled children (Radix DropdownMenu/ContextMenu content
+      // rendered in document.body) still reach this handler. The DOM
+      // containment check excludes those — portal content is not a DOM
+      // descendant of the toolbar — so Arrow keys inside an open menu can
+      // navigate the menu instead of being stolen by toolbar roving focus.
+      if (!toolbarRef.current?.contains(e.target as Node)) return;
+
       if (e.metaKey || e.altKey || e.ctrlKey) return;
 
       const items = getToolbarItems();
@@ -409,6 +502,7 @@ export function Toolbar({
                 variant="ghost"
                 size="icon"
                 data-toolbar-item=""
+                data-sidebar-toggle=""
                 onClick={onToggleFocusMode}
                 className={toolbarIconButtonClass}
                 aria-label="Toggle Sidebar"
@@ -480,34 +574,47 @@ export function Toolbar({
       "dev-server": {
         render: () =>
           currentProject ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  {...devServerHintHover}
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() =>
-                    actionService.dispatch("devServer.start", undefined, { source: "user" })
-                  }
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Dev Preview"
-                >
-                  <MonitorPlay />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipContent("Open Dev Preview", devServerShortcut)}
-              </TooltipContent>
-            </Tooltip>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      {...devServerHintHover}
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={() =>
+                        actionService.dispatch("devServer.start", undefined, { source: "user" })
+                      }
+                      className={toolbarIconButtonClass}
+                      aria-label="Open Dev Preview"
+                    >
+                      <MonitorPlay />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {createTooltipContent("Open Dev Preview", devServerShortcut)}
+                  </TooltipContent>
+                </Tooltip>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ContextMenuItem onSelect={() => toggleButtonVisibility("dev-server", "left")}>
+                  <Unplug className="mr-2 h-3.5 w-3.5" />
+                  Unpin from Toolbar
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           ) : (
             <DevServerPlaceholder />
           ),
         isAvailable: true,
       },
       "voice-recording": {
+        // Slot is always available so the right-aligned items keep a stable
+        // footprint when a session starts/stops. The button itself returns
+        // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
-        isAvailable: hasActiveVoiceRecording,
+        isAvailable: true,
       },
       "github-stats": {
         render: () =>
@@ -531,44 +638,58 @@ export function Toolbar({
       },
       "copy-tree": {
         render: () => (
-          <Tooltip open={treeCopied || undefined}>
-            <TooltipTrigger asChild>
-              <Button
-                {...copyTreeHintHover}
-                variant="ghost"
-                size="icon"
-                data-toolbar-item=""
-                onClick={handleCopyTreeClick}
-                disabled={isCopyingTree || !activeWorktree}
-                className={cn(
-                  "toolbar-icon-button relative",
-                  treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
-                  isCopyingTree && "cursor-wait opacity-70",
-                  !activeWorktree && "opacity-50"
-                )}
-                aria-label={
-                  isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
-                }
-                aria-keyshortcuts={copyTreeAriaShortcut}
-              >
-                {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
-                {!treeCopied && !isCopyingTree && (
-                  <ShortcutRevealChip actionId="worktree.copyTree" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="font-medium">
-              {isCopyingTree ? (
-                "Copying…"
-              ) : treeCopied ? (
-                <span role="status" aria-live="polite">
-                  {copyFeedback}
-                </span>
-              ) : (
-                createTooltipContent("Copy Context", copyTreeShortcut)
-              )}
-            </TooltipContent>
-          </Tooltip>
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <Tooltip open={treeCopied || undefined}>
+                <TooltipTrigger asChild>
+                  <Button
+                    {...copyTreeHintHover}
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item=""
+                    onClick={handleCopyTreeClick}
+                    aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                    className={cn(
+                      "toolbar-icon-button relative",
+                      treeCopied
+                        ? "text-status-success bg-status-success/10"
+                        : "text-daintree-text",
+                      isCopyingTree && "cursor-wait opacity-70",
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                    )}
+                    aria-label={
+                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy Context"
+                    }
+                    aria-keyshortcuts={copyTreeAriaShortcut}
+                  >
+                    {showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
+                    {!treeCopied && !isCopyingTree && (
+                      <ShortcutRevealChip actionId="worktree.copyTree" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="font-medium">
+                  {isCopyingTree ? (
+                    "Copying…"
+                  ) : treeCopied ? (
+                    <span role="status" aria-live="polite">
+                      {copyFeedback}
+                    </span>
+                  ) : !activeWorktree ? (
+                    "Open a worktree first"
+                  ) : (
+                    createTooltipContent("Copy Context", copyTreeShortcut)
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+              <ContextMenuItem onSelect={() => toggleButtonVisibility("copy-tree", "right")}>
+                <Unplug className="mr-2 h-3.5 w-3.5" />
+                Unpin from Toolbar
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         ),
         isAvailable: true,
       },
@@ -588,11 +709,15 @@ export function Toolbar({
           <ToolbarProblemsButton
             key="problems"
             errorCount={errorCount}
+            watcherDegraded={watcherDegraded}
             onToggleProblems={onToggleProblems}
             data-toolbar-item=""
           />
         ),
-        isAvailable: showDeveloperTools,
+        // Auto-surface the Problems button when the watcher is degraded so
+        // the persistent Tier-1 indicator is visible even for users who
+        // haven't enabled developer tools (the default).
+        isAvailable: showDeveloperTools || watcherDegraded,
       },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
@@ -629,10 +754,10 @@ export function Toolbar({
       copyTreeShortcut,
       copyTreeAriaShortcut,
       copyTreeHintHover,
-      hasActiveVoiceRecording,
       currentProject,
       handleCopyTreeClick,
       isCopyingTree,
+      showCopyingSpinner,
       activeWorktree,
       treeCopied,
       copyFeedback,
@@ -640,12 +765,14 @@ export function Toolbar({
       onPreloadSettings,
       onToggleProblems,
       errorCount,
+      watcherDegraded,
       showDeveloperTools,
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
       devServerShortcut,
       devServerHintHover,
+      toggleButtonVisibility,
     ]
   );
 
@@ -689,15 +816,43 @@ export function Toolbar({
     [effectiveRightButtons, buttonRegistry]
   );
 
+  // Pin the voice-recording indicator out of overflow while a recording is
+  // active so the user never loses sight of the live mic signal. Applies to
+  // whichever side the user has placed the button — overflow honors the
+  // pin regardless of left/right placement. The set reference is stabilized
+  // so the overflow hook's recalculate callback doesn't re-fire on every
+  // render.
+  const pinnedIds = hasActiveVoiceRecording ? VOICE_RECORDING_PINNED : NO_PINNED_IDS;
+
   const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
     leftGroupRef,
     rightGroupRef,
     availableLeftIds,
-    availableRightIds
+    availableRightIds,
+    pinnedIds
   );
 
-  const leftOverflowSeverity = useOverflowBadgeSeverity(leftOverflow, errorCount);
-  const rightOverflowSeverity = useOverflowBadgeSeverity(rightOverflow, errorCount);
+  // Voice recording reserves layout via an always-available slot but should
+  // not pollute the overflow badge or dropdown when no session is active —
+  // an inactive placeholder pushed into overflow would otherwise count as a
+  // hidden item and trigger the warning severity in useOverflowBadgeSeverity.
+  const visibleLeftOverflow = useMemo(
+    () =>
+      hasActiveVoiceRecording
+        ? leftOverflow
+        : leftOverflow.filter((id) => id !== "voice-recording"),
+    [leftOverflow, hasActiveVoiceRecording]
+  );
+  const visibleRightOverflow = useMemo(
+    () =>
+      hasActiveVoiceRecording
+        ? rightOverflow
+        : rightOverflow.filter((id) => id !== "voice-recording"),
+    [rightOverflow, hasActiveVoiceRecording]
+  );
+
+  const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
+  const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
 
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
@@ -850,22 +1005,20 @@ export function Toolbar({
     severity: OverflowBadgeSeverity
   ) => {
     if (overflowIds.length === 0) return null;
-    // voice-recording is intentionally absent from OVERFLOW_MENU_META — it
-    // doesn't render a dropdown menu item and has no actionable target while
-    // already active. Surface it in the tooltip/aria-label only so the
-    // count and the named list stay in sync.
-    const itemLabels = overflowIds
-      .map((id) => {
-        if (id === "voice-recording") return "Voice recording";
-        return OVERFLOW_MENU_META[id]?.label ?? pluginOverflowMeta[id]?.label;
-      })
-      .filter((label): label is string => Boolean(label));
-    const tooltipText =
-      itemLabels.length > 0
-        ? `${overflowIds.length} more — ${itemLabels.join(", ")}`
-        : `${overflowIds.length} more toolbar items`;
-    const ariaLabel =
-      itemLabels.length > 0 ? tooltipText : `${overflowIds.length} more toolbar items`;
+    // Keep the accessible name stable and terse: a comma-enumerated list
+    // re-announces the full set on every focus pass and goes stale as
+    // resize-driven overflow changes. Surface only the purpose plus a
+    // count, escalating the noun to "problem(s)" when severity is
+    // actionable (critical/warning) so screen-reader users still learn
+    // there's something to act on without the list churn.
+    const n = overflowIds.length;
+    const hasProblem = severity === "critical" || severity === "warning";
+    const tooltipText = hasProblem
+      ? `More — ${n} ${n === 1 ? "problem" : "problems"}`
+      : `More — ${n} ${n === 1 ? "item" : "items"}`;
+    const ariaLabel = hasProblem
+      ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
+      : `More toolbar items — ${n} hidden`;
     return (
       <DropdownMenu>
         <Tooltip>
@@ -875,6 +1028,8 @@ export function Toolbar({
                 variant="ghost"
                 size="icon"
                 data-toolbar-item=""
+                data-toolbar-overflow-trigger=""
+                data-toolbar-overflow-side={side}
                 className={toolbarIconButtonClass}
                 aria-label={ariaLabel}
               >
@@ -912,11 +1067,11 @@ export function Toolbar({
                   key="gh-issues"
                   onClick={() => githubStatsRef.current?.openIssues()}
                 >
-                  <CircleDot className="mr-2 h-4 w-4 text-github-open" />
+                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
                   Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
                 </DropdownMenuItem>,
                 <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
-                  <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
+                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
                   Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
                 </DropdownMenuItem>,
                 <DropdownMenuItem
@@ -953,6 +1108,41 @@ export function Toolbar({
     projectSwitcher.close();
   }, [projectSwitcher]);
 
+  // Project pill: Radix Tooltip reopens on focus restoration after the popover
+  // or context menu closes. Controlled state + a suppression ref (set in the
+  // popover/context-menu close handlers, cleared on the next pointer enter)
+  // mirrors the AgentButton pattern so the tooltip doesn't pop on top of a
+  // freshly-opened destination surface.
+  const [pillTooltipOpen, setPillTooltipOpen] = useState(false);
+  const isRestoringFocusPillRef = useRef(false);
+  const handlePillTooltipOpenChange = useCallback((open: boolean) => {
+    if (open && isRestoringFocusPillRef.current) return;
+    setPillTooltipOpen(open);
+  }, []);
+  const suppressPillTooltipForFocusRestore = useCallback(() => {
+    setPillTooltipOpen(false);
+    isRestoringFocusPillRef.current = true;
+  }, []);
+  const clearPillTooltipFocusSuppression = useCallback(() => {
+    isRestoringFocusPillRef.current = false;
+  }, []);
+  const handlePillDropdownClose = useCallback(() => {
+    suppressPillTooltipForFocusRestore();
+    handleDropdownClose();
+  }, [handleDropdownClose, suppressPillTooltipForFocusRestore]);
+
+  const activeSearchableProject = projectSwitcher.activeProject;
+  const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
+  const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
+  const handleCopyProjectPath = useCallback(() => {
+    if (!currentProject) return;
+    void copyPillPath(currentProject.path);
+  }, [currentProject, copyPillPath]);
+  const handlePillTogglePin = useCallback(() => {
+    if (!currentProject) return;
+    void projectSwitcher.togglePinProject(currentProject.id);
+  }, [currentProject, projectSwitcher]);
+
   return (
     <header>
       <div
@@ -973,8 +1163,9 @@ export function Toolbar({
         >
           {isMac() && (
             <div
+              data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-150",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />
@@ -990,7 +1181,7 @@ export function Toolbar({
             {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
           </div>
           <div className="app-no-drag">
-            {renderOverflowMenu(leftOverflow, "left", leftOverflowSeverity)}
+            {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
           </div>
         </div>
 
@@ -1000,79 +1191,162 @@ export function Toolbar({
           aria-label="Project"
           className="app-no-drag flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
         >
-          <ProjectSwitcherPalette
-            mode="dropdown"
-            isOpen={isDropdownOpen}
-            query={projectSwitcher.query}
-            results={projectSwitcher.results}
-            selectedIndex={projectSwitcher.selectedIndex}
-            onQueryChange={projectSwitcher.setQuery}
-            onSelectPrevious={projectSwitcher.selectPrevious}
-            onSelectNext={projectSwitcher.selectNext}
-            onSelect={projectSwitcher.selectProject}
-            onHoverProject={projectSwitcher.onHoverProject}
-            onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
-            onClose={handleDropdownClose}
-            onAddProject={projectSwitcher.addProject}
-            onCloneRepo={projectSwitcher.cloneRepo}
-            onStopProject={handleStopProject}
-            onCloseProject={handleCloseProject}
-            onTogglePinProject={projectSwitcher.togglePinProject}
-            onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
-            onSelectNewWindow={handleSelectNewWindow}
-            dropdownAlign="center"
-            removeConfirmProject={projectSwitcher.removeConfirmProject}
-            onRemoveConfirmClose={handleRemoveConfirmClose}
-            onConfirmRemove={projectSwitcher.confirmRemoveProject}
-            isRemovingProject={projectSwitcher.isRemovingProject}
-            scratchResults={projectSwitcher.scratchResults}
-            onCreateScratch={() => void projectSwitcher.createScratch()}
-            onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-            onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
-            onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
-            saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-            onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-            onConfirmDeleteOriginalScratch={() =>
-              void projectSwitcher.confirmDeleteOriginalScratch()
-            }
-            isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+          <Tooltip
+            open={currentProject ? pillTooltipOpen : false}
+            onOpenChange={currentProject ? handlePillTooltipOpenChange : undefined}
           >
-            <button
-              data-toolbar-item=""
-              className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
-              data-testid="project-switcher-trigger"
-              aria-label={currentProject ? undefined : "Open project"}
-              onClick={() => projectSwitcher.open("dropdown")}
-            >
-              <span
-                className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
-                aria-label={currentProject ? "Project emoji" : undefined}
-                aria-hidden={currentProject ? undefined : true}
+            <ContextMenu>
+              <ProjectSwitcherPalette
+                mode="dropdown"
+                isOpen={isDropdownOpen}
+                query={projectSwitcher.query}
+                results={projectSwitcher.results}
+                selectedIndex={projectSwitcher.selectedIndex}
+                onQueryChange={projectSwitcher.setQuery}
+                onSelectPrevious={projectSwitcher.selectPrevious}
+                onSelectNext={projectSwitcher.selectNext}
+                onSelect={projectSwitcher.selectProject}
+                onHoverProject={projectSwitcher.onHoverProject}
+                onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                onClose={handlePillDropdownClose}
+                onAddProject={projectSwitcher.addProject}
+                onCloneRepo={projectSwitcher.cloneRepo}
+                onStopProject={handleStopProject}
+                onCloseProject={handleCloseProject}
+                onLocateProject={handleLocateProject}
+                onTogglePinProject={projectSwitcher.togglePinProject}
+                onCopyPath={projectSwitcher.copyPath}
+                onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
+                onSelectNewWindow={handleSelectNewWindow}
+                dropdownAlign="center"
+                removeConfirmProject={projectSwitcher.removeConfirmProject}
+                onRemoveConfirmClose={handleRemoveConfirmClose}
+                onConfirmRemove={projectSwitcher.confirmRemoveProject}
+                isRemovingProject={projectSwitcher.isRemovingProject}
+                scratchResults={projectSwitcher.scratchResults}
+                onCreateScratch={() => void projectSwitcher.createScratch()}
+                onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+                onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+                onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
+                saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+                onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+                onConfirmDeleteOriginalScratch={() =>
+                  void projectSwitcher.confirmDeleteOriginalScratch()
+                }
+                isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
               >
-                {currentProject?.emoji ?? "•"}
-              </span>
-              <span
-                className={cn(
-                  "min-w-0 truncate text-xs tracking-wide text-daintree-text",
-                  currentProject ? "font-semibold" : "font-medium"
-                )}
-              >
-                {currentProject?.name ?? "Open project"}
-              </span>
-              <span
-                className={cn(
-                  "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-                  !branchName && "opacity-0"
-                )}
-                aria-label={branchName ? `Current branch ${branchName}` : undefined}
-                aria-hidden={branchName ? undefined : true}
-              >
-                <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-                <span className="toolbar-project-chip-label">{branchName ?? "main"}</span>
-              </span>
-              <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
-            </button>
-          </ProjectSwitcherPalette>
+                <ContextMenuTrigger asChild>
+                  <TooltipTrigger asChild>
+                    <button
+                      data-toolbar-item=""
+                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
+                      data-testid="project-switcher-trigger"
+                      aria-label={
+                        currentProject
+                          ? `Open project switcher for ${currentProject.name}`
+                          : "Open project"
+                      }
+                      role={currentProject ? "combobox" : undefined}
+                      aria-haspopup={currentProject ? "listbox" : undefined}
+                      aria-expanded={currentProject ? isDropdownOpen : undefined}
+                      onClick={() => projectSwitcher.open("dropdown")}
+                      onPointerEnter={clearPillTooltipFocusSuppression}
+                    >
+                      <span
+                        className={cn(
+                          "text-base leading-none shrink-0",
+                          !currentProject && "opacity-0"
+                        )}
+                        aria-label={currentProject ? "Project emoji" : undefined}
+                        aria-hidden={currentProject ? undefined : true}
+                      >
+                        {currentProject?.emoji ?? "•"}
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 truncate text-xs tracking-wide text-daintree-text",
+                          currentProject ? "font-semibold" : "font-medium"
+                        )}
+                      >
+                        {currentProject?.name ?? "Open project"}
+                      </span>
+                      <span
+                        className={cn(
+                          "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
+                          !branchName && "opacity-0"
+                        )}
+                        aria-label={branchName ? `Current branch ${branchName}` : undefined}
+                        aria-hidden={branchName ? undefined : true}
+                      >
+                        <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+                        <span className="toolbar-project-chip-label">
+                          {truncatedBranchName ?? "main"}
+                        </span>
+                      </span>
+                      <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
+                    </button>
+                  </TooltipTrigger>
+                </ContextMenuTrigger>
+              </ProjectSwitcherPalette>
+              {currentProject && (
+                <ContextMenuContent
+                  className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+                  onCloseAutoFocus={(e) => {
+                    suppressPillTooltipForFocusRestore();
+                    e.preventDefault();
+                  }}
+                >
+                  <ContextMenuItem onSelect={handlePillTogglePin}>
+                    {activeSearchableProject?.isPinned ? (
+                      <>
+                        <PinOff className="mr-2 h-3.5 w-3.5" />
+                        Unpin project
+                      </>
+                    ) : (
+                      <>
+                        <Pin className="mr-2 h-3.5 w-3.5" />
+                        Pin project
+                      </>
+                    )}
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={handleCopyProjectPath}>
+                    <Clipboard className="mr-2 h-3.5 w-3.5" />
+                    Copy path
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={handleOpenProjectSettings}>
+                    Project settings
+                  </ContextMenuItem>
+                  {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                    <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
+                      <Square className="mr-2 h-3.5 w-3.5" />
+                      Stop all agents
+                    </ContextMenuItem>
+                  )}
+                  <ContextMenuItem
+                    onSelect={() => handleCloseProject(currentProject.id)}
+                    className="text-status-error focus:text-status-error"
+                  >
+                    <X className="mr-2 h-3.5 w-3.5" />
+                    Close project
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              )}
+            </ContextMenu>
+            {currentProject && (
+              <TooltipContent side="bottom" className="max-w-[28rem]">
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-xs font-medium">
+                    {currentProject.name}
+                    {branchName ? ` · ${branchName}` : ""}
+                  </div>
+                  <div className="text-text-muted font-mono text-[11px] truncate">
+                    {currentProject.path}
+                  </div>
+                </div>
+              </TooltipContent>
+            )}
+          </Tooltip>
         </div>
 
         {/* RIGHT GROUP */}
@@ -1088,7 +1362,7 @@ export function Toolbar({
             {renderButtons(effectiveRightButtons, rightVisibleSet)}
           </div>
           <div className="app-no-drag">
-            {renderOverflowMenu(rightOverflow, "right", rightOverflowSeverity)}
+            {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
           </div>
 
           <div className={toolbarDividerClass} />
@@ -1101,8 +1375,16 @@ export function Toolbar({
           {isWindows() && (
             <div
               aria-hidden="true"
-              className={cn("shrink-0 transition-[width] duration-150", isFullscreen && "w-0")}
-              style={isFullscreen ? undefined : { width: "var(--win-caption-width, 138px)" }}
+              data-fullscreen={isFullscreen ? "true" : undefined}
+              className={cn(
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
+                isFullscreen && "w-0"
+              )}
+              style={
+                isFullscreen
+                  ? undefined
+                  : { width: "calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))" }
+              }
             />
           )}
         </div>

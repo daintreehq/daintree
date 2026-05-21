@@ -4,8 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
-    "outDir": "../dist-typecheck/electron",
-    "rootDir": ".",
+    "outDir": "../dist-typecheck",
+    "rootDir": "..",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -18,7 +18,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["./**/*.ts"],
+  "include": ["./**/*.ts", "../plugins/builtin/github/main/**/*.ts"],
   "exclude": ["node_modules", "preload.cts"],
   "references": [{ "path": "../shared/tsconfig.json" }]
 }

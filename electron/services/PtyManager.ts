@@ -368,14 +368,18 @@ export class PtyManager extends EventEmitter {
   /**
    * Kill a terminal process.
    */
-  kill(id: string, reason?: string, options?: { preserveSession?: boolean }): void {
+  kill(
+    id: string,
+    reason?: string,
+    options?: { preserveSession?: boolean; escalationDelayMs?: number }
+  ): void {
     this.pendingResizes.delete(id);
     this.registry.clearTrashTimeout(id);
 
     const terminal = this.registry.get(id);
     if (terminal) {
       const wasExited = terminal.getInfo().isExited;
-      terminal.kill(reason);
+      terminal.kill(reason, options?.escalationDelayMs);
       // Note: deletion handled in onExit callback
       if (wasExited) {
         this.registry.delete(id);

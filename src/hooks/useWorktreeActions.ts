@@ -7,6 +7,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { ActionSource } from "@shared/types/actions";
 
 export function formatCopyResultMessage(payload: {
   fileCount: number;
@@ -25,6 +26,7 @@ export function formatCopyResultMessage(payload: {
 
 export async function copyContextWithFeedback(
   worktreeId: string,
+  source: ActionSource,
   options?: { modified?: boolean }
 ): Promise<void> {
   // Direct store call: this is a spinner-then-update pattern that depends on
@@ -44,7 +46,7 @@ export async function copyContextWithFeedback(
     const result = await actionService.dispatch(
       "worktree.copyTree",
       { worktreeId, modified: options?.modified },
-      { source: "context-menu" }
+      { source }
     );
 
     if (!result.ok) {
@@ -198,7 +200,7 @@ export function useWorktreeActions({
   }, []);
 
   const handleOpenPR = useCallback((worktree: WorktreeSnapshot) => {
-    if (worktree.prUrl) {
+    if (worktree.linked?.pr?.url) {
       void actionService.dispatch(
         "worktree.openPR",
         { worktreeId: worktree.id },

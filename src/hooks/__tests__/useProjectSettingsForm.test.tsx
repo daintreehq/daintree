@@ -80,7 +80,7 @@ const baseSettings: ProjectSettings = {
   worktreePathPattern: "",
   terminalSettings: { shell: "/bin/zsh", shellArgs: ["-l"] },
   notificationOverrides: { soundEnabled: true },
-  githubRemote: "origin",
+  forgeRemote: "origin",
 };
 
 function resetMocks() {
@@ -145,7 +145,7 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.branchPrefixCustom).toBe("gpriday");
     expect(result.current.terminalShell).toBe("/bin/zsh");
     expect(result.current.terminalShellArgs).toBe("-l");
-    expect(result.current.githubRemote).toBe("origin");
+    expect(result.current.forgeRemote).toBe("origin");
     expect(result.current.runCommands).toHaveLength(1);
     expect(result.current.environmentVariables).toHaveLength(1);
     expect(result.current.environmentVariables[0]!.key).toBe("NODE_ENV");
@@ -425,6 +425,235 @@ describe("useProjectSettingsForm", () => {
     });
     expect(mockSaveSettings).not.toHaveBeenCalled();
     expect(mockUpdateProject).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("still saves unrelated scalar field when worktreePathPattern is invalid", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, worktreePathPattern: "{parent-dir}/{branch-slug}" };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    act(() => {
+      result.current.setWorktreePathPattern("no-branch-slug-token-here");
+      result.current.setBranchPrefixMode("none");
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const savedSettings = mockSaveSettings.mock.calls[0]![0];
+    expect(savedSettings.branchPrefixMode).toBeUndefined();
+    expect(savedSettings.worktreePathPattern).toBe("{parent-dir}/{branch-slug}");
+    expect(result.current.projectAutoSaveError).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("still saves unrelated collection field when worktreePathPattern is invalid", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, worktreePathPattern: "{parent-dir}/{branch-slug}" };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    act(() => {
+      result.current.setWorktreePathPattern("no-branch-slug-token-here");
+      result.current.setRunCommands([{ id: "rc-2", name: "Build", command: "npm run build" }]);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const savedSettings = mockSaveSettings.mock.calls[0]![0];
+    expect(savedSettings.runCommands).toEqual([
+      { id: "rc-2", name: "Build", command: "npm run build" },
+    ]);
+    expect(savedSettings.worktreePathPattern).toBe("{parent-dir}/{branch-slug}");
+    expect(result.current.projectAutoSaveError).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("saves the corrected pattern after the user fixes an invalid worktreePathPattern", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, worktreePathPattern: "{parent-dir}/{branch-slug}" };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    act(() => {
+      result.current.setWorktreePathPattern("no-branch-slug-token-here");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    act(() => {
+      result.current.setWorktreePathPattern("{base-folder}-trees/{branch-slug}");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    const lastCall = mockSaveSettings.mock.calls.at(-1)?.[0];
+    expect(lastCall?.worktreePathPattern).toBe("{base-folder}-trees/{branch-slug}");
+    expect(result.current.projectAutoSaveError).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("leaves terminal fields undefined when project has no terminalSettings", async () => {
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    const { terminalSettings: _unused, ...settingsWithoutTerminal } = baseSettings;
+    void _unused;
+    mockSettings.value = settingsWithoutTerminal as ProjectSettings;
+    rerender({ isOpen: true, tick: 2, projectId: "proj-1" });
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+    expect(result.current.terminalShell).toBeUndefined();
+    expect(result.current.terminalShellArgs).toBeUndefined();
+    expect(result.current.terminalDefaultCwd).toBeUndefined();
+    expect(result.current.terminalScrollback).toBeUndefined();
+  });
+
+  it("omits terminalSettings from the saved payload when all four terminal fields are undefined", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    // Reset both terminal fields that baseSettings had set, then trigger save
+    act(() => {
+      result.current.setTerminalShell(undefined);
+      result.current.setTerminalShellArgs(undefined);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const lastCall = mockSaveSettings.mock.calls.at(-1)![0];
+    expect(lastCall.terminalSettings).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("preserves valid saved scrollbackLines when user enters an invalid value", async () => {
+    vi.useFakeTimers();
+    const settingsWithScrollback: ProjectSettings = {
+      ...baseSettings,
+      terminalSettings: { scrollbackLines: 2000 },
+    };
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = settingsWithScrollback;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.terminalScrollback).toBe("2000");
+
+    // Type an out-of-range value (below SCROLLBACK_MIN=100). The UI shows an
+    // error; the autosave must NOT silently wipe the existing saved value.
+    act(() => {
+      result.current.setTerminalScrollback("50");
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    // Either no save fired (snapshot didn't change) or any save still has the
+    // valid prior value, never the invalid one.
+    for (const call of mockSaveSettings.mock.calls) {
+      const saved = call[0];
+      if (saved.terminalSettings?.scrollbackLines !== undefined) {
+        expect(saved.terminalSettings.scrollbackLines).toBe(2000);
+      }
+    }
+    vi.useRealTimers();
+  });
+
+  it("partial reset preserves the other terminal fields in the saved payload", async () => {
+    vi.useFakeTimers();
+    const fullTerminalSettings: ProjectSettings = {
+      ...baseSettings,
+      terminalSettings: {
+        shell: "/bin/bash",
+        shellArgs: ["-l"],
+        defaultWorkingDirectory: "/tmp",
+        scrollbackLines: 1500,
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = fullTerminalSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    // Reset only the shell — the other three should survive.
+    act(() => {
+      result.current.setTerminalShell(undefined);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const lastCall = mockSaveSettings.mock.calls.at(-1)![0];
+    expect(lastCall.terminalSettings).toBeDefined();
+    expect(lastCall.terminalSettings.shell).toBeUndefined();
+    expect(lastCall.terminalSettings.shellArgs).toEqual(["-l"]);
+    expect(lastCall.terminalSettings.defaultWorkingDirectory).toBe("/tmp");
+    expect(lastCall.terminalSettings.scrollbackLines).toBe(1500);
     vi.useRealTimers();
   });
 

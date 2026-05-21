@@ -157,6 +157,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       setSelectedSchemeId(scheme.id);
       appThemeClient.setColorScheme(scheme.id).catch((error) => {
         logError("Failed to persist theme selection", error);
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           priority: "high",

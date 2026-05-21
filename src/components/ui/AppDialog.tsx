@@ -22,12 +22,12 @@ import {
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
 import { X } from "lucide-react";
-import { Spinner } from "./Spinner";
 import { Button } from "./button";
 
 type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "4xl" | "6xl";
 type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
+type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
 
 interface AppDialogContextValue {
   onClose: () => void;
@@ -49,10 +49,11 @@ export interface AppDialogProps {
   className?: string;
   maxHeight?: string;
   zIndex?: DialogZIndex;
+  initialFocus?: DialogInitialFocus;
   "data-testid"?: string;
 }
 
-export type { DialogSize, DialogVariant, DialogZIndex };
+export type { DialogSize, DialogVariant, DialogZIndex, DialogInitialFocus };
 
 const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
@@ -75,8 +76,11 @@ export function AppDialog({
   className,
   maxHeight = "max-h-[80vh]",
   zIndex = "modal",
+  initialFocus,
   "data-testid": dataTestId,
 }: AppDialogProps) {
+  const effectiveInitialFocus: DialogInitialFocus =
+    initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
   const closeInFlightRef = useRef(false);
@@ -117,16 +121,27 @@ export function AppDialog({
   useEffect(() => {
     if (isOpen) {
       previousActiveElement.current = document.activeElement as HTMLElement;
+      if (effectiveInitialFocus === "none") return;
       requestAnimationFrame(() => {
-        const first = dialogRef.current ? getVisibleTabbableElements(dialogRef.current)[0] : null;
-        if (first) {
-          first.focus();
+        const root = dialogRef.current;
+        if (!root) return;
+        let target: HTMLElement | null = null;
+        if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
+          target = root.querySelector<HTMLElement>(
+            `[data-confirm-role="${effectiveInitialFocus}"]`
+          );
+        }
+        if (!target) {
+          target = getVisibleTabbableElements(root)[0] ?? null;
+        }
+        if (target) {
+          target.focus();
         } else {
-          dialogRef.current?.focus();
+          root.focus();
         }
       });
     }
-  }, [isOpen, restoreFocus]);
+  }, [isOpen, effectiveInitialFocus, restoreFocus]);
 
   useEffect(() => {
     return () => {
@@ -292,7 +307,7 @@ export function AppDialog({
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
         onPointerCancel={resetBackdropPointer}
-        role="dialog"
+        role={variant === "destructive" ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
@@ -465,6 +480,7 @@ AppDialog.Footer = function AppDialogFooter({
               onClick={secondaryAction.onClick}
               disabled={secondaryAction.disabled}
               className="text-daintree-text/70 hover:text-daintree-text"
+              data-confirm-role="cancel"
             >
               {secondaryAction.label}
             </Button>
@@ -473,10 +489,10 @@ AppDialog.Footer = function AppDialogFooter({
             <Button
               variant={getPrimaryVariant()}
               onClick={primaryAction.onClick}
-              disabled={primaryAction.disabled || primaryAction.loading}
-              aria-busy={primaryAction.loading || undefined}
+              disabled={primaryAction.disabled}
+              loading={primaryAction.loading}
+              data-confirm-role="confirm"
             >
-              {primaryAction.loading && <Spinner />}
               {primaryAction.label}
             </Button>
           )}

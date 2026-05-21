@@ -22,7 +22,10 @@ import {
   registerDaintreeFileProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
-import { registerAppLifecycleHandlers } from "./lifecycle/appLifecycle.js";
+import {
+  registerAppLifecycleHandlers,
+  registerWindowSessionEndHandler,
+} from "./lifecycle/appLifecycle.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import {
   setMainWindow,
@@ -66,22 +69,24 @@ import {
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
-import { isSmokeTest } from "./setup/environment.js";
+import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
-import {
-  pruneOldLogs,
-  initializeLogger,
-  registerLoggerTransport,
-  setLogLevelOverrides,
-} from "./utils/logger.js";
+import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
-import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
+import {
+  initializeCrashRecoveryService,
+  getCrashRecoveryService,
+} from "./services/CrashRecoveryService.js";
+import { projectStore } from "./services/ProjectStore.js";
+import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
+import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
 import { startAssistantScratchCleanup } from "./services/AssistantScratchService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
+import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
@@ -123,7 +128,9 @@ app.commandLine.appendSwitch(
 );
 
 // Allow autoplay without user gesture (voice input, media panels).
-// Per-view throttling is managed by ProjectViewManager.setBackgroundThrottling().
+// Per-view CPU throttling for cached views is managed by ProjectViewManager
+// via CDP Emulation.setCPUThrottlingRate (per-renderer; window-wide
+// setBackgroundThrottling is unsuitable since Electron 28 — #8599).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
 const disabledFeatures = ["BackForwardCache"];
@@ -140,14 +147,6 @@ if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else {
-  // Prune old log files based on retention setting
-  {
-    const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
-    if (retentionDays > 0) {
-      pruneOldLogs(app.getPath("userData"), retentionDays);
-    }
-  }
-
   initializeLogger(app.getPath("userData"));
 
   // Seed per-module level overrides from persisted store so main-process
@@ -170,6 +169,12 @@ if (!gotTheLock) {
   const distPath = path.join(__dirname, "../../dist");
 
   initializeCrashRecoveryService();
+  // Fold the pending-crash panel summaries into the suspect ledger immediately
+  // after CrashRecoveryService consumes the marker. Per-panel decay (clean
+  // launches, TTL) is applied during this same call. The hydration handler
+  // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
+  // restore set; surfacing per-panel quarantine to the renderer.
+  initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
   initializeDatabaseMaintenance();
   initializeTrashedPidCleanup();
   initializeScratchCleanup();
@@ -178,6 +183,7 @@ if (!gotTheLock) {
 
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
+  windowRegistry.wireFocusTracking(app);
 
   // Read last-active projectId synchronously from SQLite BEFORE creating any window.
   // This allows the initial WebContentsView to use the correct session partition,
@@ -237,10 +243,10 @@ if (!gotTheLock) {
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes
-        // freeze-eligible once setBackgroundThrottling(true) is applied.
-        // Live worktree/workspace ports would otherwise queue messages
-        // into a frozen renderer (#6273). Reactivation re-brokers a fresh
-        // port via activateProjectView in projectCrud/switch.ts.
+        // freeze-eligible once CPU throttling lands. Live worktree/workspace
+        // ports would otherwise queue messages into a frozen renderer
+        // (#6273). Reactivation re-brokers a fresh port via
+        // activateProjectView in projectCrud/switch.ts.
         // Each cleanup is isolated so a throw in one path can't leave the
         // other producer alive — that's the exact failure mode this PR
         // exists to prevent.
@@ -343,6 +349,7 @@ if (!gotTheLock) {
     }
 
     registerWindowForFocusThrottle(win);
+    registerWindowSessionEndHandler(win);
   }
 
   registerAppLifecycleHandlers({
@@ -374,12 +381,45 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      // Fire-and-forget the user-PATH refresh. Runs concurrently with the
+      // rest of startup; the PtyClient creation site awaits it before
+      // spawning the PTY host (#8625). Kicked off inside whenReady() so the
+      // shell probe never spawns a child process pre-ready — that path leaks
+      // zombies on macOS Finder-launched packaged builds.
+      markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_START);
+      kickOffEarlyPathRefresh().finally(() => {
+        markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_COMPLETE);
+      });
       setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
       setupWebviewCSP();
+      // Prime the hydrate prefetch cache for the last-active project so the
+      // renderer's first `app:boot` invoke resolves as a cache hit instead of
+      // doing an inline disk read. Fire-and-forget — overlaps with window
+      // creation. Skipped when:
+      //   - no last-active project (first run / project unset)
+      //   - safe mode (terminals are suppressed; priming would write empty)
+      //   - pending crash recovery (panelFilter path layers extra constraints)
+      //   - per-project state file doesn't exist yet (migration must run on
+      //     the renderer-blocking handler path — `buildSwitchHydrateResult`
+      //     intentionally skips the migration write)
+      if (lastActiveProjectId) {
+        const guard = getCrashLoopGuard();
+        const crashService = getCrashRecoveryService();
+        if (!guard.isSafeMode() && !crashService.getPendingCrash()) {
+          void projectStore
+            .getProjectState(lastActiveProjectId)
+            .then((state) => {
+              if (state === null) return;
+              return prefetchHydrateResult(lastActiveProjectId, buildSwitchHydrateResult);
+            })
+            .catch((error) => {
+              console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
+            });
+        }
+      }
       await createWindow(undefined, lastActiveProjectId ?? undefined);
-      getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

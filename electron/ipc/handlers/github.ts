@@ -18,17 +18,51 @@ import {
   gitHubRateLimitService,
   gitHubTokenHealthService,
   fetchRateLimitDetails,
+  resolveAuthorAvatar,
   setTokenAndSync,
   clearTokenAndSync,
 } from "../../services/github/index.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
+import type { GitHubRateLimitPayload } from "../../../shared/types/ipc/github.js";
+import type { RateLimitInfo } from "../../../shared/types/forge.js";
+
+// Project a GitHub rate-limit payload onto the provider-agnostic RateLimitInfo
+// shape. Mirrors `toRateLimitInfo` in electron/workspace-host.ts — keep the
+// two in sync if the projection rule changes.
+function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
+  if (!payload.blocked) {
+    return {
+      limit: payload.limit ?? null,
+      remaining: payload.remaining ?? null,
+      resetAt: null,
+    };
+  }
+  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
+  // projection treats `remaining === 0` as the "blocked" signal, so the exact
+  // (1–50) hard-stop-band count must not leak through as a non-zero value.
+  return {
+    limit: payload.limit ?? null,
+    remaining: 0,
+    resetAt: payload.resetAt ?? null,
+    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
+  };
+}
 
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   // Main-process transport: push rate-limit state changes to every renderer.
+  // The legacy GitHub channel is kept for backward compat; the provider-keyed
+  // forge channel is what `githubClient.onRateLimitChanged` now subscribes to,
+  // so main-process-sourced GitHub blocks (REST 403/429, rate-limit headers)
+  // still reach the renderer after the workspace-host fast-path was removed.
   const unsubscribeRateLimit = gitHubRateLimitService.onStateChange((state) => {
     broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
+    broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      state: toRateLimitInfo(state),
+    });
   });
   handlers.push(unsubscribeRateLimit);
 
@@ -48,6 +82,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     return fetchRateLimitDetails();
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, handleGetRateLimitDetails));
+
+  const handleResolveAuthorAvatar = async (email: string): Promise<string | null> => {
+    checkRateLimit(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
+    if (typeof email !== "string" || !email.trim()) return null;
+    return resolveAuthorAvatar(email.trim().toLowerCase());
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, handleResolveAuthorAvatar));
 
   const handleGitHubGetRepoStats = async (
     cwd: string,
@@ -232,7 +273,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         throw new Error(`Only GitHub PR URLs are allowed, got ${url.hostname}`);
       }
     } catch (error) {
-      throw new Error(formatErrorMessage(error, "Invalid PR URL"));
+      throw new Error(formatErrorMessage(error, "Invalid PR URL"), { cause: error });
     }
     await shell.openExternal(prUrl);
   };
@@ -458,12 +499,18 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, handleGitHubGetPRReviewThreads));
 
-  const handleGitHubListRemotes = async (
+  // Lists all git remotes (origin, upstream, …) with an optional parsed
+  // owner/repo for remotes whose URL looks like a forge repo. The data is
+  // provider-agnostic; the `github:list-remotes` channel name is legacy.
+  // New callers should use `project:list-remotes` (#8456); the GitHub
+  // channel stays registered for backward compat.
+  const listRemotesForChannel = async (
+    rateLimitKey: string,
     cwd: string
   ): Promise<
     Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
   > => {
-    checkRateLimit(CHANNELS.GITHUB_LIST_REMOTES, 10, 10_000);
+    checkRateLimit(rateLimitKey, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -473,7 +520,16 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listGitHubRemotes } = await import("../../services/github/index.js");
     return listGitHubRemotes(cwd);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_REMOTES, handleGitHubListRemotes));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_LIST_REMOTES, (cwd: string) =>
+      listRemotesForChannel(CHANNELS.GITHUB_LIST_REMOTES, cwd)
+    )
+  );
+  handlers.push(
+    typedHandle(CHANNELS.PROJECT_LIST_REMOTES, (cwd: string) =>
+      listRemotesForChannel(CHANNELS.PROJECT_LIST_REMOTES, cwd)
+    )
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

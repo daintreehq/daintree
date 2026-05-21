@@ -19,6 +19,38 @@ export type WorktreeReviewState = "conflicted" | "unpushed-clean" | "has-changes
 
 export type ResourceStatusColor = "green" | "yellow" | "red" | "neutral";
 
+export type GitStateKind =
+  | "conflicted"
+  | "rebasing"
+  | "merging"
+  | "cherry-picking"
+  | "reverting"
+  | "detached"
+  | "dirty";
+
+export interface GitStateIndicator {
+  kind: GitStateKind;
+  label: string;
+  tone: "error" | "warning" | "info";
+}
+
+const REPO_STATE_TO_KIND: Record<string, GitStateKind> = {
+  REBASING: "rebasing",
+  MERGING: "merging",
+  CHERRY_PICKING: "cherry-picking",
+  REVERTING: "reverting",
+};
+
+const GIT_STATE_LABELS: Record<GitStateKind, string> = {
+  conflicted: "conflicted",
+  rebasing: "rebasing",
+  merging: "merging",
+  "cherry-picking": "cherry-picking",
+  reverting: "reverting",
+  detached: "detached",
+  dirty: "dirty",
+};
+
 export interface UseWorktreeStatusResult {
   branchLabel: string;
   isMainOnStandardBranch: boolean;
@@ -35,6 +67,7 @@ export interface UseWorktreeStatusResult {
   resourceStatusLabel?: string;
   resourceStatusColor?: ResourceStatusColor;
   hasResourceConfig: boolean;
+  gitStateIndicator: GitStateIndicator | null;
 }
 
 export function useWorktreeStatus({
@@ -116,7 +149,7 @@ export function useWorktreeStatus({
 
   const effectiveSummary = isSummarySameAsCommit ? null : worktree.summary;
 
-  const computedSubtitle = useMemo((): ComputedSubtitle => {
+  const computedSubtitle: ComputedSubtitle = (() => {
     if (hasChanges && worktree.worktreeChanges) {
       return { text: "", tone: "warning" };
     }
@@ -125,18 +158,14 @@ export function useWorktreeStatus({
       return { text: firstLineLastCommitMessage, tone: "muted" };
     }
 
-    if (worktree.prTitle?.trim() && worktree.prState !== "closed") {
-      return { text: worktree.prTitle.trim(), tone: "muted" };
+    const prTitle = worktree.linked?.pr?.title?.trim();
+    const prState = worktree.linked?.pr?.state;
+    if (prTitle && prState !== "closed" && prState !== "declined") {
+      return { text: prTitle, tone: "muted" };
     }
 
     return { text: "No recent activity", tone: "muted" };
-  }, [
-    hasChanges,
-    worktree.worktreeChanges,
-    firstLineLastCommitMessage,
-    worktree.prTitle,
-    worktree.prState,
-  ]);
+  })();
 
   const spineState: SpineState = useMemo(() => {
     if (hasChanges) return "dirty";
@@ -144,6 +173,26 @@ export function useWorktreeStatus({
     if (worktree.mood === "stale") return "stale";
     return "idle";
   }, [hasChanges, worktree.isCurrent, worktree.mood]);
+
+  const gitStateIndicator: GitStateIndicator | null = useMemo(() => {
+    // Priority: conflicted > blocking operation > detached > dirty
+    if (worktree.worktreeChanges?.changes?.some((c) => c.status === "conflicted")) {
+      return { kind: "conflicted", label: GIT_STATE_LABELS.conflicted, tone: "error" };
+    }
+    if (worktree.repoState) {
+      const kind = REPO_STATE_TO_KIND[worktree.repoState];
+      if (kind) {
+        return { kind, label: GIT_STATE_LABELS[kind], tone: "warning" };
+      }
+    }
+    if (worktree.isDetached) {
+      return { kind: "detached", label: GIT_STATE_LABELS.detached, tone: "warning" };
+    }
+    if (hasChanges) {
+      return { kind: "dirty", label: GIT_STATE_LABELS.dirty, tone: "info" };
+    }
+    return null;
+  }, [worktree.worktreeChanges?.changes, worktree.repoState, worktree.isDetached, hasChanges]);
 
   const reviewState: WorktreeReviewState = useMemo(() => {
     const changes = worktree.worktreeChanges;
@@ -156,7 +205,7 @@ export function useWorktreeStatus({
 
   const isComplete =
     !!worktree.issueNumber &&
-    !!worktree.prNumber &&
+    !!worktree.linked?.pr &&
     !hasChanges &&
     worktree.worktreeChanges !== null;
 
@@ -164,14 +213,14 @@ export function useWorktreeStatus({
     if (isMainWorktree) return null;
     if (worktree.worktreeChanges === null) return null;
 
-    if (worktree.prState === "merged") {
+    if (worktree.linked?.pr?.state === "merged") {
       return worktree.issueNumber ? "ready-for-cleanup" : "merged";
     }
 
-    if (worktree.prState === "open") return "in-review";
+    if (worktree.linked?.pr?.state === "open") return "in-review";
 
     return null;
-  }, [isMainWorktree, worktree.worktreeChanges, worktree.prState, worktree.issueNumber]);
+  }, [isMainWorktree, worktree.worktreeChanges, worktree.linked?.pr?.state, worktree.issueNumber]);
 
   const lifecycle = worktree.lifecycleStatus;
   const isLifecycleRunning = lifecycle?.state === "running";
@@ -257,5 +306,6 @@ export function useWorktreeStatus({
     resourceStatusLabel,
     resourceStatusColor,
     hasResourceConfig,
+    gitStateIndicator,
   };
 }

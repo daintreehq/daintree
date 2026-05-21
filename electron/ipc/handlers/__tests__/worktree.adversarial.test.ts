@@ -30,15 +30,11 @@ const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => "proj-1"),
   getCurrentProject: vi.fn(() => ({ id: "proj-1", path: "/repo" })),
 }));
-const taskWorktreeMock = vi.hoisted(() => ({
+const gitServiceCacheMock = vi.hoisted(() => ({
   getGitService: vi.fn(() => ({
     findAvailableBranchName: vi.fn(async (s: string) => s),
     findAvailablePath: vi.fn((p: string) => p),
   })),
-  getWorktreeIdsForTask: vi.fn<(projectId: string, taskId: string) => string[]>(() => []),
-  removeTaskWorktreeMapping:
-    vi.fn<(projectId: string, taskId: string, worktreeId: string) => void>(),
-  addTaskWorktreeMapping: vi.fn<(projectId: string, taskId: string, worktreeId: string) => void>(),
 }));
 
 vi.mock("electron", () => ({
@@ -90,8 +86,8 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
-vi.mock("../../../services/TaskWorktreeService.js", () => ({
-  taskWorktreeService: taskWorktreeMock,
+vi.mock("../../../services/GitServiceCache.js", () => ({
+  gitServiceCache: gitServiceCacheMock,
 }));
 
 vi.mock("../../../utils/worktreePattern.js", () => ({
@@ -312,7 +308,7 @@ describe("worktree IPC adversarial", () => {
       })
     ).rejects.toThrow(/Invalid stored pattern: missing \{branch\}/);
 
-    expect(taskWorktreeMock.getGitService).not.toHaveBeenCalled();
+    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
   });
 
   it("WORKTREE_GET_DEFAULT_PATH rejects empty rootPath/branchName without calling resolve", async () => {
@@ -326,68 +322,5 @@ describe("worktree IPC adversarial", () => {
     );
 
     expect(resolveWorktreePatternMock).not.toHaveBeenCalled();
-  });
-
-  it("WORKTREE_CLEANUP_TASK skips main worktree, treats not-found as success, aggregates real failures", async () => {
-    taskWorktreeMock.getWorktreeIdsForTask.mockReturnValue(["wt-main", "wt-missing", "wt-bad"]);
-    worktreeService.getAllStatesAsync.mockResolvedValue([
-      { id: "wt-main", path: "/repo/main", isMainWorktree: true },
-      { id: "wt-missing", path: "/repo/missing" },
-      { id: "wt-bad", path: "/repo/bad" },
-    ]);
-    worktreeService.deleteWorktree
-      .mockImplementationOnce(async (id: string) => {
-        if (id === "wt-missing") throw new Error("worktree does not exist");
-      })
-      .mockImplementationOnce(async (id: string) => {
-        if (id === "wt-bad") throw new Error("EPERM: permission denied");
-      });
-
-    await expect(
-      getHandler(CHANNELS.WORKTREE_CLEANUP_TASK)(fakeEvent(), "task-42")
-    ).rejects.toThrow(/wt-bad: EPERM/);
-
-    const removedArgs = taskWorktreeMock.removeTaskWorktreeMapping.mock.calls.map(
-      (call) => call[2]
-    );
-    expect(removedArgs).toContain("wt-main");
-    expect(removedArgs).toContain("wt-missing");
-    expect(removedArgs).not.toContain("wt-bad");
-  });
-
-  it("WORKTREE_CLEANUP_TASK is idempotent when the task has no mapped worktrees", async () => {
-    taskWorktreeMock.getWorktreeIdsForTask.mockReturnValue([]);
-
-    await expect(
-      getHandler(CHANNELS.WORKTREE_CLEANUP_TASK)(fakeEvent(), "task-none")
-    ).resolves.toBeUndefined();
-
-    expect(worktreeService.deleteWorktree).not.toHaveBeenCalled();
-    expect(taskWorktreeMock.removeTaskWorktreeMapping).not.toHaveBeenCalled();
-  });
-
-  it("WORKTREE_CLEANUP_TASK still deletes when pre-check getAllStatesAsync rejects", async () => {
-    taskWorktreeMock.getWorktreeIdsForTask.mockReturnValue(["wt-1"]);
-    worktreeService.getAllStatesAsync.mockRejectedValue(new Error("IPC transport error"));
-    worktreeService.deleteWorktree.mockResolvedValue(undefined);
-
-    await getHandler(CHANNELS.WORKTREE_CLEANUP_TASK)(fakeEvent(), "task-resilient");
-
-    expect(worktreeService.deleteWorktree).toHaveBeenCalledWith("wt-1", true, true);
-    expect(taskWorktreeMock.removeTaskWorktreeMapping).toHaveBeenCalledWith(
-      "proj-1",
-      "task-resilient",
-      "wt-1"
-    );
-  });
-
-  it("WORKTREE_CLEANUP_TASK requires an active project", async () => {
-    projectStoreMock.getCurrentProjectId.mockReturnValueOnce(null);
-
-    await expect(getHandler(CHANNELS.WORKTREE_CLEANUP_TASK)(fakeEvent(), "task-1")).rejects.toThrow(
-      /No active project/
-    );
-
-    expect(worktreeService.deleteWorktree).not.toHaveBeenCalled();
   });
 });

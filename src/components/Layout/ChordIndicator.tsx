@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
-import { usePendingChord } from "@/hooks/useGlobalKeybindings";
+import { usePendingChord, useLastInvalidKey } from "@/hooks/useGlobalKeybindings";
 import { keybindingService } from "@/services/KeybindingService";
 import { CHORD_SHOW_DELAY_MS } from "@/lib/animationUtils";
 
 export function ChordIndicator() {
   const pendingChord = usePendingChord();
+  const lastInvalidKey = useLastInvalidKey();
   const [showOverlay, setShowOverlay] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Cache last chord/completions so exit animation doesn't show empty content
@@ -21,10 +22,14 @@ export function ChordIndicator() {
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: showOverlay,
+    onAnimateOut: () => keybindingService.clearLastInvalidKey(),
   });
 
   useEffect(() => {
     if (pendingChord) {
+      // A fresh chord prefix supersedes any lingering invalid-key echo from a
+      // prior attempt; clear it so the new prefix renders its completions.
+      keybindingService.clearLastInvalidKey();
       lastChordRef.current = pendingChord;
       lastCompletionsRef.current = keybindingService.getChordCompletions(pendingChord);
       setLastChord(lastChordRef.current);
@@ -36,6 +41,14 @@ export function ChordIndicator() {
         }, CHORD_SHOW_DELAY_MS);
       }
     } else {
+      // Close the overlay; useAnimatedPresence's exit animation runs while
+      // the JSX echoes lastInvalidKey, then onAnimateOut clears it. If the
+      // HUD never opened (invalid key arrived inside the 200ms show delay),
+      // there's no exit animation, so clear lastInvalidKey directly to avoid
+      // a stuck-state leak.
+      if (lastInvalidKey && !showOverlay) {
+        keybindingService.clearLastInvalidKey();
+      }
       setShowOverlay(false);
     }
 
@@ -45,11 +58,14 @@ export function ChordIndicator() {
         timerRef.current = null;
       }
     };
-  }, [pendingChord, showOverlay]);
+  }, [pendingChord, lastInvalidKey, showOverlay]);
 
   if (!shouldRender) return null;
 
   const displayChord = keybindingService.formatComboForDisplay(lastChord);
+  const displayInvalidKey = lastInvalidKey
+    ? keybindingService.formatComboForDisplay(lastInvalidKey)
+    : null;
   const completions = lastCompletions;
 
   // Group completions by category
@@ -66,7 +82,7 @@ export function ChordIndicator() {
   return createPortal(
     <div
       className={cn(
-        "fixed bottom-6 left-1/2 -translate-x-1/2 z-[var(--z-toast)]",
+        "fixed bottom-6 left-1/2 -translate-x-1/2 z-[var(--z-toast)] pointer-events-none",
         "transition-opacity duration-150",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
@@ -89,11 +105,23 @@ export function ChordIndicator() {
           <kbd className="text-sm font-semibold text-daintree-text tracking-wide">
             {displayChord}
           </kbd>
-          <span className="text-daintree-text/40">&mdash;</span>
-          <span className="text-xs text-daintree-text/50">Backspace or Esc to cancel</span>
+          {displayInvalidKey ? (
+            <>
+              <kbd className="text-sm font-medium text-daintree-text/50 tracking-wide line-through">
+                {displayInvalidKey}
+              </kbd>
+              <span className="text-daintree-text/40">&mdash;</span>
+              <span className="text-xs text-daintree-text/50">Unrecognized</span>
+            </>
+          ) : (
+            <>
+              <span className="text-daintree-text/40">&mdash;</span>
+              <span className="text-xs text-daintree-text/50">Backspace or Esc to cancel</span>
+            </>
+          )}
         </div>
 
-        {completions.length > 0 && (
+        {!displayInvalidKey && completions.length > 0 && (
           <div className="border-t border-[var(--border-overlay)] px-3 py-2 max-h-48 overflow-y-auto">
             {Array.from(grouped.entries()).map(([category, items], groupIdx) => (
               <div key={category}>

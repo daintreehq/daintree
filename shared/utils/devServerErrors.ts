@@ -14,6 +14,12 @@ export interface DevServerError {
   message: string;
   port?: string;
   module?: string;
+  /**
+   * Built-in action ID the stuck-start escalation banner should surface as
+   * the variant-specific remedy. Kept as a soft string to avoid a cyclic
+   * dependency on `shared/types/actions.ts`.
+   */
+  recommendedActionId?: string;
 }
 
 const PORT_ERROR_PATTERNS = [
@@ -51,6 +57,7 @@ export function detectDevServerError(output: string): DevServerError | null {
           type: "port-conflict",
           message: `Port ${port} is already in use. Stop the other server or use a different port.`,
           port,
+          recommendedActionId: "devPreview.restartAndClearCache",
         };
       }
     }
@@ -65,6 +72,7 @@ export function detectDevServerError(output: string): DevServerError | null {
         type: "missing-dependencies",
         message: module ? `Missing dependency: ${module}` : "Missing dependencies detected",
         module,
+        recommendedActionId: "devPreview.reinstallAndRestart",
       };
     }
   }

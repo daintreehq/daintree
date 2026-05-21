@@ -25,12 +25,14 @@ export function SettingsSection({
 
   return (
     <div
-      className="grid grid-cols-[minmax(0,1fr)] gap-3"
+      className="grid grid-cols-[minmax(0,1fr)] gap-3 scroll-mt-12"
       id={id}
       role="group"
       aria-labelledby={headingId}
     >
-      <div>
+      {/* -mx-6/px-6 mirror the SettingsDialog scrollport's p-6 padding so the
+          sticky header background bleeds edge-to-edge; keep them in sync. */}
+      <div className="settings-section-header sticky top-0 z-20 -mx-6 px-6 pb-1.5">
         <h4
           id={headingId}
           className="text-sm font-medium text-daintree-text mb-1.5 flex items-center gap-2 flex-wrap"

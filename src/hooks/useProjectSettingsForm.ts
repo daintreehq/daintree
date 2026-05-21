@@ -62,14 +62,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
   const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
-  const [terminalShell, setTerminalShell] = useState<string>("");
-  const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
-  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
-  const [terminalScrollback, setTerminalScrollback] = useState<string>("");
+  const [terminalShell, setTerminalShell] = useState<string | undefined>(undefined);
+  const [terminalShellArgs, setTerminalShellArgs] = useState<string | undefined>(undefined);
+  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string | undefined>(undefined);
+  const [terminalScrollback, setTerminalScrollback] = useState<string | undefined>(undefined);
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
-  const [githubRemote, setGithubRemote] = useState<string | undefined>(undefined);
+  const [forgeRemote, setForgeRemote] = useState<string | undefined>(undefined);
+  const [forgeProviderOverride, setForgeProviderOverride] = useState<string | null>(null);
   const [resourceEnvironments, setResourceEnvironments] = useState<
     Record<string, ResourceEnvironment> | undefined
   >(undefined);
@@ -103,17 +104,24 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
     const result: ProjectTerminalSettings = {};
-    if (terminalShell.trim()) result.shell = terminalShell.trim();
-    if (terminalShellArgs.trim()) result.shellArgs = terminalShellArgs.trim().split(/\s+/);
-    if (terminalDefaultCwd.trim()) result.defaultWorkingDirectory = terminalDefaultCwd.trim();
-    if (terminalScrollback.trim()) {
+    if (terminalShell !== undefined && terminalShell.trim()) result.shell = terminalShell.trim();
+    if (terminalShellArgs !== undefined && terminalShellArgs.trim())
+      result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    if (terminalDefaultCwd !== undefined && terminalDefaultCwd.trim())
+      result.defaultWorkingDirectory = terminalDefaultCwd.trim();
+    if (terminalScrollback !== undefined && terminalScrollback.trim()) {
       const num = Number(terminalScrollback);
       if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
         result.scrollbackLines = Math.trunc(num);
+      } else if (projectSettings?.terminalSettings?.scrollbackLines !== undefined) {
+        // Invalid in-flight input must not silently wipe an existing valid
+        // override — preserve the last saved value until the user types a
+        // valid number or resets the field.
+        result.scrollbackLines = projectSettings.terminalSettings.scrollbackLines;
       }
     }
     return Object.keys(result).length > 0 ? result : undefined;
-  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback]);
+  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback, projectSettings]);
 
   const currentProjectSnapshot = useMemo(() => {
     if (!currentProject) return null;
@@ -131,7 +139,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       branchPrefixMode,
       branchPrefixCustom,
       devServerLoadTimeout,
-      githubRemote,
+      forgeRemote,
       worktreePathPattern,
       currentTerminalSettings,
       notificationOverrides,
@@ -140,7 +148,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       activeResourceEnvironment,
       defaultWorktreeMode,
       turbopackEnabled,
-      daintreeMcpTier
+      daintreeMcpTier,
+      forgeProviderOverride
     );
   }, [
     projectName,
@@ -148,7 +157,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     projectColor,
     devServerCommand,
     devServerLoadTimeout,
-    githubRemote,
+    forgeRemote,
     projectIconSvg,
     excludedPaths,
     environmentVariables,
@@ -167,6 +176,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     defaultWorktreeMode,
     turbopackEnabled,
     daintreeMcpTier,
+    forgeProviderOverride,
   ]);
   useEffect(() => {
     currentProjectSnapshotRef.current = currentProjectSnapshot;
@@ -197,12 +207,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
       setWorktreePathPattern("");
-      setTerminalShell("");
-      setTerminalShellArgs("");
-      setTerminalDefaultCwd("");
-      setTerminalScrollback("");
+      setTerminalShell(undefined);
+      setTerminalShellArgs(undefined);
+      setTerminalDefaultCwd(undefined);
+      setTerminalScrollback(undefined);
       setNotificationOverrides({});
-      setGithubRemote(undefined);
+      setForgeRemote(undefined);
+      setForgeProviderOverride(null);
       setResourceEnvironments(undefined);
       setActiveResourceEnvironment(undefined);
       setDefaultWorktreeMode(undefined);
@@ -234,24 +245,22 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
     const initialTerminalSettings = projectSettings.terminalSettings;
     const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
-    const initialGithubRemote = projectSettings.githubRemote;
-    // Migration: convert old singular resourceEnvironment to resourceEnvironments
-    let initialResourceEnvironments: Record<string, ResourceEnvironment> | undefined;
-    let initialActiveResourceEnvironment: string | undefined;
-    if (projectSettings.resourceEnvironments) {
-      initialResourceEnvironments = projectSettings.resourceEnvironments;
-      initialActiveResourceEnvironment = projectSettings.activeResourceEnvironment;
-      // Validate activeResourceEnvironment points to existing key
-      if (
-        initialActiveResourceEnvironment &&
-        !initialResourceEnvironments[initialActiveResourceEnvironment]
-      ) {
-        const keys = Object.keys(initialResourceEnvironments);
-        initialActiveResourceEnvironment = keys.length > 0 ? keys[0] : "default";
-      }
-    } else if (projectSettings.resourceEnvironment) {
-      initialResourceEnvironments = { default: projectSettings.resourceEnvironment };
-      initialActiveResourceEnvironment = "default";
+    const initialForgeRemote = projectSettings.forgeRemote;
+    const initialForgeProviderOverride = projectSettings.forgeProviderOverride ?? null;
+    // resourceEnvironment → resourceEnvironments migration is owned by the
+    // main-process codec (electron/services/projectSettingsCodec.ts), so by
+    // the time settings reach the renderer they are already canonical.
+    const initialResourceEnvironments: Record<string, ResourceEnvironment> | undefined =
+      projectSettings.resourceEnvironments;
+    let initialActiveResourceEnvironment: string | undefined =
+      projectSettings.activeResourceEnvironment;
+    if (
+      initialResourceEnvironments &&
+      initialActiveResourceEnvironment &&
+      !initialResourceEnvironments[initialActiveResourceEnvironment]
+    ) {
+      const keys = Object.keys(initialResourceEnvironments);
+      initialActiveResourceEnvironment = keys.length > 0 ? keys[0] : "default";
     }
     const initialDefaultWorktreeMode = projectSettings.defaultWorktreeMode;
 
@@ -272,16 +281,19 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setBranchPrefixMode(initialBranchPrefixMode);
     setBranchPrefixCustom(initialBranchPrefixCustom);
     setWorktreePathPattern(initialWorktreePathPattern);
-    setTerminalShell(initialTerminalSettings?.shell ?? "");
-    setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
-    setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
+    setTerminalShell(initialTerminalSettings?.shell);
+    setTerminalShellArgs(
+      initialTerminalSettings?.shellArgs ? initialTerminalSettings.shellArgs.join(" ") : undefined
+    );
+    setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory);
     setTerminalScrollback(
       initialTerminalSettings?.scrollbackLines !== undefined
         ? String(initialTerminalSettings.scrollbackLines)
-        : ""
+        : undefined
     );
     setNotificationOverrides(initialNotificationOverrides);
-    setGithubRemote(initialGithubRemote);
+    setForgeRemote(initialForgeRemote);
+    setForgeProviderOverride(initialForgeProviderOverride);
     setResourceEnvironments(initialResourceEnvironments);
     setActiveResourceEnvironment(initialActiveResourceEnvironment);
     setDefaultWorktreeMode(initialDefaultWorktreeMode);
@@ -300,7 +312,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialBranchPrefixMode,
       initialBranchPrefixCustom,
       initialDevServerLoadTimeout,
-      initialGithubRemote,
+      initialForgeRemote,
       initialWorktreePathPattern,
       initialTerminalSettings,
       initialNotificationOverrides,
@@ -309,7 +321,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialActiveResourceEnvironment,
       initialDefaultWorktreeMode,
       initialTurbopackEnabled,
-      initialDaintreeMcpTier
+      initialDaintreeMcpTier,
+      initialForgeProviderOverride
     );
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
@@ -376,14 +389,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         });
       }
 
-      const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
-      if (sanitizedWorktreePathPattern) {
-        const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
-        if (!patternValidation.valid) {
-          setProjectAutoSaveError("Invalid worktree path pattern — other settings were not saved");
-          return;
-        }
-      }
+      const trimmedWorktreePathPattern = worktreePathPattern.trim();
+      const draftPathPattern = trimmedWorktreePathPattern || undefined;
+      const pathPatternIsValid = !draftPathPattern || validatePathPattern(draftPathPattern).valid;
+      // When the draft pattern is invalid, preserve the previously persisted value
+      // (the field-level error renders inline in AutomationTab) so unrelated field
+      // edits still auto-save.
+      const sanitizedWorktreePathPattern = pathPatternIsValid
+        ? draftPathPattern
+        : projectSettings.worktreePathPattern;
 
       await saveProjectSettings({
         ...projectSettings,
@@ -402,7 +416,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
-        githubRemote: githubRemote || undefined,
+        forgeRemote: forgeRemote || undefined,
+        forgeProviderOverride: forgeProviderOverride ?? undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
         notificationOverrides:
@@ -496,8 +511,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setTerminalScrollback,
     notificationOverrides,
     setNotificationOverrides,
-    githubRemote,
-    setGithubRemote,
+    forgeRemote,
+    setForgeRemote,
+    forgeProviderOverride,
+    setForgeProviderOverride,
     resourceEnvironments,
     setResourceEnvironments,
     activeResourceEnvironment,

@@ -61,9 +61,14 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
     selector({ availability: undefined }),
 }));
 
-vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex"] as const,
-}));
+vi.mock("@shared/config/agentIds", () => {
+  const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex"] as const;
+  return {
+    BUILT_IN_AGENT_IDS,
+    isBuiltInAgentId: (value: unknown): value is (typeof BUILT_IN_AGENT_IDS)[number] =>
+      typeof value === "string" && BUILT_IN_AGENT_IDS.includes(value as never),
+  };
+});
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => ({

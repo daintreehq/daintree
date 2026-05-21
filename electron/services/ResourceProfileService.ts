@@ -20,6 +20,20 @@ import {
   type ResourceProfile,
   type ResourceProfilePayload,
 } from "../../shared/types/resourceProfile.js";
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+
+/**
+ * Subset of PtyClient's TerminalInfoResponse used by the active-agent filter.
+ * Declared structurally so we don't depend on a non-exported interface.
+ */
+type ActiveAgentTerminalLike = {
+  agentState?: AgentState;
+  isTrashed?: boolean;
+  hasPty?: boolean;
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  everDetectedAgent?: boolean;
+};
 
 const EVAL_INTERVAL_MS = 30_000;
 const DOWNGRADE_HOLD_MS = 30_000;
@@ -29,25 +43,38 @@ const WARMUP_TICKS = 2;
 // Active event-loop-lag mitigation. The diagnostics handler reads a separate
 // lifetime histogram for IPC; this service owns its own histogram and resets
 // it after each tumbling window so percentile() reflects only the recent slice.
-// p99 is biased low by monitorEventLoopDelay (a long block records as a single
-// large sample, not many) — thresholds are conservative to compensate.
+// p99 is biased low by monitorEventLoopDelay (a single long block records as
+// ONE large sample, not many) — thresholds are conservative to compensate.
 // AND-gating with eventLoopUtilization rejects three classes of false positive:
-// (1) isolated GC stalls — high p99 from a single long pause, but ELU averages
-// down across the window; (2) bursty IPC reply storms — p99 climbs from
-// queueing but the loop reaches idle between bursts; (3) synchronous native UI
-// work (file dialogs, window-drag, plugin loads that block libuv) — ELU pegs
-// near 1.0 while V8 sits idle waiting on the OS run loop, so p99 stays low.
-// A genuine sustained-saturation event has both high tail latency AND high
-// loop occupancy. ELU alone doesn't catch periodic long sync work; p99 alone
-// trips on the cases above.
+// (1) isolated GC stalls — GC runs on the JS thread, so GC time counts as
+// ACTIVE in ELU, not idle. A single long GC pause produces ONE histogram
+// sample which cannot move p99 meaningfully across a 5-second window; the
+// p99 threshold rejects these before ELU is even consulted.
+// (2) bursty IPC reply storms — p99 climbs from queueing but the loop
+// reaches idle between bursts so ELU stays moderate; (3) synchronous native
+// UI work (file dialogs, window-drag, plugin loads that block libuv) — ELU
+// pegs near 1.0 while V8 sits idle waiting on the OS run loop, so p99 stays
+// low. A genuine sustained-saturation event has both high tail latency AND
+// high loop occupancy. ELU alone doesn't catch periodic long sync work; p99
+// alone trips on the cases above.
+// Exit uses a sliding K-of-N window so occasional jitter (e.g. efficiency
+// mode's own batched work) doesn't permanently restart recovery. A hard time
+// cap bounds the latch so a pathological feedback loop can't pin the app to
+// efficiency forever — after the cap the latch force-clears and the normal
+// entry path will re-arm if saturation is genuinely ongoing. The cap is a
+// stuck-latch escape, not a saturation override: under truly sustained lag
+// (p99 + ELU both still elevated) the moderate entry path will re-latch
+// within 10s, which is correct.
 const LAG_SAMPLE_INTERVAL_MS = 5_000;
 const LAG_HISTOGRAM_RESOLUTION_MS = 10;
 const LAG_ENTRY_P99_MS = 250;
 const LAG_ENTRY_ELU = 0.7;
 const LAG_ESCALATE_P99_MS = 500;
 const LAG_EXIT_P99_MS = 150;
-const LAG_ENTER_TICKS_REQUIRED = 2; // 10s sustained
-const LAG_EXIT_TICKS_REQUIRED = 9; // 45s clean
+const LAG_ENTER_TICKS_REQUIRED = 2; // 10s sustained for moderate entry
+const LAG_EXIT_WINDOW_SAMPLES = 9; // 45s sliding window
+const LAG_EXIT_CLEAN_REQUIRED = 7; // 7-of-9 clean tolerates 2 noisy samples
+const LAG_PRESSURE_MAX_MS = 120_000; // 2-minute hard cap on stuck latch
 
 // Memory-pressure thresholds scale with device RAM so machines with very
 // different physical memory behave sensibly. On an 8 GB machine these
@@ -56,13 +83,29 @@ const LAG_EXIT_TICKS_REQUIRED = 9; // 45s clean
 // stops false "efficiency" drops when the app has plenty of headroom.
 const HIGH_FRACTION = 0.15;
 const LOW_FRACTION = 0.08;
-const WORKTREE_COUNT_HIGH = 8;
+
+// Fleet-size signal (live agent terminals in working/waiting/directing states).
+// Each running agent's resident memory is ~200–500 MB, so a graduated curve
+// reflects that fleet size scales pressure roughly linearly. A flat +1 was
+// indistinguishable across 8, 16, and 24 agents — those have wildly different
+// memory footprints and the service must react accordingly.
+const FLEET_COUNT_HIGH = 8;
+const FLEET_COUNT_VERY_HIGH = 16;
+const FLEET_COUNT_CRITICAL = 24;
+
+// System-available memory thresholds expressed as fractions of total RAM so
+// devices with very different physical memory behave consistently. On macOS
+// "available" = free + purgeable; elsewhere it's free alone. The score scales
+// alongside the app-private signal to catch the case where the OS as a whole
+// is starved by other processes even when this app's footprint is modest.
+const SYS_AVAILABLE_HIGH_FRACTION = 0.2;
+const SYS_AVAILABLE_LOW_FRACTION = 0.1;
 
 export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getHibernationService: () => HibernationService | null;
-  getProjectViewManager: () => ProjectViewManager | null;
+  getAllProjectViewManagers: () => ProjectViewManager[];
   getProjectStatsService: () => ProjectStatsService | null;
   getUserCachedViewLimit: () => number;
 }
@@ -74,24 +117,39 @@ export class ResourceProfileService {
   private evalCleanup: (() => void) | null = null;
   private tickCount = 0;
   private disposed = false;
-  private cachedWorktreeCount = 0;
+  private cachedActiveAgentCount = 0;
+  // Monotonic counter; bumped on every start() and refreshFleetState() invocation
+  // so that promises from a previous lifecycle (or out-of-order responses within
+  // one lifecycle) can be detected and dropped without contaminating the cache.
+  private refreshGeneration = 0;
   private thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical" = "unknown";
   private speedLimit = 100;
   private isOnBattery = false;
   private readonly memoryThresholdHighMb: number;
   private readonly memoryThresholdLowMb: number;
+  private readonly sysMemThresholdHighMb: number;
+  private readonly sysMemThresholdLowMb: number;
   private lagInterval: NodeJS.Timeout | null = null;
   private lagHistogram: IntervalHistogram | null = null;
   private lagPreviousElu: EventLoopUtilization | null = null;
   private lagPressureActive = false;
   private lagEscalatedActive = false;
   private lagEnterTicks = 0;
-  private lagExitTicks = 0;
+  private lagExitWindow: boolean[] = [];
+  private lagPressureStartedAt: number | null = null;
+  // Memory sub-score captured from the most recent computeTargetProfile() run.
+  // Gates the setCachedViewLimit(1) clamp on efficiency entry so non-memory
+  // efficiency triggers (battery + thermal/CPU + worktrees) don't pay the
+  // cost of destroying cached WebContentsViews. sampleLag() bypasses
+  // computeTargetProfile() and must zero this before calling applyProfile().
+  private lastMemoryScore = 0;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
     this.memoryThresholdHighMb = totalRamMb * HIGH_FRACTION;
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
+    this.sysMemThresholdHighMb = totalRamMb * SYS_AVAILABLE_HIGH_FRACTION;
+    this.sysMemThresholdLowMb = totalRamMb * SYS_AVAILABLE_LOW_FRACTION;
   }
 
   private onThermalStateChange = (details: { state: string }): void => {
@@ -140,10 +198,6 @@ export class ResourceProfileService {
     this.isOnBattery = false;
   };
 
-  setWorktreeCount(count: number): void {
-    this.cachedWorktreeCount = count;
-  }
-
   getProfile(): ResourceProfile {
     return this.currentProfile;
   }
@@ -154,10 +208,18 @@ export class ResourceProfileService {
     this.tickCount = 0;
     this.candidateProfile = null;
     this.candidateFirstSeenAt = null;
+    // Zero the fleet-count cache so a stop → start cycle does not inherit
+    // pressure from a previous lifecycle's fleet. The first refresh below
+    // re-populates from the live PTY host.
+    this.cachedActiveAgentCount = 0;
+    // Bump the generation so any in-flight promise from the previous lifecycle
+    // (or any earlier refresh in this lifecycle) will see a stale generation
+    // in its .then() and drop its result.
+    this.refreshGeneration += 1;
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
-    this.refreshWorktreeCount();
+    this.refreshFleetState();
 
     powerMonitor.on("thermal-state-change", this.onThermalStateChange);
     powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
@@ -172,19 +234,31 @@ export class ResourceProfileService {
     powerMonitor.on("on-ac", this.onAcPower);
 
     this.evalCleanup = setAlignedInterval(() => {
-      this.refreshWorktreeCount();
+      this.refreshFleetState();
       this.evaluate();
     }, EVAL_INTERVAL_MS);
 
-    // Push the initial profile's low-memory floor so the feature is armed on
-    // launch even when the service stays on its default profile (`balanced`)
-    // and applyProfile() never runs.
-    const pvm = this.deps.getProjectViewManager();
-    if (pvm) {
+    // Push the initial profile's PVM settings so they are armed on launch
+    // even when the service stays on its default profile (`balanced`) and
+    // applyProfile() never runs. Fan out to every window's PVM so
+    // multi-window sessions are armed alongside the original window.
+    // Paint-gate values are no-ops at default but pushed for symmetry so the
+    // profile config remains the single source of truth — drift in the PVM
+    // defaults stops mattering.
+    const initialConfig = RESOURCE_PROFILE_CONFIGS[this.currentProfile];
+    for (const pvm of this.deps.getAllProjectViewManagers()) {
       try {
-        pvm.setLowMemoryFreeThresholdMb(
-          RESOURCE_PROFILE_CONFIGS[this.currentProfile].lowMemoryFreeThresholdMb
-        );
+        pvm.setLowMemoryFreeThresholdMb(initialConfig.lowMemoryFreeThresholdMb);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateTimeoutMs(initialConfig.paintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateHardTimeoutMs(initialConfig.paintGateHardTimeoutMs);
       } catch {
         // non-critical
       }
@@ -226,6 +300,14 @@ export class ResourceProfileService {
     this.lagInterval.unref();
   }
 
+  private clearLagPressure(): void {
+    this.lagPressureActive = false;
+    this.lagEscalatedActive = false;
+    this.lagEnterTicks = 0;
+    this.lagExitWindow = [];
+    this.lagPressureStartedAt = null;
+  }
+
   private sampleLag(): void {
     if (this.disposed || !this.lagHistogram) return;
 
@@ -259,25 +341,49 @@ export class ResourceProfileService {
       utilization = 0;
     }
 
-    // Exit path runs first: a window that drops below 150ms while degraded
-    // counts toward recovery even if it would also satisfy the entry condition
-    // on a separate cycle.
+    // Exit path runs first while the latch is held. A sliding K-of-N window
+    // tolerates jitter (e.g. efficiency mode's own batched work spiking p99
+    // a few times in a 9-sample window), and a hard time cap force-clears the
+    // latch if it has been held too long — preventing pathological feedback
+    // loops from pinning the app to efficiency indefinitely.
     if (this.lagPressureActive) {
-      if (p99Ms < LAG_EXIT_P99_MS) {
-        this.lagExitTicks += 1;
-        if (this.lagExitTicks >= LAG_EXIT_TICKS_REQUIRED) {
-          this.lagPressureActive = false;
-          this.lagEscalatedActive = false;
-          this.lagEnterTicks = 0;
-          this.lagExitTicks = 0;
+      const now = Date.now();
+      // Defensive: if lagPressureStartedAt is null while the latch is held the
+      // cap can never measure elapsed time, so honor it as "definitely past
+      // the cap" and force-clear. The two entry paths always set both fields
+      // together, so this branch is unreachable in production — but the cap is
+      // the last-resort escape and shouldn't be silently disarmed by an
+      // unexpected state.
+      if (
+        this.lagPressureStartedAt === null ||
+        now - this.lagPressureStartedAt >= LAG_PRESSURE_MAX_MS
+      ) {
+        const durationMs = this.lagPressureStartedAt === null ? 0 : now - this.lagPressureStartedAt;
+        logInfo("event-loop-lag-force-cleared", {
+          p99Ms: Math.round(p99Ms),
+          maxMs: Math.round(maxMs),
+          durationMs,
+        });
+        this.clearLagPressure();
+        return;
+      }
+
+      const isClean = p99Ms < LAG_EXIT_P99_MS;
+      this.lagExitWindow.push(isClean);
+      if (this.lagExitWindow.length > LAG_EXIT_WINDOW_SAMPLES) {
+        this.lagExitWindow.shift();
+      }
+      if (this.lagExitWindow.length >= LAG_EXIT_WINDOW_SAMPLES) {
+        const cleanCount = this.lagExitWindow.reduce((sum, clean) => (clean ? sum + 1 : sum), 0);
+        if (cleanCount >= LAG_EXIT_CLEAN_REQUIRED) {
           logInfo("event-loop-lag-cleared", {
             p99Ms: Math.round(p99Ms),
             maxMs: Math.round(maxMs),
           });
+          this.clearLagPressure();
+          return;
         }
-        return;
       }
-      this.lagExitTicks = 0;
 
       if (p99Ms > LAG_ESCALATE_P99_MS && !this.lagEscalatedActive) {
         this.lagEscalatedActive = true;
@@ -290,17 +396,58 @@ export class ResourceProfileService {
       return;
     }
 
+    // Severe-spike fast path: a single sample above the escalation threshold
+    // with sustained high ELU enters the latch immediately, halving the
+    // worst-case reaction time for genuine saturation bursts. ELU is still
+    // AND-gated to preserve the GC/native-UI false-positive filter.
+    if (p99Ms > LAG_ESCALATE_P99_MS && utilization > LAG_ENTRY_ELU) {
+      this.lagPressureActive = true;
+      this.lagEscalatedActive = true;
+      this.lagEnterTicks = 0;
+      this.lagExitWindow = [];
+      this.lagPressureStartedAt = Date.now();
+      // Emit both events on the same tick: log consumers expect the standard
+      // entry signal first, then the escalation signal. The dual-emit keeps
+      // the event stream consistent for code that subscribes only to one.
+      logInfo("event-loop-lag-detected", {
+        p99Ms: Math.round(p99Ms),
+        maxMs: Math.round(maxMs),
+        utilization: Math.round(utilization * 100) / 100,
+      });
+      logInfo("event-loop-lag-escalated", {
+        p99Ms: Math.round(p99Ms),
+        maxMs: Math.round(maxMs),
+        utilization: Math.round(utilization * 100) / 100,
+      });
+      if (this.currentProfile !== "efficiency") {
+        // Severe-spike lag entry bypasses computeTargetProfile(), so
+        // lastMemoryScore holds whatever the previous eval recorded (stale).
+        // The trigger here is CPU/event-loop, not memory — zero it so the
+        // setCachedViewLimit(1) clamp in applyProfile() stays off.
+        this.lastMemoryScore = 0;
+        this.applyProfile("efficiency");
+      }
+      return;
+    }
+
     if (p99Ms > LAG_ENTRY_P99_MS && utilization > LAG_ENTRY_ELU) {
       this.lagEnterTicks += 1;
       if (this.lagEnterTicks >= LAG_ENTER_TICKS_REQUIRED) {
         this.lagPressureActive = true;
         this.lagEnterTicks = 0;
+        this.lagExitWindow = [];
+        this.lagPressureStartedAt = Date.now();
         logInfo("event-loop-lag-detected", {
           p99Ms: Math.round(p99Ms),
           maxMs: Math.round(maxMs),
           utilization: Math.round(utilization * 100) / 100,
         });
         if (this.currentProfile !== "efficiency") {
+          // Lag-triggered efficiency entry bypasses computeTargetProfile(), so
+          // lastMemoryScore holds whatever the previous eval recorded (stale).
+          // The trigger here is CPU/event-loop, not memory — zero it so the
+          // setCachedViewLimit(1) clamp in applyProfile() stays off.
+          this.lastMemoryScore = 0;
           this.applyProfile("efficiency");
         }
       }
@@ -309,22 +456,82 @@ export class ResourceProfileService {
     }
   }
 
-  private refreshWorktreeCount(): void {
+  private refreshFleetState(): void {
     if (this.disposed) return;
     // Under sustained event-loop saturation, skip the only optional async work
-    // in this service. Cached count is used until pressure clears.
+    // in this service. Cached counts are used until pressure clears.
     if (this.lagEscalatedActive) return;
-    const workspaceClient = this.deps.getWorkspaceClient();
-    if (!workspaceClient) return;
-    workspaceClient
-      .getAllStatesAsync()
-      .then((states) => {
+
+    const ptyClient = this.deps.getPtyClient();
+    if (!ptyClient) return;
+
+    // Capture the generation at request time. Any later refresh (or a stop →
+    // start cycle) bumps the counter, so when our .then() runs we can detect
+    // that a fresher request is in flight and drop our stale result.
+    this.refreshGeneration += 1;
+    const generation = this.refreshGeneration;
+
+    ptyClient
+      .getAllTerminalsAsync()
+      .then((terminals) => {
         if (this.disposed) return;
-        this.cachedWorktreeCount = states.length;
+        if (generation !== this.refreshGeneration) return;
+        this.cachedActiveAgentCount = this.countActiveAgentTerminals(terminals);
       })
       .catch(() => {
-        // non-critical — use last known count
+        // PtyClient.getAllTerminalsAsync absorbs IPC failures and resolves
+        // with []; this branch only fires for an unexpected throw inside the
+        // .then() above. Leave the cache untouched in that case.
       });
+  }
+
+  private countActiveAgentTerminals(terminals: ActiveAgentTerminalLike[]): number {
+    let count = 0;
+    for (const t of terminals) {
+      if (t.isTrashed) continue;
+      // Orphaned terminals whose PTY process exited still carry stale agent
+      // metadata. Mirrors ProjectStatsService's per-project active-agent
+      // counter — without this, a fleet that exited without being trashed
+      // would keep the score pinned to `efficiency` forever.
+      if (t.hasPty === false) continue;
+      if (!t.agentState || !ACTIVE_AGENT_STATES.has(t.agentState)) continue;
+      // Only count terminals with an agent identity. `detectedAgentId` is the
+      // strongest signal (runtime-detected). A non-empty `launchAgentId` is
+      // accepted only before runtime detection has ever fired — once
+      // `everDetectedAgent` is true, missing `detectedAgentId` means the agent
+      // exited and we should not double-count the residual shell.
+      const hasIdentity =
+        Boolean(t.detectedAgentId) || (Boolean(t.launchAgentId) && t.everDetectedAgent !== true);
+      if (!hasIdentity) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Read system-wide available memory in MB. Mirrors
+   * ProjectViewManager.getAvailableMemoryMb(): on macOS "available" =
+   * free + purgeable, because Darwin holds reclaimable pages as purgeable
+   * rather than free. On Windows/Linux, `free` alone is accurate. Returns
+   * null when the Chromium API is unavailable (e.g., under test mocks).
+   */
+  private getAvailableSystemMemoryMb(): number | null {
+    try {
+      const getInfo = (
+        process as {
+          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+        }
+      ).getSystemMemoryInfo;
+      if (typeof getInfo !== "function") return null;
+      const info = getInfo.call(process);
+      const freeKb = typeof info.free === "number" ? info.free : 0;
+      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+      const availableKb = freeKb + purgeableKb;
+      if (availableKb <= 0) return null;
+      return availableKb / 1024;
+    } catch {
+      return null;
+    }
   }
 
   stop(): void {
@@ -350,10 +557,8 @@ export class ResourceProfileService {
       this.lagHistogram = null;
     }
     this.lagPreviousElu = null;
-    this.lagPressureActive = false;
-    this.lagEscalatedActive = false;
-    this.lagEnterTicks = 0;
-    this.lagExitTicks = 0;
+    this.clearLagPressure();
+    this.lastMemoryScore = 0;
     this.thermalState = "unknown";
     this.isOnBattery = false;
     this.speedLimit = 100;
@@ -395,23 +600,29 @@ export class ResourceProfileService {
 
   private computeTargetProfile(): ResourceProfile {
     let pressureScore = 0;
+    let memoryScore = 0;
 
     // Memory signal
     try {
       const metrics = app.getAppMetrics();
       let totalPrivateMb = 0;
       for (const proc of metrics) {
-        totalPrivateMb += (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
+        // workingSetSize is the only cross-platform field — privateBytes is
+        // Windows-only and returns 0 (not undefined) on macOS/Linux, so the
+        // previous `?? workingSetSize` fallback silently never fired there.
+        totalPrivateMb += proc.memory.workingSetSize / 1024;
       }
 
       if (totalPrivateMb > this.memoryThresholdHighMb) {
-        pressureScore += 2;
+        memoryScore = 2;
       } else if (totalPrivateMb > this.memoryThresholdLowMb) {
-        pressureScore += 1;
+        memoryScore = 1;
       }
     } catch {
-      // Skip memory signal on error
+      // Skip memory signal on error — memoryScore stays 0 (correct: no measurement, no clamp)
     }
+    pressureScore += memoryScore;
+    this.lastMemoryScore = memoryScore;
 
     // Battery signal (cached from startup + transition events)
     if (this.isOnBattery) {
@@ -426,10 +637,33 @@ export class ResourceProfileService {
     if (this.speedLimit < 50) pressureScore += 2;
     else if (this.speedLimit < 100) pressureScore += 1;
 
-    // Worktree count signal
-    const worktreeCount = this.cachedWorktreeCount;
-    if (worktreeCount >= WORKTREE_COUNT_HIGH) {
+    // Fleet-size signal (graduated). Counts live agent terminals filtered
+    // through ACTIVE_AGENT_STATES rather than worktrees: an idle worktree
+    // costs negligible incremental memory, but each running agent runtime
+    // (Claude, Gemini, Codex) is hundreds of MB. With a flat +1 at 8, a 24-
+    // agent fleet scored identically to an 8-worktree project and could
+    // never reach `efficiency` from fleet size alone.
+    const agentCount = this.cachedActiveAgentCount;
+    if (agentCount >= FLEET_COUNT_CRITICAL) {
+      pressureScore += 3;
+    } else if (agentCount >= FLEET_COUNT_VERY_HIGH) {
+      pressureScore += 2;
+    } else if (agentCount >= FLEET_COUNT_HIGH) {
       pressureScore += 1;
+    }
+
+    // System-available memory signal. The app-private signal above only sees
+    // this process's footprint; if another app on the box is hoarding RAM
+    // and the OS is paging, we want to back off even when our own memory
+    // looks fine. Mirrors the (free + purgeable) pattern ProjectViewManager
+    // already uses for cached-view eviction.
+    const sysAvailMb = this.getAvailableSystemMemoryMb();
+    if (sysAvailMb !== null) {
+      if (sysAvailMb < this.sysMemThresholdLowMb) {
+        pressureScore += 2;
+      } else if (sysAvailMb < this.sysMemThresholdHighMb) {
+        pressureScore += 1;
+      }
     }
 
     if (pressureScore >= 3) return "efficiency";
@@ -461,6 +695,8 @@ export class ResourceProfileService {
         workspaceClient.updateMonitorConfig({
           pollIntervalActive: config.pollIntervalActive,
           pollIntervalBackground: config.pollIntervalBackground,
+          fetchIntervalActiveMs: config.fetchIntervalActiveMs,
+          fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
         });
       } catch {
         // non-critical
@@ -500,21 +736,27 @@ export class ResourceProfileService {
     // Adjust cached project view limit under memory pressure.
     // Cached WebContentsViews cost ~100–500 MB RSS each (full Chromium renderer),
     // so clamping to 1 on efficiency reclaims the largest memory chunk available.
-    // NOTE: only reaches the primary window's PVM (single-window scope) — mirrors
-    // the existing PtyClient/HibernationService ref pattern.
-    // TODO: memory-pressure eviction bypasses the browser/dev-preview state-capture
-    // flow used in project-switch-initiated eviction (see issue #5009).
-    const pvm = this.deps.getProjectViewManager();
-    if (pvm) {
+    // Fan out across every open window's PVM so multi-window sessions all
+    // honor the profile change, not just the most-recently-created window.
+    for (const pvm of this.deps.getAllProjectViewManagers()) {
       // Split try/catch per call: a throw from setCachedViewLimit (e.g. an
       // onViewEvicted callback failing inside evictStaleViews) must NOT block
       // setEfficiencyFreeze(false) on the exit path — leaving renderers
-      // frozen after we've left efficiency has no recovery trigger.
+      // frozen after we've left efficiency has no recovery trigger. The same
+      // isolation applies per-PVM: a failure on one window must not skip the
+      // remaining windows in the iteration.
       if (profile === "efficiency") {
-        try {
-          pvm.setCachedViewLimit(1);
-        } catch {
-          // non-critical
+        // Only destroy cached WebContentsViews when memory actually contributed
+        // to entering efficiency. Battery + thermal/CPU-only triggers are
+        // handled by setEfficiencyFreeze(true) alone, and evictStaleViews()
+        // has its own lowMemoryFreeThresholdMb floor that clamps to 1 when
+        // free RAM really is low (independent of profile).
+        if (this.lastMemoryScore > 0) {
+          try {
+            pvm.setCachedViewLimit(1);
+          } catch {
+            // non-critical
+          }
         }
         try {
           // Freeze cached project views' renderers via CDP under efficiency to
@@ -543,6 +785,22 @@ export class ResourceProfileService {
       // it, without mutating the user-configured `maxCachedViews`.
       try {
         pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
+      } catch {
+        // non-critical
+      }
+
+      // Push per-profile paint-gate timeouts. Cold starts run measurably
+      // slower under efficiency (memory/thermal/battery pressure), so the
+      // soft warning bound stretches from 3s to 5s and the hard fall-through
+      // bound from 8s to 12s. Each setter wrapped in its own try/catch so a
+      // throw from one doesn't skip the other.
+      try {
+        pvm.setPaintGateTimeoutMs(config.paintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setPaintGateHardTimeoutMs(config.paintGateHardTimeoutMs);
       } catch {
         // non-critical
       }

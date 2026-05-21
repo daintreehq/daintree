@@ -30,11 +30,11 @@ function isValidBounds(bounds: unknown): bounds is PortalBounds {
 }
 
 export function registerPortalHandlers(deps: HandlerDependencies): () => void {
-  const sendMenuAction = (win: Electron.BrowserWindow, action: string) => {
+  const sendMenuAction = (win: Electron.BrowserWindow, actionId: string, args?: unknown) => {
     try {
       const appWebContents = getAppWebContents(win);
       if (appWebContents.isDestroyed()) return;
-      appWebContents.send(CHANNELS.MENU_ACTION, action);
+      appWebContents.send(CHANNELS.MENU_ACTION, { actionId, args });
     } catch (error) {
       console.warn("[PortalHandler] Failed to send portal menu action:", error);
     }
@@ -187,13 +187,13 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
                 ...(links.length > 0 ? [{ type: "separator" as const }] : []),
                 {
                   label: "Manage Portal Settings...",
-                  click: () => sendMenuAction(win, "open-settings:portal"),
+                  click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
                 },
               ],
             },
             {
               label: "Manage Portal Settings...",
-              click: () => sendMenuAction(win, "open-settings:portal"),
+              click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
             },
           ]);
 

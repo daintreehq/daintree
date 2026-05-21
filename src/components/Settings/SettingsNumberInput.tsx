@@ -5,6 +5,7 @@ interface SettingsNumberInputProps extends Omit<ComponentPropsWithoutRef<"input"
   label: string;
   description?: ReactNode;
   error?: string;
+  touched?: boolean;
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;

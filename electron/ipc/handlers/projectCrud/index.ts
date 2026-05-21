@@ -26,7 +26,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     registerProjectStatsHandlers(deps),
     registerProjectCrudCoreHandlers(deps),
     registerProjectSwitchHandlers(deps),
-    registerProjectSettingsHandlers(),
+    registerProjectSettingsHandlers(deps),
     registerGitInitHandlers(),
     registerGitCloneHandlers(),
     registerProjectPrefetchHandlers(),

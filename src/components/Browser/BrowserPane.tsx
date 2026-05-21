@@ -36,8 +36,7 @@ import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useFindInPage } from "@/hooks/useFindInPage";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
 
 export interface BrowserPaneProps extends BasePanelProps {
@@ -145,7 +144,7 @@ export function BrowserPane({
 
   const [isLoading, setIsLoading] = useState(true);
   // Doherty 400ms gate: skip loading affordances on fast loads to prevent flicker.
-  const showLoadingOverlay = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
+  const showLoadingOverlay = useDohertyGate(isLoading);
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [blockedNav, setBlockedNav] = useState<{
     url: string;
@@ -684,7 +683,7 @@ export function BrowserPane({
                   >
                     <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
                     <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
-                      Open in External Browser
+                      Open in external browser
                     </span>
                   </button>
                 </div>
@@ -713,7 +712,7 @@ export function BrowserPane({
                     }}
                     className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
                   >
-                    Open in External Browser
+                    Open in external browser
                   </button>
                 )}
                 <button

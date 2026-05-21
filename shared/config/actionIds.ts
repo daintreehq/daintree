@@ -27,6 +27,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.refresh",
   "worktree.refreshPullRequests",
   "worktree.restartService",
+  "worktree.retryProjectLoad",
   "worktree.setActive",
   "worktree.create",
   "worktree.delete",
@@ -62,6 +63,9 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.resource.config.get",
   "worktree.resource.config.set",
 
+  // -- worktreeLifecycleActions --
+  "worktree.lifecycle.retrySetup",
+
   // -- worktreeSessionActions --
   "worktree.sessions.minimizeAll",
   "worktree.sessions.maximizeAll",
@@ -70,6 +74,10 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.sessions.closeCompleted",
   "worktree.sessions.trashAll",
   "worktree.sessions.endAll",
+
+  // -- worktreeBulkActions (overview multi-select) --
+  "worktree.bulk.closeSessions",
+  "worktree.bulk.remove",
 
   // -- workflowActions --
   "workflow.startWorkOnIssue",
@@ -177,12 +185,25 @@ export const BUILT_IN_ACTION_IDS = [
   "window.zoomReset",
   "window.close",
 
+  // -- forgeActions (provider-routed; GitHub-only today) --
+  "forge.openIssues",
+  "forge.openPRs",
+  "forge.openCommits",
+  "forge.openIssue",
+  "forge.assignIssue",
+  "forge.validateToken",
+
   // -- githubActions --
+  // Five entries (openIssues, openPRs, openCommits, openIssue, validateToken)
+  // are one-release aliases that forward to forge.*. assignIssue is a net-new
+  // alias matching forge.assignIssue for parity. Removed in the release after
+  // this one with a CHANGELOG callout.
   "github.openIssues",
   "github.openPRs",
   "github.openCommits",
   "github.openIssue",
   "github.openPR",
+  "github.assignIssue",
   "github.getRepoStats",
   "github.listIssues",
   "github.listPullRequests",
@@ -235,6 +256,10 @@ export const BUILT_IN_ACTION_IDS = [
   // -- errorActions --
   "errors.clearAll",
   "errors.openLogs",
+  "errors.recent",
+
+  // -- notificationActions --
+  "notifications.recent",
 
   // -- eventInspectorActions --
   "eventInspector.getEvents",
@@ -254,9 +279,15 @@ export const BUILT_IN_ACTION_IDS = [
   "recipe.editor.openFromLayout",
   "recipe.manager.open",
   "recipe.saveToRepo",
+  "recipe.delete",
 
   // -- agentActions --
   "agent.launch",
+  "agent.terminal",
+  "agent.focusNextWaiting",
+  "agent.focusNextWorking",
+  "agent.focusNextAgent",
+  "agent.focusPreviousAgent",
   "agent.getState",
 
   // -- app settings (other) --
@@ -268,6 +299,8 @@ export const BUILT_IN_ACTION_IDS = [
   "actions.list",
   "actions.getContext",
   "actions.persistedStores",
+  "actions.search",
+  "actions.getSchema",
 
   // -- terminalLifecycleActions --
   "terminal.restart",
@@ -276,6 +309,10 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.toggleInputLock",
   "terminal.viewInfo",
   "terminal.restartService",
+  "watchdog.restart",
+  "terminal.new",
+  "terminal.hibernate",
+  "terminal.hibernateAllIdle",
 
   // -- terminalNavigationActions --
   "terminal.moveToDock",
@@ -304,6 +341,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.copyLink",
   "terminal.contextMenu",
   "terminal.sendToAgent",
+  "terminal.inject",
   "terminal.bulkCommand",
   "terminal.stashInput",
   "terminal.popStash",
@@ -378,11 +416,21 @@ export const BUILT_IN_ACTION_IDS = [
   "portal.tabs.reorder",
   "portal.listTabs",
 
+  // -- helpActions --
+  "help.gettingStarted.show",
+
   // -- uiActions --
   "ui.sidebar.resetWidth",
 
   // -- devServerActions --
   "devServer.start",
+  "devPreview.stop",
+
+  // -- devPreviewActions --
+  "devPreview.reloadPreview",
+  "devPreview.restart",
+  "devPreview.restartAndClearCache",
+  "devPreview.reinstallAndRestart",
 
   // -- envActions --
   "env.global.get",

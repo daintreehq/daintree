@@ -210,6 +210,77 @@ describe("TerminalRendererPolicy adversarial", () => {
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
+  it("BACKGROUND_SEEDED_TERMINAL_FLUSHES_ON_FIRST_ACTIVATION", async () => {
+    // Mirrors the initial-BACKGROUND wiring: TerminalInstanceService seeds
+    // the backend tier via initializeBackendTier("id","background") so the
+    // first promotion is a real BACKGROUND→active transition that flushes.
+    const wake = deferred<boolean>();
+    const managed = createManagedTerminal({
+      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+      needsWake: true,
+    });
+    const deps: RendererPolicyDeps = {
+      getInstance: vi.fn(() => managed),
+      wakeAndRestore: vi.fn(() => wake.promise),
+      onResumeFlush: vi.fn(),
+      onPostWake: vi.fn(),
+    };
+
+    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+    const policy = new TerminalRendererPolicy(deps);
+    policy.initializeBackendTier("terminal-1", "background");
+
+    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
+    expect(deps.wakeAndRestore).toHaveBeenCalledTimes(1);
+
+    wake.resolve(true);
+    await wake.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(managed.terminal.refresh).toHaveBeenCalled();
+    expect(deps.onResumeFlush).toHaveBeenCalledWith("terminal-1");
+  });
+
+  it("REBACKGROUND_DURING_WAKE_DOES_NOT_FLUSH_HIDDEN_PANE", async () => {
+    const wake = deferred<boolean>();
+    const managed = createManagedTerminal({
+      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+      getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      needsWake: true,
+    });
+    const deps: RendererPolicyDeps = {
+      getInstance: vi.fn(() => managed),
+      wakeAndRestore: vi.fn(() => wake.promise),
+      onResumeFlush: vi.fn(),
+      onPostWake: vi.fn(),
+    };
+
+    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+    const policy = new TerminalRendererPolicy(deps);
+    policy.initializeBackendTier("terminal-1", "background");
+
+    // BACKGROUND→FOCUSED starts a wake (generation G1).
+    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
+    expect(deps.wakeAndRestore).toHaveBeenCalledTimes(1);
+
+    // Re-backgrounded before the wake resolves (downgrade → hysteresis timer).
+    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.BACKGROUND);
+    vi.advanceTimersByTime(1000);
+
+    // The previously in-flight wake now resolves — it must be a no-op:
+    // the terminal is hidden again, so no refresh/flush into a dead pane.
+    wake.resolve(true);
+    await wake.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    expect(deps.onPostWake).not.toHaveBeenCalled();
+    expect(deps.onResumeFlush).not.toHaveBeenCalled();
+  });
+
   it("CLEAR_TIER_STATE_CANCELS_PENDING_WAKE_AND_RELEASES_GENERATION", async () => {
     const wake = deferred<boolean>();
     const managed = createManagedTerminal({

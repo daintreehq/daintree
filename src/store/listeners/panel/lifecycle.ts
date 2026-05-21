@@ -7,6 +7,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -62,6 +63,11 @@ export async function handleFallbackTriggered(data: {
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
   const fromName = fromPreset?.name ?? fromPresetId;
 
+  // Pair the fallback error/success notifications so a later "switched to
+  // fallback preset" success archives the prior error from the inbox instead
+  // of leaving a stale "unavailable" row behind.
+  const fallbackSupersedeKey = `terminal.${terminalId}.fallback`;
+
   if (!nextPresetId) {
     // Chain exhausted: surface a single error notification. No respawn.
     const isExhausted = chain.length > 0;
@@ -73,6 +79,7 @@ export async function handleFallbackTriggered(data: {
         ? `All fallback presets were tried. Configure fallback presets or restart the terminal manually.`
         : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
       duration: 12000,
+      supersedeKey: fallbackSupersedeKey,
       action: {
         label: "Open agent settings",
         actionId: "app.settings.openTab",
@@ -98,6 +105,7 @@ export async function handleFallbackTriggered(data: {
       title: "Fallback preset missing",
       message: `Preset "${nextPresetId}" is no longer configured. Check fallback settings or restart the terminal.`,
       duration: 12000,
+      supersedeKey: fallbackSupersedeKey,
       action: {
         label: "Open agent settings",
         actionId: "app.settings.openTab",
@@ -139,14 +147,17 @@ export async function handleFallbackTriggered(data: {
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : `${fromName} unreachable — now running "${nextPreset.name}".`,
+        supersedeKey: fallbackSupersedeKey,
       });
     } else {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         priority: "high",
         title: "Fallback activation failed",
         message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
         duration: 12000,
+        supersedeKey: fallbackSupersedeKey,
       });
     }
   } finally {
@@ -216,10 +227,15 @@ export function setupLifecycleListeners(): DisposableStore {
       terminalRegistryController.onRestored((data: { id: string }) => {
         const { id } = data;
         usePanelStore.getState().markAsRestored(id);
-        const previousFocusedId = usePanelStore.getState().focusedId;
+        const { focusedId: previousFocusedId, activeDockTerminalId } = usePanelStore.getState();
+        // Only clear the open dock popover when the restored terminal IS the
+        // one displayed in it. A background terminal waking from hibernation
+        // must not silently dismiss an unrelated dock session the user is
+        // typing into (#8368).
+        const clearsActiveDock = activeDockTerminalId === id;
         usePanelStore.setState({
           focusedId: id,
-          activeDockTerminalId: null,
+          ...(clearsActiveDock && { activeDockTerminalId: null }),
           ...(previousFocusedId !== id && { previousFocusedId }),
         });
       })
@@ -331,7 +347,7 @@ export function setupLifecycleListeners(): DisposableStore {
           terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
-        usePanelStore.getState().updateFlowStatus(id, status, timestamp);
+        enqueueFlowStatusUpdate(id, status, timestamp);
         if (status === "suspended" || status === "paused-backpressure") {
           terminalInstanceService.wake(id);
         }

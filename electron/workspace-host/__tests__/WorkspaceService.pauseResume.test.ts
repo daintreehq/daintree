@@ -65,6 +65,7 @@ vi.mock("../../services/worktree/index.js", () => ({
       calculateNextInterval: vi.fn().mockReturnValue(2000),
       recordSuccess: vi.fn(),
       recordFailure: vi.fn(),
+      recordNoChange: vi.fn(),
     };
   }),
   NoteFileReader: vi.fn(function () {
@@ -291,6 +292,10 @@ describe("WorkspaceService.refreshOnWake", () => {
       "main"
     );
     service["monitors"].set(id, monitor);
+    // Start the monitor so refresh() can proceed (otherwise it returns early
+    // because _isRunning is false). refreshOnWake tests call monitor.refresh()
+    // which depends on the monitor being in running state.
+    monitor.start();
     return monitor;
   }
 

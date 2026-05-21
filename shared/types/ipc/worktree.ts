@@ -23,21 +23,6 @@ export interface WorktreeConfig {
   pathPattern: string;
 }
 
-/** Payload for creating a task-scoped worktree */
-export interface CreateForTaskPayload {
-  taskId: string;
-  baseBranch?: string;
-  description?: string;
-}
-
-/** Options for cleaning up a task-scoped worktree */
-export interface CleanupTaskOptions {
-  /** Whether to force delete worktree with uncommitted changes (default: true) */
-  force?: boolean;
-  /** Whether to delete the associated git branch after removing the worktree (default: true) */
-  deleteBranch?: boolean;
-}
-
 /** Persisted worktree-to-issue association */
 export interface IssueAssociation {
   issueNumber: number;

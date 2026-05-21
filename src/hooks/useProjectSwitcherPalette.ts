@@ -6,6 +6,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import type { Project, Scratch } from "@shared/types";
 import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -46,6 +47,14 @@ export interface UseProjectSwitcherPaletteReturn {
   mode: ProjectSwitcherMode;
   query: string;
   results: SearchableProject[];
+  /**
+   * The currently active project as a `SearchableProject`, with stats and
+   * pin/missing flags enriched. Decoupled from `results` so callers (e.g. the
+   * toolbar pill context menu) can read pin/processCount/etc. even when the
+   * active project sits outside the 15-item results window or is filtered out
+   * by the current `query`.
+   */
+  activeProject: SearchableProject | null;
   selectedIndex: number;
   open: (mode?: ProjectSwitcherMode) => void;
   close: () => void;
@@ -70,6 +79,12 @@ export interface UseProjectSwitcherPaletteReturn {
   removeProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
   togglePinProject: (projectId: string) => Promise<void>;
+  /**
+   * Write the project's absolute path to the clipboard and surface a transient
+   * "Path copied" toast. Used by the Copy path context menu action in all
+   * project picker render sites (sidebar dropdown, toolbar dropdown, modal).
+   */
+  copyPath: (path: string) => void;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -151,11 +166,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const reopenProject = useProjectStore((state) => state.reopenProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
-  const closeProject = useProjectStore((state) => state.closeProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const locateProjectFn = useProjectStore((state) => state.locateProject);
   const projectStats = useProjectStatsStore((state) => state.stats);
+
+  const { copy: copyToClipboard } = useCopyWithFeedback();
 
   const scratches = useScratchStore((state) => state.scratches);
   const currentScratch = useScratchStore((state) => state.currentScratch);
@@ -229,6 +245,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
     return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
   }, [query, sortedProjects]);
+
+  // Decoupled from `results` so the toolbar pill keeps the active project's
+  // pin/process state even when search filters exclude it or it sits outside
+  // the MAX_RESULTS window.
+  const activeProject = useMemo<SearchableProject | null>(
+    () => searchableProjects.find((p) => p.isActive) ?? null,
+    [searchableProjects]
+  );
 
   useEffect(() => {
     if (results.length === 0) {
@@ -422,6 +446,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [locateProjectFn]
   );
 
+  const copyPath = useCallback(
+    (path: string) => {
+      void copyToClipboard(path).then((ok) => {
+        if (ok) {
+          notify({ type: "info", title: "Path copied", message: path, transient: true });
+        }
+      });
+    },
+    [copyToClipboard]
+  );
+
   const togglePinProject = useCallback(
     async (projectId: string) => {
       const project = searchableProjects.find((p) => p.id === projectId);
@@ -470,12 +505,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     const capturedId = stopConfirmProjectId;
 
     try {
-      await closeProject(capturedId, { killTerminals: true });
+      await closeActiveProject(capturedId);
       setStopConfirmProjectId(null);
     } catch (error) {
       const retry = async () => {
         try {
-          await closeProject(capturedId, { killTerminals: true });
+          await closeActiveProject(capturedId);
         } catch (retryError) {
           notify({
             type: "error",
@@ -494,7 +529,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     } finally {
       setIsStoppingProject(false);
     }
-  }, [stopConfirmProjectId, closeProject]);
+  }, [stopConfirmProjectId, closeActiveProject]);
 
   const removeProjectFromList = useCallback(
     async (projectId: string) => {
@@ -559,6 +594,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       try {
         await switchScratchAction(scratch.id);
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't switch scratch",
@@ -574,6 +610,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       try {
         await removeScratchActionStore(scratchId);
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't remove scratch",
@@ -594,6 +631,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         await loadProjects();
         setSaveAsProjectConfirm({ scratch, project: result.project });
       } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't save scratch as project",
@@ -616,6 +654,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       await removeScratchActionStore(scratchId);
       setSaveAsProjectConfirm(null);
     } catch (error) {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Couldn't remove original scratch",
@@ -682,6 +721,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     mode,
     query,
     results,
+    activeProject,
     selectedIndex,
     open,
     close,
@@ -699,6 +739,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     removeProject: removeProjectFromList,
     locateProject,
     togglePinProject,
+    copyPath,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,

@@ -4,39 +4,14 @@ import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
-import { disposePtyClient } from "../services/PtyClient.js";
-import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
-import { getWorkspaceClient, disposeWorkspaceClient } from "../services/WorkspaceClient.js";
+import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
-import { taskQueueService } from "../services/TaskQueueService.js";
-import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
-import {
-  agentConnectivityService,
-  getServiceConnectivityRegistry,
-} from "../services/connectivity/index.js";
-import { notificationService } from "../services/NotificationService.js";
-import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
-import {
-  initializeAgentAvailabilityStore,
-  disposeAgentAvailabilityStore,
-} from "../services/AgentAvailabilityStore.js";
-import {
-  initializePowerSaveBlockerService,
-  disposePowerSaveBlockerService,
-} from "../services/PowerSaveBlockerService.js";
-import { initializeAgentRouter, disposeAgentRouter } from "../services/AgentRouter.js";
-import {
-  initializeTaskOrchestrator,
-  disposeTaskOrchestrator,
-} from "../services/TaskOrchestrator.js";
+import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
+import { initializePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
-import { getHibernationService } from "../services/HibernationService.js";
-import { getSystemSleepService } from "../services/SystemSleepService.js";
-import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -49,42 +24,19 @@ import { initGlobalServices } from "./globalServicesInit.js";
 import { initPerWindowServices } from "./perWindowInit.js";
 import {
   getPtyClient,
-  setPtyClientRef,
-  getMainProcessWatchdogClientRef,
-  setMainProcessWatchdogClientRef,
   getWorkspaceClientRef,
   setWorkspaceClientRef,
   getWorktreePortBrokerRef,
   setWorktreePortBrokerRef,
   getCliAvailabilityServiceRef,
-  getCleanupIpcHandlers,
-  setCleanupIpcHandlers,
   getCleanupErrorHandlers,
   setCleanupErrorHandlers,
-  getStopEventLoopLagMonitor,
-  setStopEventLoopLagMonitor,
-  getStopProcessMemoryMonitor,
-  setStopProcessMemoryMonitor,
-  getStopAppMetricsMonitor,
-  setStopAppMetricsMonitor,
-  getStopDiskSpaceMonitor,
-  setStopDiskSpaceMonitor,
-  getResourceProfileService,
-  setResourceProfileService,
-  getCcrConfigService,
-  setCcrConfigService,
-  getAutoUpdaterServiceRef,
-  setAutoUpdaterServiceRef,
-  getWindowsStoreNotifierServiceRef,
-  setWindowsStoreNotifierServiceRef,
-  getAgentNotificationServiceRef,
-  setAgentNotificationServiceRef,
+  setCleanupIpcHandlers,
   getProcessArgvCliHandled,
   setProcessArgvCliHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
   getGlobalServicesInitialized,
-  setGlobalServicesInitialized,
 } from "./serviceRefs.js";
 
 // Re-export the public getters/setters so existing import paths in main.ts,
@@ -150,7 +102,7 @@ export async function setupWindowServices(
   }
 
   // ── Per-window initialization ──
-  const handlerDeps = initPerWindowServices(win, ctx, windowRegistry);
+  const handlerDeps = await initPerWindowServices(win, ctx, windowRegistry);
   const cliAvailabilityService = getCliAvailabilityServiceRef();
 
   console.log("[MAIN] Registering IPC handlers...");
@@ -191,11 +143,11 @@ export async function setupWindowServices(
       if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
       markPerformance(PERF_MARKS.RENDERER_READY);
       createAndDistributePorts(win, ctx);
-      // Refresh workspace direct port on reload (preload context is reset).
-      // With early-renderer mode (default), workspaceClient may still be null
-      // on the first did-finish-load — the initial direct-port attach is
-      // performed by the loadProject() path below once the workspace host is
-      // ready.
+      // Re-register the renderer in directPortViews on reload so
+      // sendToEntryWindows continues routing host events to it. With
+      // early-renderer mode (default), workspaceClient may still be null on
+      // the first did-finish-load — the initial registration is performed by
+      // the loadProject() path below once the workspace host is ready.
       const workspaceClient = getWorkspaceClientRef();
       if (workspaceClient) {
         workspaceClient.attachDirectPort(win.id, appWc);
@@ -324,22 +276,22 @@ export async function setupWindowServices(
   // Workspace client is always "ready" — per-project hosts start on-demand via loadProject()
   const workspaceReady = true;
 
+  // Scratch store init is not needed for first interaction — fire-and-forget
+  // so it doesn't gate critical-path readiness. createScratch() does its own
+  // recursive mkdir, so the root dir doesn't have to exist before IPC handlers
+  // register.
+  scratchStore.initialize().catch((err) => {
+    console.warn("[MAIN] Scratch store init failed:", err);
+  });
+
   try {
     const results = await Promise.allSettled([
       getPtyClient()!.waitForReady(),
       projectStore.initialize(),
-      scratchStore.initialize(),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
     const projectStoreReady = results[1].status === "fulfilled";
-    const scratchStoreReady = results[2].status === "fulfilled";
-    if (!scratchStoreReady) {
-      console.warn(
-        "[MAIN] Scratch store init failed:",
-        results[2].status === "rejected" ? results[2].reason : "unknown"
-      );
-    }
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
@@ -386,13 +338,9 @@ export async function setupWindowServices(
       pty.setActiveProject(win.id, null);
     }
 
-    const availabilityStore = initializeAgentAvailabilityStore();
-    const agentRouter = initializeAgentRouter(availabilityStore);
+    initializeAgentAvailabilityStore();
     initializePowerSaveBlockerService();
-    console.log("[MAIN] AgentAvailabilityStore, AgentRouter, and PowerSaveBlocker initialized");
-
-    initializeTaskOrchestrator(pty, agentRouter);
-    console.log("[MAIN] TaskOrchestrator initialized");
+    console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
     const processArgvCli = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
     const skipDefaultSpawn =
@@ -445,7 +393,8 @@ export async function setupWindowServices(
       await workspaceClient.loadProject(projectPathForWorktrees, win.id);
       console.log("[MAIN] Worktrees loaded");
 
-      // Attach direct MessagePort for workspace events (bypasses main-process relay)
+      // Register the renderer in directPortViews so sendToEntryWindows
+      // routes host events (worktree updates, PR detection, etc.) to it.
       const directPortTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
       if (directPortTarget && !directPortTarget.isDestroyed()) {
         workspaceClient.attachDirectPort(win.id, directPortTarget);
@@ -464,17 +413,6 @@ export async function setupWindowServices(
     }
   } else if (projectPathForWorktrees && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
-  }
-
-  // Task queue & workflow (startup restore only — not for unbound or path windows)
-  if (restoreProject && !opts.initialProjectPath) {
-    console.log("[MAIN] Initializing task queue for current project:", restoreProject.name);
-    try {
-      await taskQueueService.initialize(restoreProject.id);
-      console.log("[MAIN] Task queue initialized for current project");
-    } catch (error) {
-      console.error("[MAIN] Failed to initialize task queue:", error);
-    }
   }
 
   // Smoke test
@@ -538,123 +476,24 @@ export async function setupWindowServices(
     );
   }
 
-  // ── Last-window-close: dispose global services ──
+  // ── Last-window-close: reset per-window deferred queue ──
+  //
   // Per-window cleanup is handled by ctx.cleanup (run by WindowRegistry.unregister).
-  // This handler only disposes global singletons when the last window closes.
-  win.on("closed", async () => {
+  // Global services (PtyClient, WorkspaceClient, monitors, watchers, notifiers, etc.)
+  // are kept alive for app lifetime — they are torn down only in `before-quit`
+  // (electron/lifecycle/shutdown.ts). On macOS, closing all windows does NOT quit
+  // the app; reactivating from the dock must re-open a window without racing an
+  // in-flight async teardown of the global singletons. Keeping globals alive
+  // makes the dock-reactivation path a no-op past `initGlobalServices()`.
+  //
+  // We still reset the deferred init queue so a future window can re-register
+  // per-window-context deferred tasks. The `globalServicesInitialized` guard
+  // stays true, so `initGlobalServices()` itself does NOT re-run.
+  win.on("closed", () => {
     if (windowRegistry && windowRegistry.size > 0) {
-      // Other windows still open — do not dispose global services
+      // Other windows still open — nothing to do at this level.
       return;
     }
-
-    // Last window closed — dispose global services.
-    // Stop the CCR config watcher first, before any guard resets or IPC teardown.
-    // Awaiting here blocks a new window from racing into the init block (which would
-    // restart the singleton watcher) and finding this handler about to null the ref.
-    const ccrConfigService = getCcrConfigService();
-    if (ccrConfigService) {
-      await ccrConfigService.stopWatching();
-      setCcrConfigService(null);
-    }
-
-    const stopELL = getStopEventLoopLagMonitor();
-    if (stopELL) {
-      stopELL();
-      setStopEventLoopLagMonitor(null);
-    }
-    const stopPM = getStopProcessMemoryMonitor();
-    if (stopPM) {
-      stopPM();
-      setStopProcessMemoryMonitor(null);
-    }
-    const stopAM = getStopAppMetricsMonitor();
-    if (stopAM) {
-      stopAM();
-      setStopAppMetricsMonitor(null);
-    }
-    const stopDS = getStopDiskSpaceMonitor();
-    if (stopDS) {
-      stopDS();
-      setStopDiskSpaceMonitor(null);
-    }
-    const rps = getResourceProfileService();
-    if (rps) {
-      rps.stop();
-      setResourceProfileService(null);
-    }
-
-    const wpb = getWorktreePortBrokerRef();
-    if (wpb) wpb.dispose();
-    setWorktreePortBrokerRef(null);
-    const ws = getWorkspaceClientRef();
-    if (ws) ws.dispose();
-    setWorkspaceClientRef(null);
-    disposeWorkspaceClient();
-
-    // Drop PluginService's WorkspaceClient reference so plugin event handlers
-    // can't fire into the disposed instance during late teardown.
-    try {
-      const { pluginService } = await import("../services/PluginService.js");
-      pluginService.setWorkspaceClient(null);
-    } catch {
-      // module load errors during teardown are non-fatal
-    }
-
-    disposeTaskOrchestrator();
-    disposeAgentRouter();
-    disposePowerSaveBlockerService();
-    disposeAgentAvailabilityStore();
-
-    const pty = getPtyClient();
-    if (pty) pty.dispose();
-    setPtyClientRef(null);
-    disposePtyClient();
-
-    const watchdog = getMainProcessWatchdogClientRef();
-    if (watchdog) watchdog.dispose();
-    setMainProcessWatchdogClientRef(null);
-    disposeMainProcessWatchdog();
-
-    // Clean up IPC handlers and reset guards so next window re-registers fresh
-    const cleanupIpc = getCleanupIpcHandlers();
-    if (cleanupIpc) {
-      cleanupIpc();
-      setCleanupIpcHandlers(null);
-    }
-    const cleanupErr = getCleanupErrorHandlers();
-    if (cleanupErr) {
-      cleanupErr();
-      setCleanupErrorHandlers(null);
-    }
-    setIpcHandlersRegistered(false);
-    // Reset the global init guard so the next window re-runs
-    // initGlobalServices() from a clean slate.
-    setGlobalServicesInitialized(false);
     resetDeferredQueue();
-
-    getHibernationService().stop();
-    getIdleTerminalNotificationService().stop();
-    getCrashRecoveryService().stopBackupTimer();
-    getSystemSleepService().dispose();
-    gitHubTokenHealthService.dispose();
-    agentConnectivityService.dispose();
-    getServiceConnectivityRegistry().dispose();
-    notificationService.dispose();
-    const ans = getAgentNotificationServiceRef();
-    if (ans) {
-      ans.dispose();
-      setAgentNotificationServiceRef(null);
-    }
-    preAgentSnapshotService.dispose();
-    const aus = getAutoUpdaterServiceRef();
-    if (aus) {
-      aus.dispose();
-      setAutoUpdaterServiceRef(null);
-    }
-    const wsns = getWindowsStoreNotifierServiceRef();
-    if (wsns) {
-      wsns.dispose();
-      setWindowsStoreNotifierServiceRef(null);
-    }
   });
 }

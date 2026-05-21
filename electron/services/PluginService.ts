@@ -13,6 +13,7 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  BuiltInPluginPermission,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -27,12 +28,29 @@ import {
 import {
   registerToolbarButton,
   unregisterPluginToolbarButtons,
+  getAllPluginToolbarButtonConfigs,
 } from "../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
+import {
+  registerForgeProviderImpl,
+  registerForgeProviders,
+  unregisterForgeProviderImpl,
+  unregisterForgeProviderImpls,
+  unregisterForgeProviders,
+} from "./forgeProviderRegistry.js";
+import {
+  registerFileDecorationProviderImpl,
+  registerFileDecorationProviders,
+  scopeMatchesPattern,
+  unregisterFileDecorationProviderImpl,
+  unregisterFileDecorationProviderImpls,
+  unregisterFileDecorationProviders,
+} from "./fileDecorationRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
+import { store } from "../store.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
@@ -40,11 +58,32 @@ const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
 
+/**
+ * Permissions whose presence in a plugin's manifest forces every action that
+ * plugin contributes up to `effectiveDanger: "confirm"`, regardless of the
+ * `danger` the plugin self-declared. These are the permissions that grant
+ * irreversible or hard-to-undo side effects: arbitrary process execution,
+ * git history mutation, project/user-config filesystem writes, and agent
+ * invocation. Read-only or trivially-reversible permissions (`*-read`,
+ * `network:fetch`, `clipboard:*`) are intentionally excluded — promoting on
+ * those would over-confirm and train users to dismiss the dialog. The host
+ * may only raise danger; a plugin declaring `"confirm"` always stays
+ * `"confirm"` even with none of these.
+ */
+const CONFIRM_TRIGGERING_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
+  "shell:exec",
+  "git:write",
+  "fs:project-write",
+  "fs:user-data-write",
+  "agent:invoke",
+]);
+
 interface LoadedPlugin {
   manifest: PluginManifest;
   dir: string;
   resolvedMain?: string;
   loadedAt: number;
+  isBuiltin: boolean;
 }
 
 const ACTIVATE_TIMEOUT_MS = 5000;
@@ -72,7 +111,22 @@ export class PluginService {
     activate: (client: WorkspaceClient) => void;
   }> = [];
   private initialized = false;
+  /**
+   * Plugin ids that are owned by a built-in plugin but currently disabled in
+   * Preferences. Held alongside `this.plugins` so the user-dir scan cannot
+   * register a third-party plugin under a trusted first-party namespace just
+   * because the matching built-in is turned off — the namespace stays claimed
+   * even when the activation is skipped.
+   */
+  private reservedBuiltinNames = new Set<string>();
   private pluginsRoot: string;
+  /**
+   * Optional override for the built-in plugins directory. When unset, the
+   * canonical app-bundled path is resolved lazily at `initialize()` time via
+   * {@link getBuiltinDir}. Tests pass an explicit path so they don't depend
+   * on `app.isPackaged` / `process.resourcesPath`.
+   */
+  private builtinPluginsRoot: string | undefined;
   private appVersion: string;
   /**
    * Coalesces multiple registry events fired in the same tick (e.g., when a
@@ -81,12 +135,32 @@ export class PluginService {
    * snapshot.
    */
   private panelKindsBroadcastPending = false;
+  /**
+   * Same coalescing rationale as {@link panelKindsBroadcastPending}: a plugin
+   * contributing N toolbar buttons calls `registerToolbarButton` N times in
+   * `loadPlugin()`, and `unregisterPluginToolbarButtons` removes them in one
+   * call on unload — batch into a single snapshot broadcast per tick.
+   */
+  private toolbarButtonsBroadcastPending = false;
+  /**
+   * OR-accumulated across triggers coalesced into one tick: true if any was an
+   * unload (uninstall). The registry at microtask-drain time always reflects
+   * the current set, so a tick that included an unload is an authoritative
+   * snapshot the renderer may safely sweep against; a tick of only loads is a
+   * partial/growing snapshot (concurrent load + deferred init) and must not.
+   */
+  private toolbarButtonsBroadcastComplete = false;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
 
-  constructor(pluginsRoot?: string, appVersion?: string) {
+  constructor(
+    pluginsRoot?: string,
+    appVersion?: string,
+    options?: { builtinPluginsRoot?: string }
+  ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
     this.appVersion = appVersion ?? app.getVersion();
+    this.builtinPluginsRoot = options?.builtinPluginsRoot;
 
     const offRegister = onPanelKindRegistered(() => this.schedulePanelKindsBroadcast());
     const offUnregister = onPanelKindUnregistered(() => this.schedulePanelKindsBroadcast());
@@ -129,20 +203,91 @@ export class PluginService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    // Built-ins load first so user plugins with a colliding manifest.name are
+    // rejected by the duplicate guard in loadPlugin() — built-in wins.
+    const builtinDir = this.builtinPluginsRoot ?? this.getBuiltinDir();
+    try {
+      const builtinLoaded = builtinDir
+        ? await this.loadFromDir(builtinDir, { isBuiltin: true })
+        : 0;
+      const userLoaded = await this.loadFromDir(this.pluginsRoot, { isBuiltin: false });
+      console.log(
+        `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"} and ${userLoaded} user plugin(s) from ${this.pluginsRoot}`
+      );
+    } finally {
+      // Idempotency must hold even when a scan throws (e.g. EACCES on the
+      // user dir): a retry would re-run the built-in scan and trigger
+      // "already registered, overwriting" warnings from the contribution
+      // registries.
+      this.initialized = true;
+    }
+  }
+
+  /**
+   * Canonical app-bundled built-in plugins directory. Resolved at call time
+   * because `app.isPackaged` / `process.resourcesPath` are not valid at module
+   * evaluation. Mirrors the pattern in HelpService / SoundService — built-ins
+   * ship via electron-builder's `extraResources`, so the source directory at
+   * the repo root maps 1:1 to `<Resources>/plugins/builtin/` in packaged
+   * builds. Returns `null` when the Electron app API is unavailable (tests
+   * that mock `electron` with a minimal stub) — the built-in scan is then
+   * skipped without aborting user-plugin loading.
+   */
+  private getBuiltinDir(): string | null {
+    try {
+      if (typeof app.getAppPath !== "function") return null;
+      // Plugins must live alongside the shared esbuild chunks at
+      // `dist-electron/electron/chunks/` so the relative `import` paths in
+      // their bundled output resolve. In dev this resolves to the repo's
+      // `dist-electron/` directory; in packaged builds it resolves inside
+      // `app.asar/dist-electron/`, which is on disk via Electron's fs patch.
+      // Using a single path for both modes keeps the chunk-relative imports
+      // honest — copying the plugins into `Resources/plugins/builtin/` would
+      // strand the relative chunk references and produce a silent registration
+      // gap (descriptor present, impl never bound).
+      return path.join(app.getAppPath(), "dist-electron", "plugins", "builtin");
+    } catch (err) {
+      console.warn("[PluginService] Failed to resolve built-in plugins directory:", err);
+      return null;
+    }
+  }
+
+  /**
+   * Read disabled built-in plugin ids from the user store. Defensive against
+   * missing keys (in-memory fallback during tests) and read failures —
+   * a failed read returns an empty set so all built-ins activate, matching
+   * the safest startup behavior.
+   */
+  private getDisabledBuiltinIds(): Set<string> {
+    try {
+      const value = store.get("plugins") as { disabledBuiltins?: unknown } | undefined;
+      const list = Array.isArray(value?.disabledBuiltins) ? value.disabledBuiltins : [];
+      return new Set(list.filter((id): id is string => typeof id === "string"));
+    } catch (err) {
+      console.warn("[PluginService] Failed to read disabled built-in plugins from store:", err);
+      return new Set();
+    }
+  }
+
+  private async loadFromDir(root: string, opts: { isBuiltin: boolean }): Promise<number> {
     let entries: import("fs").Dirent[];
     try {
-      entries = await fs.readdir(this.pluginsRoot, { withFileTypes: true });
+      entries = await fs.readdir(root, { withFileTypes: true });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        console.log("[PluginService] No plugins directory found, skipping");
-        this.initialized = true;
-        return;
+        console.log(
+          `[PluginService] No ${opts.isBuiltin ? "built-in" : "user"} plugins directory at ${root}, skipping`
+        );
+        return 0;
       }
       throw err;
     }
 
     const pluginDirs = entries.filter((e) => e.isDirectory());
-    const results = await Promise.allSettled(pluginDirs.map((d) => this.loadPlugin(d.name)));
+    const disabled = opts.isBuiltin ? this.getDisabledBuiltinIds() : null;
+    const results = await Promise.allSettled(
+      pluginDirs.map((d) => this.loadPlugin(root, d.name, { isBuiltin: opts.isBuiltin, disabled }))
+    );
 
     let loaded = 0;
     for (const result of results) {
@@ -150,13 +295,15 @@ export class PluginService {
         loaded++;
       }
     }
-
-    this.initialized = true;
-    console.log(`[PluginService] Loaded ${loaded} plugin(s) from ${this.pluginsRoot}`);
+    return loaded;
   }
 
-  private async loadPlugin(dirName: string): Promise<LoadedPlugin | null> {
-    const pluginDir = path.join(this.pluginsRoot, dirName);
+  private async loadPlugin(
+    root: string,
+    dirName: string,
+    opts: { isBuiltin: boolean; disabled: Set<string> | null }
+  ): Promise<LoadedPlugin | null> {
+    const pluginDir = path.join(root, dirName);
     const manifestPath = path.join(pluginDir, "plugin.json");
 
     let content: string;
@@ -187,7 +334,18 @@ export class PluginService {
 
     const manifest = parseResult.data;
 
-    if (this.plugins.has(manifest.name)) {
+    // Built-ins disabled in Preferences are skipped entirely — neither
+    // registered in the plugins map nor activated. The disable persists in
+    // electron-store and takes effect on next launch. The name is reserved
+    // so a user plugin in the next scan cannot hijack a trusted first-party
+    // namespace just because its built-in is off.
+    if (opts.isBuiltin && opts.disabled?.has(manifest.name)) {
+      console.log(`[PluginService] Built-in plugin "${manifest.name}" is disabled, skipping`);
+      this.reservedBuiltinNames.add(manifest.name);
+      return null;
+    }
+
+    if (this.plugins.has(manifest.name) || this.reservedBuiltinNames.has(manifest.name)) {
       console.error(
         `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName} — rejecting`
       );
@@ -223,6 +381,7 @@ export class PluginService {
       manifest,
       dir: pluginDir,
       loadedAt: Date.now(),
+      isBuiltin: opts.isBuiltin,
     };
 
     if (manifest.main) {
@@ -262,6 +421,9 @@ export class PluginService {
         pluginId: manifest.name,
       });
     }
+    if (manifest.contributes.toolbarButtons.length > 0) {
+      this.scheduleToolbarButtonsBroadcast(false);
+    }
 
     for (const menuItem of manifest.contributes.menuItems) {
       registerPluginMenuItem(manifest.name, menuItem);
@@ -277,6 +439,14 @@ export class PluginService {
       console.warn(
         `[PluginService] Plugin "${manifest.name}": contributes.mcpServers is not yet implemented and will be ignored`
       );
+    }
+
+    if (manifest.contributes.forgeProviders.length > 0) {
+      registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);
+    }
+
+    if (manifest.contributes.fileDecorationProviders.length > 0) {
+      registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -402,6 +572,161 @@ export class PluginService {
           disposeUpdate();
           disposeRemove();
         };
+      },
+      registerForgeProvider: (descriptor, impl) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: registerForgeProvider called after activate() returned or timed out`
+          );
+        }
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${pluginId}" registerForgeProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" registerForgeProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object") {
+          throw new Error(`Plugin "${pluginId}" registerForgeProvider: impl must be an object`);
+        }
+        // The impl is keyed by the same `{pluginId}.{descriptor.id}` namespace
+        // used by the eager descriptor table. Binding an impl whose id wasn't
+        // declared in `contributes.forgeProviders` produces an orphaned entry —
+        // unreachable through the routing table, since `listMatchingProviders`
+        // walks descriptors first. Reject up front so the failure is loud.
+        const contributionId = descriptor.id;
+        const plugin = this.plugins.get(pluginId);
+        const declared = plugin?.manifest.contributes.forgeProviders.some(
+          (c) => c.id === contributionId
+        );
+        if (!declared) {
+          throw new Error(
+            `Plugin "${pluginId}" registerForgeProvider: descriptor.id "${contributionId}" is not declared in contributes.forgeProviders`
+          );
+        }
+
+        registerForgeProviderImpl(pluginId, contributionId, impl);
+
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          // Pass `impl` so a stale disposer (from a prior re-bind that was
+          // overwritten via a second registerForgeProvider call on the same
+          // id) cannot remove the currently-active impl by mistake — the
+          // registry compares identities before deleting.
+          unregisterForgeProviderImpl(pluginId, contributionId, impl);
+          const list = this.pluginEventCleanups.get(pluginId);
+          if (!list) return;
+          const idx = list.indexOf(dispose);
+          if (idx >= 0) list.splice(idx, 1);
+          if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+        };
+
+        let list = this.pluginEventCleanups.get(pluginId);
+        if (!list) {
+          list = [];
+          this.pluginEventCleanups.set(pluginId, list);
+        }
+        list.push(dispose);
+        return dispose;
+      },
+      registerFileDecorationProvider: (descriptor, impl) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: registerFileDecorationProvider called after activate() returned or timed out`
+          );
+        }
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: impl must expose provideDecorations()`
+          );
+        }
+        // Reject ids not declared in `contributes.fileDecorationProviders` for
+        // the same reason as forge providers: an undeclared id is unreachable
+        // through the eager scope-routing table, so the binding would be a
+        // silent orphan. Fail loud at registration instead.
+        const contributionId = descriptor.id;
+        const plugin = this.plugins.get(pluginId);
+        const declared = plugin?.manifest.contributes.fileDecorationProviders.some(
+          (c) => c.id === contributionId
+        );
+        if (!declared) {
+          throw new Error(
+            `Plugin "${pluginId}" registerFileDecorationProvider: descriptor.id "${contributionId}" is not declared in contributes.fileDecorationProviders`
+          );
+        }
+
+        registerFileDecorationProviderImpl(pluginId, contributionId, impl);
+
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          unregisterFileDecorationProviderImpl(pluginId, contributionId, impl);
+          const list = this.pluginEventCleanups.get(pluginId);
+          if (!list) return;
+          const idx = list.indexOf(dispose);
+          if (idx >= 0) list.splice(idx, 1);
+          if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+        };
+
+        let list = this.pluginEventCleanups.get(pluginId);
+        if (!list) {
+          list = [];
+          this.pluginEventCleanups.set(pluginId, list);
+        }
+        list.push(dispose);
+        return dispose;
+      },
+      // NOT revoke-guarded: called from the plugin's own post-activation
+      // subscription callbacks (worktree changes, polling timers). The
+      // liveness guard is plugin membership, not the activation window — once
+      // the plugin unloads this becomes a silent no-op.
+      invalidateFileDecorations: (scope, paths) => {
+        if (!this.plugins.has(pluginId)) return;
+        if (typeof scope !== "string" || scope.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          );
+        }
+        // A plugin may only invalidate scopes it actually declared in
+        // `contributes.fileDecorationProviders`. Without this a plugin could
+        // force unrelated renderer views to re-pull. Mirrors the
+        // registration-time declared-id guard so the manifest stays the
+        // single source of truth for what a plugin owns.
+        const declaredScopes = this.plugins
+          .get(pluginId)
+          ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
+        if (
+          !declaredScopes ||
+          !declaredScopes.some((pattern) => scopeMatchesPattern(scope, pattern))
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+          );
+        }
+        const narrowed =
+          Array.isArray(paths) && paths.length > 0
+            ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
+            : undefined;
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:decorations-changed",
+          payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
+        });
       },
     };
     return {
@@ -575,8 +900,35 @@ export class PluginService {
     this.unregisterPluginActions(pluginId);
     unregisterPluginMenuItems(pluginId);
     unregisterPluginToolbarButtons(pluginId);
+    this.scheduleToolbarButtonsBroadcast(true);
     unregisterPluginPanelKinds(pluginId);
+    unregisterForgeProviders(pluginId);
+    // Belt-and-suspenders: per-provider disposers pushed onto
+    // pluginEventCleanups by host.registerForgeProvider have already fired in
+    // flushPluginEventCleanups() above, but a direct bulk-clear guards against
+    // any impl entry that wasn't tracked through that path (e.g. a future
+    // re-bind that didn't refresh the disposer slot). The bulk call is
+    // idempotent — already-cleared keys are silent no-ops.
+    unregisterForgeProviderImpls(pluginId);
+    // Capture the unloaded plugin's declared decoration scopes before clearing
+    // the registry so we can tell any renderer that was showing them to
+    // re-pull (it will now resolve no impl and clear). Without this, stale
+    // decorations from a runtime-unloaded plugin would linger until the next
+    // scope/path change or remount.
+    const decorationScopes = this.plugins
+      .get(pluginId)
+      ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
+    unregisterFileDecorationProviders(pluginId);
+    unregisterFileDecorationProviderImpls(pluginId);
     this.plugins.delete(pluginId);
+    if (decorationScopes && decorationScopes.length > 0) {
+      for (const scope of new Set(decorationScopes)) {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:decorations-changed",
+          payload: { scope },
+        });
+      }
+    }
   }
 
   private flushPluginEventCleanups(pluginId: string): void {
@@ -602,6 +954,7 @@ export class PluginService {
       manifest: p.manifest,
       dir: p.dir,
       loadedAt: p.loadedAt,
+      isBuiltin: p.isBuiltin,
     }));
   }
 
@@ -649,6 +1002,17 @@ export class PluginService {
       throw new Error(`Plugin action "${id}" is already registered`);
     }
 
+    // Host-authoritative danger: the plugin's self-reported `danger` is
+    // advisory. Raise it to "confirm" (never lower) when the plugin holds a
+    // high-risk permission, so a plugin can't declare "safe" on a destructive
+    // action to slip past the renderer's confirm/MRU/repeatLast gates.
+    const manifestPermissions = this.plugins.get(pluginId)?.manifest.permissions ?? [];
+    const hasHighRiskPermission = manifestPermissions.some((p) =>
+      CONFIRM_TRIGGERING_PERMISSIONS.has(p)
+    );
+    const effectiveDanger: "safe" | "confirm" =
+      danger === "confirm" || hasHighRiskPermission ? "confirm" : "safe";
+
     const descriptor: PluginActionDescriptor = {
       pluginId,
       id,
@@ -657,6 +1021,7 @@ export class PluginService {
       category,
       kind,
       danger,
+      effectiveDanger,
       keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
       inputSchema:
         contribution.inputSchema && typeof contribution.inputSchema === "object"
@@ -740,6 +1105,33 @@ export class PluginService {
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "plugin:panel-kinds-changed",
       payload: { kinds: getPluginPanelKinds() },
+    });
+  }
+
+  /**
+   * Coalesce toolbar-button registry mutations the same way panel kinds are
+   * batched (see {@link schedulePanelKindsBroadcast}). Toolbar buttons are only
+   * ever mutated from `loadPlugin()` / `unloadPlugin()`, so the two call sites
+   * invoke this directly rather than via registry event listeners.
+   */
+  private scheduleToolbarButtonsBroadcast(complete: boolean): void {
+    if (this.disposed) return;
+    if (complete) this.toolbarButtonsBroadcastComplete = true;
+    if (this.toolbarButtonsBroadcastPending) return;
+    this.toolbarButtonsBroadcastPending = true;
+    queueMicrotask(() => {
+      this.toolbarButtonsBroadcastPending = false;
+      const complete = this.toolbarButtonsBroadcastComplete;
+      this.toolbarButtonsBroadcastComplete = false;
+      if (this.disposed) return;
+      this.broadcastPluginToolbarButtons(complete);
+    });
+  }
+
+  private broadcastPluginToolbarButtons(complete: boolean): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:toolbar-buttons-changed",
+      payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
     });
   }
 }

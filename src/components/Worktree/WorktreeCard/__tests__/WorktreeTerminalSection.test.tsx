@@ -639,23 +639,27 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
   });
 });
 
-describe("WorktreeTerminalSection drag handle visibility", () => {
-  it("has opacity-0 at rest and group-hover/termrow:opacity-100 on hover", () => {
+describe("WorktreeTerminalSection drag handle visibility (issue #8099)", () => {
+  it("stays visible-but-dimmed at rest and brightens on group-hover/termrow", () => {
     renderSection({ isExpanded: true });
     const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
     expect(handles.length).toBeGreaterThanOrEqual(1);
     for (const handle of handles) {
-      expect(handle.className).toContain("opacity-0");
-      expect(handle.className).toContain("group-hover/termrow:opacity-100");
+      expect(handle.className).toContain("text-text-primary/25");
+      expect(handle.className).toContain("group-hover/termrow:text-text-primary/40");
+      expect(handle.className).toContain("transition-colors");
+      expect(handle.className).not.toContain("opacity-0");
+      expect(handle.className).not.toContain("transition-opacity");
     }
   });
 
-  it("has focus-visible:opacity-100 for keyboard users", () => {
+  it("brightens to text-text-secondary on focus-visible for keyboard users", () => {
     renderSection({ isExpanded: true });
     const handles = screen.getAllByRole("button", { name: "Drag to move terminal" });
     expect(handles.length).toBeGreaterThanOrEqual(1);
     for (const handle of handles) {
-      expect(handle.className).toContain("focus-visible:opacity-100");
+      expect(handle.className).toContain("focus-visible:text-text-secondary");
+      expect(handle.className).not.toContain("focus-visible:opacity-100");
     }
   });
 });

@@ -258,12 +258,12 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
-  it("displays condensed footer with switch hint in modal mode", () => {
+  it("displays condensed footer with switch and right-click hints in modal mode", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
     expect(footer.textContent).not.toContain("Remove");
-    expect(footer.textContent).not.toContain("Right-click for more");
+    expect(footer.textContent).toContain("Right-click for more");
   });
 
   it("Alt+Enter performs a normal switch and never triggers new-window", () => {

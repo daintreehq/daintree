@@ -75,4 +75,82 @@ describe("AdaptivePollingStrategy", () => {
     expect(Number.isFinite(interval)).toBe(true);
     expect(interval).toBeGreaterThanOrEqual(1);
   });
+
+  describe("idle backoff", () => {
+    it("keeps base interval below the miss threshold", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      strategy.recordNoChange();
+      strategy.recordNoChange();
+
+      expect(strategy.calculateNextInterval()).toBe(2000);
+    });
+
+    it("doubles cadence at three consecutive unchanged polls", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      strategy.recordNoChange();
+      strategy.recordNoChange();
+      strategy.recordNoChange();
+
+      expect(strategy.calculateNextInterval()).toBe(4000);
+    });
+
+    it("quadruples cadence at six consecutive unchanged polls", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      for (let i = 0; i < 6; i++) strategy.recordNoChange();
+
+      expect(strategy.calculateNextInterval()).toBe(8000);
+    });
+
+    it("caps at the 4x ceiling beyond six unchanged polls", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      for (let i = 0; i < 100; i++) strategy.recordNoChange();
+
+      expect(strategy.calculateNextInterval()).toBe(8000);
+    });
+
+    it("recordStateChange resets the idle counter", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      for (let i = 0; i < 6; i++) strategy.recordNoChange();
+      expect(strategy.calculateNextInterval()).toBe(8000);
+
+      strategy.recordStateChange();
+      expect(strategy.calculateNextInterval()).toBe(2000);
+    });
+
+    it("reset() zeroes the idle counter alongside other state", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 30_000 });
+
+      for (let i = 0; i < 6; i++) strategy.recordNoChange();
+      expect(strategy.calculateNextInterval()).toBe(8000);
+
+      strategy.reset();
+      expect(strategy.calculateNextInterval()).toBe(2000);
+    });
+
+    it("idle multiplier is still bounded by maxInterval", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 2000, maxInterval: 5000 });
+
+      for (let i = 0; i < 6; i++) strategy.recordNoChange();
+
+      // 2000 * 4 = 8000, capped at maxInterval (5000)
+      expect(strategy.calculateNextInterval()).toBe(5000);
+    });
+
+    it("compounds idle multiplier on top of the adaptive backoff", () => {
+      const strategy = new AdaptivePollingStrategy({ baseInterval: 1000, maxInterval: 30_000 });
+
+      strategy.recordSuccess(3000, 500);
+      // adaptive: ceil(3500 * 1.5) = 5250
+      expect(strategy.calculateNextInterval()).toBe(5250);
+
+      for (let i = 0; i < 3; i++) strategy.recordNoChange();
+      // 5250 * 2 = 10500
+      expect(strategy.calculateNextInterval()).toBe(10500);
+    });
+  });
 });

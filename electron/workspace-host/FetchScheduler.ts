@@ -4,10 +4,11 @@
 // background tier to avoid hammering remotes for repos the user isn't viewing.
 // Jitter is applied at the call site to avoid thundering-herd alignment when
 // multiple worktrees were started together.
-const FETCH_INTERVAL_FOCUSED_MIN_MS = 30_000;
-const FETCH_INTERVAL_FOCUSED_MAX_MS = 45_000;
-const FETCH_INTERVAL_BACKGROUND_MIN_MS = 5 * 60_000;
-const FETCH_INTERVAL_BACKGROUND_MAX_MS = 10 * 60_000;
+// Defaults match the "balanced" ResourceProfileConfig values.
+const FETCH_INTERVAL_FOCUSED_DEFAULT_MS = 30_000;
+const FETCH_INTERVAL_BACKGROUND_DEFAULT_MS = 5 * 60_000;
+// Jitter fraction applied around the base interval to spread fetch alignment.
+const FETCH_JITTER_FRACTION = 0.25;
 // Initial fetch fires shortly after start so users don't wait a full cadence
 // window for fresh ahead/behind on app launch.
 const FETCH_INITIAL_DELAY_MIN_MS = 2_000;
@@ -50,10 +51,30 @@ export class FetchScheduler {
   private _pendingForceFetch = false;
   private disposed = false;
 
+  private focusedIntervalMs = FETCH_INTERVAL_FOCUSED_DEFAULT_MS;
+  private backgroundIntervalMs = FETCH_INTERVAL_BACKGROUND_DEFAULT_MS;
+
   constructor(private readonly host: FetchSchedulerHost) {}
 
   get isFetchInFlight(): boolean {
     return this._pendingFetchPromise !== null;
+  }
+
+  /** Update fetch cadence intervals (called from WorktreeMonitor.updateConfig). */
+  updateIntervals(activeMs?: number, backgroundMs?: number): void {
+    let changed = false;
+    if (activeMs !== undefined && this.focusedIntervalMs !== activeMs) {
+      this.focusedIntervalMs = activeMs;
+      changed = true;
+    }
+    if (backgroundMs !== undefined && this.backgroundIntervalMs !== backgroundMs) {
+      this.backgroundIntervalMs = backgroundMs;
+      changed = true;
+    }
+    // Re-arm with new cadence if a timer is already pending.
+    if (changed) {
+      this.reschedule(false);
+    }
   }
 
   /**
@@ -69,15 +90,21 @@ export class FetchScheduler {
 
     const delay = initial
       ? randomBetween(FETCH_INITIAL_DELAY_MIN_MS, FETCH_INITIAL_DELAY_MAX_MS)
-      : this.host.isCurrent
-        ? randomBetween(FETCH_INTERVAL_FOCUSED_MIN_MS, FETCH_INTERVAL_FOCUSED_MAX_MS)
-        : randomBetween(FETCH_INTERVAL_BACKGROUND_MIN_MS, FETCH_INTERVAL_BACKGROUND_MAX_MS);
+      : this.pickInterval();
 
     this.fetchTimer = setTimeout(() => {
       this.fetchTimer = null;
       if (this.disposed || !this.host.isRunning) return;
       void this.run(false);
     }, delay);
+  }
+
+  private pickInterval(): number {
+    const base = this.host.isCurrent ? this.focusedIntervalMs : this.backgroundIntervalMs;
+    const jitterRange = Math.floor(base * FETCH_JITTER_FRACTION);
+    const minMs = Math.max(1000, base - jitterRange);
+    const maxMs = Math.max(minMs + 1000, base + jitterRange);
+    return randomBetween(minMs, maxMs);
   }
 
   /** Clear the timer and re-arm — used by the focus-change setter. */

@@ -26,7 +26,7 @@ export class ProcessTreeKiller {
    *   where timers don't fire). If false, SIGKILL escalation fires after 500ms and re-reads
    *   the descendant list to catch processes spawned during the grace window.
    */
-  execute(immediate: boolean): void {
+  execute(immediate: boolean, escalationDelayMs?: number): void {
     this.abort();
 
     const shellPid = this.ptyProcess.pid;
@@ -87,13 +87,15 @@ export class ProcessTreeKiller {
       return;
     }
 
+    const delay = escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS;
+
     // Re-read descendants inside the timer so children spawned in the
     // grace window between SIGTERM and SIGKILL are also reaped. Capturing
     // the snapshot in a closure here would orphan late-forked subprocesses.
     this.killTreeTimer = setTimeout(() => {
       this.killTreeTimer = null;
       this.sigkillSweep(shellPid);
-    }, SIGKILL_ESCALATION_DELAY_MS);
+    }, delay);
     this.killTreeTimer.unref?.();
   }
 

@@ -1,5 +1,5 @@
-import { FileEdit } from "lucide-react";
-import { InlineStatusBanner } from "./InlineStatusBanner";
+import { FileEdit, MessageSquare, Forward } from "lucide-react";
+import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 
 export interface AgentCompletionBannerProps {
   /**
@@ -11,6 +11,14 @@ export interface AgentCompletionBannerProps {
   fileCount?: number;
   onReview: () => void;
   onDismiss: () => void;
+  /**
+   * Relay the completion into the active assistant session. Omitted (button
+   * hidden) when no assistant terminal exists or it's mid-stream — a missing
+   * guard would inject text into a working agent.
+   */
+  onSendToAssistant?: () => void;
+  /** Open the send-to-agent palette pre-populated with the agent's output. */
+  onSendToAgent?: () => void;
   className?: string;
 }
 
@@ -26,8 +34,42 @@ export function AgentCompletionBanner({
   fileCount,
   onReview,
   onDismiss,
+  onSendToAssistant,
+  onSendToAgent,
   className,
 }: AgentCompletionBannerProps) {
+  const actions: BannerAction[] = [
+    {
+      id: "review",
+      label: "Review",
+      variant: "primary",
+      onClick: onReview,
+    },
+  ];
+
+  if (onSendToAssistant) {
+    actions.push({
+      id: "send-to-assistant",
+      label: "Send to assistant",
+      icon: MessageSquare,
+      variant: "dismiss",
+      onClick: onSendToAssistant,
+    });
+  }
+
+  if (onSendToAgent) {
+    actions.push({
+      id: "send-to-agent",
+      label: "Send to agent",
+      icon: Forward,
+      variant: "dismiss",
+      iconOnly: true,
+      ariaLabel: "Send to agent",
+      title: "Send to another agent…",
+      onClick: onSendToAgent,
+    });
+  }
+
   return (
     <InlineStatusBanner
       icon={FileEdit}
@@ -35,14 +77,7 @@ export function AgentCompletionBanner({
       severity="neutral"
       role="status"
       className={className ? `border-t border-divider ${className}` : "border-t border-divider"}
-      actions={[
-        {
-          id: "review",
-          label: "Review",
-          variant: "primary",
-          onClick: onReview,
-        },
-      ]}
+      actions={actions}
       onClose={onDismiss}
     />
   );

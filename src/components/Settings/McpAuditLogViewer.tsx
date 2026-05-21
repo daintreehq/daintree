@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
-import { Check, Copy, RefreshCw, ShieldOff } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import type { McpAuditRecord, McpAuditResult } from "@shared/types";
+import type {
+  McpAuditRecord,
+  McpAuditResult,
+  AssistantTurnRecord,
+  McpAnomalySignal,
+} from "@shared/types";
 
 type AuditResultFilter = "all" | McpAuditResult;
 
@@ -19,6 +24,8 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   "confirmation-pending": "Awaiting confirmation",
   unauthorized: "Unauthorized",
   dedup: "Deduplicated",
+  collision: "Key collision",
+  rate_limited: "Rate limited",
 };
 
 const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
@@ -27,10 +34,85 @@ const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
   "confirmation-pending": "bg-status-warning",
   unauthorized: "bg-status-danger",
   dedup: "bg-status-info",
+  collision: "bg-status-warning",
+  rate_limited: "bg-status-warning",
 };
 
-function formatRelativeTimestamp(ts: number): string {
-  const diffMs = Date.now() - ts;
+type TimeRange = "5m" | "1h" | "24h" | "all";
+
+const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
+  "5m": 300_000,
+  "1h": 3_600_000,
+  "24h": 86_400_000,
+};
+
+const RELATIVE_TIMESTAMP_REFRESH_MS = 30_000;
+
+const OUTCOME_LABEL: Record<string, string> = {
+  answered: "Answered",
+  hedged: "Hedged",
+  refused: "Refused",
+  "docs-empty": "No docs found",
+  "tier-rejected": "Tier rejected",
+  "mcp-not-ready": "MCP not ready",
+  "agent-stuck": "Agent stuck",
+  "tool-error": "Tool error",
+  "hibernate-resume-stale": "Resume stale",
+  unknown: "Unknown",
+};
+
+export interface TurnGroup {
+  turnId: string;
+  turnRecord: AssistantTurnRecord;
+  records: McpAuditRecord[];
+  callCount: number;
+  unauthorizedCount: number;
+  errorCount: number;
+  totalDurationMs: number;
+}
+
+export function groupRecordsByTurn(
+  records: McpAuditRecord[],
+  turnRecords: AssistantTurnRecord[]
+): { groups: TurnGroup[]; unassociated: McpAuditRecord[] } {
+  const turnById = new Map<string, AssistantTurnRecord>();
+  for (const t of turnRecords) {
+    if (t.turnId) turnById.set(t.turnId, t);
+  }
+
+  const grouped = new Map<string, McpAuditRecord[]>();
+  const unassociated: McpAuditRecord[] = [];
+
+  for (const r of records) {
+    if (r.turnId && turnById.has(r.turnId)) {
+      const list = grouped.get(r.turnId);
+      if (list) list.push(r);
+      else grouped.set(r.turnId, [r]);
+    } else {
+      unassociated.push(r);
+    }
+  }
+
+  const groups: TurnGroup[] = [];
+  for (const [turnId, recs] of grouped) {
+    const turnRecord = turnById.get(turnId)!;
+    groups.push({
+      turnId,
+      turnRecord,
+      records: recs,
+      callCount: recs.length,
+      unauthorizedCount: recs.filter((r) => r.result === "unauthorized").length,
+      errorCount: recs.filter((r) => r.result === "error").length,
+      totalDurationMs: recs.reduce((sum, r) => sum + r.durationMs, 0),
+    });
+  }
+  groups.sort((a, b) => b.turnRecord.timestamp - a.turnRecord.timestamp);
+
+  return { groups, unassociated };
+}
+
+function formatRelativeTimestamp(ts: number, now: number): string {
+  const diffMs = now - ts;
   if (diffMs < 0) return "just now";
   const sec = Math.floor(diffMs / 1000);
   if (sec < 60) return `${sec}s ago`;
@@ -44,22 +126,25 @@ function formatRelativeTimestamp(ts: number): string {
 
 interface McpAuditLogViewerProps {
   records: McpAuditRecord[];
+  turnRecords?: AssistantTurnRecord[];
   loading: boolean;
   onRefresh: () => Promise<void> | void;
   onCopy: (records: McpAuditRecord[]) => Promise<void> | void;
   onClear?: () => void;
-  /**
-   * Predicate applied before filters render — used by the Daintree Assistant
-   * Privacy section to hide `external` MCP traffic.
-   */
   includeRecord?: (record: McpAuditRecord) => boolean;
   maxRecords?: number;
-  /** Set when a copy succeeded so the UI can flash a confirmation. */
   copyFlashActive?: boolean;
+  /** Triggers the NDJSON export via OS save dialog with the filtered records. */
+  onExport?: (records: McpAuditRecord[]) => Promise<void> | void;
+  /** Set when an export succeeded so the UI can flash a confirmation. */
+  exportFlashActive?: boolean;
+  anomalySignals?: McpAnomalySignal[];
+  anomalySuppressed?: boolean;
 }
 
 export function McpAuditLogViewer({
   records,
+  turnRecords,
   loading,
   onRefresh,
   onCopy,
@@ -67,9 +152,23 @@ export function McpAuditLogViewer({
   includeRecord,
   maxRecords,
   copyFlashActive,
+  onExport,
+  exportFlashActive,
+  anomalySignals = [],
+  anomalySuppressed = true,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
+  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [groupByTurn, setGroupByTurn] = useState(false);
+  const [ignoreLastHour, setIgnoreLastHour] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), RELATIVE_TIMESTAMP_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
 
   const visibleRecords = useMemo(() => {
     if (!includeRecord) return records;
@@ -83,14 +182,53 @@ export function McpAuditLogViewer({
 
   const filteredRecords = useMemo(() => {
     const needle = toolFilter.trim().toLowerCase();
+    const searchNeedle = searchQuery.trim().toLowerCase();
+    const cutoffMs = timeRange !== "all" ? nowTick - TIME_RANGE_MS[timeRange] : undefined;
     return visibleRecords.filter((record) => {
+      if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
       if (resultFilter !== "all" && record.result !== resultFilter) return false;
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
+      if (
+        searchNeedle.length > 0 &&
+        !(record.argsSummary || "").toLowerCase().includes(searchNeedle)
+      )
+        return false;
       return true;
     });
-  }, [visibleRecords, resultFilter, toolFilter]);
+  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, nowTick]);
+
+  const turnGroups = useMemo(() => {
+    if (!groupByTurn || !turnRecords || turnRecords.length === 0) return null;
+    return groupRecordsByTurn(filteredRecords, turnRecords);
+  }, [groupByTurn, turnRecords, filteredRecords]);
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
+
+  const oneHourAgo = Date.now() - 3_600_000;
+  const visibleSignals = useMemo(() => {
+    if (anomalySuppressed) return [];
+    return ignoreLastHour
+      ? anomalySignals.filter((s) => s.timestamp <= oneHourAgo)
+      : anomalySignals;
+  }, [anomalySignals, anomalySuppressed, ignoreLastHour, oneHourAgo]);
+
+  const signalRecordIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const sig of visibleSignals) {
+      for (const id of sig.recordIds) {
+        set.add(id);
+      }
+    }
+    return set;
+  }, [visibleSignals]);
+
+  const anomalyCountsByKind = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const sig of visibleSignals) {
+      counts[sig.kind] = (counts[sig.kind] ?? 0) + 1;
+    }
+    return counts;
+  }, [visibleSignals]);
 
   const showTierRejections = () => {
     setResultFilter("unauthorized");
@@ -107,6 +245,14 @@ export function McpAuditLogViewer({
           aria-label="Filter audit by tool name"
           className="flex-1 min-w-[160px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search arguments"
+          aria-label="Search audit arguments"
+          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        />
         <select
           value={resultFilter}
           onChange={(e) => {
@@ -117,7 +263,9 @@ export function McpAuditLogViewer({
               value === "error" ||
               value === "confirmation-pending" ||
               value === "unauthorized" ||
-              value === "dedup"
+              value === "dedup" ||
+              value === "collision" ||
+              value === "rate_limited"
             ) {
               setResultFilter(value);
             }
@@ -131,6 +279,24 @@ export function McpAuditLogViewer({
           <option value="confirmation-pending">Awaiting confirmation</option>
           <option value="unauthorized">Unauthorized</option>
           <option value="dedup">Deduplicated</option>
+          <option value="collision">Key collision</option>
+          <option value="rate_limited">Rate limited</option>
+        </select>
+        <select
+          value={timeRange}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === "5m" || value === "1h" || value === "24h" || value === "all") {
+              setTimeRange(value);
+            }
+          }}
+          aria-label="Filter audit by time range"
+          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        >
+          <option value="all">All</option>
+          <option value="5m">Last 5 minutes</option>
+          <option value="1h">Last hour</option>
+          <option value="24h">Last 24 hours</option>
         </select>
         {unauthorizedCount > 0 && resultFilter !== "unauthorized" && (
           <button
@@ -142,7 +308,49 @@ export function McpAuditLogViewer({
             Show tier rejections ({unauthorizedCount})
           </button>
         )}
+        {turnRecords && turnRecords.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setGroupByTurn((v) => !v)}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+              groupByTurn
+                ? "bg-overlay-subtle border-daintree-border text-daintree-text"
+                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+            )}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Group by turn
+          </button>
+        )}
+        {!anomalySuppressed && anomalySignals.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setIgnoreLastHour((v) => !v)}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+              ignoreLastHour
+                ? "border-status-warning/20 text-status-warning bg-status-warning/10"
+                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+            )}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            Ignore last hour
+          </button>
+        )}
       </div>
+
+      {!anomalySuppressed && visibleSignals.length > 0 && (
+        <div className="flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+          <span className="text-xs text-status-danger">
+            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {Object.entries(anomalyCountsByKind).length > 0 &&
+              ` (${Object.entries(anomalyCountsByKind)
+                .map(([kind, count]) => `${count} ${kind}`)
+                .join(", ")})`}
+          </span>
+        </div>
+      )}
 
       <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg">
         {loading ? (
@@ -165,18 +373,127 @@ export function McpAuditLogViewer({
               title="No records match the current filters"
             />
           )
+        ) : groupByTurn && turnGroups ? (
+          <ul className="divide-y divide-daintree-border">
+            {turnGroups.groups.map((group) => (
+              <li key={group.turnId} className="p-2 text-xs">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-daintree-text/90">
+                    {OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
+                  </span>
+                  <span className="text-daintree-text/40">
+                    {formatRelativeTimestamp(group.turnRecord.timestamp, nowTick)}
+                  </span>
+                  <span className="text-daintree-text/40">
+                    {group.callCount} call{group.callCount !== 1 ? "s" : ""}
+                  </span>
+                  {group.unauthorizedCount > 0 && (
+                    <span className="text-status-danger/70">
+                      {group.unauthorizedCount} unauthorized
+                    </span>
+                  )}
+                  {group.errorCount > 0 && (
+                    <span className="text-status-danger/70">
+                      {group.errorCount} error{group.errorCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <span className="text-daintree-text/40">{group.totalDurationMs}ms</span>
+                </div>
+                <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
+                  {group.records.map((record) => (
+                    <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+                      <span
+                        className={cn(
+                          "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
+                          RESULT_DOT_CLASS[record.result]
+                        )}
+                        aria-label={RESULT_LABEL[record.result]}
+                        title={RESULT_LABEL[record.result]}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-daintree-text/80 truncate">
+                            {record.toolId}
+                          </span>
+                          {record.errorCode && (
+                            <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              {record.errorCode}
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-mono text-daintree-text/50 truncate">
+                          {record.argsSummary || "{}"}
+                        </div>
+                      </div>
+                      <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div>{record.durationMs}ms</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+            {turnGroups.unassociated.length > 0 && (
+              <li className="p-2 text-xs">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-daintree-text/60">Unassociated</span>
+                  <span className="text-daintree-text/40">
+                    {turnGroups.unassociated.length} record
+                    {turnGroups.unassociated.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
+                  {turnGroups.unassociated.map((record) => (
+                    <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
+                      <span
+                        className={cn(
+                          "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
+                          RESULT_DOT_CLASS[record.result]
+                        )}
+                        aria-label={RESULT_LABEL[record.result]}
+                        title={RESULT_LABEL[record.result]}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-daintree-text/80 truncate">
+                            {record.toolId}
+                          </span>
+                          {record.errorCode && (
+                            <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              {record.errorCode}
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-mono text-daintree-text/50 truncate">
+                          {record.argsSummary || "{}"}
+                        </div>
+                      </div>
+                      <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div>{record.durationMs}ms</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            )}
+          </ul>
         ) : (
           <ul className="divide-y divide-daintree-border">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <span
-                  className={cn(
-                    "mt-1 h-2 w-2 rounded-full shrink-0",
-                    RESULT_DOT_CLASS[record.result]
+                <div className="flex items-start gap-1 mt-1">
+                  <span
+                    className={cn("h-2 w-2 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
+                    aria-label={RESULT_LABEL[record.result]}
+                    title={RESULT_LABEL[record.result]}
+                  />
+                  {signalRecordIds.has(record.id) && (
+                    <span
+                      className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                      title="Anomaly"
+                    />
                   )}
-                  aria-label={RESULT_LABEL[record.result]}
-                  title={RESULT_LABEL[record.result]}
-                />
+                </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-daintree-text/90 truncate">
@@ -203,7 +520,7 @@ export function McpAuditLogViewer({
                   )}
                 </div>
                 <div className="text-right text-daintree-text/40 whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp)}</div>
+                  <div>{formatRelativeTimestamp(record.timestamp, nowTick)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
               </li>
@@ -238,6 +555,28 @@ export function McpAuditLogViewer({
           {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
           {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
         </button>
+        {onExport && (
+          <button
+            type="button"
+            onClick={() => void onExport(filteredRecords)}
+            disabled={filteredRecords.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
+              filteredRecords.length === 0
+                ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+                : exportFlashActive
+                  ? "text-status-success border-status-success/30"
+                  : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+            )}
+          >
+            {exportFlashActive ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            {exportFlashActive ? "Exported!" : "Export as NDJSON"}
+          </button>
+        )}
         {onClear && (
           <button
             type="button"
@@ -254,7 +593,10 @@ export function McpAuditLogViewer({
           </button>
         )}
         <span className="ml-auto text-xs text-daintree-text/40">
-          {resultFilter !== "all" || toolFilter.trim().length > 0
+          {resultFilter !== "all" ||
+          toolFilter.trim().length > 0 ||
+          timeRange !== "all" ||
+          searchQuery.trim().length > 0
             ? `${filteredRecords.length} of ${visibleRecords.length}`
             : maxRecords !== undefined
               ? `${visibleRecords.length} of ${maxRecords}`

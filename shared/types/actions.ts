@@ -8,27 +8,38 @@ export type ActionKind = "command" | "query";
 
 export type ActionDanger = "safe" | "confirm" | "restricted";
 
+export type RiskBand =
+  | "reversible"
+  | "external-effect"
+  | "destructive-local"
+  | "destructive-network";
+
+export type McpVisibility = "core" | "discoverable" | "hidden";
+
 export type ActionScope = "renderer";
 
 /**
- * Explicit MCP tool annotation overrides. Only the hints that can be
- * meaningfully decoupled from `kind`/`danger` are exposed here — `title` is
- * always sourced from the action title and `openWorldHint` is derived from the
- * action category. Provide an override only when the heuristic from `kind` and
- * `danger` doesn't reflect the action's true semantics for an MCP client (for
- * example, a query that requires UX confirmation, or a status command that is
- * read-only). Defined inline (no `@modelcontextprotocol/sdk` import) so this
- * type stays usable from the renderer.
+ * Explicit MCP tool annotation overrides. The spec defaults to a conservative
+ * posture (destructive, open-world) — override only when the action's true
+ * semantics differ from that default. `title` is always sourced from the action
+ * title. Defined inline (no `@modelcontextprotocol/sdk` import) so this type
+ * stays usable from the renderer.
  */
 export interface ActionMcpAnnotations {
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
   idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }
 
 export type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
 
 export type ActionId = BuiltInActionId | (string & {});
+
+export interface ActionExample {
+  args: Record<string, unknown>;
+  description: string;
+}
 
 export interface ActionContext {
   projectId?: string;
@@ -45,6 +56,15 @@ export interface ActionContext {
   focusedTerminalType?: string;
   focusedTerminalTitle?: string;
   isSettingsOpen?: boolean;
+  /**
+   * The dispatch source for the in-flight `run()` call. Set by
+   * `ActionService.dispatch` from the resolved {@link ActionSource} before
+   * invoking the definition. A read-only contextual signal (never a security
+   * gate): plugin synthetic actions read it to skip their own confirm dialog
+   * when `"agent"`, since the MCP bridge has already confirmed and would
+   * otherwise double-prompt.
+   */
+  dispatchSource?: ActionSource;
 }
 
 export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
@@ -85,9 +105,38 @@ export interface ActionDefinition<
   keywords?: string[];
   /**
    * Per-action MCP tool annotation overrides. Use sparingly — only when the
-   * defaults derived from `kind` and `danger` would mislead an MCP client.
+   * spec-conservative defaults (destructive, open-world) would mislead an MCP
+   * client.
    */
   mcpAnnotations?: ActionMcpAnnotations;
+  /**
+   * Concrete usage examples surfaced to MCP clients via `_meta.examples`.
+   * Each entry pairs args (matching `argsSchema` shape) with a short
+   * description of what the invocation accomplishes.
+   */
+  examples?: readonly ActionExample[];
+  /**
+   * Human-readable rationale for why this action carries its `danger` rating.
+   * Surfaces in the MCP elicitation confirmation message so the user sees the
+   * same reasoning the model would. Required when `danger !== "safe"`.
+   */
+  dangerRationale?: string;
+  /**
+   * Opt-in flag to expose `outputSchema` on the MCP tool manifest. When true
+   * and `resultSchema` is set, the Zod schema is converted to JSON Schema and
+   * surfaced as `outputSchema`, enabling structured `structuredContent` on
+   * `tools/call` responses. Use sparingly — only for naturally-structured
+   * results where the schema adds real value for programmatic consumers.
+   */
+  mcpOutputSchema?: boolean;
+  /**
+   * MCP progressive-disclosure visibility. `core` tools always appear on
+   * `tools/list`; `discoverable` tools are reachable via `actions.search` +
+   * `actions.getSchema` but omitted from the default list; `hidden` tools
+   * never surface in discovery. Unset (undefined) preserves pre-existing
+   * behavior (tool appears on `tools/list` when tier-permitted).
+   */
+  mcpVisibility?: McpVisibility;
 }
 
 export interface ActionManifestEntry {
@@ -112,6 +161,14 @@ export interface ActionManifestEntry {
   mcpAnnotations?: ActionMcpAnnotations;
   /** Set when this action was registered by a plugin (not a built-in). */
   pluginId?: string;
+  /** Concrete usage examples surfaced to MCP clients via `_meta.examples`. */
+  examples?: readonly ActionExample[];
+  /** Human-readable rationale for the action's `danger` rating. */
+  dangerRationale?: string;
+  /** Risk band derived from danger + open-world category. Read by consent dialogs. */
+  band?: RiskBand;
+  /** MCP progressive-disclosure visibility classification. */
+  mcpVisibility?: McpVisibility;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {
@@ -137,7 +194,8 @@ export type ActionErrorCode =
   | "EXECUTION_ERROR"
   | "USER_REJECTED"
   | "CONFIRMATION_TIMEOUT"
-  | "ELICITATION_FAILED";
+  | "ELICITATION_FAILED"
+  | "BINDING_STALE";
 
 export interface ActionError {
   code: ActionErrorCode;
@@ -165,6 +223,8 @@ export interface ActionDispatchPayload {
   context: ActionContext;
   source: ActionSource;
   timestamp: number;
+  /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
+  confirmed?: boolean;
 }
 
 export interface ActionFrecencyEntry {

@@ -1,25 +1,28 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { CornerDownRight, GitPullRequest } from "lucide-react";
-import type { GitHubPRCIStatus } from "@shared/types/github";
+import { Clock, CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
+import type { CIStatus } from "@shared/types/forge";
+import type { NormalizedPRState } from "@shared/types/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
 import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
-import { freshnessOpacityClass, freshnessSuffix } from "@/components/Layout/FreshnessUtils";
+import { badgeFreshnessSuffix } from "@/components/Layout/FreshnessUtils";
 import { PRTooltipContent, TooltipLoading, TokenMissingTooltip } from "./GitHubTooltipContent";
-import { getPRCIStatusVisual } from "@/components/GitHub/prCIStatus";
+import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 interface PRBadgeProps {
   prNumber: number;
-  prState?: "open" | "merged" | "closed";
-  prCiStatus?: GitHubPRCIStatus;
+  prState?: NormalizedPRState;
+  prCiStatus?: CIStatus | null;
   isSubordinate: boolean;
   worktreePath: string;
   onOpen?: () => void;
   isActive?: boolean;
   underlineOnHover?: boolean;
   rowLastUpdatedAt?: number;
+  /** Service-wide PR detection circuit breaker tripped — this rollup may be stale. */
+  prDetectionPaused?: boolean;
 }
 
 export function PRBadge({
@@ -32,6 +35,7 @@ export function PRBadge({
   isActive,
   underlineOnHover,
   rowLastUpdatedAt,
+  prDetectionPaused,
 }: PRBadgeProps) {
   const { data, loading, error, missingToken, fetchTooltip, reset } = usePRTooltip(
     worktreePath,
@@ -46,31 +50,54 @@ export function PRBadge({
     onOpen,
   });
 
-  const { freshnessLevel, cacheLastUpdatedAt, now } = useGitHubBadgeFreshness(
+  const { freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } = useGitHubBadgeFreshness(
     "pr",
     rowLastUpdatedAt
   );
 
   const prStateColor =
     prState === "merged"
-      ? "text-github-merged"
-      : prState === "closed"
-        ? "text-github-closed"
-        : "text-github-open";
+      ? "text-pr-merged"
+      : prState === "closed" || prState === "declined"
+        ? "text-pr-closed"
+        : "text-pr-open";
 
-  const prStateLabel = prState === "merged" ? "merged" : prState === "closed" ? "closed" : "open";
+  const prStateLabel =
+    prState === "merged"
+      ? "merged"
+      : prState === "closed" || prState === "declined"
+        ? "closed"
+        : "open";
 
-  const ciVisual = getPRCIStatusVisual(prCiStatus);
+  const ciVisual = getCIStatusVisual(prCiStatus);
+
+  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
+  const showPausedGlyph =
+    (freshnessCause === "rate-limit" ||
+      freshnessCause === "circuit-breaker" ||
+      (prDetectionPaused ?? false)) &&
+    !missingToken;
 
   const ariaLabel = missingToken
     ? "Configure GitHub token to see PR details"
-    : ciVisual
-      ? `Open ${prStateLabel} pull request #${prNumber} on GitHub — ${ciVisual.ariaLabel}`
-      : `Open ${prStateLabel} pull request #${prNumber} on GitHub`;
+    : (ciVisual
+        ? `Open ${prStateLabel} pull request #${prNumber} on GitHub — ${ciVisual.ariaLabel}`
+        : `Open ${prStateLabel} pull request #${prNumber} on GitHub`) +
+      (freshnessCause === "rate-limit"
+        ? " — GitHub rate limited"
+        : freshnessCause === "circuit-breaker" || (prDetectionPaused ?? false)
+          ? " — PR detection paused"
+          : "");
 
   const freshnessSuffixStr = useMemo(
-    () => freshnessSuffix(freshnessLevel, cacheLastUpdatedAt, now),
-    [freshnessLevel, cacheLastUpdatedAt, now]
+    () =>
+      badgeFreshnessSuffix(
+        freshnessCause,
+        rowLastUpdatedAt ?? cacheLastUpdatedAt,
+        now,
+        rateLimitResetAt
+      ),
+    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
   );
 
   return (
@@ -81,8 +108,7 @@ export function PRBadge({
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            freshnessOpacityClass(freshnessLevel)
+            "flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={ariaLabel}
@@ -120,6 +146,16 @@ export function PRBadge({
                 <span className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)} />
               )}
             </span>
+          )}
+          {showStaleGlyph && (
+            <Clock
+              className="w-3 h-3 shrink-0 text-text-muted"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            />
+          )}
+          {showPausedGlyph && (
+            <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
           )}
         </button>
       </TooltipTrigger>

@@ -1,8 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
 vi.mock("electron", () => ({
   app: { getVersion: vi.fn(() => "1.0.0"), getPath: vi.fn(() => "/tmp") },
-  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  ipcMain: {
+    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+      ipcHandlers.set(channel, handler);
+    }),
+    removeHandler: vi.fn((channel: string) => {
+      ipcHandlers.delete(channel);
+    }),
+  },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
     fromWebContents: vi.fn(() => null),
@@ -10,26 +19,40 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../../store.js", () => ({
-  store: { get: vi.fn(), set: vi.fn(), delete: vi.fn() },
+  store: {
+    get: vi.fn((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    }),
+    set: vi.fn(),
+    delete: vi.fn(),
+  },
   consumePendingSettingsRecovery: vi.fn(() => null),
   windowStatesStore: { get: vi.fn(), set: vi.fn() },
 }));
 
+const crashService = {
+  scheduleBackup: vi.fn(),
+  consumePanelFilter: vi.fn(() => null),
+  startBackupTimer: vi.fn(),
+  resetToFresh: vi.fn(),
+  restoreBackup: vi.fn(() => false),
+  setPanelFilter: vi.fn(),
+  getPendingCrash: vi.fn() as any,
+  getConfig: vi.fn(() => ({ autoRestoreOnCrash: false })),
+};
+
 vi.mock("../../services/CrashRecoveryService.js", () => ({
-  getCrashRecoveryService: () => ({
-    scheduleBackup: vi.fn(),
-    consumePanelFilter: vi.fn(() => null),
-    startBackupTimer: vi.fn(),
-    resetToFresh: vi.fn(),
-    restoreBackup: vi.fn(() => false),
-    setPanelFilter: vi.fn(),
-  }),
+  getCrashRecoveryService: () => crashService,
   initializeCrashRecoveryService: vi.fn(),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
   },
@@ -42,15 +65,29 @@ vi.mock("../../utils/gpuDetection.js", () => ({
 
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
+  isGpuAngleFallbackApplied: vi.fn(() => false),
 }));
 
+const crashGuard = {
+  isSafeMode: vi.fn(() => false),
+  getCrashCount: vi.fn(() => 0),
+  getLastCrashTimestamp: vi.fn(() => null),
+  getQuarantinedStatePath: vi.fn(() => null),
+  resetForNormalBoot: vi.fn(),
+};
+
 vi.mock("../../services/CrashLoopGuardService.js", () => ({
-  getCrashLoopGuard: () => ({
-    isSafeMode: vi.fn(() => false),
-    getCrashCount: vi.fn(() => 0),
-    getLastCrashTimestamp: vi.fn(() => null),
-    resetForNormalBoot: vi.fn(),
-  }),
+  getCrashLoopGuard: () => crashGuard,
+}));
+
+const panelSuspectLedger = {
+  getQuarantinedPanelIds: vi.fn(() => new Set<string>()),
+  getQuarantinedPanels: vi.fn(() => [] as Array<Record<string, unknown>>),
+  clearQuarantinedPanel: vi.fn((_panelId: string) => false),
+};
+
+vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: () => panelSuspectLedger,
 }));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -85,7 +122,11 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
   };
 });
 
-import { CRASH_CRITICAL_FIELDS } from "../handlers/app/state.js";
+import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app/state.js";
+import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import type { HandlerDependencies } from "../types.js";
 
 function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
   return Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
@@ -216,5 +257,401 @@ describe("shouldTriggerBackup", () => {
 
   it("returns false for empty object", () => {
     expect(shouldTriggerBackup({})).toBe(false);
+  });
+});
+
+function makeInvokeEvent(senderId = 1) {
+  return {
+    sender: {
+      id: senderId,
+    },
+  } as unknown as Electron.IpcMainInvokeEvent;
+}
+
+async function invokeBoot(options: { deps?: HandlerDependencies; senderId?: number } = {}) {
+  ipcHandlers.clear();
+  const cleanup = registerAppStateHandlers(options.deps);
+  const handler = ipcHandlers.get("app:boot");
+  if (!handler) throw new Error("app:boot handler not registered");
+  const result = (await handler(makeInvokeEvent(options.senderId))) as Record<string, unknown>;
+  cleanup();
+  return result;
+}
+
+describe("app:boot handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    crashGuard.isSafeMode.mockReturnValue(false);
+    crashGuard.getCrashCount.mockReturnValue(0);
+    crashService.getPendingCrash.mockReturnValue(null);
+    crashService.consumePanelFilter.mockReturnValue(null);
+    crashService.getConfig.mockReturnValue({ autoRestoreOnCrash: false });
+    crashGuard.getQuarantinedStatePath.mockReturnValue(null);
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(undefined);
+    vi.mocked(getWindowForWebContents).mockReturnValue(null);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+    vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: null,
+      quarantinedPath: undefined,
+    });
+  });
+
+  it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
+    const result = await invokeBoot();
+    expect(result).toHaveProperty("appState");
+    expect(result).toHaveProperty("terminalConfig");
+    expect(result).toHaveProperty("agentSettings");
+    expect(result).toHaveProperty("crashPending", null);
+    expect(result).toHaveProperty("crashConfig", { autoRestoreOnCrash: false });
+  });
+
+  it("attaches a pending crash plus the live crashCount when one exists", async () => {
+    crashGuard.getCrashCount.mockReturnValue(3);
+    crashService.getPendingCrash.mockReturnValue({
+      logPath: "/fake.json",
+      entry: {
+        id: "c",
+        timestamp: 0,
+        appVersion: "1",
+        platform: "x",
+        osVersion: "y",
+        arch: "z",
+      },
+      hasBackup: false,
+      panels: [],
+    });
+
+    const result = (await invokeBoot()) as { crashPending: { crashCount: number } | null };
+    expect(result.crashPending).not.toBeNull();
+    expect(result.crashPending?.crashCount).toBe(3);
+  });
+
+  it("suppresses crashPending when in safe mode (mirrors crash-recovery:get-pending)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    crashService.getPendingCrash.mockReturnValue({
+      logPath: "/fake.json",
+      entry: {
+        id: "c",
+        timestamp: 0,
+        appVersion: "1",
+        platform: "x",
+        osVersion: "y",
+        arch: "z",
+      },
+      hasBackup: false,
+      panels: [],
+    });
+
+    const result = (await invokeBoot()) as { crashPending: unknown };
+    expect(result.crashPending).toBeNull();
+  });
+
+  it("surfaces crashLoopStateRecovery only when in safe mode AND quarantine path is set", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    (crashGuard.getQuarantinedStatePath as any).mockReturnValue(
+      "/tmp/crash-loop-state.json.corrupted.42"
+    );
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toEqual({
+      quarantinedPath: "/tmp/crash-loop-state.json.corrupted.42",
+    });
+  });
+
+  it("omits crashLoopStateRecovery when not in safe mode (silent corruption is log-only)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(false);
+    (crashGuard.getQuarantinedStatePath as any).mockReturnValue(
+      "/tmp/crash-loop-state.json.corrupted.42"
+    );
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toBeNull();
+  });
+
+  it("omits crashLoopStateRecovery when in safe mode but no quarantine occurred", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    crashGuard.getQuarantinedStatePath.mockReturnValue(null);
+
+    const result = (await invokeBoot()) as { crashLoopStateRecovery: unknown };
+    expect(result.crashLoopStateRecovery).toBeNull();
+  });
+
+  it("filters out quarantined panels in safe mode while keeping stable ones", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["panel-bad"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "panel-bad", kind: "terminal", title: "Misbehaving" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "panel-good", kind: "terminal", title: "Good", location: "grid", cwd: "/tmp" },
+            { id: "panel-bad", kind: "terminal", title: "Bad", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: Array<{ id: string }>;
+    };
+    expect(result.appState.terminals.map((t) => t.id)).toEqual(["panel-good"]);
+    expect(result.skippedPanelCount).toBe(1);
+    expect(result.quarantinedPanels).toEqual([
+      expect.objectContaining({ id: "panel-bad", title: "Misbehaving" }),
+    ]);
+  });
+
+  it("falls back to the all-or-nothing wipe when every saved panel is quarantined", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a", "b"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "a", kind: "terminal", title: "A" },
+      { id: "b", kind: "terminal", title: "B" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: unknown[] };
+      skippedPanelCount: number;
+    };
+    expect(result.appState.terminals).toEqual([]);
+    expect(result.skippedPanelCount).toBe(2);
+  });
+
+  it("falls back to the all-or-nothing wipe when ledger is empty (legacy path)", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set());
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [{ id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" }],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: unknown[] };
+      skippedPanelCount: number;
+      quarantinedPanels: unknown[];
+    };
+    expect(result.appState.terminals).toEqual([]);
+    expect(result.skippedPanelCount).toBe(1);
+    expect(result.quarantinedPanels).toEqual([]);
+  });
+
+  it("preserves panels in safe mode when the quarantine set doesn't match this project", async () => {
+    crashGuard.isSafeMode.mockReturnValue(true);
+    // Ledger has IDs from a different project — none of the current project's
+    // saved panels are quarantined.
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["other-project-bad"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "other-project-bad", kind: "terminal", title: "Other" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "current-a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "current-b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: Array<{ id: string }>;
+    };
+    expect(result.appState.terminals.map((t) => t.id).sort()).toEqual(["current-a", "current-b"]);
+    expect(result.skippedPanelCount).toBe(0);
+    // The other project's quarantine is still surfaced for the banner.
+    expect(result.quarantinedPanels.map((p) => p.id)).toEqual(["other-project-bad"]);
+  });
+
+  it("does not consult the ledger filter outside of safe mode", async () => {
+    crashGuard.isSafeMode.mockReturnValue(false);
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([
+      { id: "a", kind: "terminal", title: "A" },
+    ]);
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [
+            { id: "a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+            { id: "b", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+          ],
+          sidebarWidth: 350,
+        };
+      }
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    });
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string }> };
+      skippedPanelCount: number;
+      quarantinedPanels: unknown[];
+    };
+    expect(result.appState.terminals.map((t) => t.id).sort()).toEqual(["a", "b"]);
+    expect(result.skippedPanelCount).toBe(0);
+    expect(result.quarantinedPanels).toEqual([]);
+  });
+
+  it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
+    const cachedResult = {
+      appState: { terminals: [], sidebarWidth: 350 },
+      terminalConfig: {
+        scrollbackLines: 3000,
+        performanceMode: false,
+        resourceMonitoringEnabled: true,
+      },
+      project: null,
+      agentSettings: { agents: {} },
+      gpuWebGLHardware: true,
+      gpuHardwareAccelerationDisabled: false,
+      gpuAngleFallbackActive: false,
+      safeMode: false,
+      isWindowsStore: false,
+    };
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(
+      cachedResult as ReturnType<typeof consumePrefetchedHydrateResult>
+    );
+    // Force the cache path by giving handleAppHydrate a current project.
+    const projectStoreModule = await import("../../services/ProjectStore.js");
+    vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+    expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
+    expect(result.crashPending).toBeNull();
+    expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
+  });
+
+  it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {
+    const boundProject = {
+      id: "proj-bound",
+      name: "Bound Project",
+      path: "/projects/bound",
+    };
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.getProjectById).mockImplementation((projectId) =>
+      projectId === boundProject.id
+        ? (boundProject as unknown as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: {
+        projectId: boundProject.id,
+        sidebarWidth: 350,
+        terminals: [],
+      },
+      quarantinedPath: undefined,
+    });
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(boundProject.id),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: {
+        getProjectIdForWebContents: vi.fn().mockReturnValue("proj-other"),
+      },
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({ deps, senderId: 42 });
+
+    expect(result.project).toEqual(boundProject);
+    expect(pvm.getProjectIdForWebContents).toHaveBeenCalledWith(42);
+    expect(projectStore.getProjectStateWithRecovery).toHaveBeenCalledWith(boundProject.id);
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit the global current project for an unbound project view", async () => {
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({ deps, senderId: 42 });
+
+    expect(result.project).toBeNull();
+    expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 });

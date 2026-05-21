@@ -286,22 +286,6 @@ describe("EventBuffer", () => {
       expect(searchAgent.length).toBe(1);
     });
 
-    it("redacts task:created description field", () => {
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Process user credentials for API_KEY=secret",
-        worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
-
-      const all = buffer.getAll();
-      const taskEvent = all.find((e) => e.type === "task:created");
-
-      expect(taskEvent).toBeDefined();
-      expect(taskEvent?.payload.description).toBe("[REDACTED - May contain sensitive information]");
-      expect(taskEvent?.payload.taskId).toBe("task-1"); // taskId should not be redacted
-    });
-
     it("does not redact non-sensitive events", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
@@ -489,32 +473,9 @@ describe("EventBuffer", () => {
     });
   });
 
-  describe("filtering with taskId and traceId", () => {
+  describe("filtering with traceId", () => {
     beforeEach(() => {
       buffer.clear();
-
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
-        worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
-      events.emit("task:assigned", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-      events.emit("task:state-changed", {
-        taskId: "task-1",
-        state: "running",
-        previousState: "queued",
-        timestamp: Date.now(),
-      });
-    });
-
-    it("filters by taskId", () => {
-      const filtered = buffer.getFiltered({ taskId: "task-1" });
-      expect(filtered.length).toBe(3);
     });
 
     it("filters by traceId", () => {
@@ -605,10 +566,9 @@ describe("EventBuffer", () => {
     });
 
     it("assigns correct category to different event types", () => {
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
-        worktreeId: "wt-1",
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
         timestamp: Date.now(),
       });
 
@@ -625,10 +585,10 @@ describe("EventBuffer", () => {
       } as any);
 
       const all = buffer.getAll();
-      const taskEvent = all.find((e) => e.type === "task:created");
+      const agentEvent = all.find((e) => e.type === "agent:spawned");
       const sysEvent = all.find((e) => e.type === "sys:worktree:update");
 
-      expect(taskEvent?.category).toBe("task");
+      expect(agentEvent?.category).toBe("agent");
       expect(sysEvent?.category).toBe("system");
     });
 
@@ -646,20 +606,25 @@ describe("EventBuffer", () => {
         trigger: "output",
         confidence: 1.0,
       });
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
+      events.emit("sys:worktree:update", {
+        id: "wt-1",
+        path: "/foo/bar",
+        name: "bar",
+        branch: "main",
+        isCurrent: true,
         worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+        aiStatus: "disabled",
+      } as any);
 
       const agentEvents = buffer.getFiltered({ category: "agent" });
       expect(agentEvents.length).toBe(2);
       expect(agentEvents.every((e) => e.category === "agent")).toBe(true);
 
-      const taskEvents = buffer.getFiltered({ category: "task" });
-      expect(taskEvents.length).toBe(1);
-      expect(taskEvents[0].category).toBe("task");
+      const systemEvents = buffer.getFiltered({ category: "system" });
+      expect(systemEvents.length).toBe(1);
+      expect(systemEvents[0].category).toBe("system");
     });
 
     it("combines category filter with other filters", () => {
@@ -673,12 +638,17 @@ describe("EventBuffer", () => {
         terminalId: "term-2",
         timestamp: Date.now(),
       });
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
+      events.emit("sys:worktree:update", {
+        id: "wt-1",
+        path: "/foo/bar",
+        name: "bar",
+        branch: "main",
+        isCurrent: true,
         worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+        aiStatus: "disabled",
+      } as any);
 
       const filtered = buffer.getFiltered({
         category: "agent",
@@ -694,20 +664,25 @@ describe("EventBuffer", () => {
         terminalId: "term-1",
         timestamp: Date.now(),
       });
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
+      events.emit("sys:worktree:update", {
+        id: "wt-1",
+        path: "/foo/bar",
+        name: "bar",
+        branch: "main",
+        isCurrent: true,
         worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+        aiStatus: "disabled",
+      } as any);
 
       const agentEvents = buffer.getEventsByCategory("agent");
       expect(agentEvents.length).toBe(1);
       expect(agentEvents[0].type).toBe("agent:spawned");
 
-      const taskEvents = buffer.getEventsByCategory("task");
-      expect(taskEvents.length).toBe(1);
-      expect(taskEvents[0].type).toBe("task:created");
+      const sysEvents = buffer.getEventsByCategory("system");
+      expect(sysEvents.length).toBe(1);
+      expect(sysEvents[0].type).toBe("sys:worktree:update");
     });
 
     it("getCategoryStats returns correct counts", () => {
@@ -724,32 +699,36 @@ describe("EventBuffer", () => {
         trigger: "output",
         confidence: 1.0,
       });
-      events.emit("task:created", {
-        taskId: "task-1",
-        description: "Test task",
+      events.emit("sys:worktree:update", {
+        id: "wt-1",
+        path: "/foo/bar",
+        name: "bar",
+        branch: "main",
+        isCurrent: true,
         worktreeId: "wt-1",
-        timestamp: Date.now(),
-      });
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+        aiStatus: "disabled",
+      } as any);
 
       const stats = buffer.getCategoryStats();
       expect(stats.agent).toBe(2);
-      expect(stats.task).toBe(1);
-      expect(stats.system).toBe(0);
+      expect(stats.system).toBe(1);
+      expect(stats.file).toBe(0);
     });
 
     it("returns empty array for category with no events", () => {
-      // Don't emit any task events
       events.emit("agent:spawned", {
         agentId: "agent-1",
         terminalId: "term-1",
         timestamp: Date.now(),
       });
 
-      const taskEvents = buffer.getEventsByCategory("task");
-      expect(taskEvents).toEqual([]);
+      const fileEvents = buffer.getEventsByCategory("file");
+      expect(fileEvents).toEqual([]);
 
       const stats = buffer.getCategoryStats();
-      expect(stats.task).toBe(0);
+      expect(stats.file).toBe(0);
     });
   });
 

@@ -83,7 +83,7 @@ export function TrashGroupItem({
     return null;
   })();
 
-  const fallbackName = `Tab Group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
+  const fallbackName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
   const groupName = resolvedActiveTitle
     ? tabCount > 1
       ? `${resolvedActiveTitle} +${tabCount - 1} more`

@@ -38,6 +38,7 @@ vi.mock("../SystemSleepService.js", () => {
   return { getSystemSleepService: vi.fn(() => mockSleepService) };
 });
 
+import os from "os";
 import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import v8 from "node:v8";
@@ -49,6 +50,8 @@ import {
   WARMUP_INTERVALS,
   PRESSURE_COUNT_TIER2,
   MITIGATION_COOLDOWN_MS,
+  RECLAIM_SETTLE_MS,
+  MIN_RECLAIMED_MB,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -60,6 +63,8 @@ import {
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
+
+const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
 const mockGetAppMetrics = app.getAppMetrics as ReturnType<typeof vi.fn>;
 
@@ -91,12 +96,17 @@ describe("ProcessMemoryMonitor", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_830_001);
     vi.clearAllMocks();
+    // Pin total RAM so the RAM-scaled per-process thresholds resolve to the
+    // legacy absolute values (Browser 300 / Tab 768 / Utility 500) and the
+    // aggregate threshold resolves to 2048 MB — deterministic across CI hosts.
+    vi.spyOn(os, "totalmem").mockReturnValue(EIGHT_GB);
     mockGetAppMetrics.mockReturnValue([]);
   });
 
   afterEach(() => {
     stop?.();
     vi.useRealTimers();
+    vi.restoreAllMocks();
     Object.defineProperty(app, "isPackaged", { value: false, writable: true });
   });
 
@@ -297,25 +307,31 @@ describe("ProcessMemoryMonitor", () => {
     expect(logDebug).toHaveBeenCalledTimes(1);
   });
 
-  // --- New tests for privateBytes and trend detection ---
+  // --- Memory metric is workingSetSize unconditionally (privateBytes is
+  // Windows-only and reports 0 on macOS/Linux, so the previous
+  // `privateBytes ?? workingSetSize` fallback silently never fired there). ---
 
-  it("prefers privateBytes over workingSetSize when available", () => {
-    // privateBytes = 350 MB, workingSetSize = 100 MB — should use 350 MB
+  it("uses workingSetSize even when privateBytes is present and larger", () => {
+    // workingSetSize = 100 MB (below 300 MB Browser threshold on 8 GB)
+    // privateBytes  = 350 MB (would exceed if it were used)
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100, 350 * 1024)]);
 
     stop = startAppMetricsMonitor();
     vi.advanceTimersByTime(30_000);
 
-    expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
+    expect(logDebug).toHaveBeenCalledWith("process-memory-sample", {
       pid: 100,
       type: "Browser",
-      mb: 350,
-      thresholdMb: 300,
+      mb: 100,
     });
+    expect(logWarn).not.toHaveBeenCalledWith(
+      "process-memory-threshold-exceeded",
+      expect.anything()
+    );
   });
 
-  it("falls back to workingSetSize when privateBytes is not available", () => {
-    // No privateBytes supplied — should use workingSetSize of 600 MB
+  it("uses workingSetSize when privateBytes is not available", () => {
+    // No privateBytes supplied — should use workingSetSize of 600 MB (> 500 MB Utility threshold)
     mockGetAppMetrics.mockReturnValue([makeMetric("Utility", 600 * 1024, 300)]);
 
     stop = startAppMetricsMonitor();
@@ -415,7 +431,66 @@ describe("ProcessMemoryMonitor", () => {
     });
   });
 
-  describe("memory pressure mitigation", () => {
+  describe("RAM-scaled per-process thresholds (issue #8633)", () => {
+    it("scales Browser threshold up on a 64 GB machine — 350 MB no longer warns", () => {
+      // 64 GB * (300/8192) = 2400 MB Browser threshold; 350 MB is well below.
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).not.toHaveBeenCalledWith(
+        "process-memory-threshold-exceeded",
+        expect.anything()
+      );
+    });
+
+    it("64 GB machine still warns when Browser exceeds the scaled 2400 MB threshold", () => {
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 2401 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
+        pid: 100,
+        type: "Browser",
+        mb: 2401,
+        thresholdMb: 2400,
+      });
+    });
+
+    it("scales Tab threshold down on a 4 GB machine — 400 MB now warns", () => {
+      // 4 GB * (768/8192) = 384 MB Tab threshold; 400 MB exceeds it.
+      vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 * 1024 * 1024);
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 400 * 1024, 200)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
+        pid: 200,
+        type: "Tab",
+        mb: 400,
+        thresholdMb: 384,
+      });
+    });
+
+    it("does NOT warn at exactly the threshold (strict >)", () => {
+      // 8 GB → Browser threshold is exactly 300 MB; 300 MB sample should not warn.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 300 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      expect(logWarn).not.toHaveBeenCalledWith(
+        "process-memory-threshold-exceeded",
+        expect.anything()
+      );
+    });
+  });
+
+  describe("aggregate working-set pressure (issue #8633)", () => {
     let mockActions: MemoryPressureActions;
 
     beforeEach(() => {
@@ -431,6 +506,242 @@ describe("ProcessMemoryMonitor", () => {
         vi.advanceTimersByTime(30_000);
       }
       await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("triggers mitigation when sum exceeds 25% of RAM even though no process alone exceeds its threshold", async () => {
+      // 8 GB * 0.25 = 2048 MB aggregate threshold.
+      // 5 × 500 MB Tab processes = 2500 MB total (> 2048).
+      // Per-process Tab threshold is 768 MB — none individually exceeds.
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 500 * 1024, 201),
+        makeMetric("Tab", 500 * 1024, 202),
+        makeMetric("Tab", 500 * 1024, 203),
+        makeMetric("Tab", 500 * 1024, 204),
+        makeMetric("Tab", 500 * 1024, 205),
+      ]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+      // No per-process threshold warnings should have fired (each Tab is below 768 MB).
+      expect(logWarn).not.toHaveBeenCalledWith(
+        "process-memory-threshold-exceeded",
+        expect.anything()
+      );
+    });
+
+    it("does NOT trigger mitigation when sum stays below 25% of RAM", async () => {
+      // 4 × 400 MB Tab processes = 1600 MB total (< 2048 MB aggregate threshold).
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 400 * 1024, 201),
+        makeMetric("Tab", 400 * 1024, 202),
+        makeMetric("Tab", 400 * 1024, 203),
+        makeMetric("Tab", 400 * 1024, 204),
+      ]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("ignores unmonitored process types in the aggregate sum", async () => {
+      // Massive GPU/Zygote totals should NOT count toward aggregate (they are
+      // not in MONITORED_TYPES). Only the small Browser process contributes.
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("GPU", 3000 * 1024, 901),
+        makeMetric("Zygote", 3000 * 1024, 902),
+        makeMetric("Browser", 100 * 1024, 100),
+      ]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("escalates aggregate-only pressure to tier 2 after sustained polls", async () => {
+      // Same 5-Tab × 500 MB setup — aggregate 2500 MB stays above the 2048 MB
+      // ceiling, no single Tab trips its 768 MB per-type threshold.
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 500 * 1024, 201),
+        makeMetric("Tab", 500 * 1024, 202),
+        makeMetric("Tab", 500 * 1024, 203),
+        makeMetric("Tab", 500 * 1024, 204),
+        makeMetric("Tab", 500 * 1024, 205),
+      ]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      // Tier 2 escalates inside the tier-1 mitigation cycle, gated on the
+      // post-mitigation re-sample that runs once the RECLAIM_SETTLE_MS settle
+      // window elapses. The block-level advancePolls only flushes microtasks,
+      // so drive the settle delay explicitly so the re-sample and tier-2
+      // decision run before the assertion.
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets consecutive count when aggregate drops below threshold", async () => {
+      // Above-threshold setup.
+      const overThreshold = [
+        makeMetric("Tab", 500 * 1024, 201),
+        makeMetric("Tab", 500 * 1024, 202),
+        makeMetric("Tab", 500 * 1024, 203),
+        makeMetric("Tab", 500 * 1024, 204),
+        makeMetric("Tab", 500 * 1024, 205),
+      ];
+      mockGetAppMetrics.mockReturnValue(overThreshold);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Past warmup + (PRESSURE_COUNT_TIER2 - 1) polls of aggregate pressure.
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      // Drop aggregate below threshold for one poll.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 100 * 1024, 201)]);
+      await advancePolls(1);
+
+      // Resume aggregate pressure — count restarted, should still need PRESSURE_COUNT_TIER2.
+      mockGetAppMetrics.mockReturnValue(overThreshold);
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("system-wide low-memory signal (issue #8633)", () => {
+    let mockActions: MemoryPressureActions;
+    let originalGetSystemMemoryInfo: unknown;
+
+    beforeEach(() => {
+      mockActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+      originalGetSystemMemoryInfo = (process as { getSystemMemoryInfo?: unknown })
+        .getSystemMemoryInfo;
+    });
+
+    afterEach(() => {
+      if (originalGetSystemMemoryInfo === undefined) {
+        delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+      } else {
+        (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo =
+          originalGetSystemMemoryInfo;
+      }
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        vi.advanceTimersByTime(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0): void {
+      (
+        process as {
+          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+        }
+      ).getSystemMemoryInfo = () => ({
+        free: freeKb,
+        purgeable: purgeableKb,
+        total: EIGHT_GB / 1024,
+      });
+    }
+
+    it("triggers mitigation when free + purgeable drops below 10% of total RAM", async () => {
+      // 8 GB * 0.10 = 819.2 MB threshold. Report 500 MB free + 100 MB purgeable
+      // = 600 MB available, below threshold. No process exceeds its threshold.
+      stubSystemMemoryInfo(500 * 1024, 100 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT trigger mitigation when free + purgeable stays above threshold", async () => {
+      // 1500 MB free, well above the 819 MB threshold.
+      stubSystemMemoryInfo(1500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("counts purgeable toward available on macOS — free alone below threshold but purgeable rescues", async () => {
+      // 500 MB free + 500 MB purgeable = 1000 MB available, > 819 MB threshold.
+      // Without the purgeable summation this would falsely trigger on macOS.
+      stubSystemMemoryInfo(500 * 1024, 500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("skips the signal when getSystemMemoryInfo is unavailable", async () => {
+      // Remove the API entirely to simulate test/sandbox environments.
+      delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      // No throw, no mitigation triggered.
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("memory pressure mitigation", () => {
+    let mockActions: MemoryPressureActions;
+
+    beforeEach(() => {
+      mockActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // Helper that mocks getAppMetrics to return `beforeMb` until clearCaches
+    // is called, then returns `afterMb`. Lets each test express the
+    // closed-loop reclamation delta directly.
+    function arrangeClosedLoopMetrics(opts: {
+      beforeMb: number;
+      afterMb: number;
+      pid?: number;
+    }): void {
+      const { beforeMb, afterMb, pid = 100 } = opts;
+      let postMitigation = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = postMitigation ? afterMb : beforeMb;
+        return [makeMetric("Browser", mb * 1024, pid, mb * 1024)];
+      });
+      mockActions.clearCaches = vi.fn().mockImplementation(async () => {
+        postMitigation = true;
+      });
+    }
+
+    // Advances `n` polls then drives the async mitigation IIFE through its
+    // {@link RECLAIM_SETTLE_MS} settle delay so the re-sample and tier-2
+    // decision run before assertions.
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        vi.advanceTimersByTime(30_000);
+      }
+      // Flush microtasks so the IIFE starts and reaches the settle await,
+      // then advance through the settle delay (also flushes microtasks).
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
     }
 
     it("works without actions parameter (backward compat)", () => {
@@ -459,65 +770,106 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
     });
 
-    it("does not call hibernateIdleProjects before sustained pressure threshold", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+    it("does not escalate to tier 2 when tier 1 reclaims above the minimum", async () => {
+      // Tier 1 frees 100 MB (well above MIN_RECLAIMED_MB), and the post-
+      // settle sample drops below the Browser pressure threshold — both
+      // halves of the AND gate should suppress escalation.
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 250 });
       stop = startAppMetricsMonitor(mockActions);
 
-      // Warmup + pressure count less than tier2
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
+      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
 
-    it("calls hibernateIdleProjects after sustained pressure threshold", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+    it("escalates to tier 2 when tier 1 reclaims insufficient memory and pressure remains", async () => {
+      // Tier 1 freed only 10 MB (< MIN_RECLAIMED_MB) and pressure persists.
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 340 });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
 
-    it("resets consecutive pressure count when pressure subsides", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+    it("does NOT escalate to tier 2 when post-settle re-sample shows pressure cleared", async () => {
+      // Tier 1 freed only 5 MB (< MIN_RECLAIMED_MB) but pressure dropped
+      // below threshold after the settle window — pressureRemains is false,
+      // so the AND gate suppresses escalation even though delta is small.
+      arrangeClosedLoopMetrics({ beforeMb: 305, afterMb: 295 });
       stop = startAppMetricsMonitor(mockActions);
 
-      // Past warmup + 2 pressure polls
-      await advancePolls(WARMUP_INTERVALS + 2);
-
-      // Drop below threshold
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
-      await advancePolls(1);
-
-      // Resume pressure — should restart count from 0
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
+    });
+
+    it("logs reclaim delta alongside before/after totals", async () => {
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 250 });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          beforeMb: 350,
+          afterMb: 250,
+          deltaMb: 100,
+          pressureRemains: false,
+        })
+      );
+    });
+
+    it("re-samples app.getAppMetrics() only after the settle delay elapses", async () => {
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 250 });
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Advance to the first post-warmup poll and let the IIFE start, but
+      // stop short of the settle delay completing.
+      for (let i = 0; i < WARMUP_INTERVALS + 1; i++) {
+        vi.advanceTimersByTime(30_000);
+      }
+      // Let the IIFE run up to the settle await.
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The reclaim log fires only after the settle delay; nothing yet.
+      expect(logInfo).not.toHaveBeenCalledWith("memory-pressure-tier1-reclaim", expect.any(Object));
+
+      // Advance through the settle delay; now the IIFE completes.
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier1-reclaim", expect.any(Object));
     });
 
     it("respects tier 2 cooldown — no re-trigger within cooldown period", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      // Tier 1 reclaims very little, so tier 2 fires every cycle absent the
+      // cooldown.
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
       stop = startAppMetricsMonitor(mockActions);
 
-      // Trigger tier 2
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      // Trigger tier 2 on the first post-warmup pressure poll.
+      await advancePolls(WARMUP_INTERVALS + 1);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
 
-      // Continue pressure — should not trigger again within cooldown
-      await advancePolls(PRESSURE_COUNT_TIER2);
+      // Continue pressure — should not trigger again within cooldown.
+      await advancePolls(3);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
     });
 
     it("allows tier 2 re-trigger after cooldown expires", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
       stop = startAppMetricsMonitor(mockActions);
 
-      // Trigger tier 2
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      // Trigger tier 2.
+      await advancePolls(WARMUP_INTERVALS + 1);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
 
-      // Advance past cooldown (keep pressure)
+      // Advance past cooldown (pressure remains, delta remains insufficient).
       const cooldownPolls = Math.ceil(MITIGATION_COOLDOWN_MS / 30_000);
       await advancePolls(cooldownPolls + 1);
 
@@ -525,10 +877,10 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("logs tier 1 and tier 2 mitigation events", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier1-mitigation", expect.any(Object));
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-mitigation", expect.any(Object));
@@ -556,10 +908,12 @@ describe("ProcessMemoryMonitor", () => {
         ...mockActions,
         trimPtyHostState,
       };
+      // Default mockActions has clearCaches as a no-op resolver; reclaim
+      // delta stays at 0 so tier 2 should still fire here.
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(actionsWithTrim);
 
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(trimPtyHostState).toHaveBeenCalled();
       expect(actionsWithTrim.hibernateIdleProjects).toHaveBeenCalledTimes(1);
@@ -575,10 +929,11 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("calls destroyHiddenWebviews(2) on tier 2 mitigation", async () => {
+      // Zero reclamation + pressure remains → tier 2 fires immediately.
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
@@ -595,7 +950,7 @@ describe("ProcessMemoryMonitor", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await advancePolls(WARMUP_INTERVALS + 1);
 
       const destroyIdx = callOrder.lastIndexOf("destroyHiddenWebviews");
       const hibernateIdx = callOrder.indexOf("hibernateIdleProjects");
@@ -610,6 +965,78 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mockActions.clearCaches).not.toHaveBeenCalled();
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("escalation gate honors MIN_RECLAIMED_MB at the boundary", async () => {
+      // Reclaim exactly equals MIN_RECLAIMED_MB → the gate `deltaMb <
+      // MIN_RECLAIMED_MB` is false, so no escalation even with pressure
+      // persisting.
+      arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 - MIN_RECLAIMED_MB });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("escalates to tier 2 when the post-settle re-sample throws", async () => {
+      // Regression: the post-settle catch block must produce deltaMb=0,
+      // not deltaMb=beforeMb, so the AND gate falls through to escalation.
+      // Without `afterMb = beforeMb` inside the catch, the large derived
+      // delta would suppress tier 2 even with pressureRemains=true.
+      let cleared = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (cleared) {
+          throw new Error("getAppMetrics unavailable");
+        }
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      mockActions.clearCaches = vi.fn().mockImplementation(async () => {
+        cleared = true;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          pressureRemains: true,
+          resampleFailed: true,
+          deltaMb: 0,
+        })
+      );
+    });
+
+    it("consumes tier-2 cooldown even when hibernateIdleProjects throws", async () => {
+      // Regression: lastTier2At must be stamped before the tier-2 awaits.
+      // Otherwise a partial failure (destroyHiddenWebviews(2) succeeds,
+      // hibernateIdleProjects throws) leaves the cooldown unconsumed and the
+      // next pressure poll re-fires destroyHiddenWebviews(2).
+      arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
+      mockActions.hibernateIdleProjects = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("hibernate failed"))
+        .mockResolvedValue(undefined);
+
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      // First cycle: tier-2 attempted, destroyHiddenWebviews(2) called,
+      // hibernate throws. Cooldown should still be consumed.
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      const destroyCallsAfterFirst = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter((c) => c[0] === 2).length;
+      expect(destroyCallsAfterFirst).toBe(1);
+
+      // Second cycle within cooldown: no new tier-2 fire.
+      await advancePolls(3);
+      const destroyCallsAfterSecond = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter((c) => c[0] === 2).length;
+      expect(destroyCallsAfterSecond).toBe(1);
     });
   });
 

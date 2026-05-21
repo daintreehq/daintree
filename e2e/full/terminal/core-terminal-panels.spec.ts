@@ -8,6 +8,8 @@ import {
   getFirstGridPanel,
   getGridPanelCount,
   getDockPanelCount,
+  clickToolbarButton,
+  expectToolbarButtonReachable,
   openTerminal,
 } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
@@ -78,11 +80,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const maximizeBtn = panel.locator('[aria-label*="Maximize"]').first();
       await maximizeBtn.click();
 
-      const exitFocus = window.locator('[aria-label*="Exit Focus"]').first();
-      await expect(exitFocus).toBeVisible({ timeout: T_SHORT });
+      const restoreBtn = window.locator(SEL.panel.restore).first();
+      await expect(restoreBtn).toBeVisible({ timeout: T_SHORT });
 
-      await exitFocus.click();
-      await expect(exitFocus).not.toBeVisible({ timeout: T_SHORT });
+      await restoreBtn.click();
+      await expect(restoreBtn).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("minimize to dock and restore", async () => {
@@ -337,17 +339,14 @@ test.describe.serial("Core: Terminal & Panels", () => {
   test.describe.serial("Context Flow", () => {
     test("Copy Context button is visible when project is active", async () => {
       const { window } = ctx;
-      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
-      await expect(btn).toBeVisible({ timeout: T_MEDIUM });
+      await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_MEDIUM);
     });
 
     test("Copy Context button transitions through states", async () => {
       const { window } = ctx;
 
-      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
-      await btn.click();
-
-      await expect(btn).toBeVisible({ timeout: T_LONG });
+      await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
+      await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_LONG);
     });
 
     test("clipboard contains context after copy", async () => {

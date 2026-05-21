@@ -435,6 +435,55 @@ describe("agentInstall", () => {
     });
   });
 
+  describe("extractInspectUrl", () => {
+    it("returns the URL for a curl | bash command", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("curl -fsSL https://kiro.dev/install.sh | bash")).toBe(
+        "https://kiro.dev/install.sh"
+      );
+    });
+
+    it("returns the URL for a curl | sh command", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("curl https://example.com/install.sh | sh")).toBe(
+        "https://example.com/install.sh"
+      );
+    });
+
+    it("returns the URL for an irm | iex Windows command", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("irm 'https://example.com/install.ps1' | iex")).toBe(
+        "https://example.com/install.ps1"
+      );
+    });
+
+    it("trims trailing punctuation from process-substitution forms", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("bash <(curl https://example.com/install.sh) | bash")).toBe(
+        "https://example.com/install.sh"
+      );
+    });
+
+    it("returns undefined for non-pipe-to-shell commands", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("npm install -g @anthropic-ai/claude-code")).toBeUndefined();
+      expect(extractInspectUrl("brew install opencode")).toBeUndefined();
+      expect(extractInspectUrl("scoop install extras/opencode")).toBeUndefined();
+    });
+
+    it("returns undefined for pipe-to-shell commands without a URL", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(extractInspectUrl("echo hello | bash")).toBeUndefined();
+    });
+
+    it("returns the first URL when multiple are present", async () => {
+      const { extractInspectUrl } = await import("../agentInstall");
+      expect(
+        extractInspectUrl("curl https://primary.example.com/install.sh https://other.com | bash")
+      ).toBe("https://primary.example.com/install.sh");
+    });
+  });
+
   describe("isBlockExecutable", () => {
     it("should return true for npm-only blocks", async () => {
       const { isBlockExecutable } = await import("../agentInstall");

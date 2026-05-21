@@ -5,14 +5,27 @@ import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
+import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import { actionService } from "@/services/ActionService";
+import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
 
 const ContextMenu = ({ children, ...rest }: ContextMenuRootProps) => {
   const radix = useRadixPrimitives();
-  if (!radix) return <>{children}</>;
+  if (!radix)
+    return (
+      <MenuActionSourceContext.Provider value="context-menu">
+        {children}
+      </MenuActionSourceContext.Provider>
+    );
   const Root = radix.ContextMenuPrimitive.Root;
-  return <Root {...rest}>{children}</Root>;
+  return (
+    <MenuActionSourceContext.Provider value="context-menu">
+      <Root {...rest}>{children}</Root>
+    </MenuActionSourceContext.Provider>
+  );
 };
 ContextMenu.displayName = "ContextMenu";
 
@@ -169,6 +182,7 @@ const ContextMenuSubContent = React.forwardRef<
 >(({ className, sideOffset = 4, collisionPadding = 8, children, style, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+  const isDockPopoverChild = useIsDockPopoverChild();
   if (!radix) return null;
   const Portal = radix.ContextMenuPrimitive.Portal;
   const SubContent = radix.ContextMenuPrimitive.SubContent;
@@ -185,6 +199,7 @@ const ContextMenuSubContent = React.forwardRef<
           className
         )}
         {...props}
+        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
       >
         {topShadow}
         {children}
@@ -205,6 +220,7 @@ const ContextMenuContent = React.forwardRef<
 >(({ className, collisionPadding = 8, children, style, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+  const isDockPopoverChild = useIsDockPopoverChild();
   if (!radix) return null;
   const Portal = radix.ContextMenuPrimitive.Portal;
   const Content = radix.ContextMenuPrimitive.Content;
@@ -220,6 +236,7 @@ const ContextMenuContent = React.forwardRef<
           className
         )}
         {...props}
+        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
       >
         {topShadow}
         {children}
@@ -257,6 +274,30 @@ const ContextMenuItem = React.forwardRef<
   );
 });
 ContextMenuItem.displayName = "ContextMenuItem";
+
+type ContextMenuActionItemProps = ContextMenuItemProps & {
+  actionId: ActionId;
+  args?: unknown;
+  dispatchOptions?: Omit<ActionDispatchOptions, "source">;
+};
+
+const ContextMenuActionItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
+  ContextMenuActionItemProps
+>(({ actionId, args, dispatchOptions, onSelect, disabled, ...props }, ref) => {
+  const source = useMenuActionSource();
+
+  const handleSelect: React.ComponentPropsWithoutRef<
+    typeof ContextMenuPrimitiveType.Item
+  >["onSelect"] = (event) => {
+    onSelect?.(event);
+    if (event.defaultPrevented) return;
+    void actionService.dispatch(actionId, args, { ...dispatchOptions, source });
+  };
+
+  return <ContextMenuItem ref={ref} onSelect={handleSelect} disabled={disabled} {...props} />;
+});
+ContextMenuActionItem.displayName = "ContextMenuActionItem";
 
 type ContextMenuSeparatorProps = React.ComponentPropsWithoutRef<
   typeof ContextMenuPrimitiveType.Separator
@@ -398,6 +439,7 @@ export {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuActionItem,
   ContextMenuCheckboxItem,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,

@@ -135,13 +135,6 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
       });
     }
 
-    if (filters.taskId) {
-      filtered = filtered.filter((event) => {
-        const payload = event.payload;
-        return payload && payload.taskId === filters.taskId;
-      });
-    }
-
     if (filters.traceId) {
       const normalizedFilter = filters.traceId.toLowerCase();
       filtered = filtered.filter((event) => {

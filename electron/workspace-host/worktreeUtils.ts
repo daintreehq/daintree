@@ -3,7 +3,10 @@ import { mkdir, writeFile, stat } from "fs/promises";
 import { join as pathJoin, dirname } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
+import { isGitHubRemoteUrl } from "../../shared/utils/githubUrl.js";
 import { NOTE_PATH } from "./types.js";
+
+export { isGitHubRemoteUrl };
 
 // Hard ceiling on the `git lfs version` probe. `git` is already on PATH, so a
 // healthy probe returns in milliseconds; the 3 s cap only matters on slow/
@@ -66,19 +69,6 @@ export function probeGitLfsAvailable(): Promise<boolean> {
 
 export function escapeBranchRegex(name: string): string {
   return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Detect github.com remotes in either HTTPS or SSH form. Inlined here rather
- * than imported from `../services/github/...` to keep the workspace-host's
- * dependency direction one-way (workspace-host → utils, never → main services).
- */
-const GITHUB_REMOTE_URL_PATTERN =
-  /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)/i;
-
-export function isGitHubRemoteUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  return GITHUB_REMOTE_URL_PATTERN.test(url.trim());
 }
 
 export function parseCheckedOutBranches(porcelainOutput: string): Set<string> {

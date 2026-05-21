@@ -7,7 +7,6 @@ type Handler = (...args: unknown[]) => void;
 interface MockWc {
   id: number;
   isDestroyed: ReturnType<typeof vi.fn>;
-  setBackgroundThrottling: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
@@ -31,7 +30,6 @@ function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
   const wc: MockWc = {
     id,
     isDestroyed: vi.fn(() => false),
-    setBackgroundThrottling: vi.fn(),
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
@@ -129,6 +127,8 @@ vi.mock("../skeletonCss.js", () => ({
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -189,6 +189,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
       dirname: "/test",
       cachedProjectViews: 3,
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
 
     initialWc = createMockWebContents();
@@ -287,6 +288,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const freshManager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
     });
 
     const failWc = createMockWebContents({ autoFinishLoad: false });

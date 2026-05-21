@@ -21,6 +21,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { TerminalRecipe } from "@/types";
@@ -51,7 +52,6 @@ export function RecipeManager({
     () => rawProjectRecipes.filter((r) => !inRepoNames.has(r.name)),
     [rawProjectRecipes, inRepoNames]
   );
-  const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
   const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
@@ -82,12 +82,16 @@ export function RecipeManager({
 
   const handleDeleteRecipe = async (recipeId: string) => {
     setDeleteError(null);
-    try {
-      await deleteRecipe(recipeId);
+    const result = await actionService.dispatch(
+      "recipe.delete",
+      { recipeId },
+      { source: "user", confirmed: true }
+    );
+    if (result.ok) {
       setRecipeToDelete(null);
-    } catch (err) {
-      logError("Failed to delete recipe", err);
-      setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
+    } else {
+      logError("Failed to delete recipe", result.error);
+      setDeleteError(formatErrorMessage(result.error, "Failed to delete recipe"));
     }
   };
 
@@ -129,10 +133,13 @@ export function RecipeManager({
 
   const handleDeleteAfterSave = async () => {
     if (!recipeToDeleteAfterSave) return;
-    try {
-      await deleteRecipe(recipeToDeleteAfterSave);
-    } catch (err) {
-      logError("Failed to delete original recipe", err);
+    const result = await actionService.dispatch(
+      "recipe.delete",
+      { recipeId: recipeToDeleteAfterSave },
+      { source: "user", confirmed: true }
+    );
+    if (!result.ok) {
+      logError("Failed to delete original recipe", result.error);
     }
     setRecipeToDeleteAfterSave(null);
   };

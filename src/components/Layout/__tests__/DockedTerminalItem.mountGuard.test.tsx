@@ -162,6 +162,7 @@ vi.mock("@dnd-kit/core", () => ({
 
 import { DockedTerminalItem } from "../DockedTerminalItem";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { TerminalRefreshTier } from "@/types";
 
 function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
@@ -267,4 +268,97 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
+});
+
+describe("DockedTerminalItem lifecycle and pop-out (#8160)", () => {
+  let rafCallbacks: Array<{ id: number; cb: FrameRequestCallback; cancelled: boolean }> = [];
+  let nextRafId = 1;
+
+  function flushRaf() {
+    const pending = rafCallbacks.filter((e) => !e.cancelled);
+    rafCallbacks = [];
+    for (const entry of pending) entry.cb(performance.now());
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    rafCallbacks = [];
+    nextRafId = 1;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      const id = nextRafId++;
+      rafCallbacks.push({ id, cb, cancelled: false });
+      return id;
+    });
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+      const entry = rafCallbacks.find((e) => e.id === id);
+      if (entry) entry.cancelled = true;
+    });
+    openDockTerminalMock.mockClear();
+    closeDockTerminalMock.mockClear();
+    moveTerminalToGridMock.mockClear();
+    mockActiveDockTerminalId = null;
+    vi.mocked(terminalInstanceService.applyRendererPolicy).mockClear();
+    vi.mocked(terminalInstanceService.focus).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("schedules a single RAF on open and applies VISIBLE policy when it fires", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(rafCallbacks.length).toBe(1);
+    expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
+
+    act(() => {
+      flushRaf();
+    });
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.VISIBLE
+    );
+  });
+
+  it("applies BACKGROUND policy synchronously when mounted closed", () => {
+    mockActiveDockTerminalId = null;
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.BACKGROUND
+    );
+    expect(rafCallbacks.length).toBe(0);
+  });
+
+  it("cancels the pending RAF and never applies VISIBLE when closed before it fires", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    const { rerender } = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(rafCallbacks.length).toBe(1);
+    expect(rafCallbacks[0]?.cancelled).toBe(false);
+
+    mockActiveDockTerminalId = null;
+    rerender(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(rafCallbacks[0]?.cancelled).toBe(true);
+
+    act(() => {
+      flushRaf();
+    });
+
+    const calls = vi.mocked(terminalInstanceService.applyRendererPolicy).mock.calls;
+    expect(calls.some((c) => c[1] === TerminalRefreshTier.VISIBLE)).toBe(false);
+    expect(calls.some((c) => c[1] === TerminalRefreshTier.BACKGROUND)).toBe(true);
+  });
+
+  // The "Open in grid" affordance moved out of DockedTerminalItem's overlay and
+  // into PanelHeader's control slot (#8359). Button rendering + onRestore wiring
+  // is covered by PanelHeader.test.tsx; the conditional dock-close lives in
+  // DockedPanel.handleRestore.
 });

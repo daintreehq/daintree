@@ -81,30 +81,6 @@ export const config: AgentConfig = {
     promptConfidence: 0.85,
     debounceMs: 6000,
   },
-  routing: {
-    capabilities: [
-      "javascript",
-      "typescript",
-      "python",
-      "go",
-      "rust",
-      "react",
-      "node",
-      "debugging",
-      "refactoring",
-      "general-purpose",
-    ],
-    domains: {
-      frontend: 0.8,
-      backend: 0.8,
-      testing: 0.75,
-      refactoring: 0.8,
-      debugging: 0.8,
-      architecture: 0.75,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   // Kiro uses directory-based sessions: no session ID is emitted on quit
   // and `--resume` takes no argument. `project-scoped` skips the PTY host's
   // session-ID capture loop while still firing the graceful `/quit`.

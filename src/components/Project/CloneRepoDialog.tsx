@@ -1,13 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, FolderOpen, X } from "lucide-react";
+import { Check, AlertCircle, FolderOpen, LogIn, X } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
+import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
+import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
+import { isGitHubRemoteUrl } from "@shared/utils/githubUrl";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
+import { isClientGitError } from "@/utils/clientGitError";
+
+interface CloneError {
+  message: string;
+  gitReason?: GitOperationReason;
+}
 
 interface CloneRepoDialogProps {
   isOpen: boolean;
@@ -54,7 +65,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [shallowClone, setShallowClone] = useState(false);
   const [progressEvents, setProgressEvents] = useState<CloneRepoProgressEvent[]>([]);
   const [isCloning, setIsCloning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CloneError | null>(null);
+  // Kept separate from `progressEvents` (which dedups by stage) so the
+  // cleanup-failure banner isn't swallowed by, or lost among, progress rows.
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [clonedPath, setClonedPath] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -77,6 +91,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setProgressEvents([]);
       setIsCloning(false);
       setError(null);
+      setCleanupError(null);
       setIsComplete(false);
       setClonedPath(null);
       hasFinalizedRef.current = false;
@@ -84,6 +99,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     }
 
     const cleanup = projectClient.onCloneProgress((event) => {
+      if (event.stage === "cleanup-failed") {
+        setCleanupError(event.message);
+        return;
+      }
       setProgressEvents((prev) => {
         // Dedup by stage so a long clone (hundreds of byte-count updates per
         // stage) shows one live-updating row per stage instead of an unbounded
@@ -130,6 +149,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const startClone = async () => {
     setIsCloning(true);
     setError(null);
+    setCleanupError(null);
     setIsComplete(false);
     setProgressEvents([]);
     hasFinalizedRef.current = false;
@@ -148,7 +168,16 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       // CANCELLED is the user aborting via the cancel button — not a failure.
       const code = (err as { code?: string })?.code;
       if (code !== "CANCELLED") {
-        setError(formatErrorMessage(err, "Failed to clone repository"));
+        // Decode the preload-injected `[GitError|...]` message prefix so we
+        // can branch on `gitReason`. contextBridge strips own Error properties
+        // when the preload's reconstructed error crosses to the renderer, so
+        // the prefix is the only reliable carrier; `isClientGitError` decodes
+        // it and reattaches `gitReason` onto the error.
+        const gitReason = isClientGitError(err) ? err.gitReason : undefined;
+        setError({
+          message: formatErrorMessage(err, "Failed to clone repository"),
+          gitReason,
+        });
       }
     } finally {
       setIsCloning(false);
@@ -174,7 +203,11 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     parentPath.trim() !== "" &&
     folderName.trim() !== "" &&
     folderNameError === null;
-  const showProgress = isCloning || progressEvents.length > 0;
+  // Doherty gate: don't flash the progress box / spinner for a sub-400ms gap
+  // before the first git progress event — only reveal it if the wait exceeds
+  // the threshold. Once real progress arrives the box stays up regardless.
+  const showConnecting = useDohertyGate(isCloning && progressEvents.length === 0);
+  const showProgress = showConnecting || progressEvents.length > 0;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
@@ -278,12 +311,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
         {/* Progress Log */}
         {showProgress && (
           <div className="rounded-lg bg-muted/50 p-4 min-h-[120px] max-h-[250px] overflow-y-auto font-mono text-sm">
-            {progressEvents.length === 0 && isCloning && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Spinner size="md" />
-                <span>Starting clone...</span>
-              </div>
-            )}
+            {showConnecting && <div className="text-muted-foreground">Connecting…</div>}
 
             {progressEvents.map((event, index) => (
               <div key={index} className="flex items-start gap-2 mb-1">
@@ -316,16 +344,68 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </div>
         )}
 
-        {/* Error (not from progress events) */}
-        {error && !progressEvents.some((e) => e.stage === "error") && (
-          <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <div>
-              <div className="font-medium">Clone Failed</div>
-              <div className="text-xs mt-1">{error}</div>
-            </div>
-          </div>
+        {/* Cleanup failure — the partial clone couldn't be removed and needs
+            manual deletion, so it gets its own persistent Tier 3 banner.
+            Kept separate from the recovery error block below because the two
+            failures are orthogonal (cleanup can fail whether or not the clone
+            itself recovered) and the user may need to act on both. */}
+        {cleanupError && (
+          <InlineStatusBanner
+            icon={AlertCircle}
+            severity="error"
+            title="Partial clone not removed"
+            description={cleanupError}
+            actions={[]}
+            onClose={() => setCleanupError(null)}
+            className="rounded-lg"
+          />
         )}
+
+        {/* Error block — rendered alongside the progress log so the recovery
+            banner is reachable even when emitProgress("error") has already
+            queued an "error" row in the log. */}
+        {error &&
+          (() => {
+            const showGitHubAuth =
+              error.gitReason === "auth-failed" && isGitHubRemoteUrl(normalizeCloneUrl(url));
+            if (showGitHubAuth) {
+              const actions: BannerAction[] = [
+                {
+                  id: "signin-github",
+                  label: "Sign in with GitHub",
+                  icon: LogIn,
+                  variant: "accent",
+                  onClick: () => {
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab: "github" },
+                      { source: "user" }
+                    );
+                  },
+                  title: "Open GitHub sign-in",
+                  ariaLabel: "Sign in with GitHub",
+                },
+              ];
+              return (
+                <InlineStatusBanner
+                  icon={AlertCircle}
+                  title="Clone Failed"
+                  description={error.message}
+                  severity="error"
+                  actions={actions}
+                />
+              );
+            }
+            return (
+              <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="font-medium">Clone Failed</div>
+                  <div className="text-xs mt-1">{error.message}</div>
+                </div>
+              </div>
+            );
+          })()}
 
         {/* Actions */}
         <div className="flex justify-end gap-2">
@@ -351,15 +431,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               >
                 {isCloning ? "Stop clone" : "Cancel"}
               </Button>
-              <Button onClick={() => void startClone()} disabled={!canClone || isCloning}>
-                {isCloning ? (
-                  <>
-                    <Spinner size="md" />
-                    Cloning...
-                  </>
-                ) : (
-                  "Clone"
-                )}
+              <Button onClick={() => void startClone()} disabled={!canClone} loading={isCloning}>
+                Clone
               </Button>
             </>
           )}

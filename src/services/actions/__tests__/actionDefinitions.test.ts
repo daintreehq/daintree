@@ -43,6 +43,13 @@ describe("createActionDefinitions", () => {
   it("registers core app actions", async () => {
     const actions = await createRegistry();
 
+    expect(actions.has("forge.openIssues")).toBe(true);
+    expect(actions.has("forge.openPRs")).toBe(true);
+    expect(actions.has("forge.openCommits")).toBe(true);
+    expect(actions.has("forge.openIssue")).toBe(true);
+    expect(actions.has("forge.assignIssue")).toBe(true);
+    expect(actions.has("forge.validateToken")).toBe(true);
+    // Aliases retire in the next release.
     expect(actions.has("github.openIssues")).toBe(true);
     expect(actions.has("github.openPRs")).toBe(true);
     expect(actions.has("app.developerMode.set")).toBe(true);

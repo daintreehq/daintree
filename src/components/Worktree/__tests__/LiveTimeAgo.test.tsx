@@ -140,6 +140,43 @@ describe("LiveTimeAgo", () => {
     Object.defineProperty(document, "hidden", { value: false, configurable: true });
   });
 
+  it("renders a <time> element with ISO datetime attribute", () => {
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    const { container } = renderTimeAgo({ timestamp: now - 120_000 });
+    const timeEl = container.querySelector("time");
+    expect(timeEl).toBeTruthy();
+    expect(timeEl!.getAttribute("dateTime")).toBe(new Date(now - 120_000).toISOString());
+  });
+
+  it("renders absolute date for timestamps 30 days or older", () => {
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    const thirtyOneDaysMs = 31 * 24 * 60 * 60 * 1000;
+    const { container } = renderTimeAgo({ timestamp: now - thirtyOneDaysMs });
+    const timeEl = container.querySelector("time");
+    expect(timeEl).toBeTruthy();
+    const expected = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+      new Date(now - thirtyOneDaysMs)
+    );
+    expect(timeEl!.textContent).toBe(expected);
+  });
+
+  it("does not schedule a per-second timer beyond 30 days", () => {
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    const thirtyOneDaysMs = 31 * 24 * 60 * 60 * 1000;
+    renderTimeAgo({ timestamp: now - thirtyOneDaysMs });
+
+    // A single far-future wake is armed (clamped to MAX_TIMEOUT_DELAY ~24.8 days),
+    // but advancing 1 second must NOT fire it — the absolute date can't change.
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
   it("snaps to the current value on visibility restore", () => {
     const now = 1_700_000_000_000;
     vi.setSystemTime(now);

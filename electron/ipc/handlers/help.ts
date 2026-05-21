@@ -4,6 +4,7 @@ import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
+import type { ActionContext } from "../../../shared/types/actions.js";
 
 let cachedHelpService: typeof HelpServiceModule | null = null;
 async function getHelpService(): Promise<typeof HelpServiceModule> {
@@ -36,7 +37,17 @@ function handleUnmarkTerminal(terminalId: string): void {
 
 async function handleProvisionSession(
   ctx: import("../types.js").IpcContext,
-  input: { projectId: string; projectPath: string; agentId: string }
+  input: {
+    projectId: string;
+    projectPath: string;
+    agentId: string;
+    /**
+     * Renderer `ActionContext` snapshot captured synchronously when the
+     * user launched the assistant. Bound to the MCP session so pinned tool
+     * dispatch targets the worktree/terminal focused at launch (#8317).
+     */
+    context?: ActionContext;
+  }
 ): Promise<{
   sessionId: string;
   sessionPath: string;
@@ -56,6 +67,7 @@ async function handleProvisionSession(
     agentId: input.agentId,
     windowId: ctx.senderWindow.id,
     projectViewWebContentsId: ctx.webContentsId,
+    actionContext: input.context,
   });
 }
 

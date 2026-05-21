@@ -388,8 +388,8 @@ function DefaultKeyboardHints() {
     <PaletteFooterHints
       primaryHint={{ keys: ["↵"], label: "to select" }}
       hints={[
-        { keys: ["↑", "↓"], label: "to navigate" },
-        { keys: ["Esc"], label: "to close" },
+        { keys: ["↑", "↓"], label: "navigate" },
+        { keys: ["Esc"], label: "close" },
       ]}
     />
   );

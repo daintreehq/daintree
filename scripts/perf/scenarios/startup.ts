@@ -14,8 +14,9 @@ const HEAVY_LAYOUT_SERIALIZED = JSON.stringify(HEAVY_LAYOUT);
 export const startupScenarios: PerfScenario[] = [
   {
     id: "PERF-001",
-    name: "Cold Start - Empty Project",
-    description: "Approximate cold startup bootstrap path with minimal persisted state.",
+    name: "Startup Simulation - Empty Project",
+    description:
+      "In-process hydration of a near-empty layout (NOT a real binary launch — see PERF-004 for real cold start).",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
@@ -38,8 +39,9 @@ export const startupScenarios: PerfScenario[] = [
   },
   {
     id: "PERF-002",
-    name: "Cold Start - Heavy Persisted Layout",
-    description: "Deserialize and hydrate a high-density panel/tab-group workspace state.",
+    name: "Startup Simulation - Heavy Layout",
+    description:
+      "In-process deserialize + hydration of a high-density panel/tab-group workspace (NOT a real binary launch — see PERF-004).",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
@@ -93,7 +95,7 @@ export const startupScenarios: PerfScenario[] = [
     id: "PERF-004",
     name: "Real Cold Start - Packaged Binary",
     description:
-      "Launch the packaged Electron binary via Playwright, capture APP_BOOT_START to RENDERER_READY via NDJSON pipeline.",
+      "Launch the packaged Electron binary via Playwright, capture APP_BOOT_START to RENDERER_FIRST_INTERACTIVE via NDJSON pipeline.",
     tier: "heavy",
     modes: ["nightly"],
     iterations: { nightly: 30 },

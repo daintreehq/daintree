@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { CrashRecoveryDialog } from "../CrashRecoveryDialog";
@@ -38,6 +38,37 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Body = ({ children, className }: SectionProps) => (
     <div className={className}>{children}</div>
   );
+  AppDialog.Description = ({ children }: SectionProps) => <p>{children}</p>;
+  AppDialog.Footer = ({
+    secondaryAction,
+    primaryAction,
+  }: {
+    secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
+    primaryAction?: { label: string; onClick: () => void; loading?: boolean; disabled?: boolean };
+  }) => (
+    <div>
+      {secondaryAction && (
+        <button
+          type="button"
+          data-confirm-role="cancel"
+          onClick={secondaryAction.onClick}
+          disabled={secondaryAction.disabled}
+        >
+          {secondaryAction.label}
+        </button>
+      )}
+      {primaryAction && (
+        <button
+          type="button"
+          data-confirm-role="confirm"
+          onClick={primaryAction.onClick}
+          disabled={primaryAction.disabled}
+        >
+          {primaryAction.label}
+        </button>
+      )}
+    </div>
+  );
 
   return { AppDialog };
 });
@@ -50,6 +81,25 @@ vi.mock("@/components/ui/button", () => ({
     <button type="button" {...props}>
       {children}
     </button>
+  ),
+}));
+
+vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
+  InlineStatusBanner: ({
+    title,
+    description,
+    severity,
+  }: {
+    title: ReactNode;
+    description?: ReactNode;
+    severity?: string;
+  }) => (
+    <div data-testid="inline-status-banner" data-severity={severity ?? "error"}>
+      <span data-testid="inline-status-banner-title">{title}</span>
+      {description ? (
+        <span data-testid="inline-status-banner-description">{description}</span>
+      ) : null}
+    </div>
   ),
 }));
 
@@ -193,12 +243,160 @@ describe("CrashRecoveryDialog", () => {
       expect(screen.getByTestId("suspect-warning")).toBeTruthy();
     });
 
+    it("renders the suspect warning as a warning-severity InlineStatusBanner", () => {
+      setup();
+      const banner = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner"
+      );
+      expect(banner.getAttribute("data-severity")).toBe("warning");
+    });
+
+    it("suspect banner title uses the 'created shortly before the crash' phrasing when crashCount is undefined", () => {
+      setup();
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("1 panel created shortly before the crash");
+    });
+
+    it("suspect banner title says 'deselected' when crashCount is at least 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("1 panel deselected");
+      expect(title.textContent).toContain("created shortly before the crash");
+    });
+
+    it("suspect banner description prompts re-check when suspects were auto-deselected", () => {
+      setup({ crash: { crashCount: 1 } });
+      const desc = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("Re-check");
+    });
+
+    it("suspect banner is omitted when there are no suspect panels", () => {
+      setup({
+        crash: {
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: false },
+          ],
+        },
+      });
+      expect(screen.queryByTestId("suspect-warning")).toBeNull();
+    });
+
     it("all panels are selected by default", () => {
       setup();
       const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
       const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
       expect(checkbox1.checked).toBe(true);
       expect(checkbox2.checked).toBe(true);
+    });
+
+    it("pre-deselects suspect panels when crashCount is at least 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      const nonSuspect1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      const nonSuspect3 = screen.getByTestId("panel-checkbox-t3") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+      expect(nonSuspect1.checked).toBe(true);
+      expect(nonSuspect3.checked).toBe(true);
+    });
+
+    it("pre-deselects suspect panels when crashCount is in a crash loop", () => {
+      setup({ crash: { crashCount: 3 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+    });
+
+    it("keeps suspect panels selected when crashCount is 0", () => {
+      setup({ crash: { crashCount: 0 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(true);
+    });
+
+    it("restore-selected omits pre-deselected suspect panels by default when crashCount >= 1", async () => {
+      const { onResolve } = setup({ crash: { crashCount: 1 } });
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t3"]),
+        })
+      );
+      const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+      expect(call.panelIds).not.toContain("t2");
+    });
+
+    it("selection count reflects auto-deselection when crashCount >= 1", () => {
+      setup({ crash: { crashCount: 1 } });
+      expect(screen.getByText("2 of 3 selected")).toBeTruthy();
+    });
+
+    it("lets the user re-check a pre-deselected suspect and include it in restore", async () => {
+      const { onResolve } = setup({ crash: { crashCount: 1 } });
+      const suspect = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(suspect.checked).toBe(false);
+      fireEvent.click(suspect);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t2", "t3"]),
+        })
+      );
+    });
+
+    it("pre-deselects every suspect when multiple panels are flagged", () => {
+      setup({
+        crash: {
+          crashCount: 1,
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: false },
+            { id: "t2", kind: "terminal", title: "Claude", location: "dock", isSuspect: true },
+            { id: "t3", kind: "browser", title: "Docs", location: "grid", isSuspect: true },
+          ],
+        },
+      });
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByTestId("panel-checkbox-t3") as HTMLInputElement).checked).toBe(false);
+      expect(screen.getByText("1 of 3 selected")).toBeTruthy();
+      const title = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-title"
+      );
+      expect(title.textContent).toContain("2 panels deselected");
+    });
+
+    it("disables restore-selected when every panel is a pre-deselected suspect", () => {
+      setup({
+        crash: {
+          crashCount: 1,
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: true },
+            { id: "t2", kind: "terminal", title: "Claude", location: "dock", isSuspect: true },
+          ],
+        },
+      });
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(false);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(false);
+      const restoreBtn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
+      expect(restoreBtn.disabled).toBe(true);
+      // Toggle-all should still let the user opt back in
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      expect((screen.getByTestId("panel-checkbox-t1") as HTMLInputElement).checked).toBe(true);
+      expect((screen.getByTestId("panel-checkbox-t2") as HTMLInputElement).checked).toBe(true);
+    });
+
+    it("suspect banner description suggests deselecting when crashCount is 0", () => {
+      setup({ crash: { crashCount: 0 } });
+      const desc = within(screen.getByTestId("suspect-warning")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("Consider deselecting");
     });
 
     it("calls onResolve with selected panel IDs when Restore Selected is clicked", async () => {
@@ -217,10 +415,53 @@ describe("CrashRecoveryDialog", () => {
       expect(call.panelIds).not.toContain("t2");
     });
 
-    it("calls onResolve with fresh when 'Continue without restoring' is clicked", async () => {
+    it("opens destructive confirm dialog when 'Continue without restoring' is clicked, does not call onResolve immediately", async () => {
       const { onResolve } = setup();
       fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(onResolve).not.toHaveBeenCalled();
+      expect(screen.getByText("Reset to clean layout?")).toBeTruthy();
+    });
+
+    it("calls onResolve with fresh when confirm button is clicked in destructive dialog", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      fireEvent.click(screen.getByText("Reset to clean layout"));
       await waitFor(() => expect(onResolve).toHaveBeenCalledWith({ kind: "fresh" }));
+    });
+
+    it("does not call onResolve when cancel is clicked in destructive confirm dialog", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      fireEvent.click(screen.getByText("Cancel"));
+      expect(onResolve).not.toHaveBeenCalled();
+      // Fresh button should be re-enabled
+      const btn = screen.getByTestId("fresh-button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+
+    it("shows panel preview in destructive confirm dialog", () => {
+      setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      const confirm = screen.getByTestId("app-dialog");
+      expect(within(confirm).getByText("Shell")).toBeTruthy();
+      expect(within(confirm).getByText("Claude")).toBeTruthy();
+      expect(within(confirm).getByText("Docs")).toBeTruthy();
+    });
+
+    it("destructive confirm dialog does not show panel preview when panels is empty", () => {
+      setup({ crash: { panels: [], hasBackup: false } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(screen.getByText("Your session will start with a clean layout.")).toBeTruthy();
+    });
+
+    it("destructive confirm warns about discarded backup when panels empty but backup exists", () => {
+      setup({ crash: { panels: [], hasBackup: true } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(
+        screen.getByText(
+          "Your session will start with a clean layout and the existing session backup will be discarded."
+        )
+      ).toBeTruthy();
     });
 
     it("toggle all deselects when all are selected", () => {
@@ -256,6 +497,19 @@ describe("CrashRecoveryDialog", () => {
       setup();
       expect(screen.getByTestId("toggle-all-button").className).toContain("cursor-pointer");
     });
+
+    it("restore-selected path is unaffected by destructive confirm gate", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t2", "t3"]),
+        })
+      );
+      // Should not show confirm dialog
+      expect(screen.queryByText("Reset to clean layout?")).toBeNull();
+    });
   });
 
   describe("without panels (legacy fallback)", () => {
@@ -286,6 +540,15 @@ describe("CrashRecoveryDialog", () => {
           panelIds: [],
         })
       );
+    });
+
+    it("opens destructive confirm dialog on fresh in legacy mode and resolves on confirm", async () => {
+      const { onResolve } = setup({ crash: { panels: [] } });
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      expect(onResolve).not.toHaveBeenCalled();
+      expect(screen.getByText("Reset to clean layout?")).toBeTruthy();
+      fireEvent.click(screen.getByText("Reset to clean layout"));
+      await waitFor(() => expect(onResolve).toHaveBeenCalledWith({ kind: "fresh" }));
     });
   });
 
@@ -517,5 +780,34 @@ describe("CrashRecoveryDialog", () => {
   it("shows 'no backup' message when hasBackup is false in legacy mode", () => {
     setup({ crash: { hasBackup: false, backupTimestamp: undefined, panels: undefined } });
     expect(screen.getByText(/No backup available/)).toBeTruthy();
+  });
+
+  it("clipboard surfaces watchdog deadlock cause when present", async () => {
+    setup({
+      crash: {
+        entry: {
+          id: "wd-123",
+          timestamp: 1700000000000,
+          appVersion: "1.0.0",
+          platform: "linux",
+          osVersion: "5.15.0",
+          arch: "x64",
+          cause: "watchdog-deadlock",
+          watchdogKilledAt: 1700000016000,
+          watchdogMissedBeats: 3,
+          watchdogMainPid: 4242,
+        },
+      },
+    });
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    fireEvent.click(screen.getByTestId("report-button"));
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
+    const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as string;
+    expect(clipText).toContain("Watchdog deadlock");
+    expect(clipText).toContain("3 missed heartbeats");
+    expect(clipText).toContain("main PID 4242");
   });
 });

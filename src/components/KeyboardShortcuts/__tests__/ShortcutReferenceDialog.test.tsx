@@ -2,7 +2,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ShortcutReferenceDialog } from "../ShortcutReferenceDialog";
-import type { KeybindingConfig } from "@/services/KeybindingService";
+import type { RegisteredKeybindingConfig } from "@/services/KeybindingService";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -13,7 +13,7 @@ vi.stubGlobal(
   }
 );
 
-const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
+const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string }> = [
   {
     actionId: "terminal.stashInput",
     combo: "Cmd+K Cmd+S",
@@ -24,7 +24,7 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     effectiveCombo: "Cmd+K Cmd+S",
   },
   {
-    actionId: "app.toggleSidebar",
+    actionId: "nav.toggleSidebar",
     combo: "Cmd+B",
     scope: "global",
     priority: 0,
@@ -33,7 +33,7 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     effectiveCombo: "Cmd+B",
   },
   {
-    actionId: "terminal.newPanel",
+    actionId: "terminal.new",
     combo: "Cmd+T",
     scope: "global",
     priority: 0,
@@ -42,7 +42,7 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     effectiveCombo: "Cmd+T",
   },
   {
-    actionId: "app.openSettings",
+    actionId: "app.settings",
     combo: "Cmd+,",
     scope: "global",
     priority: 0,
@@ -51,7 +51,7 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     effectiveCombo: "Cmd+,",
   },
   {
-    actionId: "app.commandPalette",
+    actionId: "action.palette.open",
     combo: "Cmd+Shift+P",
     scope: "global",
     priority: 0,
@@ -60,7 +60,7 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     effectiveCombo: "Cmd+Shift+P",
   },
   {
-    actionId: "app.unboundAction",
+    actionId: "project.mruCycleNewer",
     combo: "",
     scope: "global",
     priority: 0,
@@ -72,11 +72,11 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
 
 const mockDisplayCombos: Record<string, string> = {
   "terminal.stashInput": "⌘K ⌘S",
-  "app.toggleSidebar": "⌘B",
-  "terminal.newPanel": "⌘T",
-  "app.openSettings": "⌘,",
-  "app.commandPalette": "⌘⇧P",
-  "app.unboundAction": "",
+  "nav.toggleSidebar": "⌘B",
+  "terminal.new": "⌘T",
+  "app.settings": "⌘,",
+  "action.palette.open": "⌘⇧P",
+  "project.mruCycleNewer": "",
 };
 
 vi.mock("@/services/KeybindingService", () => {

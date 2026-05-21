@@ -48,6 +48,12 @@ const COMPLETION_HOLD_MS = 500;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
+// Claude Code emits OSC 9;4 state=0 between every tool call (the "remove
+// progress" marker). Without debouncing, a brief state=0 → state=1 flicker
+// would act on idle prematurely. 200ms is comfortably above Claude's
+// inter-tool gap upper bound and well under the 8s IDLE_DEBOUNCE_MS, so it
+// suppresses flicker without delaying real idle detection.
+const OSC_IDLE_DEBOUNCE_MS = 200;
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
@@ -138,6 +144,7 @@ export class ActivityMonitor {
   private state: "busy" | "idle" = "idle";
   private isDisposed = false;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private oscIdleTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
   private readonly PROMPT_FAST_PATH_MIN_QUIET_MS: number;
   private readonly MAX_WORKING_SILENCE_MS: number;
@@ -752,6 +759,10 @@ export class ActivityMonitor {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.oscIdleTimer) {
+      clearTimeout(this.oscIdleTimer);
+      this.oscIdleTimer = null;
+    }
     this.completionTimer.dispose();
     this.inputTracker.reset();
     this.outputVolumeDetector.reset();
@@ -805,6 +816,55 @@ export class ActivityMonitor {
   notifySubmission(): void {
     if (this.isDisposed) return;
     this.becomeBusy({ trigger: "input" });
+  }
+
+  // Viewport-independent working signal (#8701). Called by `TerminalProcess`
+  // when its OSC 9;4 parser observes state=1 (normal/determinate) or state=3
+  // (indeterminate) — both mean the agent is actively working. Refreshes
+  // `lastActivityTimestamp` and `lastDataTimestamp` so the simpleOutputState
+  // polling cycle's idle gate (`now - lastActivityTimestamp >= IDLE_DEBOUNCE_MS`)
+  // doesn't fire from a stale timestamp when the visible-line snapshot is too
+  // small (small grid tiles starve the viewport-bound detector).
+  //
+  // Acts like the data-path's cosmetic-redraw branch (line 538-540 in `onData`):
+  // refresh the working hold and reset the debounce timer so an already-busy
+  // monitor stays busy. The existing `MAX_WORKING_SILENCE_MS` safety net is
+  // untouched — this is a heartbeat, not a permanent hold (lesson #4974).
+  onOscProgressWorking(now: number = Date.now()): void {
+    if (this.isDisposed) return;
+    if (this.oscIdleTimer) {
+      clearTimeout(this.oscIdleTimer);
+      this.oscIdleTimer = null;
+    }
+    this.lastActivityTimestamp = now;
+    this.lastDataTimestamp = now;
+    if (this.state !== "busy") {
+      this.becomeBusy({ trigger: "output" }, now);
+      return;
+    }
+    this.recordWorkingSignal(now);
+    this.resetDebounceTimer();
+  }
+
+  // OSC 9;4 state=0 (#8701). Claude Code emits this between every tool call,
+  // not just on completion, so the signal needs a 200ms debounce: any state=1/3
+  // arriving inside that window cancels the timer (handled in
+  // `onOscProgressWorking` above). Once the debounce elapses without
+  // interruption, the OSC heartbeat has truly stopped — but we do NOT force
+  // idle here. The existing `lastActivityTimestamp`-driven idle path in the
+  // simpleOutputState polling cycle (line 893) takes over via natural decay
+  // (working signals stop refreshing the timestamp, so the 8s gate eventually
+  // fires). Mutating `workingHoldUntil` directly here would risk clobbering
+  // holds set by other signal paths.
+  onOscProgressIdle(_now: number = Date.now()): void {
+    if (this.isDisposed) return;
+    if (this.oscIdleTimer) {
+      clearTimeout(this.oscIdleTimer);
+    }
+    this.oscIdleTimer = setTimeout(() => {
+      this.oscIdleTimer = null;
+    }, OSC_IDLE_DEBOUNCE_MS);
+    this.oscIdleTimer.unref?.();
   }
 
   notifyResize(suppressionMs = 500): void {

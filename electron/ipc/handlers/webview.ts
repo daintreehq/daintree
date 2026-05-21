@@ -9,6 +9,7 @@ import type {
   CdpRemoteArg,
   CdpStackTrace,
   CdpConsoleType,
+  CdpLogEntrySource,
   SerializedConsoleRow,
   CdpPropertyDescriptor,
 } from "../../../shared/types/ipc/webviewConsole.js";
@@ -19,10 +20,14 @@ import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsL
 
 interface CdpSession {
   runtimeEnabled: boolean;
+  logEnabled: boolean;
   paneIds: Set<string>;
   navigationGeneration: number;
   groupDepthByPane: Map<string, number>;
   objectIdsByPane: Map<string, Set<string>>;
+  // Per-session throttle for `Log.entryAdded` — browser-emitted entries
+  // (CSP, network, deprecation) can flood. Keyed by source:level:url:line.
+  logRateLimit: Map<string, { count: number; resetAt: number }>;
   ownerWindow: BrowserWindow | null;
   messageListener: ((event: Electron.Event, method: string, params: unknown) => void) | null;
   detachListener: ((event: Electron.Event, reason: string) => void) | null;
@@ -31,15 +36,69 @@ interface CdpSession {
 const sessions = new Map<number, CdpSession>();
 let _nextMessageId = 0;
 
+// Keep in sync with rendererConsoleCapture.ts (RATE_WINDOW_MS / RATE_MAX_PER_WINDOW).
+// Same throttle algorithm; the rate state lives on CdpSession (keyed by wcId)
+// rather than a WeakMap<WebContents>, so the helper is not shared.
+const LOG_RATE_WINDOW_MS = 5_000;
+const LOG_RATE_MAX_PER_WINDOW = 5;
+
+const LOG_ENTRY_SOURCES: ReadonlySet<string> = new Set<CdpLogEntrySource>([
+  "javascript",
+  "network",
+  "deprecation",
+  "security",
+  "violation",
+  "intervention",
+  "recommendation",
+  "worker",
+  "other",
+]);
+
+function normalizeLogEntrySource(source: unknown): CdpLogEntrySource {
+  return typeof source === "string" && LOG_ENTRY_SOURCES.has(source)
+    ? (source as CdpLogEntrySource)
+    : "other";
+}
+
+function logEntryLevelToLevel(level: unknown): "log" | "info" | "warning" | "error" {
+  switch (level) {
+    case "error":
+      return "error";
+    case "warning":
+      return "warning";
+    case "info":
+      return "info";
+    // "verbose" and anything unexpected collapse to "log"
+    default:
+      return "log";
+  }
+}
+
+function shouldAllowLogEntry(session: CdpSession, key: string): boolean {
+  const now = Date.now();
+  const entry = session.logRateLimit.get(key);
+  if (!entry || now >= entry.resetAt) {
+    session.logRateLimit.set(key, { count: 1, resetAt: now + LOG_RATE_WINDOW_MS });
+    return true;
+  }
+  if (entry.count < LOG_RATE_MAX_PER_WINDOW) {
+    entry.count++;
+    return true;
+  }
+  return false;
+}
+
 function getOrCreateSession(wcId: number): CdpSession {
   let session = sessions.get(wcId);
   if (!session) {
     session = {
       runtimeEnabled: false,
+      logEnabled: false,
       paneIds: new Set(),
       navigationGeneration: 0,
       groupDepthByPane: new Map(),
       objectIdsByPane: new Map(),
+      logRateLimit: new Map(),
       ownerWindow: null,
       messageListener: null,
       detachListener: null,
@@ -275,6 +334,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         const listener = (_event: Electron.Event, method: string, params: unknown) => {
           if (method === "Runtime.consoleAPICalled") {
             handleConsoleApiCalled(webContentsId, session, params);
+          } else if (method === "Runtime.exceptionThrown") {
+            handleExceptionThrown(session, params);
+          } else if (method === "Log.entryAdded") {
+            handleLogEntryAdded(session, params);
           } else if (method === "Runtime.executionContextsCleared") {
             session.navigationGeneration++;
             // Reset group depth and clear stale objectIds for all panes
@@ -304,6 +367,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       if (!session.detachListener) {
         const detachListener = (_event: Electron.Event, _reason: string) => {
           session.runtimeEnabled = false;
+          session.logEnabled = false;
           // Debugger detach automatically removes all listeners, so just null our refs
           session.messageListener = null;
           session.detachListener = null;
@@ -328,6 +392,24 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         };
         session.detachListener = detachListener;
         wc.debugger.on("detach", detachListener);
+      }
+
+      // Log domain surfaces browser-emitted entries (CSP violations, network
+      // failures, deprecations) that never reach Runtime.consoleAPICalled.
+      // Enabled AFTER the message listener is wired so any entries CDP replays
+      // on enable are captured, and in its own try/catch so a Log.enable
+      // failure degrades to "no log-entry rows" rather than silently breaking
+      // the already-registered Runtime.consoleAPICalled capture.
+      if (!session.logEnabled) {
+        try {
+          await wc.debugger.sendCommand("Log.enable");
+          session.logEnabled = true;
+        } catch (logErr) {
+          console.warn(
+            `[webview] CDP Log.enable failed for id=${webContentsId}:`,
+            formatErrorMessage(logErr, "Log.enable failed")
+          );
+        }
       }
     } catch (err) {
       const message = formatErrorMessage(err, "CDP console capture start failed");
@@ -398,6 +480,75 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   }
 
+  function emitConsoleRow(session: CdpSession, row: SerializedConsoleRow): void {
+    if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+      sendToRenderer(session.ownerWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+    } else {
+      broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+    }
+  }
+
+  function handleExceptionThrown(session: CdpSession, params: unknown): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = params as any;
+    const details = p?.exceptionDetails;
+    if (!details) return;
+
+    const summaryText: string =
+      details.exception?.description ?? details.text ?? "Uncaught (unknown exception)";
+    const stackTrace = normalizeStackTrace(details.stackTrace);
+    const timestamp = typeof p.timestamp === "number" ? Math.floor(p.timestamp) : Date.now();
+
+    for (const paneId of session.paneIds) {
+      const row: SerializedConsoleRow = {
+        id: _nextMessageId++,
+        paneId,
+        level: "error",
+        cdpType: "error",
+        args: [],
+        summaryText,
+        stackTrace,
+        groupDepth: session.groupDepthByPane.get(paneId) ?? 0,
+        timestamp,
+        navigationGeneration: session.navigationGeneration,
+      };
+      emitConsoleRow(session, row);
+    }
+  }
+
+  function handleLogEntryAdded(session: CdpSession, params: unknown): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const entry = (params as any)?.entry;
+    if (!entry) return;
+
+    const source = normalizeLogEntrySource(entry.source);
+    const level = logEntryLevelToLevel(entry.level);
+    const rateKey = `${source}:${level}:${entry.url ?? ""}:${entry.lineNumber ?? 0}`;
+    if (!shouldAllowLogEntry(session, rateKey)) return;
+
+    const summaryText: string = typeof entry.text === "string" ? entry.text : "";
+    const stackTrace = normalizeStackTrace(entry.stackTrace);
+    const timestamp =
+      typeof entry.timestamp === "number" ? Math.floor(entry.timestamp) : Date.now();
+
+    for (const paneId of session.paneIds) {
+      const row: SerializedConsoleRow = {
+        id: _nextMessageId++,
+        paneId,
+        level,
+        cdpType: "log-entry",
+        args: [],
+        summaryText,
+        stackTrace,
+        groupDepth: session.groupDepthByPane.get(paneId) ?? 0,
+        timestamp,
+        navigationGeneration: session.navigationGeneration,
+        category: source,
+      };
+      emitConsoleRow(session, row);
+    }
+  }
+
   const handleStopConsoleCapture = async (
     webContentsId: unknown,
     paneId: unknown
@@ -423,6 +574,13 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       if (wc && !wc.isDestroyed() && session.runtimeEnabled) {
         try {
           await wc.debugger.sendCommand("Runtime.disable");
+        } catch {
+          // Ignore
+        }
+      }
+      if (wc && !wc.isDestroyed() && session.logEnabled) {
+        try {
+          await wc.debugger.sendCommand("Log.disable");
         } catch {
           // Ignore
         }
@@ -532,12 +690,25 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     getWebviewDialogService().resolveDialog(dialogId, confirmed, response);
   };
 
+  const handleCancelOAuthLoopback = async (payload: unknown): Promise<void> => {
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      typeof (payload as { panelId?: unknown }).panelId !== "string"
+    ) {
+      throw new Error("Invalid arguments: panelId must be string");
+    }
+    const { panelId } = payload as { panelId: string };
+    const { cancelOAuthLoopback } = await import("../../services/OAuthLoopbackService.js");
+    cancelOAuthLoopback(panelId);
+  };
+
   const handleOAuthLoopback = async (
     authUrl: unknown,
     panelId: unknown,
     webContentsId: unknown,
     providedSessionStorageSnapshot: unknown
-  ): Promise<{ success: true } | null> => {
+  ): Promise<import("../../../shared/types/oauth.js").OAuthLoopbackResult> => {
     if (
       typeof authUrl !== "string" ||
       typeof panelId !== "string" ||
@@ -608,9 +779,24 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       }
     }
 
+    // Resolve owner window once — used for status event broadcasts.
+    const ownerWindow = getWindowForWebContents(wc);
+
     // Step 2: Start loopback server, open system browser, wait for callback
     const loopbackResult = await startOAuthLoopback(authUrl, panelId);
-    if (!loopbackResult) return null;
+    if (!loopbackResult.success) {
+      // Suppress status event for cancelled flows — the renderer already
+      // dismissed the banner via the Cancel button, and a second "Sign in"
+      // preempting a first would flash a misleading "error" phase.
+      if (loopbackResult.cause !== "cancelled" && ownerWindow) {
+        sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+          panelId,
+          phase: loopbackResult.cause === "timed-out" ? "timed-out" : "error",
+          message: loopbackResult.cause === "timed-out" ? "Sign-in timed out" : undefined,
+        });
+      }
+      return loopbackResult;
+    }
 
     const { callbackUrl, loopbackRedirectUri, originalRedirectUri } = loopbackResult;
 
@@ -740,6 +926,13 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             });
 
           clearTimeout(timeout);
+          // Broadcast token-exchange-intercepted status to the renderer
+          if (ownerWindow) {
+            sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+              panelId,
+              phase: "token-exchange-intercepted",
+            });
+          }
           finishIntercept();
         };
 
@@ -795,6 +988,13 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
 
     if (navigationError) {
+      if (ownerWindow) {
+        sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+          panelId,
+          phase: "error",
+          message: `Navigation failed: ${(navigationError as Error).message}`,
+        });
+      }
       throw new AppError({
         code: "INTERNAL",
         message: `OAuth callback navigation failed: ${(navigationError as Error).message}`,
@@ -803,7 +1003,15 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       });
     }
 
-    return { success: true };
+    // Broadcast completion status
+    if (ownerWindow) {
+      sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+        panelId,
+        phase: "completed",
+      });
+    }
+
+    return { success: true, callbackUrl, loopbackRedirectUri, originalRedirectUri };
   };
 
   const handleReloadIgnoringCache = async (
@@ -822,6 +1030,40 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     wc.reloadIgnoringCache();
   };
 
+  const handleGetScrollPosition = async (webContentsId: unknown): Promise<number> => {
+    if (typeof webContentsId !== "number") {
+      throw new Error("Invalid arguments: webContentsId must be number");
+    }
+
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return 0;
+
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return 0;
+
+    try {
+      ensureAttached(wc);
+      // Reads scroll position directly from Blink's layout tree without
+      // touching the JS task queue — works on frozen pages where
+      // executeJavaScript("window.scrollY") would hang indefinitely.
+      const result = (await wc.debugger.sendCommand("Page.getLayoutMetrics")) as {
+        cssLayoutViewport?: { pageY?: number };
+      };
+      const pageY = result?.cssLayoutViewport?.pageY;
+      return typeof pageY === "number" ? Math.round(pageY) : 0;
+    } catch (err) {
+      const message = formatErrorMessage(err, "CDP getLayoutMetrics failed");
+      const isExpected =
+        message.includes("Target closed") ||
+        message.includes("Inspected target navigated") ||
+        message.includes("Cannot attach") ||
+        message.includes("debugger is already attached");
+      if (!isExpected) {
+        console.warn(`[webview] getScrollPosition failed for id=${webContentsId}:`, message);
+      }
+      return 0;
+    }
+  };
+
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
     typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
@@ -832,7 +1074,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     typedHandle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties),
     // @ts-expect-error: result type contains {success} | null — pending migration to throw AppError. See #6020.
     typedHandle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback),
+    typedHandle(CHANNELS.WEBVIEW_CANCEL_OAUTH_LOOPBACK, handleCancelOAuthLoopback),
     typedHandle(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, handleReloadIgnoringCache),
+    typedHandle(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, handleGetScrollPosition),
   ];
 
   return () => {

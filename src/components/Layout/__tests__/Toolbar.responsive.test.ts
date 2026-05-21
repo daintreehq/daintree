@@ -57,6 +57,16 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(css).toContain("toolbar-project-chip-label");
       expect(css).toContain("display: none");
     });
+
+    it("CSS has a second container-query tier that hides the entire chip at narrower widths — issue #8174", () => {
+      // Below the second breakpoint the vestigial GitBranch icon shifts visual
+      // weight without conveying anything (the branch label has already
+      // dropped); hide the whole chip so the pill stays clean. The tooltip
+      // remains the recovery surface for the branch name.
+      expect(css).toMatch(
+        /@container toolbar \(max-width:\s*560px\)[\s\S]*?\.toolbar-project-chip[^-][\s\S]*?display:\s*none/
+      );
+    });
   });
 
   describe("container query setup", () => {
@@ -78,8 +88,8 @@ describe("Toolbar responsive design — issue #4133", () => {
 
   describe("overflow trigger surfaces hidden state — issue #6416", () => {
     it("calls useOverflowBadgeSeverity for both left and right overflow", () => {
-      expect(source).toContain("useOverflowBadgeSeverity(leftOverflow");
-      expect(source).toContain("useOverflowBadgeSeverity(rightOverflow");
+      expect(source).toContain("useOverflowBadgeSeverity(visibleLeftOverflow");
+      expect(source).toContain("useOverflowBadgeSeverity(visibleRightOverflow");
     });
 
     it("passes left and right severities into renderOverflowMenu independently", () => {
@@ -104,17 +114,46 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toMatch(/data-severity=\{severity\}/);
     });
 
-    it("builds a dynamic tooltip listing the hidden buttons", () => {
-      expect(source).toContain("itemLabels");
-      expect(source).toMatch(/\$\{overflowIds\.length\} more — /);
+    it("builds a terse count-only tooltip — no enumerated list (issue #8159)", () => {
+      // The enumerated list re-announced the full set on every focus pass
+      // and went stale on resize; it must be gone entirely.
+      expect(source).not.toContain("itemLabels");
+      expect(source).not.toMatch(/\$\{overflowIds\.length\} more — /);
+      // Tooltip is "More — {n} item(s)" / "More — {n} problem(s)".
+      expect(source).toContain('`More — ${n} ${n === 1 ? "item" : "items"}`');
+      expect(source).toContain('`More — ${n} ${n === 1 ? "problem" : "problems"}`');
     });
 
-    it("supplies a fallback label for voice-recording so the count and named list stay aligned", () => {
-      // voice-recording is absent from OVERFLOW_MENU_META on purpose — it
-      // has no dropdown rendering — so the tooltip must look it up
-      // separately or the spoken count would exceed the list.
-      expect(source).toContain('id === "voice-recording"');
-      expect(source).toContain('"Voice recording"');
+    it("escalates tooltip/aria noun to 'problem' for actionable severity (issue #8159)", () => {
+      expect(source).toContain(
+        'const hasProblem = severity === "critical" || severity === "warning";'
+      );
+    });
+
+    it("uses a stable, count-bearing aria-label instead of the enumerated list (issue #8159)", () => {
+      // voice-recording special-casing is gone — the tooltip/aria-label no
+      // longer enumerate, so the count/list alignment hack is unnecessary.
+      expect(source).not.toContain('id === "voice-recording"');
+      expect(source).not.toContain('"Voice recording"');
+      // aria-label is purpose-naming + count; severity escalates the noun.
+      expect(source).toContain("`More toolbar items — ${n} hidden`");
+      expect(source).toContain(
+        '`More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`'
+      );
+    });
+
+    it("pins voice-recording out of overflow while actively recording — issue #8158", () => {
+      // The toolbar must keep the live mic indicator visible regardless of
+      // container width. The pinned set wires into useToolbarOverflow so the
+      // button is excluded from the overflow budget while a recording is
+      // active. The previous workaround (a hardcoded fallback label in the
+      // overflow tooltip) is gone; reintroducing it would re-mask the bug.
+      expect(source).toContain("VOICE_RECORDING_PINNED");
+      // Pin applies to whichever side the button lives on — passed as a
+      // single pinnedIds set into useToolbarOverflow, not a right-only param.
+      expect(source).toMatch(/useToolbarOverflow\(\s*[\s\S]*?pinnedIds\s*\)/);
+      expect(source).not.toContain('id === "voice-recording"');
+      expect(source).not.toContain("OVERFLOW_DROPDOWN_SKIP");
     });
   });
 
@@ -136,14 +175,29 @@ describe("Toolbar responsive design — issue #4133", () => {
 
     it("armed selectors carry an inset shadow on top of the emphasis background", () => {
       // The armed selector block must include both background AND box-shadow
-      // so the state reads as anchored/pressed, not "still hovering".
+      // so the state reads as anchored/pressed, not "still hovering". The shadow
+      // shape is asserted as an inset hairline ring (0 0 0 1px) — the geometry
+      // that distinguishes the state edge from a soft directional shadow that
+      // reads as fog on low-contrast light themes (#7XXX).
       const armedBlock = css.match(
         /\.toolbar-icon-button\[aria-pressed="true"\][\s\S]*?\{[\s\S]*?\}/
       )?.[0];
       expect(armedBlock).toBeDefined();
       expect(armedBlock).toContain("--toolbar-control-armed-bg");
       expect(armedBlock).toContain("--toolbar-control-armed-shadow");
-      expect(armedBlock).toMatch(/inset\s+0\s+1px\s+2px/);
+      expect(armedBlock).toMatch(/inset\s+0\s+0\s+0\s+1px/);
+      expect(armedBlock).toContain('.toolbar-agent-button[aria-pressed="true"]');
+    });
+
+    it("armed selectors appear after :hover in source order so armed survives hover-over-armed", () => {
+      // Hover and armed have equal specificity, so later-in-source wins. If a
+      // refactor moves the armed block above hover, hovering an armed button
+      // would erase the ring — silently regressing #8175.
+      const hoverIndex = css.search(/\.toolbar-icon-button:hover\s*[,{]/);
+      const armedIndex = css.search(/\.toolbar-icon-button\[aria-pressed="true"\]/);
+      expect(hoverIndex).toBeGreaterThan(-1);
+      expect(armedIndex).toBeGreaterThan(-1);
+      expect(armedIndex).toBeGreaterThan(hoverIndex);
     });
 
     it("press transform is owned by base Button cva, not the toolbar transition list", () => {

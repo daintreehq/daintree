@@ -42,34 +42,40 @@ describe("FetchScheduler", () => {
     expect(host.onExecuteFetch).toHaveBeenCalledWith(false);
   });
 
-  it("uses focused cadence (30-45s) when isCurrent is true", async () => {
+  it("uses focused cadence (~22-38s) when isCurrent is true", async () => {
     const host = makeHost({ isCurrent: true });
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
 
-    scheduler.schedule(false);
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(host.onExecuteFetch).not.toHaveBeenCalled();
+    // Pin random near max so the timer lands at ~37s, giving a comfortable
+    // "not yet" window at 30s and a "fired" window at 40s.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
 
-    await vi.advanceTimersByTimeAsync(15_002);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    try {
+      scheduler.schedule(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(host.onExecuteFetch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
-  it("uses background cadence (5-10min) when isCurrent is false", async () => {
+  it("uses background cadence (~3.7-6.2min) when isCurrent is false", async () => {
     const host = makeHost({ isCurrent: false });
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
 
-    // Pin Math.random so both the initial delay and the post-completion
-    // reschedule land at 7.5min — the second fetch fires at ~15min, safely
-    // outside the 11min window we advance through here. Without this, T1+T2
-    // can be as low as 10min and the test races the second fetch.
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    // Pin random near max so the timer fires at ~6.2min. Two back-to-back
+    // fetches would land at ~12.4min, safely outside the test's 8min window.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.99);
 
     try {
       scheduler.schedule(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect(host.onExecuteFetch).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(7 * 60_000);
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
     } finally {
       randomSpy.mockRestore();
@@ -268,14 +274,22 @@ describe("FetchScheduler", () => {
     const host = makeHost({ isCurrent: true });
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
 
-    // Initial fetch runs at 2-5s.
-    scheduler.schedule(true);
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    // Pin random so the 2nd fetch lands inside the advance window and a 3rd
+    // can't: low rolls put min cumulative time at 2 + 22.5 + 22.5 = 47s ≤ 52s.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    // After completion, the next focused-tier fetch should be scheduled.
-    await vi.advanceTimersByTimeAsync(46_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    try {
+      // Initial fetch runs at 2-5s.
+      scheduler.schedule(true);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+
+      // After completion, the next focused-tier fetch should be scheduled.
+      await vi.advanceTimersByTimeAsync(46_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("recovers from a rejected onExecuteFetch — emits update + reschedules", async () => {

@@ -722,7 +722,7 @@ describe("projectSettingsDirty", () => {
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
     });
 
-    it("should detect changed githubRemote", () => {
+    it("should detect changed forgeRemote", () => {
       const snapshotA = createProjectSettingsSnapshot(
         "Project",
         "🌲",
@@ -853,6 +853,119 @@ describe("projectSettingsDirty", () => {
       );
 
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should detect changed forgeProviderOverride", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        "off",
+        null
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        "off",
+        "gitlab"
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should treat null and null forgeProviderOverride as equal", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        "off",
+        null
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        "off"
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
     });
   });
 });

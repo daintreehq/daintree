@@ -5,6 +5,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG } from "../../helpers/timeouts";
+import { openSettings } from "../../helpers/panels";
 import path from "path";
 import crypto from "crypto";
 
@@ -298,7 +299,7 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
     const alive = await ctx.app.evaluate(() => true);
     expect(alive).toBe(true);
 
-    // Renderer is responsive — toolbar button visible
-    await expect(ctx.window.locator(SEL.toolbar.openSettings)).toBeVisible();
+    await openSettings(ctx.window);
+    await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible();
   });
 });

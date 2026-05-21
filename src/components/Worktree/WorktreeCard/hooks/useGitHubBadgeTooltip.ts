@@ -35,7 +35,7 @@ export function useGitHubBadgeTooltip({
     if (missingToken) {
       void actionService.dispatch(
         "app.settings.openTab",
-        { tab: "github", sectionId: "github-token" },
+        { tab: "code-forge", subtab: "github", sectionId: "github-token" },
         { source: "user" }
       );
       return;

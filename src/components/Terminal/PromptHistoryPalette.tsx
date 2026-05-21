@@ -133,8 +133,8 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         <PaletteFooterHints
           primaryHint={{ keys: ["↵"], label: "to recall" }}
           hints={[
-            { keys: ["↑", "↓"], label: "to navigate" },
-            { keys: ["Esc"], label: "to close" },
+            { keys: ["↑", "↓"], label: "navigate" },
+            { keys: ["Esc"], label: "close" },
           ]}
         />
       </div>

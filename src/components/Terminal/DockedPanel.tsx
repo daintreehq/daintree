@@ -15,9 +15,16 @@ export interface DockedPanelProps {
   terminal: TerminalInstance;
   onPopoverClose?: () => void;
   onAddTab?: () => void;
+  /** Show the inline "Open in grid" header control (single-panel dock only). */
+  showRestoreControl?: boolean;
 }
 
-export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelProps) {
+export function DockedPanel({
+  terminal,
+  onPopoverClose,
+  onAddTab,
+  showRestoreControl,
+}: DockedPanelProps) {
   const moveTerminalToGrid = usePanelStore((state) => state.moveTerminalToGrid);
   const closeDockTerminal = usePanelStore((state) => state.closeDockTerminal);
 
@@ -83,6 +90,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
           onMinimize: handleMinimize,
           onTitleChange: handleTitleChange,
           onAddTab,
+          showRestoreControl,
         },
       }),
     [
@@ -94,6 +102,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
       handleMinimize,
       handleTitleChange,
       onAddTab,
+      showRestoreControl,
     ]
   );
 

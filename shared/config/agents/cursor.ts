@@ -77,19 +77,6 @@ export const config: AgentConfig = {
     debounceMs: 6000,
     promptFastPathMinQuietMs: 6000,
   },
-  routing: {
-    capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
-    domains: {
-      frontend: 0.8,
-      backend: 0.8,
-      testing: 0.75,
-      refactoring: 0.8,
-      debugging: 0.8,
-      architecture: 0.75,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   authCheck: {
     // Cursor may store tokens in OS Keychain on newer versions; file check
     // is best-effort. Misses leave `authConfirmed: false` so the Settings

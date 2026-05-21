@@ -49,14 +49,29 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "system.checkCommand",
       title: "Check Command Availability",
-      description: "Check whether a command is available on PATH",
+      description:
+        "Check whether an executable is available on the user's PATH. Args: `command` (required) — the executable name to look for (e.g. 'node', 'gh'). Returns { available: boolean }. Never errors for a missing command — absence is reported as available:false, not an exception.",
       category: "system",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ command: z.string() }),
+      argsSchema: z.object({
+        command: z.string().describe("Executable name to look for on PATH (e.g. 'node', 'gh')."),
+      }),
+      examples: [
+        {
+          args: { command: "node" },
+          description: "Check if Node.js is available on PATH",
+        },
+        {
+          args: { command: "gh" },
+          description: "Check if the GitHub CLI is installed",
+        },
+      ],
+      resultSchema: z.object({ available: z.boolean() }),
       run: async ({ command }) => {
-        return await systemClient.checkCommand(command);
+        const result = await systemClient.checkCommand(command);
+        return { available: result };
       },
     })
   );
@@ -65,14 +80,25 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "system.checkDirectory",
       title: "Check Directory",
-      description: "Check whether a directory exists",
+      description:
+        "Check whether a filesystem directory exists. Args: `path` (required) — an absolute directory path. Returns { exists: boolean }. Never errors for a missing path — absence is reported as exists:false, not an exception.",
       category: "system",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ path: z.string() }),
+      argsSchema: z.object({
+        path: z.string().describe("Absolute directory path to test for existence."),
+      }),
+      examples: [
+        {
+          args: { path: "/Users/me/Projects/app" },
+          description: "Check whether a project directory exists on disk",
+        },
+      ],
+      resultSchema: z.object({ exists: z.boolean() }),
       run: async ({ path }) => {
-        return await systemClient.checkDirectory(path);
+        const result = await systemClient.checkDirectory(path);
+        return { exists: result };
       },
     })
   );
@@ -85,8 +111,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ path: z.string() }),
     run: async () => {
-      return await systemClient.getHomeDir();
+      const result = await systemClient.getHomeDir();
+      return { path: result };
     },
   }));
 
@@ -98,6 +126,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await cliAvailabilityClient.get();
     },
@@ -121,12 +150,23 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "files.search",
       title: "Search Files",
       description:
-        "Search for files by name in a directory. Defaults to the active worktree path when cwd is omitted.",
+        "Search for files by name/glob within a directory tree. Args: `query` (required) — filename or glob; `cwd` (optional) — directory to search, defaults to the active worktree path; `limit` (optional) caps results. Returns { files } — an array of matching paths. Errors when `cwd` is omitted and no worktree is active.",
       category: "files",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: FileSearchPayloadSchema,
+      examples: [
+        {
+          args: { query: "*.test.ts" },
+          description: "Search for test files from the active worktree root",
+        },
+        {
+          args: { query: "ActionService", limit: 10 },
+          description: "Find up to 10 files matching 'ActionService'",
+        },
+      ],
+      resultSchema: z.object({ files: z.array(z.string()) }),
       run: async (payload, ctx: ActionContext) => {
         const resolvedCwd = payload.cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
@@ -140,7 +180,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List available slash commands for an agent. Defaults to 'claude' when agentId is omitted.",
+        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectPath` — project to scope project-local commands. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -153,9 +193,26 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           projectPath: z.string().optional(),
         })
         .optional(),
+      resultSchema: z.object({
+        commands: z.array(
+          z.object({
+            id: z.string(),
+            label: z.string(),
+            description: z.string(),
+            scope: z.string(),
+            agentId: z.string(),
+            sourcePath: z.string().optional(),
+            kind: z.string().optional(),
+          })
+        ),
+      }),
       run: async (payload) => {
         const agentId = payload?.agentId ?? "claude";
-        return await slashCommandsClient.list({ agentId, projectPath: payload?.projectPath });
+        const result = await slashCommandsClient.list({
+          agentId,
+          projectPath: payload?.projectPath,
+        });
+        return { commands: result };
       },
     })
   );
@@ -207,8 +264,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ available: z.boolean() }),
     run: async () => {
-      return await copyTreeClient.isAvailable();
+      const result = await copyTreeClient.isAvailable();
+      return { available: result };
     },
   }));
 
@@ -216,7 +275,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
-      description: "Generate worktree context (returns content)",
+      description:
+        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` — a worktree id from `worktree.list`, defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration }, optional error }. A generation failure is reported in the `error` field; throws only when no worktree is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -231,6 +291,17 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           options: CopyTreeOptionsSchema.optional(),
         })
         .optional(),
+      resultSchema: z.object({
+        content: z.string(),
+        fileCount: z.number(),
+        error: z.string().optional(),
+        stats: z
+          .object({
+            totalSize: z.number(),
+            duration: z.number(),
+          })
+          .optional(),
+      }),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
         if (!worktreeId) throw new Error("No active worktree");
@@ -319,8 +390,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             "Relative path within the worktree (e.g. 'src', 'src/components'). Omit for root."
           ),
       }),
+      resultSchema: z.object({ nodes: z.array(z.unknown()) }),
       run: async ({ worktreeId, dirPath }) => {
-        return await copyTreeClient.getFileTree(worktreeId, dirPath);
+        const result = await copyTreeClient.getFileTree(worktreeId, dirPath);
+        return { nodes: result };
       },
     })
   );

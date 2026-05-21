@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { normalizeBrowserUrl } from "../../Browser/browserUtils";
-import { shouldAdoptDetectedDevServerUrl } from "../urlSync";
+import { computeDevServerUrl } from "../urlSync";
 
 // ─── Browser History Logic ──────────────────────────────────────────
 // Extracted from DevPreviewPane to enable pure-function testing
@@ -79,6 +79,7 @@ const statusConfig: Record<DevPreviewStatus, { label: string; color: string }> =
   starting: { label: "Starting", color: "text-blue-400" },
   installing: { label: "Installing", color: "text-yellow-400" },
   running: { label: "Running", color: "text-green-400" },
+  stopping: { label: "Stopping", color: "text-blue-400" },
   error: { label: "Error", color: "text-red-400" },
   stopped: { label: "Stopped", color: "text-gray-400" },
 };
@@ -422,25 +423,19 @@ describe("DevPreviewPane", () => {
 
   describe("detected URL adoption", () => {
     it("adopts detected URL when there is no current URL", () => {
-      expect(shouldAdoptDetectedDevServerUrl("http://localhost:5173/", "")).toBe(true);
+      expect(computeDevServerUrl("http://localhost:5173/", "")).toBe("http://localhost:5173/");
     });
 
     it("does not override in-app navigation on same origin", () => {
       expect(
-        shouldAdoptDetectedDevServerUrl(
-          "http://localhost:5173/",
-          "http://localhost:5173/products/42"
-        )
+        computeDevServerUrl("http://localhost:5173/", "http://localhost:5173/products/42")
       ).toBe(false);
     });
 
-    it("adopts detected URL when origin changes", () => {
+    it("grafts the current route onto the new origin when origin changes", () => {
       expect(
-        shouldAdoptDetectedDevServerUrl(
-          "http://localhost:5174/",
-          "http://localhost:5173/products/42"
-        )
-      ).toBe(true);
+        computeDevServerUrl("http://localhost:5174/", "http://localhost:5173/products/42")
+      ).toBe("http://localhost:5174/products/42");
     });
   });
 

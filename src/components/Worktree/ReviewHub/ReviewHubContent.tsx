@@ -32,7 +32,7 @@ import {
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { getPRCIStatusVisual } from "@/components/GitHub/prCIStatus";
+import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Spinner } from "@/components/ui/Spinner";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
@@ -40,6 +40,7 @@ import { ConflictPanel } from "./ConflictPanel";
 import { FileDiffModal } from "../FileDiffModal";
 import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -54,8 +55,10 @@ import {
 import { EmptyState } from "@/components/ui/EmptyState";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useFileDecorations } from "@/hooks/useFileDecorations";
 import { useShallow } from "zustand/react/shallow";
-import { githubClient } from "@/clients/githubClient";
+import { systemClient } from "@/clients/systemClient";
+import { forgeClient } from "@/clients/forgeClient";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -65,7 +68,6 @@ import {
   type SectionViewState,
   DEFAULT_SECTION_STATE,
   FILTER_DEBOUNCE_MS,
-  extractGitHubErrorCode,
   getPushBannerConfig,
   isDensity,
   isGeneratedFile,
@@ -222,6 +224,13 @@ export function ReviewHubContent({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
+  // Provider-classified push-error state, resolved async via the active forge
+  // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
+  // searchable code (e.g. GitHub's `GH###`); `forgeProviderId` is the resolved
+  // provider's contribution id, used to route the settings CTA. Both null when
+  // no provider resolves or it doesn't recognize the stderr.
+  const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
+  const [forgeProviderId, setForgeProviderId] = useState<string | null>(null);
   const [showPushDetails, setShowPushDetails] = useState(false);
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
@@ -238,6 +247,7 @@ export function ReviewHubContent({
   const [viewedFiles, setViewedFiles] = useState<Set<string>>(() => new Set());
   const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
   const [forcePushDialogOpen, setForcePushDialogOpen] = useState(false);
+  const [pullRebaseConfirmOpen, setPullRebaseConfirmOpen] = useState(false);
   const [pullRebasing, setPullRebasing] = useState(false);
   const isPullRebasingRef = useRef(false);
   const [baseBranchFiles, setBaseBranchFiles] = useState<CrossWorktreeFile[] | null>(null);
@@ -246,8 +256,6 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
-  const [reviewThreadCounts, setReviewThreadCounts] = useState<Record<string, number> | null>(null);
-  const reviewThreadsRequestRef = useRef(0);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
   const refreshIdRef = useRef(0);
@@ -373,12 +381,12 @@ export function ReviewHubContent({
     useShallow((state) => {
       for (const wt of state.worktrees.values()) {
         if (wt.path === worktreePath) {
-          return wt.prNumber
+          return wt.linked?.pr
             ? {
-                prNumber: wt.prNumber,
-                prUrl: wt.prUrl,
-                prState: wt.prState,
-                prCiStatus: wt.prCiStatus,
+                prNumber: wt.linked.pr.ref.number,
+                prUrl: wt.linked.pr.url,
+                prState: wt.linked.pr.state,
+                prCiStatus: wt.linked.pr.ciStatus,
               }
             : null;
         }
@@ -387,10 +395,34 @@ export function ReviewHubContent({
     })
   );
 
+  // Per-file review-thread badges now come from the generic plugin
+  // file-decoration system (the built-in GitHub plugin contributes the
+  // `worktree-diff:*` provider) rather than a direct `getPRReviewThreads`
+  // call here. The scope is empty (→ no-op, no IPC) unless the base-branch
+  // diff is showing for a worktree with a linked PR.
+  const decorationScope =
+    isOpen && diffMode === "base-branch" && worktreePR?.prNumber && worktreePath
+      ? `worktree-diff:${worktreePath}`
+      : "";
+  const decorationPaths = useMemo(
+    () => sortedBaseBranchFiles?.map((f) => f.path) ?? [],
+    [sortedBaseBranchFiles]
+  );
+  const reviewDecorations = useFileDecorations(decorationScope, decorationPaths);
+
   const behindCount = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
       if (wt.path === worktreePath) {
         return wt.behindCount;
+      }
+    }
+    return undefined;
+  });
+
+  const aheadCount = useWorktreeStore((state) => {
+    for (const wt of state.worktrees.values()) {
+      if (wt.path === worktreePath) {
+        return wt.aheadCount;
       }
     }
     return undefined;
@@ -518,7 +550,6 @@ export function ReviewHubContent({
       refreshIdRef.current++;
       bgRefreshIdRef.current++;
       baseBranchRequestRef.current++;
-      reviewThreadsRequestRef.current++;
       setStatus(null);
       setLoadError(null);
       setActionError(null);
@@ -530,7 +561,6 @@ export function ReviewHubContent({
       setBaseBranchFiles(null);
       setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setReviewThreadCounts(null);
       setForcePushDialogOpen(false);
       setPullRebasing(false);
       isPullRebasingRef.current = false;
@@ -586,38 +616,43 @@ export function ReviewHubContent({
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
       baseBranchRequestRef.current++;
-      reviewThreadsRequestRef.current++;
       setDiffMode("working-tree");
       setBaseBranchFiles(null);
       setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setReviewThreadCounts(null);
     }
   }, [status?.currentBranch, mainBranch, diffMode]);
 
+  // Classify push failures via the active forge provider (lives in main).
+  // Provider-agnostic: surfaces a stable error code and the provider id used
+  // to route the settings CTA. Classification is best-effort — any failure
+  // leaves the banner in its generic state with the raw stderr.
   useEffect(() => {
-    if (!isOpen || diffMode !== "base-branch" || !worktreePR?.prNumber || !worktreePath) {
-      if (diffMode !== "base-branch") {
-        setReviewThreadCounts(null);
-      }
+    // Clear synchronously so a new failure never shows the previous error's
+    // code or routes its settings CTA to a stale provider while the new
+    // classification is in flight.
+    setForgeErrorCode(undefined);
+    setForgeProviderId(null);
+    if (!pushError || !worktreePath) {
       return;
     }
-
-    const requestId = ++reviewThreadsRequestRef.current;
-
+    let cancelled = false;
     void (async () => {
       try {
-        const counts = await githubClient.getPRReviewThreads(worktreePath, worktreePR.prNumber!);
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(counts);
-        }
+        const result = await forgeClient.classifyPushError(worktreePath, pushError.rawMessage);
+        if (cancelled) return;
+        setForgeProviderId(result?.providerId ?? null);
+        setForgeErrorCode(result?.classification?.code);
       } catch {
-        if (reviewThreadsRequestRef.current === requestId) {
-          setReviewThreadCounts(null);
-        }
+        if (cancelled) return;
+        setForgeProviderId(null);
+        setForgeErrorCode(undefined);
       }
     })();
-  }, [isOpen, diffMode, worktreePR?.prNumber, worktreePath]);
+    return () => {
+      cancelled = true;
+    };
+  }, [pushError, worktreePath]);
 
   useEffect(() => {
     if (!status || !selectionSection) return;
@@ -1166,11 +1201,11 @@ export function ReviewHubContent({
               worktreePR &&
               worktreePR.prUrl &&
               (() => {
-                const ciVisual = getPRCIStatusVisual(worktreePR.prCiStatus);
+                const ciVisual = getCIStatusVisual(worktreePR.prCiStatus);
                 const prStateLabel =
                   worktreePR.prState === "merged"
                     ? "merged"
-                    : worktreePR.prState === "closed"
+                    : worktreePR.prState === "closed" || worktreePR.prState === "declined"
                       ? "closed"
                       : "open";
                 return (
@@ -1190,19 +1225,19 @@ export function ReviewHubContent({
                         className={cn(
                           "w-3 h-3 shrink-0",
                           worktreePR.prState === "merged"
-                            ? "text-github-merged"
-                            : worktreePR.prState === "closed"
-                              ? "text-github-closed"
-                              : "text-github-open"
+                            ? "text-pr-merged"
+                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
+                              ? "text-pr-closed"
+                              : "text-pr-open"
                         )}
                       />
                       <span
                         className={
                           worktreePR.prState === "merged"
-                            ? "text-github-merged"
-                            : worktreePR.prState === "closed"
-                              ? "text-github-closed"
-                              : "text-github-open"
+                            ? "text-pr-merged"
+                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
+                              ? "text-pr-closed"
+                              : "text-pr-open"
                         }
                       >
                         #{worktreePR.prNumber}
@@ -1240,14 +1275,14 @@ export function ReviewHubContent({
                     </span>
                     <button
                       type="button"
-                      onClick={() => void githubClient.openPR(worktreePR.prUrl as string)}
+                      onClick={() => void systemClient.openExternal(worktreePR.prUrl as string)}
                       className={cn(
                         "inline-flex items-center justify-center p-0.5 rounded",
                         "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
                         "transition-colors cursor-pointer",
                         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
                       )}
-                      aria-label={`View pull request #${worktreePR.prNumber} on GitHub`}
+                      aria-label={`View pull request #${worktreePR.prNumber}`}
                     >
                       <ExternalLink className="w-3 h-3" />
                     </button>
@@ -1342,16 +1377,15 @@ export function ReviewHubContent({
         )}
         {pushError &&
           (() => {
-            const config = getPushBannerConfig(pushError, behindCount);
-            const ghCode = extractGitHubErrorCode(pushError.rawMessage);
+            const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
             const canCollapse =
               config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
             const dispatchCta = (cta: PushBannerCta) => {
               switch (cta.kind) {
-                case "settings-github":
+                case "settings-forge":
                   void actionService.dispatch(
                     "app.settings.openTab",
-                    { tab: "github" },
+                    { tab: "code-forge", subtab: cta.providerId },
                     { source: "user" }
                   );
                   return;
@@ -1359,7 +1393,7 @@ export function ReviewHubContent({
                   void handleRetryPush();
                   return;
                 case "pull-rebase":
-                  void handlePullRebase();
+                  setPullRebaseConfirmOpen(true);
                   return;
                 case "force-push":
                   setForcePushDialogOpen(true);
@@ -1405,12 +1439,12 @@ export function ReviewHubContent({
                   <div>
                     <span className="font-medium">Push failed.</span> <span>{config.message}</span>
                   </div>
-                  {ghCode && (
+                  {forgeErrorCode && (
                     <div
                       data-testid="review-hub-push-error-code"
                       className="mt-1 text-[10px] font-mono opacity-80"
                     >
-                      {ghCode}
+                      {forgeErrorCode}
                     </div>
                   )}
                   {canCollapse && (
@@ -1498,11 +1532,16 @@ export function ReviewHubContent({
                       key={`${file.status}:${file.path}`}
                       file={file}
                       onClick={() => setSelectedBaseBranchFile(file)}
-                      unresolvedCount={reviewThreadCounts?.[file.path]}
+                      unresolvedCount={(() => {
+                        const badge = reviewDecorations[file.path]?.badge;
+                        if (badge === undefined) return undefined;
+                        const n = Number.parseInt(badge, 10);
+                        return Number.isNaN(n) ? undefined : n;
+                      })()}
                       onBadgeClick={
                         worktreePR?.prUrl
                           ? () =>
-                              void githubClient.openPR(
+                              void systemClient.openExternal(
                                 `${worktreePR.prUrl}/files?file=${encodeURIComponent(file.path)}`
                               )
                           : undefined
@@ -2068,6 +2107,40 @@ export function ReviewHubContent({
           onError={handleForcePushError}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={pullRebaseConfirmOpen}
+        onClose={() => setPullRebaseConfirmOpen(false)}
+        title={`Pull and rebase '${status?.currentBranch ?? "current branch"}'?`}
+        description={
+          <span>
+            Replays{" "}
+            {aheadCount != null ? (
+              <span className="font-medium text-daintree-text">
+                {aheadCount} local commit{aheadCount === 1 ? "" : "s"}
+              </span>
+            ) : (
+              "your local commits"
+            )}{" "}
+            on top of{" "}
+            {behindCount != null ? (
+              <span className="font-medium text-daintree-text">
+                {behindCount} incoming commit{behindCount === 1 ? "" : "s"}
+              </span>
+            ) : (
+              "the incoming commits"
+            )}{" "}
+            from the remote. Rebasing rewrites local commit history and cannot be undone.
+          </span>
+        }
+        confirmLabel="Pull and rebase"
+        cancelLabel="Cancel"
+        variant="destructive"
+        onConfirm={() => {
+          setPullRebaseConfirmOpen(false);
+          void handlePullRebase();
+        }}
+      />
     </>
   );
 }

@@ -47,4 +47,31 @@ describe("SettingsSection", () => {
     expect(root.classList.contains("grid-cols-[minmax(0,1fr)]")).toBe(true);
     expect(root.classList.contains("gap-3")).toBe(true);
   });
+
+  it("offsets the scroll anchor so scrollIntoView clears the sticky header", () => {
+    const { container } = render(
+      <SettingsSection icon={TestIcon} title="My Section" description="desc" id="my-section">
+        <div>child</div>
+      </SettingsSection>
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.id).toBe("my-section");
+    expect(root.classList.contains("scroll-mt-12")).toBe(true);
+  });
+
+  it("pins the heading wrapper with a translucent sticky header", () => {
+    const { container } = render(
+      <SettingsSection icon={TestIcon} title="My Section" description="desc">
+        <div>child</div>
+      </SettingsSection>
+    );
+    const header = container.querySelector(".settings-section-header") as HTMLElement;
+    expect(header).toBeTruthy();
+    for (const cls of ["sticky", "top-0", "z-20", "-mx-6", "px-6", "pb-1.5"]) {
+      expect(header.classList.contains(cls)).toBe(true);
+    }
+    // The heading and description live inside the sticky wrapper.
+    expect(header.contains(screen.getByText("My Section"))).toBe(true);
+    expect(header.contains(screen.getByText("desc"))).toBe(true);
+  });
 });

@@ -142,7 +142,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
 
     // The active-project flow now uses "Stop project?" instead of the
     // retired "Close Project?" title.
-    const dialog = window.getByRole("dialog", { name: "Stop project?" }).last();
+    const dialog = window.getByRole("alertdialog", { name: "Stop project?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(dialog.getByRole("button", { name: "Stop project" })).toBeVisible();
 
@@ -160,7 +160,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
 
     await stopActiveProjectViaSwitcher(window, PROJECT_NAME);
 
-    const dialog = window.getByRole("dialog", { name: "Stop project?" }).last();
+    const dialog = window.getByRole("alertdialog", { name: "Stop project?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
     await dialog.getByRole("button", { name: "Stop project" }).click();
@@ -268,7 +268,7 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
+    const dialog = window.getByRole("alertdialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(dialog.getByRole("button", { name: "Remove project" })).toBeVisible();
 
@@ -282,7 +282,7 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
-    const dialog = window.getByRole("dialog", { name: "Remove project from list?" }).last();
+    const dialog = window.getByRole("alertdialog", { name: "Remove project from list?" }).last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
     await dialog.getByRole("button", { name: "Remove project" }).click();
@@ -375,7 +375,9 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
 
     // Remove B from the list
     await removeProjectViaSwitcher(ctx.window, PROJECT_B);
-    const dialog = ctx.window.getByRole("dialog", { name: "Remove project from list?" }).last();
+    const dialog = ctx.window
+      .getByRole("alertdialog", { name: "Remove project from list?" })
+      .last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await dialog.getByRole("button", { name: "Remove project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });

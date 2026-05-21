@@ -13,15 +13,14 @@ export const CHANNELS = {
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
   WORKTREE_GET_AVAILABLE_BRANCH: "worktree:get-available-branch",
   WORKTREE_DELETE: "worktree:delete",
-  WORKTREE_CREATE_FOR_TASK: "worktree:create-for-task",
-  WORKTREE_GET_BY_TASK_ID: "worktree:get-by-task-id",
-  WORKTREE_CLEANUP_TASK: "worktree:cleanup-task",
   WORKTREE_ATTACH_ISSUE: "worktree:attach-issue",
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
+  WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
+  PROJECT_WORKTREE_LOAD_STATUS: "project:worktree-load-status",
 
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_DATA: "terminal:data",
@@ -61,6 +60,7 @@ export const CHANNELS = {
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
+  WATCHDOG_RESTART: "watchdog:restart",
   TERMINAL_FD_LEAK_WARNING: "terminal:fd-leak-warning",
   TERMINAL_RESOURCE_METRICS: "terminal:resource-metrics",
 
@@ -155,14 +155,17 @@ export const CHANNELS = {
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
   GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
   GITHUB_GET_FIRST_PAGE_CACHE: "github:get-first-page-cache",
+  GITHUB_RESOLVE_AUTHOR_AVATAR: "github:resolve-author-avatar",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
   APP_GET_VERSION: "app:get-version",
   APP_HYDRATE: "app:hydrate",
+  APP_BOOT: "app:boot",
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
   APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",
+  APP_CLEAR_QUARANTINED_PANEL: "app:clear-quarantined-panel",
   APP_FIRST_INTERACTIVE: "app:first-interactive",
   APP_VIEW_PAINTED: "app:view-painted",
   MENU_ACTION: "menu:action",
@@ -210,9 +213,11 @@ export const CHANNELS = {
   PROJECT_PREFETCH_HYDRATE: "project:prefetch-hydrate",
   PROJECT_OPEN_DIALOG: "project:open-dialog",
   PROJECT_ON_SWITCH: "project:on-switch",
+  PROJECT_FOCUS_ON_ACTIVATE: "project:focus-on-activate",
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
+  PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
@@ -356,12 +361,17 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
+  WEBVIEW_UNRESPONSIVE: "webview:unresponsive",
+  WEBVIEW_RESPONSIVE: "webview:responsive",
   WEBVIEW_OAUTH_LOOPBACK: "webview:oauth-loopback",
+  WEBVIEW_CANCEL_OAUTH_LOOPBACK: "webview:cancel-oauth-loopback",
+  WEBVIEW_OAUTH_LOOPBACK_STATUS: "webview:oauth-loopback-status",
   WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
   WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
   WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
   WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
   WEBVIEW_RELOAD_IGNORING_CACHE: "webview:reload-ignoring-cache",
+  WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
@@ -438,6 +448,8 @@ export const CHANNELS = {
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
+  DEV_PREVIEW_RESTART_AND_CLEAR_CACHE: "dev-preview:restart-and-clear-cache",
+  DEV_PREVIEW_REINSTALL_AND_RESTART: "dev-preview:reinstall-and-restart",
   DEV_PREVIEW_STOP: "dev-preview:stop",
   DEV_PREVIEW_STOP_BY_PANEL: "dev-preview:stop-by-panel",
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
@@ -536,6 +548,12 @@ export const CHANNELS = {
    * because pre-dispatch auth failures never reach the record ring buffer.
    */
   MCP_SERVER_GET_AUDIT_STATS: "mcp-server:get-audit-stats",
+  /** Export filtered audit records as scrubbed NDJSON via OS save dialog. */
+  MCP_SERVER_EXPORT_AUDIT_LOG: "mcp-server:export-audit-log",
+  /** Read the turn-outcome record ring buffer (newest first). */
+  MCP_SERVER_GET_TURN_OUTCOME_RECORDS: "mcp-server:get-turn-outcome-records",
+  /** Clear all turn-outcome records from the ring buffer and persistence. */
+  MCP_SERVER_CLEAR_TURN_OUTCOME_LOG: "mcp-server:clear-turn-outcome-log",
   /**
    * Mount-time hydration of the runtime-state snapshot. Distinct from
    * `MCP_SERVER_GET_STATUS` (which exposes config — enabled/port/apiKey)
@@ -560,11 +578,40 @@ export const CHANNELS = {
    */
   MCP_TIER_NOT_PERMITTED: "mcp-server:tier-not-permitted",
   /**
-   * Elevate the tier of an active help-session (Approve once). Mutates
+   * Push channel: a session was revoked by the abuse policy after exceeding
+   * the denial threshold. Targeted at the pinned WebContents — the renderer
+   * surfaces this as a notification so the user understands why the session
+   * ended and can re-authorise.
+   */
+  MCP_SESSION_REVOKED: "mcp-server:session-revoked",
+  /**
+   * Elevate the tier of an active help-session (Always allow). Mutates
    * `sessionTierMap` in-place — never downgrades, so a malicious renderer
-   * cannot drop its own privileges.
+   * cannot drop its own privileges. The per-tool "Approve once" flow now
+   * uses {@link MCP_SERVER_ISSUE_GRANT} instead — this channel is reserved
+   * for the standing-permission path that pairs with a project-level
+   * `daintreeMcpTier` write (#8442).
    */
   MCP_SERVER_SET_SESSION_TIER: "mcp-server:set-session-tier",
+  /**
+   * Mint a per-`(sessionId, toolId)` time-bounded grant for the named tool
+   * (Approve once). The main process owns the TTL constant. Caller-pin
+   * checked: only the renderer that minted the help-session can issue
+   * grants on its behalf.
+   */
+  MCP_SERVER_ISSUE_GRANT: "mcp-server:issue-grant",
+  /**
+   * Revoke every grant currently held by the named session. Returns the
+   * count of revoked grants for the renderer's confirmation copy. Caller-
+   * pin checked.
+   */
+  MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
+  /**
+   * Push channel: a grant lifecycle event (`issued`, `expired`, `revoked`)
+   * fired for the help-session pinned to this renderer. Targeted send —
+   * grant state is session-scoped and never broadcast.
+   */
+  MCP_GRANT_LIFECYCLE: "mcp-server:grant-lifecycle",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -597,6 +644,7 @@ export const CHANNELS = {
   ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
   ONBOARDING_MARK_WAITING_NUDGE_SEEN: "onboarding:mark-waiting-nudge-seen",
   ONBOARDING_MARK_AGENTS_SEEN: "onboarding:mark-agents-seen",
+  ONBOARDING_RECORD_AGENT_FIRST_SEEN: "onboarding:record-agent-first-seen",
   ONBOARDING_DISMISS_WELCOME_CARD: "onboarding:dismiss-welcome-card",
   ONBOARDING_DISMISS_SETUP_BANNER: "onboarding:dismiss-setup-banner",
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
@@ -672,6 +720,30 @@ export const CHANNELS = {
   DEMO_CAPTURE_CHUNK: "demo:capture-chunk",
   DEMO_CAPTURE_STOP: "demo:capture-stop",
 
+  // Forge integration channels
+  FORGE_RATE_LIMIT_CHANGED: "forge:rate-limit-changed",
+  FORGE_TOKEN_HEALTH_CHANGED: "forge:token-health-changed",
+  FORGE_GET_SETTINGS: "forge:get-settings",
+  FORGE_SET_DEFAULT_PROVIDER: "forge:set-default-provider",
+  FORGE_GET_PROVIDERS: "forge:get-providers",
+  FORGE_RESOLVE_PROVIDER: "forge:resolve-provider",
+  FORGE_OPEN_ISSUES: "forge:open-issues",
+  FORGE_OPEN_PRS: "forge:open-prs",
+  FORGE_OPEN_COMMITS: "forge:open-commits",
+  FORGE_OPEN_ISSUE: "forge:open-issue",
+  FORGE_GET_ISSUE_URL: "forge:get-issue-url",
+  FORGE_ASSIGN_ISSUE: "forge:assign-issue",
+  FORGE_VALIDATE_TOKEN: "forge:validate-token",
+  FORGE_SET_CREDENTIAL: "forge:set-credential",
+  FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
+  FORGE_CLEAR_CREDENTIAL: "forge:clear-credential",
+  FORGE_LIST_ISSUES: "forge:list-issues",
+  FORGE_LIST_PRS: "forge:list-prs",
+  FORGE_GET_ISSUE: "forge:get-issue",
+  FORGE_GET_PR: "forge:get-pr",
+  FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
+  FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INVOKE: "plugin:invoke",
@@ -682,6 +754,8 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
+  PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

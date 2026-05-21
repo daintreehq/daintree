@@ -8,6 +8,7 @@ import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariab
 import type { TerminalInstance } from "@shared/types";
 import {
   buildFleetBroadcastRecipeContext,
+  classifyFleetRejectionReason,
   FLEET_LARGE_PASTE_BATCH_SIZE,
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   getFleetBroadcastByteLength,
@@ -27,8 +28,22 @@ export interface FleetExecutionResult {
   total: number;
   successCount: number;
   failureCount: number;
-  perTarget: Array<{ terminalId: string; status: "fulfilled" | "rejected"; reason?: string }>;
+  /**
+   * Per-target outcome. `kind` is set only for rejected entries — callers
+   * use it to disarm permanent failures (dead PTYs) versus surface a
+   * transient retry chip. See `classifyFleetRejectionReason`.
+   */
+  perTarget: Array<{
+    terminalId: string;
+    status: "fulfilled" | "rejected";
+    reason?: string;
+    kind?: "permanent" | "transient";
+  }>;
   failedIds: string[];
+  /** Subset of `failedIds` whose rejection classified as permanent. */
+  permanentlyFailedIds: string[];
+  /** Subset of `failedIds` whose rejection classified as transient (retryable). */
+  transientlyFailedIds: string[];
   cancelled: boolean;
   skippedCount: number;
 }
@@ -91,7 +106,13 @@ function detectUnresolved(text: string, ctx: RecipeContext): string[] {
   return unresolved;
 }
 
-function filterEligibleIds(ids: string[]): string[] {
+/**
+ * Drop ids whose backing panel is no longer fleet-eligible (trashed,
+ * backgrounded, no PTY, etc.). Exported so the Enter-broadcast confirm
+ * path can re-check eligibility at dispatch time — a pane that went
+ * away while the confirm dialog was open must not still receive bytes.
+ */
+export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
   return ids.filter((id) => isTerminalFleetEligible(panelsById[id]));
 }
@@ -186,19 +207,36 @@ export async function executeFleetBroadcast(
   useFleetBroadcastProgressStore.getState().init(resolved.length);
 
   const buildResult = (cancelled: boolean): FleetExecutionResult => {
-    const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
-      terminalId: resolved[i]!.terminalId,
-      status: r.status,
-      reason: r.status === "rejected" ? String(r.reason) : undefined,
-    }));
+    const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
+      if (r.status === "fulfilled") {
+        return { terminalId: resolved[i]!.terminalId, status: "fulfilled" };
+      }
+      const reason = String(r.reason);
+      return {
+        terminalId: resolved[i]!.terminalId,
+        status: "rejected",
+        reason,
+        kind: classifyFleetRejectionReason(reason),
+      };
+    });
     const successCount = results.filter((r) => r.status === "fulfilled").length;
-    const failedIds = perTarget.filter((t) => t.status === "rejected").map((t) => t.terminalId);
+    const failedIds: string[] = [];
+    const permanentlyFailedIds: string[] = [];
+    const transientlyFailedIds: string[] = [];
+    for (const t of perTarget) {
+      if (t.status !== "rejected") continue;
+      failedIds.push(t.terminalId);
+      if (t.kind === "transient") transientlyFailedIds.push(t.terminalId);
+      else permanentlyFailedIds.push(t.terminalId);
+    }
     return {
       total: results.length,
       successCount,
       failureCount: results.length - successCount,
       perTarget,
       failedIds,
+      permanentlyFailedIds,
+      transientlyFailedIds,
       cancelled,
       skippedCount: Math.max(0, resolved.length - dispatchedCount),
     };
@@ -305,14 +343,29 @@ export async function broadcastFleetLiteralPaste(
   }
 
   const results = await Promise.allSettled(submissions);
-  const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
-    terminalId: collected[i]!,
-    status: r.status,
-    reason: r.status === "rejected" ? String(r.reason) : undefined,
-  }));
+  const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
+    if (r.status === "fulfilled") {
+      return { terminalId: collected[i]!, status: "fulfilled" };
+    }
+    const reason = String(r.reason);
+    return {
+      terminalId: collected[i]!,
+      status: "rejected",
+      reason,
+      kind: classifyFleetRejectionReason(reason),
+    };
+  });
 
   const successCount = results.filter((r) => r.status === "fulfilled").length;
-  const failedIds = perTarget.filter((t) => t.status === "rejected").map((t) => t.terminalId);
+  const failedIds: string[] = [];
+  const permanentlyFailedIds: string[] = [];
+  const transientlyFailedIds: string[] = [];
+  for (const t of perTarget) {
+    if (t.status !== "rejected") continue;
+    failedIds.push(t.terminalId);
+    if (t.kind === "transient") transientlyFailedIds.push(t.terminalId);
+    else permanentlyFailedIds.push(t.terminalId);
+  }
 
   return {
     total: results.length,
@@ -320,6 +373,8 @@ export async function broadcastFleetLiteralPaste(
     failureCount: results.length - successCount,
     perTarget,
     failedIds,
+    permanentlyFailedIds,
+    transientlyFailedIds,
     cancelled: false,
     skippedCount: 0,
   };

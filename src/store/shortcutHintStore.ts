@@ -1,7 +1,7 @@
 import { createStore } from "zustand/vanilla";
 
 /** Invocation counts at which a shortcut hint is shown. Encodes the lifetime cap (set size). */
-export const HINT_MILESTONES = new Set([1, 2, 3, 10, 20, 30, 50, 75, 100, 150]);
+export const HINT_MILESTONES = new Set([1, 2, 4, 8, 16, 32]);
 const POINTER_STALE_MS = 2000;
 
 function hoverOneShotKey(actionId: string, count: number): string {

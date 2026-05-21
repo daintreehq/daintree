@@ -7,13 +7,19 @@ let mockOnContextLoss: ReturnType<typeof vi.fn>;
 
 function createMockAddon() {
   // Per-instance so a resync test can fire one addon's merge event and assert
-  // every co-owning addon's clearTextureAtlas() ran.
+  // every co-owning addon's local resize-like reset ran.
   const removeAtlasHandlers = new Set<() => void>();
   const changeAtlasHandlers = new Set<() => void>();
+  const clearLocalModel = vi.fn();
+  const resizeLocalRenderer = vi.fn();
   return {
     dispose: mockAddonDispose,
     onContextLoss: mockOnContextLoss,
     clearTextureAtlas: vi.fn(),
+    _renderer: {
+      _clearModel: clearLocalModel,
+      handleResize: resizeLocalRenderer,
+    },
     onChangeTextureAtlas: vi.fn((handler: () => void) => {
       changeAtlasHandlers.add(handler);
       return {
@@ -30,7 +36,7 @@ function createMockAddon() {
         },
       };
     }),
-    // Test helper — simulate a shared-atlas page merge for this addon.
+    // Test helper: simulate a shared-atlas page merge for this addon.
     __fireRemoveTextureAtlasCanvas(): void {
       for (const handler of [...removeAtlasHandlers]) {
         handler();
@@ -159,6 +165,7 @@ function makeManagedTerminal(overrides: Partial<ManagedTerminal> = {}): ManagedT
     terminal: {
       loadAddon: vi.fn(),
       element,
+      cols: 80,
       rows: 24,
       refresh: vi.fn(),
     },
@@ -193,6 +200,11 @@ describe("TerminalWebGLManager", () => {
     mod.__testing.setWebglAddonClass(
       WebglAddonMock as unknown as new () => InstanceType<typeof webglMod.WebglAddon>
     );
+    // The passive-mode threshold is module-level state that survives across
+    // tests. Reset to the balanced default so order doesn't matter; blocks that
+    // need to fill the pool past it (LRU eviction, eviction priority) raise it
+    // in their own beforeEach, which runs after this one.
+    mod.TerminalWebGLManager.setPassiveThreshold(8);
     manager = new mod.TerminalWebGLManager();
   });
 
@@ -254,13 +266,18 @@ describe("TerminalWebGLManager", () => {
     const addon2 = addonAt(1);
 
     // A real merge reindexes the shared atlas, and xterm forwards the event to
-    // every co-owning renderer — each must drop and rebuild its GPU texture
-    // cache, not just the one that triggered the merge.
+    // every co-owning renderer. Each renderer must run the same local reset
+    // path that makes a user resize heal corruption, without clearing the
+    // shared atlas again.
     addon1.__fireRemoveTextureAtlasCanvas();
     addon2.__fireRemoveTextureAtlasCanvas();
 
-    expect(addon1.clearTextureAtlas).toHaveBeenCalledTimes(1);
-    expect(addon2.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer.handleResize).toHaveBeenCalledWith(80, 24);
+    expect(addon2._renderer.handleResize).toHaveBeenCalledWith(80, 24);
+    expect(addon1._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon2._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(addon2.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).toHaveBeenCalledWith(0, 23);
     expect(managed2.terminal.refresh).toHaveBeenCalledWith(0, 23);
   });
@@ -279,7 +296,10 @@ describe("TerminalWebGLManager", () => {
     // fired, so clearing it would be wasted work on an unaffected renderer.
     addon1.__fireRemoveTextureAtlasCanvas();
 
-    expect(addon1.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer.handleResize).toHaveBeenCalledWith(80, 24);
+    expect(addon1._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(addon2._renderer.handleResize).not.toHaveBeenCalled();
     expect(addon2.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).toHaveBeenCalledWith(0, 23);
     expect(managed2.terminal.refresh).not.toHaveBeenCalled();
@@ -292,8 +312,23 @@ describe("TerminalWebGLManager", () => {
 
     addon.__fireChangeTextureAtlas();
 
-    expect(addon.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon._renderer.handleResize).toHaveBeenCalledWith(80, 24);
+    expect(addon._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+  });
+
+  it("falls back to local model clear when resize-like reset is unavailable", () => {
+    const managed = makeManagedTerminal();
+    manager.ensureContext("t1", managed);
+    const addon = addonAt(0);
+    delete (addon._renderer as { handleResize?: unknown }).handleResize;
+
+    addon.__fireRemoveTextureAtlasCanvas();
+
+    expect(addon._renderer._clearModel).toHaveBeenCalledWith(true);
+    expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
   });
 
@@ -316,18 +351,22 @@ describe("TerminalWebGLManager", () => {
     addon2.__fireRemoveTextureAtlasCanvas();
     addon1.__fireRemoveTextureAtlasCanvas();
 
-    expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(addon1._renderer.handleResize).not.toHaveBeenCalled();
     expect(flushRafFrame()).toBe(true);
 
-    expect(addon1.clearTextureAtlas).toHaveBeenCalledTimes(1);
-    expect(addon2.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer.handleResize).toHaveBeenCalledTimes(1);
+    expect(addon2._renderer.handleResize).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon2._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(addon2.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).toHaveBeenCalledTimes(1);
     expect(managed2.terminal.refresh).toHaveBeenCalledTimes(1);
     // The burst collapsed to one frame — nothing else is queued.
     expect(flushRafFrame()).toBe(false);
   });
 
-  it("resyncs the rest of the fired set when one clearTextureAtlas throws", () => {
+  it("falls back to reacquire when local renderer reset throws and continues the fired set", () => {
     const managed1 = makeManagedTerminal();
     const managed2 = makeManagedTerminal();
     manager.ensureContext("t1", managed1);
@@ -335,7 +374,10 @@ describe("TerminalWebGLManager", () => {
 
     const addon1 = addonAt(0);
     const addon2 = addonAt(1);
-    addon1.clearTextureAtlas.mockImplementation(() => {
+    addon1._renderer.handleResize.mockImplementation(() => {
+      throw new Error("context lost mid-resync");
+    });
+    addon1._renderer._clearModel.mockImplementation(() => {
       throw new Error("context lost mid-resync");
     });
 
@@ -346,17 +388,30 @@ describe("TerminalWebGLManager", () => {
     addon2.__fireRemoveTextureAtlasCanvas();
     flushRafFrame();
 
-    expect(addon1.clearTextureAtlas).toHaveBeenCalledTimes(1);
-    expect(addon2.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer.handleResize).toHaveBeenCalledTimes(1);
+    expect(addon1._renderer._clearModel).toHaveBeenCalledTimes(1);
+    expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(mockAddonDispose).toHaveBeenCalledTimes(1);
+    expect(addon2._renderer.handleResize).toHaveBeenCalledTimes(1);
+    expect(addon2._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon2.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).not.toHaveBeenCalled();
     expect(managed2.terminal.refresh).toHaveBeenCalledTimes(1);
+
+    // The fallback reacquire is paced through the same one-context-per-rAF
+    // attach queue as normal WebGL acquisition.
+    expect(manager.isActive("t1")).toBe(false);
+    expect(flushRafFrame()).toBe(true);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(3);
+    expect(manager.isActive("t1")).toBe(true);
   });
 
-  it("skips the post-clear refresh when the terminal has no rows", () => {
+  it("skips the post-reset refresh when the terminal has no rows", () => {
     const managed = makeManagedTerminal({
       terminal: {
         loadAddon: vi.fn(),
         element: makeFakeElement(),
+        cols: 80,
         rows: 0,
         refresh: vi.fn(),
       } as unknown as ManagedTerminal["terminal"],
@@ -366,7 +421,9 @@ describe("TerminalWebGLManager", () => {
 
     addon.__fireRemoveTextureAtlasCanvas();
 
-    expect(addon.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(addon._renderer.handleResize).not.toHaveBeenCalled();
+    expect(addon._renderer._clearModel).toHaveBeenCalledWith(true);
+    expect(addon.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
@@ -382,6 +439,8 @@ describe("TerminalWebGLManager", () => {
     // The queued frame was cancelled — flushing finds nothing — and the
     // resync never runs.
     expect(flushRafFrame()).toBe(false);
+    expect(addon1._renderer.handleResize).not.toHaveBeenCalled();
+    expect(addon1._renderer._clearModel).not.toHaveBeenCalled();
     expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).not.toHaveBeenCalled();
   });
@@ -403,6 +462,10 @@ describe("TerminalWebGLManager", () => {
     // The released terminal's subscription is disposed: no frame is scheduled
     // and no addon is cleared.
     expect(flushRafFrame()).toBe(false);
+    expect(addon1._renderer.handleResize).not.toHaveBeenCalled();
+    expect(addon2._renderer.handleResize).not.toHaveBeenCalled();
+    expect(addon1._renderer._clearModel).not.toHaveBeenCalled();
+    expect(addon2._renderer._clearModel).not.toHaveBeenCalled();
     expect(addon1.clearTextureAtlas).not.toHaveBeenCalled();
     expect(addon2.clearTextureAtlas).not.toHaveBeenCalled();
     expect(managed1.terminal.refresh).not.toHaveBeenCalled();
@@ -776,6 +839,100 @@ describe("TerminalWebGLManager", () => {
       warnSpy.mockRestore();
     });
 
+    it("coalesces a same-frame loss burst across pool entries into one breaker tick", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+      manager.ensureContext("t4", m4);
+
+      // Bulk GPU eviction (e.g. Chromium 146 D3D11on12 memory pressure) fires
+      // webglcontextlost on every pool entry within one animation frame. Queue
+      // the rAF so the burst collapses into a single breaker tick.
+      rafMode = "queued";
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+      handlers[3]!();
+
+      expect(flushRafFrame()).toBe(true);
+      // The burst collapsed to one frame — nothing else queued.
+      expect(flushRafFrame()).toBe(false);
+
+      // One coalesced tick — far below LOSS_THRESHOLD, so the breaker must NOT
+      // have tripped and a new ensure must still attach. Flip rAF back to sync
+      // so the drain runs inline (matching how this suite's other tests work).
+      rafMode = "sync";
+      const before = WebglAddonMock.mock.calls.length;
+      const m5 = makeManagedTerminal();
+      manager.ensureContext("t5", m5);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t5")).toBe(true);
+    });
+
+    it("still trips on LOSS_THRESHOLD bursts across distinct frames", () => {
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      // Three genuinely distinct GPU events — one per frame — must each tick
+      // the breaker so the issue #6163 persistent-fault path still trips.
+      rafMode = "queued";
+      handlers[0]!();
+      flushRafFrame();
+      handlers[1]!();
+      flushRafFrame();
+      handlers[2]!();
+      flushRafFrame();
+
+      const before = WebglAddonMock.mock.calls.length;
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t4", m4);
+      expect(WebglAddonMock.mock.calls.length).toBe(before);
+      expect(manager.isActive("t4")).toBe(false);
+    });
+
+    it("dispose cancels a pending loss flush before it records a tick", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const handlers = captureContextLossHandlers();
+
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+
+      rafMode = "queued";
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
+
+      manager.dispose();
+      // dispose must cancel the queued flush — not just zero pendingLossCount.
+      // If the rAF survived, flushRafFrame would still find an entry. The
+      // distinction matters: a future change that drops cancelAnimationFrame
+      // but keeps the count reset would silently leak rAF callbacks, and only
+      // this empty-queue assertion catches it.
+      expect(flushRafFrame()).toBe(false);
+
+      const breakerWarnings = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].includes("circuit breaker")
+      );
+      expect(breakerWarnings).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+
     it("logs the breaker-trip warning only once", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handlers = captureContextLossHandlers();
@@ -812,6 +969,14 @@ describe("TerminalWebGLManager", () => {
   });
 
   describe("LRU eviction", () => {
+    // These tests fill the pool to MAX_CONTEXTS, past the passive gate.
+    // Pin the threshold above the pool cap so eviction — not passive-mode
+    // suppression — is what's under test here.
+    beforeEach(async () => {
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setPassiveThreshold(999);
+    });
+
     it("evicts the least recently used entry when pool reaches MAX_CONTEXTS", async () => {
       const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
       const maxContexts = TerminalWebGLManager.MAX_CONTEXTS;
@@ -876,6 +1041,424 @@ describe("TerminalWebGLManager", () => {
       expect(localManager.isActive("t0")).toBe(true);
       expect(localManager.isActive("t1")).toBe(false);
       expect(disposes[1]).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("eviction priority", () => {
+    // Same as LRU eviction: these fill the pool past the passive gate, so the
+    // threshold is pinned above the pool cap to isolate eviction behaviour.
+    beforeEach(async () => {
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setPassiveThreshold(999);
+    });
+
+    // Builds a fresh manager whose addons each carry an id-tagged dispose mock,
+    // so a test can assert exactly which pooled terminal lost its slot.
+    async function makePriorityManager(): Promise<{
+      localManager: import("../TerminalWebGLManager").TerminalWebGLManager;
+      disposeFor: (id: string) => ReturnType<typeof vi.fn>;
+    }> {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      const disposeById = new Map<string, ReturnType<typeof vi.fn>>();
+      let pendingId: string | null = null;
+      WebglAddonMock.mockImplementation(function () {
+        const d = vi.fn();
+        if (pendingId) disposeById.set(pendingId, d);
+        return { dispose: d, onContextLoss: mockOnContextLoss };
+      });
+      const localManager = new TerminalWebGLManager();
+      const origEnsure = localManager.ensureContext.bind(localManager);
+      // Tag the next-constructed addon with the id being ensured.
+      localManager.ensureContext = (id: string, m: ManagedTerminal): void => {
+        pendingId = id;
+        origEnsure(id, m);
+        pendingId = null;
+      };
+      return {
+        localManager,
+        disposeFor: (id: string) => {
+          const d = disposeById.get(id);
+          if (!d) throw new Error(`no addon constructed for ${id}`);
+          return d;
+        },
+      };
+    }
+
+    it("evicts the idle terminal over actively-working ones regardless of LRU order", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      const max = TerminalWebGLManager.MAX_CONTEXTS;
+      const { localManager, disposeFor } = await makePriorityManager();
+
+      // Oldest LRU entries are actively streaming (tier 5). Pure LRU would evict
+      // t0; the priority scorer must instead evict the idle terminal even though
+      // it is the newest entry.
+      for (let i = 0; i < max - 1; i++) {
+        localManager.ensureContext(
+          `work${i}`,
+          makeManagedTerminal({ agentState: "working", pendingWrites: 2, isFocused: false })
+        );
+      }
+      localManager.ensureContext(
+        "idle",
+        makeManagedTerminal({ agentState: "idle", pendingWrites: 0, isFocused: false })
+      );
+
+      localManager.ensureContext("extra", makeManagedTerminal({ agentState: "working" }));
+
+      expect(localManager.isActive("idle")).toBe(false);
+      expect(disposeFor("idle")).toHaveBeenCalledTimes(1);
+      expect(localManager.isActive("work0")).toBe(true);
+      expect(localManager.isActive("extra")).toBe(true);
+    });
+
+    it("treats undefined agentState as tier-0 and evicts it before a working terminal", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      const max = TerminalWebGLManager.MAX_CONTEXTS;
+      const { localManager, disposeFor } = await makePriorityManager();
+
+      for (let i = 0; i < max - 1; i++) {
+        localManager.ensureContext(
+          `work${i}`,
+          makeManagedTerminal({ agentState: "working", pendingWrites: 1 })
+        );
+      }
+      // No agentState at all (non-agent terminal).
+      localManager.ensureContext("plain", makeManagedTerminal());
+
+      localManager.ensureContext("extra", makeManagedTerminal());
+
+      expect(localManager.isActive("plain")).toBe(false);
+      expect(disposeFor("plain")).toHaveBeenCalledTimes(1);
+    });
+
+    it("protects a streaming terminal (tier 5) over a focused-idle one (tier 4)", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      const max = TerminalWebGLManager.MAX_CONTEXTS;
+      const { localManager, disposeFor } = await makePriorityManager();
+
+      for (let i = 0; i < max - 1; i++) {
+        localManager.ensureContext(
+          `work${i}`,
+          makeManagedTerminal({ agentState: "working", pendingWrites: 3, isFocused: false })
+        );
+      }
+      // Focused but idle — the user clicked through it but it isn't doing work.
+      localManager.ensureContext(
+        "focused",
+        makeManagedTerminal({ agentState: "waiting", pendingWrites: 0, isFocused: true })
+      );
+
+      localManager.ensureContext("extra", makeManagedTerminal({ agentState: "working" }));
+
+      expect(localManager.isActive("focused")).toBe(false);
+      expect(disposeFor("focused")).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < max - 1; i++) {
+        expect(localManager.isActive(`work${i}`)).toBe(true);
+      }
+    });
+
+    it("classifies recent-write recency at the WRITE_BURST_RECENCY_MS boundary", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      installRafShim();
+      try {
+        const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+        const { WRITE_BURST_RECENCY_MS } = await import("../types");
+        const max = TerminalWebGLManager.MAX_CONTEXTS;
+        const { localManager, disposeFor } = await makePriorityManager();
+
+        const now = Date.now();
+        // Filler: streaming terminals (tier 5) — never the eviction target.
+        for (let i = 0; i < max - 2; i++) {
+          localManager.ensureContext(
+            `work${i}`,
+            makeManagedTerminal({ agentState: "working", pendingWrites: 2 })
+          );
+        }
+        // A: waiting, wrote just inside the window → recently-writing → tier 3.
+        localManager.ensureContext(
+          "recent",
+          makeManagedTerminal({
+            agentState: "waiting",
+            pendingWrites: 0,
+            isFocused: false,
+            lastWriteAt: now - (WRITE_BURST_RECENCY_MS - 1),
+          })
+        );
+        // B: waiting, wrote just outside the window → not recently-writing → tier 1.
+        localManager.ensureContext(
+          "stale",
+          makeManagedTerminal({
+            agentState: "waiting",
+            pendingWrites: 0,
+            isFocused: false,
+            lastWriteAt: now - (WRITE_BURST_RECENCY_MS + 1),
+          })
+        );
+
+        localManager.ensureContext("extra", makeManagedTerminal({ agentState: "working" }));
+
+        // Tier 1 (stale) outranks tier 3 (recent) for eviction.
+        expect(localManager.isActive("stale")).toBe(false);
+        expect(disposeFor("stale")).toHaveBeenCalledTimes(1);
+        expect(localManager.isActive("recent")).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls back to LRU order to break ties within the same tier", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      const max = TerminalWebGLManager.MAX_CONTEXTS;
+      const { localManager, disposeFor } = await makePriorityManager();
+
+      // Every entry is tier 0 (idle). Oldest LRU entry must lose its slot.
+      for (let i = 0; i < max; i++) {
+        localManager.ensureContext(`idle${i}`, makeManagedTerminal({ agentState: "idle" }));
+      }
+      localManager.ensureContext("extra", makeManagedTerminal({ agentState: "idle" }));
+
+      expect(localManager.isActive("idle0")).toBe(false);
+      expect(disposeFor("idle0")).toHaveBeenCalledTimes(1);
+      expect(localManager.isActive("idle1")).toBe(true);
+    });
+
+    it("evicts a recently-flushed done terminal (tier 0) before a waiting one (tier 1)", async () => {
+      // Regression: an exited/completed agent that just printed a final line
+      // has a recent lastWriteAt, but that flush is not an ongoing burst — it
+      // must stay tier 0 and be evicted before an idle "waiting" terminal.
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      installRafShim();
+      try {
+        const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+        const max = TerminalWebGLManager.MAX_CONTEXTS;
+        const { localManager, disposeFor } = await makePriorityManager();
+
+        // Filler streaming terminals (tier 5) — never the target.
+        for (let i = 0; i < max - 2; i++) {
+          localManager.ensureContext(
+            `work${i}`,
+            makeManagedTerminal({ agentState: "working", pendingWrites: 2 })
+          );
+        }
+        // Waiting, no recent write → tier 1.
+        localManager.ensureContext(
+          "waiting",
+          makeManagedTerminal({ agentState: "waiting", pendingWrites: 0, isFocused: false })
+        );
+        // Exited, just flushed a final line → must remain tier 0, not tier 3.
+        localManager.ensureContext(
+          "exited",
+          makeManagedTerminal({
+            agentState: "exited",
+            pendingWrites: 0,
+            isFocused: false,
+            lastWriteAt: Date.now() - 1,
+          })
+        );
+
+        localManager.ensureContext("extra", makeManagedTerminal({ agentState: "working" }));
+
+        expect(localManager.isActive("exited")).toBe(false);
+        expect(disposeFor("exited")).toHaveBeenCalledTimes(1);
+        expect(localManager.isActive("waiting")).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("treats exactly WRITE_BURST_RECENCY_MS ago as stale (strict < boundary)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      installRafShim();
+      try {
+        const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+        const { WRITE_BURST_RECENCY_MS } = await import("../types");
+        const max = TerminalWebGLManager.MAX_CONTEXTS;
+        const { localManager, disposeFor } = await makePriorityManager();
+
+        const now = Date.now();
+        for (let i = 0; i < max - 2; i++) {
+          localManager.ensureContext(
+            `work${i}`,
+            makeManagedTerminal({ agentState: "working", pendingWrites: 2 })
+          );
+        }
+        // Exactly at the window edge → stale (tier 1), since the check is `<`.
+        localManager.ensureContext(
+          "edge",
+          makeManagedTerminal({
+            agentState: "waiting",
+            pendingWrites: 0,
+            isFocused: false,
+            lastWriteAt: now - WRITE_BURST_RECENCY_MS,
+          })
+        );
+        // One millisecond inside the window → recent (tier 3).
+        localManager.ensureContext(
+          "inside",
+          makeManagedTerminal({
+            agentState: "waiting",
+            pendingWrites: 0,
+            isFocused: false,
+            lastWriteAt: now - WRITE_BURST_RECENCY_MS + 1,
+          })
+        );
+
+        localManager.ensureContext("extra", makeManagedTerminal({ agentState: "working" }));
+
+        expect(localManager.isActive("edge")).toBe(false);
+        expect(disposeFor("edge")).toHaveBeenCalledTimes(1);
+        expect(localManager.isActive("inside")).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rate-limits the pool-pressure warning to once per minute", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      installRafShim();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+        const max = TerminalWebGLManager.MAX_CONTEXTS;
+        const { localManager } = await makePriorityManager();
+
+        for (let i = 0; i < max; i++) {
+          localManager.ensureContext(`idle${i}`, makeManagedTerminal({ agentState: "idle" }));
+        }
+
+        const poolWarnings = () =>
+          warnSpy.mock.calls.filter(
+            (args) => typeof args[0] === "string" && args[0].includes("Pool pressure")
+          );
+
+        // First eviction warns immediately.
+        localManager.ensureContext("e1", makeManagedTerminal({ agentState: "idle" }));
+        expect(poolWarnings()).toHaveLength(1);
+
+        // Second eviction within the same minute is suppressed.
+        localManager.ensureContext("e2", makeManagedTerminal({ agentState: "idle" }));
+        expect(poolWarnings()).toHaveLength(1);
+
+        // After the interval elapses, the next eviction warns again.
+        vi.setSystemTime(60_001);
+        localManager.ensureContext("e3", makeManagedTerminal({ agentState: "idle" }));
+        expect(poolWarnings()).toHaveLength(2);
+      } finally {
+        warnSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("passive mode gate (#8378)", () => {
+    it("suppresses new acquisitions once pool+queue reaches the threshold", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(2);
+
+      manager.ensureContext("t1", makeManagedTerminal());
+      manager.ensureContext("t2", makeManagedTerminal());
+      expect(WebglAddonMock).toHaveBeenCalledTimes(2);
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+
+      // 3rd request — pool is already at the threshold, so this is suppressed
+      // and the terminal stays on the DOM renderer.
+      manager.ensureContext("t3", makeManagedTerminal());
+      expect(WebglAddonMock).toHaveBeenCalledTimes(2);
+      expect(manager.isActive("t3")).toBe(false);
+    });
+
+    it("lets a re-ensure of an already-pooled terminal pass through (LRU touch)", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(2);
+
+      const m1 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", makeManagedTerminal());
+
+      // Pool is full at the threshold; re-ensuring a pooled terminal must not
+      // be gated (it adds no new context) and must not evict anything.
+      manager.ensureContext("t1", m1);
+      expect(WebglAddonMock).toHaveBeenCalledTimes(2);
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("resumes acquisition once a release drops the count below the threshold", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(2);
+
+      manager.ensureContext("t1", makeManagedTerminal());
+      manager.ensureContext("t2", makeManagedTerminal());
+      manager.ensureContext("t3", makeManagedTerminal());
+      expect(manager.isActive("t3")).toBe(false);
+
+      manager.releaseContext("t1");
+      expect(manager.isActive("t1")).toBe(false);
+
+      // Slot freed — a newly-visible terminal now passes the gate.
+      manager.ensureContext("t3", makeManagedTerminal());
+      expect(manager.isActive("t3")).toBe(true);
+      expect(WebglAddonMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps a suppressed terminal on DOM until the caller re-ensures it", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(2);
+
+      manager.ensureContext("t1", makeManagedTerminal());
+      manager.ensureContext("t2", makeManagedTerminal());
+      manager.ensureContext("t3", makeManagedTerminal());
+      expect(manager.isActive("t3")).toBe(false);
+
+      // Releasing t1 frees a slot, but t3 must NOT auto-resume — the gate only
+      // suppresses, it doesn't track suppressed terminals. The caller drives
+      // re-acquisition on the next attach/focus signal.
+      manager.releaseContext("t1");
+      expect(manager.isActive("t3")).toBe(false);
+
+      manager.ensureContext("t3", makeManagedTerminal());
+      expect(manager.isActive("t3")).toBe(true);
+    });
+
+    it("clamps the threshold to a minimum of 1", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(0);
+
+      // Clamped to 1 (not 0): the first acquisition still succeeds, the second
+      // is suppressed. A threshold of 0 would have suppressed even the first.
+      manager.ensureContext("t1", makeManagedTerminal());
+      manager.ensureContext("t2", makeManagedTerminal());
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(false);
+      expect(WebglAddonMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not evict existing pooled contexts when the threshold is crossed", async () => {
+      const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+      TerminalWebGLManager.setPassiveThreshold(2);
+
+      const disposes: ReturnType<typeof vi.fn>[] = [];
+      WebglAddonMock.mockImplementation(function () {
+        const d = vi.fn();
+        disposes.push(d);
+        return { dispose: d, onContextLoss: mockOnContextLoss };
+      });
+      const localManager = new TerminalWebGLManager();
+
+      localManager.ensureContext("t1", makeManagedTerminal());
+      localManager.ensureContext("t2", makeManagedTerminal());
+      // Suppressed — must not trigger eviction of t1/t2 to make room.
+      localManager.ensureContext("t3", makeManagedTerminal());
+
+      expect(localManager.isActive("t1")).toBe(true);
+      expect(localManager.isActive("t2")).toBe(true);
+      expect(disposes).toHaveLength(2);
+      disposes.forEach((d) => expect(d).not.toHaveBeenCalled());
     });
   });
 
@@ -1202,6 +1785,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t2", m2);
       manager.ensureContext("t3", m3);
 
+      // Sync rAF here — three distinct events each flush inline as one tick
+      // apiece, matching production where each DOM event arrives in its own
+      // frame on a persistent-fault display (issue #6163 path).
       (m1.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
       (m2.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
       (m3.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
@@ -1211,6 +1797,37 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t4", m4);
       expect(WebglAddonMock.mock.calls.length).toBe(before);
       expect(manager.isActive("t4")).toBe(false);
+    });
+
+    it("coalesces a same-frame DOM-event burst across pool entries (#8541)", () => {
+      const m1 = makeManagedTerminal();
+      const m2 = makeManagedTerminal();
+      const m3 = makeManagedTerminal();
+      const m4 = makeManagedTerminal();
+      manager.ensureContext("t1", m1);
+      manager.ensureContext("t2", m2);
+      manager.ensureContext("t3", m3);
+      manager.ensureContext("t4", m4);
+
+      // Queued rAF — mirrors the production path where Chromium dispatches
+      // webglcontextlost synchronously to every pool entry within one frame
+      // on a bulk GPU eviction. Must coalesce to one tick, well below the
+      // 3-loss threshold, so a new ensure still attaches.
+      rafMode = "queued";
+      (m1.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m2.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m3.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+      (m4.terminal.element as HTMLElement).dispatchEvent(new Event("webglcontextlost"));
+
+      expect(flushRafFrame()).toBe(true);
+      expect(flushRafFrame()).toBe(false);
+
+      rafMode = "sync";
+      const before = WebglAddonMock.mock.calls.length;
+      const m5 = makeManagedTerminal();
+      manager.ensureContext("t5", m5);
+      expect(WebglAddonMock.mock.calls.length).toBe(before + 1);
+      expect(manager.isActive("t5")).toBe(true);
     });
 
     it("does not re-fire after release (handler is removed)", () => {

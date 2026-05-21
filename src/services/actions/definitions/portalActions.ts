@@ -5,7 +5,15 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { usePortalStore } from "@/store/portalStore";
 import { useUIStore } from "@/store/uiStore";
 import { logError } from "@/utils/logger";
-import { activatePortalTab, getPortalBounds } from "./portalHelpers";
+import { deriveEffectiveTier } from "../deriveEffectiveTier";
+import { usePortalPendingCloseStore } from "@/store/portalPendingCloseStore";
+import { PortalTabSummarySchema } from "./schemas";
+import {
+  activatePortalTab,
+  clearPortalPendingIf,
+  getPortalBounds,
+  parseConfirmed,
+} from "./portalHelpers";
 
 export function registerPortalActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("portal.toggle", () => ({
@@ -30,6 +38,11 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      isOpen: z.boolean(),
+      activeTabId: z.string().nullable(),
+      tabs: z.array(PortalTabSummarySchema),
+    }),
     run: async () => {
       const state = usePortalStore.getState();
       return {
@@ -84,6 +97,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale: "Permanently removes a portal link by ID. The link configuration is lost.",
     argsSchema: z.object({ id: z.string() }),
     run: async (args: unknown) => {
       const { id } = args as { id: string };
@@ -212,9 +226,26 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     category: "portal",
     kind: "command",
     danger: "safe",
+    // Runtime-escalated to a D1 confirm at 3+ tabs. A confirmed dispatch
+    // carries `{ confirmed: true }`; recording that into `lastAction` would
+    // let `action.repeatLast` replay the close past its gate.
+    nonRepeatable: true,
     scope: "renderer",
     keywords: ["remove", "clear", "cleanup", "tabs"],
-    run: async () => {
+    argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
+    run: async (args: unknown) => {
+      const tabs = usePortalStore.getState().tabs;
+      if (
+        !parseConfirmed(args) &&
+        deriveEffectiveTier("portal.closeAllTabs", { tabCount: tabs.length }) === "D1"
+      ) {
+        usePortalPendingCloseStore.getState().request({
+          kind: "closeAll",
+          tabsToClose: [...tabs],
+        });
+        return;
+      }
+      clearPortalPendingIf("closeAll");
       usePortalStore.getState().closeAllTabs();
       await window.electron.portal.hide().catch(() => {});
     },

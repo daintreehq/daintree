@@ -5,6 +5,10 @@ import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
+import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import { actionService } from "@/services/ActionService";
+import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -37,7 +41,7 @@ const DropdownMenu = ({
   if (!radix) {
     return (
       <DropdownMenuIntentContext.Provider value={requestOpen}>
-        {children}
+        <MenuActionSourceContext.Provider value="menu">{children}</MenuActionSourceContext.Provider>
       </DropdownMenuIntentContext.Provider>
     );
   }
@@ -45,17 +49,19 @@ const DropdownMenu = ({
   const Root = radix.DropdownMenuPrimitive.Root;
   const effectiveDefaultOpen = isControlled ? defaultOpen : (pendingOpen ?? defaultOpen);
   return (
-    <Root
-      open={open}
-      defaultOpen={effectiveDefaultOpen}
-      onOpenChange={(next) => {
-        if (!isControlled) setPendingOpen(undefined);
-        onOpenChange?.(next);
-      }}
-      {...rest}
-    >
-      {children}
-    </Root>
+    <MenuActionSourceContext.Provider value="menu">
+      <Root
+        open={open}
+        defaultOpen={effectiveDefaultOpen}
+        onOpenChange={(next) => {
+          if (!isControlled) setPendingOpen(undefined);
+          onOpenChange?.(next);
+        }}
+        {...rest}
+      >
+        {children}
+      </Root>
+    </MenuActionSourceContext.Provider>
   );
 };
 DropdownMenu.displayName = "DropdownMenu";
@@ -215,6 +221,7 @@ const DropdownMenuSubContent = React.forwardRef<
 >(({ className, sideOffset = 4, collisionPadding = 8, children, style, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+  const isDockPopoverChild = useIsDockPopoverChild();
   if (!radix) return null;
   const Portal = radix.DropdownMenuPrimitive.Portal;
   const SubContent = radix.DropdownMenuPrimitive.SubContent;
@@ -231,6 +238,7 @@ const DropdownMenuSubContent = React.forwardRef<
           className
         )}
         {...props}
+        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
       >
         {topShadow}
         {children}
@@ -251,6 +259,7 @@ const DropdownMenuContent = React.forwardRef<
 >(({ className, sideOffset = 4, children, style, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+  const isDockPopoverChild = useIsDockPopoverChild();
   if (!radix) return null;
   const Portal = radix.DropdownMenuPrimitive.Portal;
   const Content = radix.DropdownMenuPrimitive.Content;
@@ -266,6 +275,7 @@ const DropdownMenuContent = React.forwardRef<
           className
         )}
         {...props}
+        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
       >
         {topShadow}
         {children}
@@ -305,6 +315,30 @@ const DropdownMenuItem = React.forwardRef<
   );
 });
 DropdownMenuItem.displayName = "DropdownMenuItem";
+
+type DropdownMenuActionItemProps = DropdownMenuItemProps & {
+  actionId: ActionId;
+  args?: unknown;
+  dispatchOptions?: Omit<ActionDispatchOptions, "source">;
+};
+
+const DropdownMenuActionItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
+  DropdownMenuActionItemProps
+>(({ actionId, args, dispatchOptions, onSelect, disabled, ...props }, ref) => {
+  const source = useMenuActionSource();
+
+  const handleSelect: React.ComponentPropsWithoutRef<
+    typeof DropdownMenuPrimitiveType.Item
+  >["onSelect"] = (event) => {
+    onSelect?.(event);
+    if (event.defaultPrevented) return;
+    void actionService.dispatch(actionId, args, { ...dispatchOptions, source });
+  };
+
+  return <DropdownMenuItem ref={ref} onSelect={handleSelect} disabled={disabled} {...props} />;
+});
+DropdownMenuActionItem.displayName = "DropdownMenuActionItem";
 
 type DropdownMenuSeparatorProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.Separator
@@ -446,6 +480,7 @@ export {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuActionItem,
   DropdownMenuCheckboxItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,

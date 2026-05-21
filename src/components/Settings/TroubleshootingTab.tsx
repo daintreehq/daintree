@@ -165,10 +165,12 @@ function DownloadDiagnosticsSection() {
 
 function HardwareAccelerationSection() {
   const [disabled, setDisabled] = useState<boolean | null>(null);
+  const [angleFallback, setAngleFallback] = useState<boolean>(false);
 
   useEffect(() => {
     window.electron.gpu.getStatus().then((status) => {
       setDisabled(status.hardwareAccelerationDisabled);
+      setAngleFallback(status.angleFallbackActive);
     });
   }, []);
 
@@ -202,6 +204,16 @@ function HardwareAccelerationSection() {
           <AlertTriangle className="w-3 h-3" />
           GPU acceleration was disabled due to repeated crashes. Re-enable to restore full
           performance.
+        </p>
+      )}
+
+      {!disabled && angleFallback && (
+        <p className="text-xs text-status-warning/80 flex items-start gap-1.5 select-text">
+          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+          <span>
+            GPU is running in ANGLE/Vulkan fallback mode after a crash. Performance may be reduced —
+            toggle hardware acceleration off and back on to restore the default backend.
+          </span>
         </p>
       )}
     </SettingsSection>
@@ -261,7 +273,7 @@ export function TroubleshootingTab() {
       .dispatch("logs.getVerbose", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) {
-          setVerboseLogging(result.result as boolean);
+          setVerboseLogging((result.result as { verbose: boolean }).verbose);
         }
       })
       .catch((error) => {

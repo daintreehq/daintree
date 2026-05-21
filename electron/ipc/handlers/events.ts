@@ -35,6 +35,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:fullscreen-change": "external",
   "window:reclaim-memory": "external",
   "window:destroy-hidden-webviews": "external",
+  "window:accelerate-hibernation": "external",
   "window:disk-space-status": "external",
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",
@@ -44,6 +45,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:backend-crashed": "external",
   "terminal:backend-recovering": "external",
   "terminal:backend-ready": "external",
+  "watchdog:disabled": "external",
+  "watchdog:active": "external",
 
   // Terminal observability (relayed from TypedEventBus via PtyEventsBridge)
   "terminal:reliability-metric": "bus",
@@ -54,6 +57,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "sound:cancel": "external",
   "plugin:actions-changed": "external",
   "plugin:panel-kinds-changed": "external",
+  "plugin:toolbar-buttons-changed": "external",
+  "plugin:decorations-changed": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
@@ -167,6 +172,15 @@ function normalizeActionDispatchedPayload(
 
   const safeBreadcrumbArgs = sanitizeSafeArgs(payload.safeArgs);
 
+  const dangerRaw = payload.danger;
+  const danger =
+    dangerRaw === "safe" || dangerRaw === "confirm" || dangerRaw === "restricted"
+      ? dangerRaw
+      : "safe";
+
+  const confirmed: boolean | undefined =
+    typeof payload.confirmed === "boolean" ? payload.confirmed : undefined;
+
   return {
     actionId,
     args: safeArgs,
@@ -175,7 +189,9 @@ function normalizeActionDispatchedPayload(
     timestamp,
     category,
     durationMs,
+    danger,
     ...(safeBreadcrumbArgs ? { safeArgs: safeBreadcrumbArgs } : {}),
+    ...(confirmed !== undefined ? { confirmed } : {}),
   };
 }
 

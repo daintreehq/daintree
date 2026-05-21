@@ -230,6 +230,10 @@ export function ConflictPanel({
   onContinue,
 }: ConflictPanelProps) {
   const [isAbortOpen, setIsAbortOpen] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState<{
+    filePath: string;
+    side: "ours" | "theirs";
+  } | null>(null);
   const [isAborting, setIsAborting] = useState(false);
   const [isContinuing, setIsContinuing] = useState(false);
   const [busyFile, setBusyFile] = useState<string | null>(null);
@@ -529,7 +533,7 @@ export function ConflictPanel({
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        handleCheckoutSide(file.path, "ours").catch(() => {});
+                        setPendingCheckout({ filePath: file.path, side: "ours" });
                       }}
                       disabled={isBusy}
                       className="h-5 px-1.5 text-[10px]"
@@ -542,7 +546,7 @@ export function ConflictPanel({
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        handleCheckoutSide(file.path, "theirs").catch(() => {});
+                        setPendingCheckout({ filePath: file.path, side: "theirs" });
                       }}
                       disabled={isBusy}
                       className="h-5 px-1.5 text-[10px]"
@@ -675,6 +679,40 @@ export function ConflictPanel({
         onConfirm={() => void handleAbort()}
         isConfirmLoading={isAborting}
         variant="destructive"
+      />
+
+      <ConfirmDialog
+        isOpen={pendingCheckout !== null}
+        onClose={() => setPendingCheckout(null)}
+        title={
+          pendingCheckout ? `Take ${pendingCheckout.side} for '${pendingCheckout.filePath}'?` : ""
+        }
+        description={
+          pendingCheckout ? (
+            <span>
+              Overwrites the conflicted file with the{" "}
+              {pendingCheckout.side === "ours"
+                ? isRebase
+                  ? "destination branch"
+                  : "current branch"
+                : isRebase
+                  ? "incoming commit"
+                  : "incoming changes"}{" "}
+              version. Any manual conflict edits in this file are discarded and cannot be undone.
+            </span>
+          ) : (
+            ""
+          )
+        }
+        confirmLabel={pendingCheckout ? `Take ${pendingCheckout.side}` : "Confirm"}
+        cancelLabel="Cancel"
+        variant="destructive"
+        onConfirm={() => {
+          if (!pendingCheckout) return;
+          const { filePath, side } = pendingCheckout;
+          setPendingCheckout(null);
+          handleCheckoutSide(filePath, side).catch(() => {});
+        }}
       />
     </div>
   );

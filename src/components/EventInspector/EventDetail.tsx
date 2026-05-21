@@ -254,7 +254,6 @@ export function EventDetail({ event, className }: EventDetailProps) {
       {event.payload &&
         (event.payload.worktreeId ||
           event.payload.agentId ||
-          event.payload.taskId ||
           event.payload.runId ||
           event.payload.terminalId ||
           event.payload.issueNumber ||
@@ -287,15 +286,6 @@ export function EventDetail({ event, className }: EventDetailProps) {
                     label="Agent"
                     value={event.payload.agentId}
                     filterKey="agentId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.taskId !== undefined && (
-                  <ContextPill
-                    label="Task"
-                    value={event.payload.taskId}
-                    filterKey="taskId"
                     currentFilters={filters}
                     onToggle={handleContextToggle}
                   />

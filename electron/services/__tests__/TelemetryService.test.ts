@@ -1062,6 +1062,7 @@ describe("addActionBreadcrumb", () => {
     durationMs: 7,
     timestamp: 1_700_000_000_000,
     count: 1,
+    danger: "safe" as const,
   };
 
   beforeEach(() => {
@@ -1146,6 +1147,51 @@ describe("addActionBreadcrumb", () => {
         throw new Error("transport failed");
       });
       expect(() => mod.addActionBreadcrumb(crumb)).not.toThrow();
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("forwards confirmed:true in breadcrumb data", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb({ ...crumb, confirmed: true });
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.data.confirmed).toBe(true);
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("forwards confirmed:false in breadcrumb data", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb({ ...crumb, confirmed: false });
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.data.confirmed).toBe(false);
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("omits confirmed from breadcrumb data when absent", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb(crumb); // no confirmed field
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.data.confirmed).toBeUndefined();
     } finally {
       process.env.SENTRY_DSN = original;
     }

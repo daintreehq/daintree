@@ -1,6 +1,81 @@
-import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
-import { MCP_SSE_IDLE_TIMEOUT_MS } from "./shared.js";
-import type { CallToolResultLike, DedupCacheEntry } from "./sessionDedup.js";
+import type { ActionContext } from "../../../shared/types/actions.js";
+import type { McpTier, McpSseSession, McpHttpSession, RateLimitConfig } from "./shared.js";
+import {
+  MCP_SSE_IDLE_TIMEOUT_MS,
+  MCP_TIER_ELEVATION_TTL_MS,
+  rateLimitConfigForTool,
+} from "./shared.js";
+import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
+import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
+import { getSystemSleepService } from "../SystemSleepService.js";
+
+export interface SessionStoreOptions {
+  /**
+   * Lifecycle emitter wired through to the {@link GrantCache} so audit
+   * entries and renderer broadcasts fire for every `issued`/`expired`/
+   * `revoked` transition. Optional so the bare `new SessionStore(...)`
+   * test fixture path still constructs without an emitter (the cache
+   * defaults to silent).
+   */
+  emitGrantLifecycle?: GrantLifecycleEmitter;
+  /**
+   * Callback fired alongside the other per-session cleanup hooks
+   * (idle expiry, explicit revoke, drain) so the {@link AbusePolicy}
+   * denial counter can be pruned in lockstep. Without this, the
+   * policy's internal Map grows for every session that ever opens
+   * and is only pruned on the rare abuse-trip path. Optional so test
+   * fixtures construct without one.
+   */
+  dropAbuseState?: (sessionId: string) => void;
+  /**
+   * Fired when a session's renderer-approved tier elevation expires and the
+   * session is silently decayed back to the `workbench` baseline (#8462).
+   * `httpLifecycle` wires this to `server.sendToolListChanged()` on the
+   * decayed session so the model's tool manifest reflects the narrowed
+   * surface immediately. Optional so bare test fixtures construct without
+   * one (decay still mutates the tier map; only the notification is skipped).
+   */
+  onTierDecayed?: (sessionId: string) => void;
+}
+
+/**
+ * Mutable token-bucket state for one `(sessionId, toolId)` pair. `tokens`
+ * is the current fractional balance; `lastRefillMs` is the wall-clock of
+ * the most recent refill so the next call can recompute lazily.
+ */
+export interface RateLimitBucket {
+  tokens: number;
+  lastRefillMs: number;
+}
+
+export type ConsumeTokenResult = { allowed: true } | { allowed: false; retryAfter: number };
+
+/**
+ * Pure token-bucket step. Refills `bucket` for the time elapsed since its
+ * last refill (capped at `config.capacity`), then attempts to consume one
+ * token. Mutates `bucket` in place and returns whether the call is allowed;
+ * on rejection `retryAfter` is the whole-seconds wait until one token has
+ * accrued (always `>= 1`). Exported for direct unit coverage independent
+ * of the session-store wiring.
+ */
+export function consumeToken(
+  bucket: RateLimitBucket,
+  config: RateLimitConfig,
+  nowMs: number
+): ConsumeTokenResult {
+  const elapsed = Math.max(0, nowMs - bucket.lastRefillMs);
+  bucket.tokens = Math.min(config.capacity, bucket.tokens + elapsed * config.refillPerMs);
+  // Never move the refill anchor backward: a backward `Date.now()` (NTP
+  // step-back, which Electron can see on macOS) would otherwise let the
+  // next call accrue refill it didn't earn.
+  bucket.lastRefillMs = Math.max(bucket.lastRefillMs, nowMs);
+  if (bucket.tokens >= 1) {
+    bucket.tokens -= 1;
+    return { allowed: true };
+  }
+  const retryAfter = Math.max(1, Math.ceil((1 - bucket.tokens) / config.refillPerMs / 1000));
+  return { allowed: false, retryAfter };
+}
 
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
@@ -10,18 +85,71 @@ export class SessionStore {
   // for help-session bearers; api-key / pane-token sessions stay absent and
   // fall through to the focused-window dispatch path. See #7002.
   readonly sessionWebContentsMap = new Map<string, number>();
+  // sessionId → ActionContext snapshot captured in the renderer at provision
+  // time and bound at handshake. Populated only for help-session bearers, in
+  // exact lockstep with sessionWebContentsMap. Pinned dispatch passes this as
+  // `contextOverride` so a focus shift between the model's tool call and the
+  // dispatch can't retarget the action. See #8317.
+  readonly sessionContextMap = new Map<string, ActionContext>();
   readonly resourceSubscriptions = new Map<string, Map<string, () => void>>();
   // Per-session idempotency dedup state for the MCP creation-tool allowlist.
   // Two phases: in-flight singleflight (same-moment duplicates share the
   // original Promise) and TTL'd result cache (post-completion duplicates
   // return the original result). Cleared on drain and idle expiry.
-  readonly dedupInFlight = new Map<string, Map<string, Promise<CallToolResultLike>>>();
+  readonly dedupInFlight = new Map<string, Map<string, DedupInFlightEntry>>();
   readonly dedupResultCache = new Map<string, Map<string, DedupCacheEntry>>();
+  // Per-`(sessionId, toolId)` token buckets for the runaway-loop rate
+  // limiter (#8468). Lazily populated on first call to a tool and torn
+  // down in lockstep with the other session-scoped maps on drain, idle
+  // expiry, and explicit revoke.
+  readonly rateLimitBuckets = new Map<string, Map<string, RateLimitBucket>>();
+  /**
+   * Per-`(sessionId, toolId)` time-bounded grants — replaces the sticky
+   * `sessionTierMap` elevation pathway for the "Approve once" flow (#8442).
+   * Co-located with the other session-scoped maps so a single drain or
+   * idle-timer firing tears them down in lockstep.
+   */
+  readonly grantCache: GrantCache;
+
+  // Wall-clock timestamps recording when each session's idle timer was armed.
+  // Used by recomputeIdleTimers() to calculate awake elapsed time across
+  // suspend/resume cycles via SystemSleepService.getAwakeTimeSince().
+  private readonly idleStartedAt = new Map<string, number>();
+  private readonly httpIdleStartedAt = new Map<string, number>();
+
+  // Tier-elevation decay timers, keyed by sessionId (unique across SSE and
+  // HTTP). A renderer-approved "Always allow" elevation is bounded to
+  // MCP_TIER_ELEVATION_TTL_MS; on expiry the session silently decays to the
+  // `workbench` baseline (#8462). `tierElevationStartedAt` drives the same
+  // awake-time correction as the idle reaper; `tierElevationToken` records
+  // the tier captured when the timer was armed so a fresh re-elevation
+  // between arm and fire is never wiped (#2243 stale-token guard). Stored
+  // off the session object (unlike `idleTimer`) so the four inline cleanup
+  // paths in `httpLifecycle` can tear it down via `clearElevationTimer`.
+  private readonly tierElevationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly tierElevationStartedAt = new Map<string, number>();
+  private readonly tierElevationToken = new Map<string, McpTier>();
+  // The session's token-resolved baseline tier captured at the first
+  // elevation in a chain. Decay reverts here, NOT to a hardcoded
+  // `workbench` — a help-session bearer can hold a configured baseline of
+  // `action`/`system` (`HelpAssistantTier`), and dropping it to `workbench`
+  // would strip tools the user legitimately had from handshake. Preserved
+  // across chained re-elevations (workbench→action→system still decays all
+  // the way to workbench).
+  private readonly tierElevationBaseline = new Map<string, McpTier>();
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
+  private readonly dropAbuseStateFn: (sessionId: string) => void;
+  private readonly onTierDecayedFn: (sessionId: string) => void;
 
-  constructor(cleanupResourceSubscriptions: (sessionId: string) => void) {
+  constructor(
+    cleanupResourceSubscriptions: (sessionId: string) => void,
+    options: SessionStoreOptions = {}
+  ) {
     this.cleanupResourceSubscriptionsFn = cleanupResourceSubscriptions;
+    this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
+    this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
+    this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
   }
 
   clearDedupState(sessionId: string): void {
@@ -29,19 +157,80 @@ export class SessionStore {
     this.dedupResultCache.delete(sessionId);
   }
 
+  /**
+   * Charge one token against the `(sessionId, toolId)` bucket, creating a
+   * full bucket on first use. The tier is resolved from
+   * `rateLimitConfigForTool` so an unmapped tool falls back to `standard`.
+   * Thin wrapper around the pure {@link consumeToken} step.
+   */
+  consumeRateLimitToken(
+    sessionId: string,
+    toolId: string,
+    nowMs: number = Date.now()
+  ): ConsumeTokenResult {
+    const config = rateLimitConfigForTool(toolId);
+    let byTool = this.rateLimitBuckets.get(sessionId);
+    if (!byTool) {
+      byTool = new Map<string, RateLimitBucket>();
+      this.rateLimitBuckets.set(sessionId, byTool);
+    }
+    let bucket = byTool.get(toolId);
+    if (!bucket) {
+      bucket = { tokens: config.capacity, lastRefillMs: nowMs };
+      byTool.set(toolId, bucket);
+    }
+    return consumeToken(bucket, config, nowMs);
+  }
+
+  clearRateLimitState(sessionId: string): void {
+    this.rateLimitBuckets.delete(sessionId);
+  }
+
+  private expireSseSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    this.sessions.delete(sessionId);
+    this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin so the lifecycle
+    // emitter can still resolve the pinned renderer and dispatch the
+    // `grant.revoked` event. The audit-record write tolerates a
+    // missing pin (it doesn't need one); the targeted `wc.send` does.
+    this.grantCache.revokeSession(sessionId, "session-idle");
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
+    this.idleStartedAt.delete(sessionId);
+    this.clearElevationTimer(sessionId);
+    this.dropAbuseStateFn(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    session.transport.close().catch(() => {
+      // ignore close errors during idle timeout cleanup
+    });
+  }
+
   createIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => {
+    this.idleStartedAt.set(sessionId, Date.now());
+    const checkAndExpire = () => {
       const session = this.sessions.get(sessionId);
       if (!session) return;
-      this.sessions.delete(sessionId);
-      this.sessionTierMap.delete(sessionId);
-      this.sessionWebContentsMap.delete(sessionId);
-      this.clearDedupState(sessionId);
-      this.cleanupResourceSubscriptionsFn(sessionId);
-      session.transport.close().catch(() => {
-        // ignore close errors during idle timeout cleanup
-      });
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+      const startedAt = this.idleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
+      this.expireSseSession(sessionId);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -53,19 +242,49 @@ export class SessionStore {
     session.idleTimer = this.createIdleTimer(sessionId);
   }
 
+  private expireHttpSession(sessionId: string): void {
+    const session = this.httpSessions.get(sessionId);
+    if (!session) return;
+    this.httpSessions.delete(sessionId);
+    this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin — same reasoning
+    // as `expireSseSession` above.
+    this.grantCache.revokeSession(sessionId, "session-idle");
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
+    this.httpIdleStartedAt.delete(sessionId);
+    this.clearElevationTimer(sessionId);
+    this.dropAbuseStateFn(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    session.transport.close().catch(() => {
+      // ignore close errors during idle timeout cleanup
+    });
+  }
+
   createHttpIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => {
+    this.httpIdleStartedAt.set(sessionId, Date.now());
+    const checkAndExpire = () => {
       const session = this.httpSessions.get(sessionId);
       if (!session) return;
-      this.httpSessions.delete(sessionId);
-      this.sessionTierMap.delete(sessionId);
-      this.sessionWebContentsMap.delete(sessionId);
-      this.clearDedupState(sessionId);
-      this.cleanupResourceSubscriptionsFn(sessionId);
-      session.transport.close().catch(() => {
-        // ignore close errors during idle timeout cleanup
-      });
-    }, MCP_SSE_IDLE_TIMEOUT_MS);
+      const startedAt = this.httpIdleStartedAt.get(sessionId);
+      if (startedAt !== undefined) {
+        try {
+          const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+          if (awakeElapsed < MCP_SSE_IDLE_TIMEOUT_MS) {
+            const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+            session.idleTimer = setTimeout(checkAndExpire, remaining);
+            (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+            return;
+          }
+        } catch {
+          // Fall through to expiry.
+        }
+      }
+      this.expireHttpSession(sessionId);
+    };
+    const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
     return timer;
   }
@@ -77,8 +296,214 @@ export class SessionStore {
     session.idleTimer = this.createHttpIdleTimer(sessionId);
   }
 
+  recomputeIdleTimers(): void {
+    // Snapshot entries to avoid mutation-during-iteration from timer callbacks.
+    const sseEntries = Array.from(this.sessions.entries());
+    for (const [sessionId, session] of sseEntries) {
+      let startedAt = this.idleStartedAt.get(sessionId);
+      if (startedAt === undefined) {
+        console.warn(`[MCP] Missing idleStartedAt for SSE session ${sessionId}, resetting`);
+        startedAt = Date.now();
+        this.idleStartedAt.set(sessionId, startedAt);
+      }
+      try {
+        const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+        if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
+          this.expireSseSession(sessionId);
+        } else {
+          clearTimeout(session.idleTimer);
+          const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+          session.idleTimer = setTimeout(() => {
+            this.expireSseSession(sessionId);
+          }, remaining);
+          (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+        }
+      } catch {
+        // SystemSleepService may not be initialized; keep existing timer.
+      }
+    }
+
+    const httpEntries = Array.from(this.httpSessions.entries());
+    for (const [sessionId, session] of httpEntries) {
+      let startedAt = this.httpIdleStartedAt.get(sessionId);
+      if (startedAt === undefined) {
+        console.warn(`[MCP] Missing httpIdleStartedAt for HTTP session ${sessionId}, resetting`);
+        startedAt = Date.now();
+        this.httpIdleStartedAt.set(sessionId, startedAt);
+      }
+      try {
+        const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+        if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
+          this.expireHttpSession(sessionId);
+        } else {
+          clearTimeout(session.idleTimer);
+          const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
+          session.idleTimer = setTimeout(() => {
+            this.expireHttpSession(sessionId);
+          }, remaining);
+          (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
+        }
+      } catch {
+        // SystemSleepService may not be initialized; keep existing timer.
+      }
+    }
+
+    // Recompute tier-elevation timers in lockstep with the idle reaper so a
+    // long suspend doesn't either prematurely decay a session (sleep time
+    // must not count) or leave a stale elevation parked indefinitely after
+    // wake. If idle expiry above already collected the session, the
+    // session-existence guard makes this a no-op cleanup. Snapshot to avoid
+    // mutation-during-iteration from `decayTier`.
+    const elevationEntries = Array.from(this.tierElevationStartedAt.entries());
+    for (const [sessionId, startedAt] of elevationEntries) {
+      if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) {
+        this.clearElevationTimer(sessionId);
+        continue;
+      }
+      try {
+        const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+        if (awakeElapsed >= MCP_TIER_ELEVATION_TTL_MS) {
+          this.decayTier(sessionId);
+        } else {
+          clearTimeout(this.tierElevationTimers.get(sessionId));
+          const remaining = Math.max(1, MCP_TIER_ELEVATION_TTL_MS - awakeElapsed);
+          this.scheduleTierElevationCheck(sessionId, remaining);
+        }
+      } catch {
+        // SystemSleepService may not be initialized; keep existing timer.
+      }
+    }
+  }
+
+  /**
+   * Arm (or refresh) the decay timer for a renderer-approved tier
+   * elevation. `baselineTier` is the session's pre-elevation tier (the
+   * token-resolved handshake tier) — decay reverts here, not to a hardcoded
+   * `workbench`. Idempotent: clearing first makes a repeat "Always allow"
+   * reset the window from now. A baseline captured by an earlier elevation
+   * in the same chain is preserved (workbench→action→system still decays
+   * all the way to workbench). When the requested tier equals the effective
+   * baseline the session isn't actually elevated, so any pending timer is
+   * just cleared. Call this from `setSessionTier` after the promote-only
+   * guard accepts the change.
+   */
+  armTierElevationTimer(sessionId: string, tier: McpTier, baselineTier: McpTier): void {
+    const baseline = this.tierElevationBaseline.get(sessionId) ?? baselineTier;
+    this.clearElevationTimer(sessionId);
+    if (tier === baseline) return;
+    this.tierElevationStartedAt.set(sessionId, Date.now());
+    this.tierElevationToken.set(sessionId, tier);
+    this.tierElevationBaseline.set(sessionId, baseline);
+    this.scheduleTierElevationCheck(sessionId, MCP_TIER_ELEVATION_TTL_MS);
+  }
+
+  private scheduleTierElevationCheck(sessionId: string, delayMs: number): void {
+    const timer = setTimeout(() => this.checkAndDecayTier(sessionId), delayMs);
+    timer.unref?.();
+    this.tierElevationTimers.set(sessionId, timer);
+  }
+
+  private checkAndDecayTier(sessionId: string): void {
+    // Guard #1 (#3728): the session may have been reaped/closed between arm
+    // and fire — its teardown path already dropped the elevation state.
+    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) {
+      this.clearElevationTimer(sessionId);
+      return;
+    }
+    const startedAt = this.tierElevationStartedAt.get(sessionId);
+    if (startedAt === undefined) return;
+    try {
+      const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
+      if (awakeElapsed < MCP_TIER_ELEVATION_TTL_MS) {
+        // Suspend time is excluded by getAwakeTimeSince, so re-arm against
+        // the remaining awake budget without resetting startedAt/token —
+        // the original deadline is preserved across sleep/wake.
+        const remaining = Math.max(1, MCP_TIER_ELEVATION_TTL_MS - awakeElapsed);
+        clearTimeout(this.tierElevationTimers.get(sessionId));
+        this.scheduleTierElevationCheck(sessionId, remaining);
+        return;
+      }
+    } catch {
+      // SystemSleepService not initialized — fall through to decay.
+    }
+    this.decayTier(sessionId);
+  }
+
+  private decayTier(sessionId: string): void {
+    const token = this.tierElevationToken.get(sessionId);
+    const baseline = this.tierElevationBaseline.get(sessionId) ?? "workbench";
+    const current = this.sessionTierMap.get(sessionId);
+    this.clearElevationTimer(sessionId);
+    // Guard #1: session gone — nothing to decay, nobody to notify.
+    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return;
+    // Guard #2 (#2243): a fresh "Always allow" re-elevated this session
+    // between arm and fire — its own timer owns the new window now; never
+    // wipe a tier the user just re-approved.
+    if (current === undefined || current !== token) return;
+    // Already at/below the token baseline — nothing to roll back.
+    if (current === baseline) return;
+    this.sessionTierMap.set(sessionId, baseline);
+    // Drop stale denial-suppression counters so the first post-decay
+    // out-of-baseline call re-triggers the tier-mismatch banner instead of
+    // being silently suppressed by denials accrued before the elevation
+    // (the #8462 acceptance criterion). Per-tool grants survive — they are
+    // an orthogonal explicit approval (#8442).
+    this.grantCache.clearDenialCounts(sessionId);
+    this.onTierDecayedFn(sessionId);
+  }
+
+  /**
+   * Tear down a session's tier-elevation timer and bookkeeping. Public so
+   * the inline cleanup paths in `httpLifecycle` (SSE/HTTP `transport.onclose`
+   * and the two connect-failure catch blocks) can clear it without routing
+   * through the private session-expiry helpers (#4851: every setTimeout must
+   * be cleared in every exit path).
+   */
+  clearElevationTimer(sessionId: string): void {
+    const timer = this.tierElevationTimers.get(sessionId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.tierElevationTimers.delete(sessionId);
+    this.tierElevationStartedAt.delete(sessionId);
+    this.tierElevationToken.delete(sessionId);
+    this.tierElevationBaseline.delete(sessionId);
+  }
+
   getTier(sessionId: string): McpTier {
     return this.sessionTierMap.get(sessionId) ?? "workbench";
+  }
+
+  revokeSession(sessionId: string): boolean {
+    const sseSession = this.sessions.get(sessionId);
+    const httpSession = this.httpSessions.get(sessionId);
+    if (!sseSession && !httpSession) return false;
+
+    if (sseSession) {
+      clearTimeout(sseSession.idleTimer);
+      this.sessions.delete(sessionId);
+      sseSession.transport.close().catch(() => {});
+    }
+    if (httpSession) {
+      clearTimeout(httpSession.idleTimer);
+      this.httpSessions.delete(sessionId);
+      httpSession.transport.close().catch(() => {});
+    }
+
+    this.sessionTierMap.delete(sessionId);
+    // Revoke BEFORE deleting the WebContents pin so the lifecycle
+    // emitter can still resolve the pinned renderer for the
+    // `grant.revoked` push. Without this, any outstanding per-tool
+    // grants would be left in the cache while the session entry is
+    // torn down — the renderer would never receive the `revoked`
+    // lifecycle event and the grant state would leak (#8467).
+    this.grantCache.revokeSession(sessionId, "session-ended");
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.clearRateLimitState(sessionId);
+    this.clearElevationTimer(sessionId);
+    this.dropAbuseStateFn(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
+    return true;
   }
 
   drain(): void {
@@ -87,6 +512,7 @@ export class SessionStore {
     // resurrect a torn-down session's cache.
     this.dedupInFlight.clear();
     this.dedupResultCache.clear();
+    this.rateLimitBuckets.clear();
 
     for (const session of this.sessions.values()) {
       clearTimeout(session.idleTimer);
@@ -99,6 +525,7 @@ export class SessionStore {
       }
     }
     this.sessions.clear();
+    this.idleStartedAt.clear();
 
     for (const session of this.httpSessions.values()) {
       clearTimeout(session.idleTimer);
@@ -111,8 +538,23 @@ export class SessionStore {
       }
     }
     this.httpSessions.clear();
+    this.httpIdleStartedAt.clear();
+    for (const timer of this.tierElevationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.tierElevationTimers.clear();
+    this.tierElevationStartedAt.clear();
+    this.tierElevationToken.clear();
+    this.tierElevationBaseline.clear();
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
+    this.sessionContextMap.clear();
+    // Wholesale teardown: drop grants without per-entry audit noise but
+    // keep the sweep timer so the store can be reused after a subsequent
+    // `start()`. The audit ring buffer still carries each grant's original
+    // `grant.issued` entry; teardown is an environmental event, not a user
+    // action worth a `grant.revoked` per tool.
+    this.grantCache.clearAll();
 
     for (const bucket of this.resourceSubscriptions.values()) {
       for (const unsub of bucket.values()) {

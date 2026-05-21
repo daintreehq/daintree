@@ -4,6 +4,7 @@ const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
   on: vi.fn(),
   quit: vi.fn(),
+  exit: vi.fn(),
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -26,8 +27,10 @@ vi.mock("../../menu.js", () => ({
 }));
 
 const setSignalShutdownMock = vi.fn();
+const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
   setSignalShutdown: setSignalShutdownMock,
+  setSafetyBeltTimer: setSafetyBeltTimerMock,
 }));
 
 const isWindowRecreatingMock = vi.fn(() => false);
@@ -37,7 +40,7 @@ vi.mock("../windowRecreationState.js", () => ({
 
 import type { AppLifecycleOptions } from "../appLifecycle.js";
 import { handleDirectoryOpen } from "../../menu.js";
-import { CLEANUP_TIMEOUT_MS } from "../shutdownConfig.js";
+import { SAFETY_BELT_TIMEOUT_MS } from "../shutdownConfig.js";
 
 function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions {
   return {
@@ -93,7 +96,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processOnSpy.mock.calls.some(([sig]: string[]) => sig === "SIGHUP")).toBe(false);
   });
 
-  it("signal handler calls setSignalShutdown, schedules timeout, and calls app.quit", async () => {
+  it("signal handler calls setSignalShutdown, schedules safety-belt timer, and calls app.quit", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
@@ -104,14 +107,39 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
+    // Belt handle must be stored so shutdown.ts can cancel it on clean exit.
+    // Without this, a slow closeTelemetry() could let the belt fire after
+    // app.exit(0) and clobber the exit code with a wrong-direction exit(1).
+    expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(expect.anything());
 
-    // Belt must outlast CLEANUP_TIMEOUT_MS plus telemetry-drain buffer so it
-    // doesn't fire mid-cleanup. Advancing to (CLEANUP_TIMEOUT_MS + 3000 - 1)
+    // Belt must outlast the full cleanup chain: CLEANUP_TIMEOUT_MS + 3000ms
+    // buffer + 2500ms closeTelemetry budget. Advancing to (SAFETY_BELT_TIMEOUT_MS - 1)
     // confirms the belt hasn't fired prematurely.
-    vi.advanceTimersByTime(CLEANUP_TIMEOUT_MS + 3000 - 1);
+    vi.advanceTimersByTime(SAFETY_BELT_TIMEOUT_MS - 1);
+    expect(appMock.exit).not.toHaveBeenCalled();
     expect(processExitSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
-    expect(processExitSpy).toHaveBeenCalledWith(0);
+    // Belt fires app.exit(1) — dirty exit signals supervisors correctly and
+    // runs Electron's native teardown. Never process.exit(0).
+    expect(appMock.exit).toHaveBeenCalledWith(1);
+    expect(processExitSpy).not.toHaveBeenCalledWith(0);
+  });
+
+  it("safety-belt nulls the stored handle when it fires", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+    setSafetyBeltTimerMock.mockClear();
+
+    vi.advanceTimersByTime(SAFETY_BELT_TIMEOUT_MS);
+
+    // Belt fired → handle cleared so a late clearSafetyBeltTimer() from
+    // shutdown.ts is a no-op rather than canceling an already-fired timer.
+    expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(null);
   });
 
   it("rapid second signal within 2s force-exits with status 1", async () => {
@@ -397,5 +425,82 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     isWindowRecreatingMock.mockReturnValue(false);
     handler();
     expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", () => {
+  const originalPlatform = process.platform;
+
+  function makeWin() {
+    return { on: vi.fn() } as unknown as import("electron").BrowserWindow & {
+      on: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  it("registers a session-end listener on win32 and nothing else", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    const sessionEndCalls = winOn.mock.calls.filter(([event]) => event === "session-end");
+    expect(sessionEndCalls).toHaveLength(1);
+    // Locks in the documented "no veto" decision — wiring query-session-end
+    // with event.preventDefault() would block the user's planned shutdown.
+    const queryEndCalls = winOn.mock.calls.filter(([event]) => event === "query-session-end");
+    expect(queryEndCalls).toHaveLength(0);
+  });
+
+  it("invoking the session-end listener calls setSignalShutdown then app.quit", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    const sessionEndCall = winOn.mock.calls.find(([event]) => event === "session-end");
+    const handler = sessionEndCall![1] as () => void;
+
+    handler();
+
+    // setSignalShutdown must run before app.quit so the before-quit handler in
+    // shutdown.ts skips the agent-count dialog (isSignalShutdown gate).
+    expect(setSignalShutdownMock).toHaveBeenCalledOnce();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(setSignalShutdownMock.mock.invocationCallOrder[0]).toBeLessThan(
+      appMock.quit.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("registers nothing on darwin", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    expect(winOn).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing on linux", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+    const win = makeWin();
+
+    registerWindowSessionEndHandler(win);
+
+    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
+    expect(winOn).not.toHaveBeenCalled();
   });
 });

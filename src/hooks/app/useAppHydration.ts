@@ -7,8 +7,12 @@ import { usePanelStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useDiagnosticsStore, useFocusStore, useActionMruStore } from "@/store";
+import type { HydrateResult } from "@shared/types/ipc/app";
 
-export function useAppHydration(enabled = true) {
+export function useAppHydration(
+  enabled: boolean = true,
+  prefetchedHydrateResult?: HydrateResult | null
+) {
   const [isStateLoaded, setIsStateLoaded] = useState(false);
   const hasRestoredState = useRef(false);
 
@@ -34,23 +38,28 @@ export function useAppHydration(enabled = true) {
 
     const restoreState = async () => {
       try {
-        await hydrateAppState({
-          addPanel: ((opts: Record<string, unknown>) =>
-            addPanel({ ...opts, bypassLimits: true } as Parameters<
-              typeof addPanel
-            >[0])) as HydrationOptions["addPanel"],
-          setActiveWorktree,
-          loadRecipes,
-          openDiagnosticsDock,
-          setFocusMode,
-          setReconnectError,
-          hydrateTabGroups,
-          restoreTerminalOrder,
-          hydrateMru,
-          hydrateActionMru,
-          beginHydrationBatch,
-          flushHydrationBatch,
-        });
+        await hydrateAppState(
+          {
+            addPanel: ((opts: Record<string, unknown>) =>
+              addPanel({ ...opts, bypassLimits: true } as Parameters<
+                typeof addPanel
+              >[0])) as HydrationOptions["addPanel"],
+            setActiveWorktree,
+            loadRecipes,
+            openDiagnosticsDock,
+            setFocusMode,
+            setReconnectError,
+            hydrateTabGroups,
+            restoreTerminalOrder,
+            hydrateMru,
+            hydrateActionMru,
+            beginHydrationBatch,
+            flushHydrationBatch,
+          },
+          undefined,
+          undefined,
+          prefetchedHydrateResult ?? undefined
+        );
 
         // Pick an initial focused panel now that hydration is done. The legacy
         // path set focus opportunistically inside `panelStore.addPanel` on every
@@ -83,6 +92,7 @@ export function useAppHydration(enabled = true) {
     restoreState();
   }, [
     enabled,
+    prefetchedHydrateResult,
     addPanel,
     setActiveWorktree,
     loadRecipes,

@@ -180,7 +180,8 @@ export function terminalChromeDescriptorsEqual(
     left.isAgent === right.isAgent &&
     left.agentId === right.agentId &&
     left.processId === right.processId &&
-    left.runtimeKind === right.runtimeKind
+    left.runtimeKind === right.runtimeKind &&
+    left.hasExited === right.hasExited
   );
 }
 

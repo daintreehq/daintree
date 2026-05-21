@@ -90,7 +90,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await expect(dock).toBeVisible();
-    await expect(ctx.window.locator(SEL.toolbar.openSettings)).toBeVisible();
+    await expect(ctx.window.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible();
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
 
     await clearAllFaults(ctx.app);
@@ -133,9 +133,8 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
 
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
 
-    const settingsButton = ctx.window.locator(SEL.toolbar.openSettings);
-    await expect(settingsButton).toBeVisible();
-    await expect(settingsButton).toBeEnabled();
+    await openSettings(ctx.window);
+    await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await clearAllFaults(ctx.app);
   });

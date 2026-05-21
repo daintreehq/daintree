@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+// eslint-disable-next-line no-restricted-imports
 import { githubClient } from "@/clients/githubClient";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";

@@ -22,6 +22,13 @@
       "when": 1777971986182,
       "tag": "0002_add_scratch_deleted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1779148800000,
+      "tag": "0003_drop_tasks",
+      "breakpoints": true
     }
   ]
 }

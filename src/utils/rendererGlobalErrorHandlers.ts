@@ -24,6 +24,24 @@ function isAbortRejection(reason: unknown): boolean {
   return false;
 }
 
+// Chromium emits these as a bare ErrorEvent (message only, no `error` object,
+// no stack) when a ResizeObserver callback triggers layout that defers
+// notifications to the next frame. They are harmless — the leftover
+// notifications are delivered then. Our own observers already rAF-defer
+// (useResizeObserverRaf, TwoPaneSplitLayout) and debounce (XtermAdapter); the
+// residual warning comes from xterm v6's internal scrollable-element layout and
+// is not reducible from app code. Surfacing it as a "Renderer Error" only
+// trains users to ignore the error panel.
+const BENIGN_ERROR_MESSAGE_PATTERNS = [
+  "ResizeObserver loop completed with undelivered notifications",
+  "ResizeObserver loop limit exceeded",
+];
+
+function isBenignBrowserError(message: string | undefined): boolean {
+  if (!message) return false;
+  return BENIGN_ERROR_MESSAGE_PATTERNS.some((pattern) => message.includes(pattern));
+}
+
 function mapCategoryToStoreType(category: ErrorCategory): ErrorType {
   switch (category) {
     case "network":
@@ -142,6 +160,10 @@ function handleUnhandledRejection(event: PromiseRejectionEvent): void {
 
 function handleWindowError(event: ErrorEvent): void {
   if (!event.error && !event.message) return;
+
+  // A real thrown error always populates `event.error`; the benign browser
+  // warnings only ever arrive as a message-only event, so gate on both.
+  if (!event.error && isBenignBrowserError(event.message)) return;
 
   reportRendererGlobalError("error", event.error ?? event.message, {
     message: event.message,

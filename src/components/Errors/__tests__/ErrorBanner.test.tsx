@@ -644,7 +644,7 @@ describe("ErrorBanner", () => {
       const actionWithArgs = {
         label: "Sign in with GitHub",
         actionId: "app.settings.openTab",
-        args: { tab: "github" },
+        args: { tab: "code-forge", subtab: "github" },
       };
       render(
         <ErrorBanner
@@ -657,7 +657,7 @@ describe("ErrorBanner", () => {
       });
       expect(mockDispatch).toHaveBeenCalledWith(
         "app.settings.openTab",
-        { tab: "github" },
+        { tab: "code-forge", subtab: "github" },
         { source: "user" }
       );
     });

@@ -266,13 +266,13 @@ function ProjectListItem({
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent>
         {onSelectNewWindow && !project.isActive && !project.isMissing && (
-          <ContextMenuItem onClick={() => onSelectNewWindow(project)}>
+          <ContextMenuItem onSelect={() => onSelectNewWindow(project)}>
             <AppWindow className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open in new window
           </ContextMenuItem>
         )}
         {onTogglePinProject && (
-          <ContextMenuItem onClick={() => onTogglePinProject(project.id)}>
+          <ContextMenuItem onSelect={() => onTogglePinProject(project.id)}>
             {project.isPinned ? (
               <>
                 <PinOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -287,7 +287,7 @@ function ProjectListItem({
           </ContextMenuItem>
         )}
         {onCopyPath && (
-          <ContextMenuItem onClick={() => onCopyPath(project.path)}>
+          <ContextMenuItem onSelect={() => onCopyPath(project.path)}>
             <Clipboard className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Copy path
           </ContextMenuItem>
@@ -296,19 +296,19 @@ function ProjectListItem({
           <ContextMenuSeparator />
         )}
         {showStop && onStopProject && (
-          <ContextMenuItem destructive onClick={() => onStopProject(project.id)}>
+          <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (
-          <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
+          <ContextMenuItem destructive onSelect={() => onCloseProject(project.id)}>
             <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Close project
           </ContextMenuItem>
         )}
         {onCloseProject && !project.isActive && (
-          <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
+          <ContextMenuItem destructive onSelect={() => onCloseProject(project.id)}>
             <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Remove project
           </ContextMenuItem>
@@ -316,7 +316,7 @@ function ProjectListItem({
         {project.isMissing && onLocateProject && (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onLocateProject(project.id)}>
+            <ContextMenuItem onSelect={() => onLocateProject(project.id)}>
               <FolderOpen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
               Locate folder
             </ContextMenuItem>
@@ -620,14 +620,14 @@ function ScratchSection({
                     {hasContextActions && (
                       <ContextMenuContent>
                         {onSaveAsProject && (
-                          <ContextMenuItem onClick={() => onSaveAsProject(scratch.id)}>
+                          <ContextMenuItem onSelect={() => onSaveAsProject(scratch.id)}>
                             <FolderUp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                             Save as project...
                           </ContextMenuItem>
                         )}
                         {onSaveAsProject && onRemove && <ContextMenuSeparator />}
                         {onRemove && (
-                          <ContextMenuItem destructive onClick={() => onRemove(scratch.id)}>
+                          <ContextMenuItem destructive onSelect={() => onRemove(scratch.id)}>
                             <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                             Delete scratch
                           </ContextMenuItem>
@@ -681,11 +681,9 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           </span>
         )}
       </div>
-      {mode !== "modal" && (
-        <span className="text-daintree-text/30">
-          <span>Right-click for more</span>
-        </span>
-      )}
+      <span className="text-daintree-text/30">
+        <span>Right-click for more</span>
+      </span>
     </div>
   );
 }
@@ -1120,6 +1118,12 @@ function DropdownContent({
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           inputRef.current?.focus();
+        }}
+        onInteractOutside={(event) => {
+          const target = event.target;
+          if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
+            event.preventDefault();
+          }
         }}
       >
         <ProjectPaletteInner

@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { ProjectSettings, TerminalRecipe } from "../../types/index.js";
+import type {
+  ProjectSettings,
+  ProjectTerminalSettings,
+  TerminalRecipe,
+} from "../../types/index.js";
+import {
+  PROJECT_SETTINGS_SHAREABILITY,
+  PROJECT_TERMINAL_SETTINGS_SHAREABILITY,
+} from "../../../shared/types/project.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 
 const DAINTREE_PROJECT_JSON = ".daintree/project.json";
@@ -122,47 +130,69 @@ describe("writeInRepoSettings", () => {
     expect(content.excludedPaths).toEqual(["node_modules"]);
   });
 
-  it("omits machine-local fields: devServerDismissed", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerDismissed: true }));
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
-    );
-    expect(content).not.toHaveProperty("devServerDismissed");
-  });
+  // Table-driven coverage: every non-shareable field defined in
+  // PROJECT_SETTINGS_SHAREABILITY must be absent from the on-disk JSON, and
+  // every shareable field must appear when set. The table is the single
+  // source of truth — adding a new field here without classifying it is a
+  // compile-time error, and this loop guarantees the write boundary honors
+  // the classification at runtime.
+  const NON_SHAREABLE_FIELDS = (
+    Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>
+  ).filter((k) => PROJECT_SETTINGS_SHAREABILITY[k] !== "shareable");
 
-  it("omits machine-local fields: devServerAutoDetected", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerAutoDetected: true }));
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
-    );
-    expect(content).not.toHaveProperty("devServerAutoDetected");
-  });
+  // Per-field sample values that are non-empty (so omission isn't an artifact
+  // of the writer's empty-array / empty-string skip rule). Only non-shareable
+  // fields need samples here.
+  const NON_SHAREABLE_SAMPLES: { [K in keyof ProjectSettings]?: ProjectSettings[K] } = {
+    environmentVariables: { API_KEY: "secret123" },
+    secureEnvironmentVariables: ["DB_PASS"],
+    insecureEnvironmentVariables: ["PLAIN_KEY"],
+    unresolvedSecureEnvironmentVariables: ["LOCKED_KEY"],
+    projectIconSvg: "<svg>...</svg>",
+    defaultWorktreeRecipeId: "recipe-1",
+    devServerDismissed: true,
+    devServerAutoDetected: true,
+    cloudSyncWarningDismissed: true,
+    commandOverrides: [{ commandId: "git.push", disabled: true }],
+    gitInitDefaults: { createInitialCommit: false },
+    preferredEditor: { id: "vscode" },
+    preferredImageViewer: { mode: "os" },
+    branchPrefixMode: "custom",
+    branchPrefixCustom: "feature/",
+    forgeRemote: "upstream",
+    githubRemote: "upstream",
+    forgeProviderOverride: "github-com",
+    fleetSavedScopes: [
+      { kind: "predicate", id: "s1", name: "All", scope: "all", stateFilter: "all", createdAt: 1 },
+    ],
+    notificationOverrides: { soundEnabled: false },
+    resourceEnvironment: { provision: ["echo provision"] },
+    resourceEnvironments: { default: { provision: ["echo provision"] } },
+    activeResourceEnvironment: "default",
+    defaultWorktreeMode: "local",
+    browserAllowedHosts: ["example.com"],
+    daintreeMcpTier: "workbench",
+    exposeDaintreeMcpToAgents: true,
+  };
 
-  it("omits environment variables from output", async () => {
-    await identityFiles.writeInRepoSettings(
-      tmpDir,
-      makeSettings({
-        environmentVariables: { API_KEY: "secret123" },
-        secureEnvironmentVariables: ["DB_PASS"],
-      })
-    );
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
-    );
-    expect(content).not.toHaveProperty("environmentVariables");
-    expect(content).not.toHaveProperty("secureEnvironmentVariables");
-  });
-
-  it("omits projectIconSvg from output", async () => {
-    await identityFiles.writeInRepoSettings(
-      tmpDir,
-      makeSettings({ projectIconSvg: "<svg>...</svg>" })
-    );
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
-    );
-    expect(content).not.toHaveProperty("projectIconSvg");
-  });
+  it.each(NON_SHAREABLE_FIELDS)(
+    "omits non-shareable field %s from .daintree/settings.json",
+    async (field) => {
+      const sample = NON_SHAREABLE_SAMPLES[field];
+      expect(
+        sample,
+        `missing sample value for non-shareable field ${field} — update NON_SHAREABLE_SAMPLES`
+      ).not.toBeUndefined();
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({ [field]: sample } as Partial<ProjectSettings>)
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      expect(content).not.toHaveProperty(field);
+    }
+  );
 
   it("includes copyTreeSettings when present", async () => {
     await identityFiles.writeInRepoSettings(
@@ -201,6 +231,171 @@ describe("writeInRepoSettings", () => {
       await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
     );
     expect(content).not.toHaveProperty("runCommands");
+  });
+
+  // Mirror of the omission table: every shareable top-level field appears in
+  // the on-disk JSON when populated. `terminalSettings` is exercised via the
+  // dedicated nested test below.
+  const SHAREABLE_TOP_LEVEL_FIELDS = (
+    Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>
+  ).filter((k) => PROJECT_SETTINGS_SHAREABILITY[k] === "shareable" && k !== "terminalSettings");
+
+  const SHAREABLE_SAMPLES: { [K in keyof ProjectSettings]?: ProjectSettings[K] } = {
+    runCommands: [{ id: "dev", name: "Dev", command: "npm run dev" }],
+    excludedPaths: ["node_modules"],
+    devServerCommand: "npm run dev",
+    devServerLoadTimeout: 60,
+    turbopackEnabled: true,
+    copyTreeSettings: { maxFileSize: 50000 },
+    worktreePathPattern: "../{name}",
+  };
+
+  it.each(SHAREABLE_TOP_LEVEL_FIELDS)(
+    "includes shareable field %s in .daintree/settings.json",
+    async (field) => {
+      const sample = SHAREABLE_SAMPLES[field];
+      expect(
+        sample,
+        `missing sample value for shareable field ${field} — update SHAREABLE_SAMPLES`
+      ).not.toBeUndefined();
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({ [field]: sample } as Partial<ProjectSettings>)
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      expect(content[field]).toEqual(sample);
+    }
+  );
+
+  describe("terminalSettings nested shareability", () => {
+    const TERMINAL_NON_SHAREABLE: Array<keyof ProjectTerminalSettings> = (
+      Object.keys(PROJECT_TERMINAL_SETTINGS_SHAREABILITY) as Array<keyof ProjectTerminalSettings>
+    ).filter((k) => PROJECT_TERMINAL_SETTINGS_SHAREABILITY[k] !== "shareable");
+
+    const TERMINAL_SHAREABLE: Array<keyof ProjectTerminalSettings> = (
+      Object.keys(PROJECT_TERMINAL_SETTINGS_SHAREABILITY) as Array<keyof ProjectTerminalSettings>
+    ).filter((k) => PROJECT_TERMINAL_SETTINGS_SHAREABILITY[k] === "shareable");
+
+    const TERMINAL_NON_SHAREABLE_SAMPLES: {
+      [K in keyof ProjectTerminalSettings]?: ProjectTerminalSettings[K];
+    } = {
+      shell: "/bin/zsh",
+      defaultWorkingDirectory: "/Users/me/project",
+    };
+
+    const TERMINAL_SHAREABLE_SAMPLES: {
+      [K in keyof ProjectTerminalSettings]?: ProjectTerminalSettings[K];
+    } = {
+      shellArgs: ["-l"],
+      scrollbackLines: 5000,
+    };
+
+    it.each(TERMINAL_NON_SHAREABLE)("omits non-shareable terminal sub-field %s", async (field) => {
+      const sample = TERMINAL_NON_SHAREABLE_SAMPLES[field];
+      expect(
+        sample,
+        `missing sample value for non-shareable terminal field ${field}`
+      ).not.toBeUndefined();
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({
+          terminalSettings: { [field]: sample } as ProjectTerminalSettings,
+        })
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      // The terminalSettings block must be absent if its only field was non-shareable.
+      expect(content).not.toHaveProperty("terminalSettings");
+    });
+
+    it.each(TERMINAL_SHAREABLE)("includes shareable terminal sub-field %s", async (field) => {
+      const sample = TERMINAL_SHAREABLE_SAMPLES[field];
+      expect(
+        sample,
+        `missing sample value for shareable terminal field ${field}`
+      ).not.toBeUndefined();
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({
+          terminalSettings: { [field]: sample } as ProjectTerminalSettings,
+        })
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      expect(content.terminalSettings?.[field]).toEqual(sample);
+    });
+
+    it("strips shell from a mixed terminalSettings while keeping shareable siblings", async () => {
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({
+          terminalSettings: {
+            shell: "/bin/zsh",
+            shellArgs: ["-l"],
+            scrollbackLines: 2000,
+          },
+        })
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      expect(content.terminalSettings).toEqual({ shellArgs: ["-l"], scrollbackLines: 2000 });
+      expect(content.terminalSettings).not.toHaveProperty("shell");
+    });
+
+    it("preserves scrollbackLines: 0 (defined but falsy)", async () => {
+      await identityFiles.writeInRepoSettings(
+        tmpDir,
+        makeSettings({ terminalSettings: { scrollbackLines: 0 } })
+      );
+      const content = JSON.parse(
+        await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
+      expect(content.terminalSettings).toEqual({ scrollbackLines: 0 });
+    });
+  });
+
+  it("preserves turbopackEnabled: false (defined but falsy)", async () => {
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ turbopackEnabled: false }));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
+    expect(content.turbopackEnabled).toBe(false);
+  });
+
+  it("omits null values from output (e.g. when renderer sends 'clear this field')", async () => {
+    // The renderer occasionally sends `null` to clear an optional field. The
+    // type declares `string` for most of these, but the IPC handler calls the
+    // writer with raw incoming settings before sanitization runs. Writing
+    // `null` produces a spurious git diff that means nothing to teammates.
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({
+        devServerCommand: null as unknown as string,
+        worktreePathPattern: null as unknown as string,
+      })
+    );
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
+    expect(content).not.toHaveProperty("devServerCommand");
+    expect(content).not.toHaveProperty("worktreePathPattern");
+  });
+
+  it("refuses to write when .daintree/ is a symlink", async () => {
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-symlink-target-"));
+    try {
+      await fs.symlink(target, path.join(tmpDir, ".daintree"));
+      await expect(identityFiles.writeInRepoSettings(tmpDir, makeSettings())).rejects.toThrow(
+        /symbolic link/
+      );
+    } finally {
+      await fs.rm(target, { recursive: true, force: true });
+    }
   });
 });
 

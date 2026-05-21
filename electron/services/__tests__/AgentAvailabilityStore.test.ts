@@ -24,7 +24,6 @@ describe("AgentAvailabilityStore", () => {
 
       expect(store.getState("agent-1")).toBe("idle");
       expect(store.isAvailable("agent-1")).toBe(true);
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(0);
     });
 
     it("registers an agent with default idle state", () => {
@@ -137,98 +136,6 @@ describe("AgentAvailabilityStore", () => {
       });
 
       expect(store.getState("agent-1")).toBe("idle");
-    });
-  });
-
-  describe("concurrent task tracking", () => {
-    it("increments concurrent tasks on task:assigned", () => {
-      store.registerAgent("agent-1");
-
-      events.emit("task:assigned", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(1);
-    });
-
-    it("decrements concurrent tasks on task:completed", () => {
-      store.registerAgent("agent-1");
-
-      events.emit("task:assigned", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-
-      events.emit("task:completed", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        result: "Success",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(0);
-    });
-
-    it("decrements concurrent tasks on task:failed", () => {
-      store.registerAgent("agent-1");
-
-      events.emit("task:assigned", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-
-      events.emit("task:failed", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        error: "Something went wrong",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(0);
-    });
-
-    it("tracks multiple concurrent tasks", () => {
-      store.registerAgent("agent-1");
-
-      events.emit("task:assigned", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-
-      events.emit("task:assigned", {
-        taskId: "task-2",
-        agentId: "agent-1",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(2);
-
-      events.emit("task:completed", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        result: "Done",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(1);
-    });
-
-    it("does not go below zero concurrent tasks", () => {
-      store.registerAgent("agent-1");
-
-      events.emit("task:completed", {
-        taskId: "task-1",
-        agentId: "agent-1",
-        result: "Done",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getConcurrentTaskCount("agent-1")).toBe(0);
     });
   });
 

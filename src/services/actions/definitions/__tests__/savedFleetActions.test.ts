@@ -379,8 +379,11 @@ describe("fleet.recallNamedFleet", () => {
     await run(registry, "fleet.recallNamedFleet", { id: "p1" });
 
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-    // Saved scopes were never modified by recall — only save/delete may write.
-    expect(saveSettingsMock).not.toHaveBeenCalled();
+    // Recall stamps recency on the matched scope even when zero panes
+    // resolve — the user action of recalling the fleet is still a "use".
+    const saved = saveSettingsMock.mock.calls[0]?.[1].fleetSavedScopes[0] as FleetSavedScope;
+    expect(saved.lastUsedAt).toBeGreaterThan(0);
+    expect(saved.usageHistory).toHaveLength(1);
   });
 
   it("predicate stateFilter='all' calls armAll(scope)", async () => {
@@ -450,6 +453,142 @@ describe("fleet.recallNamedFleet", () => {
     expect(armed.has("a")).toBe(true);
     expect(armed.has("c")).toBe(true);
     expect(armed.has("b")).toBe(false);
+  });
+
+  it("stamps lastUsedAt and usageHistory on recall with no prior recency", async () => {
+    seedPanels([makeAgent("a")]);
+    const scope: FleetSavedScope = {
+      kind: "snapshot",
+      id: "s1",
+      name: "Snap",
+      terminalIds: ["a"],
+      createdAt: 1,
+    };
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [scope] });
+    saveSettingsMock.mockResolvedValue(undefined);
+    useProjectSettingsStore.setState({ projectId: "proj-1", settings: null });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "s1" });
+
+    const settings = saveSettingsMock.mock.calls[0]?.[1];
+    expect(settings).toBeDefined();
+    const saved = settings.fleetSavedScopes[0] as FleetSavedScope;
+    expect(saved.lastUsedAt).toBeGreaterThan(0);
+    expect(saved.usageHistory).toHaveLength(1);
+    expect(saved.usageHistory?.[0]).toBe(saved.lastUsedAt);
+  });
+
+  it("appends to existing usageHistory and caps at 20", async () => {
+    seedPanels([makeAgent("a")]);
+    const priorHistory = Array.from({ length: 19 }, (_, i) => 1000 + i);
+    const scope: FleetSavedScope = {
+      kind: "snapshot",
+      id: "s1",
+      name: "Snap",
+      terminalIds: ["a"],
+      createdAt: 1,
+      lastUsedAt: priorHistory[priorHistory.length - 1],
+      usageHistory: [...priorHistory],
+    };
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [scope] });
+    saveSettingsMock.mockResolvedValue(undefined);
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "s1" });
+
+    const saved = saveSettingsMock.mock.calls[0]?.[1].fleetSavedScopes[0] as FleetSavedScope;
+    expect(saved.usageHistory).toHaveLength(20);
+    // First 19 entries preserved, newest appended
+    expect(saved.usageHistory?.slice(0, 19)).toEqual(priorHistory);
+    expect(saved.usageHistory?.[19]).toBeGreaterThan(priorHistory[priorHistory.length - 1]!);
+  });
+
+  it("does not mutate unrelated scopes when stamping recency", async () => {
+    seedPanels([makeAgent("a")]);
+    const unrelated: FleetSavedScope = {
+      kind: "predicate",
+      id: "p1",
+      name: "Other",
+      scope: "all",
+      stateFilter: "working",
+      createdAt: 1,
+    };
+    const target: FleetSavedScope = {
+      kind: "snapshot",
+      id: "s1",
+      name: "Target",
+      terminalIds: ["a"],
+      createdAt: 1,
+    };
+    getSettingsMock.mockResolvedValue({
+      runCommands: [],
+      fleetSavedScopes: [unrelated, target],
+    });
+    saveSettingsMock.mockResolvedValue(undefined);
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "s1" });
+
+    const saved = saveSettingsMock.mock.calls[0]?.[1].fleetSavedScopes;
+    expect(saved).toHaveLength(2);
+    const unrelatedSaved = saved[0] as FleetSavedScope;
+    expect(unrelatedSaved.lastUsedAt).toBeUndefined();
+    expect(unrelatedSaved.usageHistory).toBeUndefined();
+  });
+
+  it("writes through to useProjectSettingsStore after stamping", async () => {
+    seedPanels([makeAgent("a")]);
+    const scope: FleetSavedScope = {
+      kind: "snapshot",
+      id: "s1",
+      name: "Snap",
+      terminalIds: ["a"],
+      createdAt: 1,
+    };
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [scope] });
+    saveSettingsMock.mockResolvedValue(undefined);
+    useProjectSettingsStore.setState({ projectId: "proj-1", settings: null });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "s1" });
+
+    const storeScopes = useProjectSettingsStore.getState().settings?.fleetSavedScopes;
+    expect(storeScopes).toHaveLength(1);
+    const stored = storeScopes?.[0] as FleetSavedScope | undefined;
+    expect(stored?.lastUsedAt).toBeGreaterThan(0);
+    expect(stored?.usageHistory).toHaveLength(1);
+  });
+
+  it("missing-id recall does not call saveSettings", async () => {
+    seedPanels([makeAgent("a")]);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
+    saveSettingsMock.mockResolvedValue(undefined);
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "missing" });
+
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts the recency write when the project switches mid-recall", async () => {
+    seedPanels([makeAgent("a")]);
+    const scope: FleetSavedScope = {
+      kind: "snapshot",
+      id: "s1",
+      name: "Snap",
+      terminalIds: ["a"],
+      createdAt: 1,
+    };
+    getSettingsMock.mockImplementation(async () => {
+      setCurrentProject("proj-2");
+      return { runCommands: [], fleetSavedScopes: [scope] };
+    });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "s1" });
+
+    expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 });
 

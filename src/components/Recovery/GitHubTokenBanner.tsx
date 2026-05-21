@@ -9,7 +9,9 @@ export function GitHubTokenBanner() {
 
   const handleReconnect = () => {
     window.dispatchEvent(
-      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "github" } })
+      new CustomEvent("daintree:open-settings-tab", {
+        detail: { tab: "code-forge", subtab: "github" },
+      })
     );
   };
 

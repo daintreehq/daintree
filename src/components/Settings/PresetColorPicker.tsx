@@ -99,7 +99,7 @@ export function PresetColorPicker({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-daintree-accent/50 focus-visible:ring-daintree-accent focus-visible:outline-hidden transition-all"
+          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-daintree-accent/50 focus-visible:ring-daintree-accent focus-visible:outline-hidden transition-shadow"
           aria-label={ariaLabel}
           title={ariaLabel}
           data-testid="preset-color-picker-trigger"

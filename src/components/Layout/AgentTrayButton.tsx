@@ -10,9 +10,15 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Plug, Pin, Settings2, ChevronRight, Keyboard } from "lucide-react";
+import { Plug, Pin, Settings2, ChevronRight, Keyboard, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,10 +48,14 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useKeybindingDisplay } from "@/hooks";
-import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
+import {
+  useAgentDiscoveryOnboarding,
+  NEW_AGENT_TTL_MS,
+} from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { notify } from "@/lib/notify";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -203,7 +213,17 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
               <row.Icon brandColor={getBrandColorHex(row.id)} />
             </BrandMark>
           </span>
-          {row.name}
+          <span className="flex-1">{row.name}</span>
+          {row.isNew && (
+            <>
+              <span
+                data-testid={`agent-tray-new-pill-${row.id}`}
+                aria-hidden="true"
+                className="ml-1 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+              />
+              <span className="sr-only">New</span>
+            </>
+          )}
         </span>
         <span
           className="flex items-center px-2 py-1.5 border-l border-daintree-border/50"
@@ -297,6 +317,7 @@ export function AgentTrayButton({
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
+  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
 
@@ -306,8 +327,10 @@ export function AgentTrayButton({
   const {
     loaded: onboardingLoaded,
     seenAgentIds,
+    availabilityFirstSeen,
     welcomeCardDismissed,
     markAgentsSeen,
+    recordAgentFirstSeen,
   } = useAgentDiscoveryOnboarding();
 
   const [open, setOpen] = useState(false);
@@ -428,11 +451,18 @@ export function AgentTrayButton({
   const newAgentIds = useMemo<ReadonlySet<string>>(() => {
     if (!onboardingLoaded || welcomeCardRenderable) return new Set<string>();
     const set = new Set<string>();
+    // Snapshot Date.now() once per memo so all agents share a single cutoff
+    // for this render. The visibilitychange listener already re-renders on
+    // app resume, so a stale `now` can't outlive a session.
+    const now = Date.now();
     for (const id of readyAgentIds) {
-      if (!seenAgentIds.includes(id)) set.add(id);
+      if (seenAgentIds.includes(id)) continue;
+      const firstSeen = availabilityFirstSeen[id];
+      if (firstSeen !== undefined && now - firstSeen >= NEW_AGENT_TTL_MS) continue;
+      set.add(id);
     }
     return set;
-  }, [onboardingLoaded, welcomeCardRenderable, readyAgentIds, seenAgentIds]);
+  }, [onboardingLoaded, welcomeCardRenderable, readyAgentIds, seenAgentIds, availabilityFirstSeen]);
 
   const showDiscoveryBadge = newAgentIds.size > 0;
 
@@ -480,8 +510,9 @@ export function AgentTrayButton({
 
     // Sort Launch by palette frecency (higher score = more recent). Untracked
     // agents keep their natural BUILT_IN_AGENT_IDS order after any tracked
-    // ones. Only palette dispatches populate frecency; tray launches
-    // don't record, but palette-sourced frecency is the signal we have.
+    // ones. Both palette dispatches and tray launches feed into the same
+    // frecency map (the tray records explicitly in handleLaunch since
+    // ActionService.dispatch doesn't auto-record MRU).
     const frecencyEntries = getSortedActionMruList();
     const frecencyScoreMap = new Map<string, number>();
     frecencyEntries.forEach(({ id, score }) => frecencyScoreMap.set(id, score));
@@ -510,6 +541,15 @@ export function AgentTrayButton({
   const handleLaunch = useCallback(
     (agentId: BuiltInAgentId, presetId?: string | null) => {
       setOpen(false);
+      // Clear the NEW signal only for the agent the user actually launched.
+      // Opening the dropdown alone used to call markAgentsSeen(readyAgentIds),
+      // which burned the discovery cue for every other agent at the same
+      // time. Per-launch decay keeps the cue truthful.
+      void markAgentsSeen([agentId]);
+      // Feed palette frecency from tray launches too. `ActionService.dispatch`
+      // does not auto-record MRU (only `useActionPalette` does), so without
+      // this the tray's MRU-based sort can never reflect tray usage.
+      useActionMruStore.getState().recordActionMru(`agent.${agentId}`);
       // `null` = explicit default — clear both the worktree-scoped override
       // and the agent-level presetId so resolveEffectivePresetId returns
       // undefined and the radio group visually selects "Default".
@@ -530,7 +570,7 @@ export function AgentTrayButton({
         { source: "user" }
       );
     },
-    [activeWorktreeId, updateWorktreePreset]
+    [activeWorktreeId, markAgentsSeen, updateWorktreePreset]
   );
 
   const handleSetup = (agentId: BuiltInAgentId) => {
@@ -559,7 +599,11 @@ export function AgentTrayButton({
     // Fire-and-forget: the store throttle absorbs rapid reopens.
     void refreshAvailability().catch(() => {});
     if (readyAgentIds.length > 0) {
-      void markAgentsSeen(readyAgentIds);
+      // Anchor each agent's TTL window on the first time the user could
+      // actually see it in the tray. We deliberately do NOT mark agents
+      // seen here — that would burn the NEW dot for everything the user
+      // hasn't interacted with. markAgentsSeen now fires per-launch only.
+      void recordAgentFirstSeen(readyAgentIds);
     }
   };
 
@@ -614,31 +658,43 @@ export function AgentTrayButton({
           handleOpenChange(o);
         }}
       >
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                className="toolbar-agent-button text-daintree-text"
-                aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
-                onPointerEnter={clearFocusRestoreSuppression}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <Plug />
-                  <span
-                    data-testid="agent-tray-discovery-badge"
-                    data-visible={showDiscoveryBadge}
-                    className="toolbar-badge absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
-                    aria-hidden="true"
-                  />
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Agent Tray</TooltipContent>
-        </Tooltip>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item={dataToolbarItem}
+                    className="toolbar-agent-button text-daintree-text"
+                    aria-label={
+                      showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"
+                    }
+                    onPointerEnter={clearFocusRestoreSuppression}
+                  >
+                    <span className="relative inline-flex items-center justify-center">
+                      <Plug />
+                      <span
+                        data-testid="agent-tray-discovery-badge"
+                        data-visible={showDiscoveryBadge}
+                        className="toolbar-badge absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+                        aria-hidden="true"
+                      />
+                    </span>
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Agent Tray</TooltipContent>
+            </Tooltip>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+            <ContextMenuItem onSelect={() => toggleButtonVisibility("agent-tray", "left")}>
+              <Unplug className="mr-2 h-3.5 w-3.5" />
+              Unpin from Toolbar
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         <DropdownMenuContent
           align="start"
           sideOffset={4}
@@ -777,9 +833,10 @@ function LaunchRow({
       if (!result.ok) {
         // Stay open on failure so the user can retry; surface the failure
         // explicitly since the user otherwise has no visible signal.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          message: "Couldn't save shortcut. Try again.",
+          message: "Couldn't save shortcut",
           duration: 3000,
           priority: "high",
         });
@@ -834,12 +891,14 @@ function LaunchRow({
       <span className="flex-1">{row.name}</span>
 
       {row.isNew && (
-        <span
-          data-testid={`agent-tray-new-pill-${row.id}`}
-          className="ml-2 shrink-0 rounded border border-status-info/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-status-info"
-        >
-          New
-        </span>
+        <>
+          <span
+            data-testid={`agent-tray-new-pill-${row.id}`}
+            aria-hidden="true"
+            className="ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+          />
+          <span className="sr-only">New</span>
+        </>
       )}
 
       {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
@@ -880,7 +939,14 @@ function LaunchRow({
         )}
       >
         <Pin
-          className={cn("h-3 w-3", row.pinned && "fill-current text-daintree-text")}
+          className={cn(
+            "h-3 w-3",
+            // Pinned rows: read as state markers, not active controls. Muted
+            // until the row is highlighted (hover/keyboard focus), at which
+            // point the icon brightens to signal it is also clickable.
+            row.pinned &&
+              "fill-current text-daintree-text/40 group-data-[highlighted]:text-daintree-text"
+          )}
           strokeWidth={row.pinned ? 2 : 1.75}
         />
       </span>

@@ -24,6 +24,10 @@ const {
   agentSettingsState,
   projectStoreState,
   preferencesState,
+  terminalInputState,
+  mockTerminalSubmit,
+  mockTerminalSendKey,
+  mockNotifyUserInput,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -103,6 +107,10 @@ const {
     currentProject: { id: "proj-default", path: "/repo" } as { id: string; path: string } | null,
   },
   preferencesState: { reduceAnimations: false },
+  terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
+  mockTerminalSubmit: vi.fn(),
+  mockTerminalSendKey: vi.fn(),
+  mockNotifyUserInput: vi.fn(),
 }));
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -123,6 +131,51 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
   XtermAdapter: () => <div data-testid="xterm-adapter" />,
 }));
 
+vi.mock("@/components/Terminal/HybridInputBar", () => ({
+  HybridInputBar: ({
+    terminalId,
+    onSend,
+    onSendKey,
+    disabled,
+  }: {
+    terminalId: string;
+    onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
+    onSendKey?: (key: string) => void;
+    disabled?: boolean;
+  }) => (
+    <div
+      data-testid="hybrid-input-bar"
+      data-terminal-id={terminalId}
+      data-disabled={disabled ? "true" : "false"}
+    >
+      <button
+        type="button"
+        data-testid="hybrid-input-send"
+        onClick={() => onSend?.({ data: "hello", trackerData: "hello", text: "hello" })}
+      >
+        send
+      </button>
+      <button type="button" data-testid="hybrid-input-key" onClick={() => onSendKey?.("escape")}>
+        key
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("@/clients", () => ({
+  terminalClient: {
+    submit: (...args: unknown[]) => mockTerminalSubmit(...args),
+    sendKey: (...args: unknown[]) => mockTerminalSendKey(...args),
+  },
+}));
+
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    focus: vi.fn(),
+    notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
+  },
+}));
+
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
     <div data-testid="missing-cli-gate" data-agent={agentId}>
@@ -133,9 +186,14 @@ vi.mock("@/components/Terminal/MissingCliGate", () => ({
   ),
 }));
 
-vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex"],
-}));
+vi.mock("@shared/config/agentIds", () => {
+  const ids = ["claude", "gemini", "codex"];
+  return {
+    BUILT_IN_AGENT_IDS: ids,
+    isBuiltInAgentId: (value: unknown): value is "claude" | "gemini" | "codex" =>
+      typeof value === "string" && ids.includes(value),
+  };
+});
 
 vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: {
@@ -211,6 +269,10 @@ vi.mock("@/store", () => {
     selector ? selector(worktreeSelectionState) : worktreeSelectionState;
   worktreeSelectionStore.getState = () => worktreeSelectionState;
 
+  const terminalInputStore = (selector?: (state: typeof terminalInputState) => unknown) =>
+    selector ? selector(terminalInputState) : terminalInputState;
+  terminalInputStore.getState = () => terminalInputState;
+
   return {
     usePanelStore: panelStore,
     useCliAvailabilityStore: cliStore,
@@ -218,6 +280,7 @@ vi.mock("@/store", () => {
     useProjectStore: projectStore,
     usePreferencesStore: preferencesStore,
     useWorktreeSelectionStore: worktreeSelectionStore,
+    useTerminalInputStore: terminalInputStore,
     getTerminalRefreshTier: () => 0,
   };
 });
@@ -315,6 +378,11 @@ function resetState() {
 
   projectStoreState.currentProject = { id: "proj-default", path: "/repo" };
   preferencesState.reduceAnimations = false;
+  terminalInputState.hybridInputEnabled = true;
+  mockTerminalSubmit.mockReset();
+  mockTerminalSubmit.mockResolvedValue(undefined);
+  mockTerminalSendKey.mockReset();
+  mockNotifyUserInput.mockReset();
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue({
     sessionId: "sess-default",
@@ -403,6 +471,12 @@ beforeEach(() => {
         mcpServer: {
           onTierNotPermitted: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          issueGrant: vi.fn().mockResolvedValue({
+            sessionId: "",
+            toolId: "",
+            ttlMs: 900_000,
+            expiresAt: Date.now() + 900_000,
+          }),
         },
         git: {
           snapshotGet: vi.fn().mockResolvedValue(null),
@@ -2529,5 +2603,187 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
       expect.objectContaining({ agentId: "claude" }),
       { source: "user" }
     );
+  });
+});
+
+describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
+  function setupBoundTerminal(overrides: { isInputLocked?: boolean } = {}) {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = {
+      "term-1": {
+        id: "term-1",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        agentState: "idle",
+        isInputLocked: overrides.isInputLocked ?? false,
+      },
+    };
+  }
+
+  it("renders HybridInputBar when an agent is bound and hybridInputEnabled is true", async () => {
+    setupBoundTerminal();
+    terminalInputState.hybridInputEnabled = true;
+
+    let queryByTestId!: ReturnType<typeof render>["queryByTestId"];
+    await act(async () => {
+      ({ queryByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    const bar = queryByTestId("hybrid-input-bar");
+    expect(bar).not.toBeNull();
+    expect(bar?.getAttribute("data-terminal-id")).toBe("term-1");
+    expect(bar?.getAttribute("data-disabled")).toBe("false");
+  });
+
+  it("does not render HybridInputBar when hybridInputEnabled is false", async () => {
+    setupBoundTerminal();
+    terminalInputState.hybridInputEnabled = false;
+
+    let queryByTestId!: ReturnType<typeof render>["queryByTestId"];
+    await act(async () => {
+      ({ queryByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    expect(queryByTestId("hybrid-input-bar")).toBeNull();
+  });
+
+  it("does not render HybridInputBar when no agent is bound", async () => {
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    terminalInputState.hybridInputEnabled = true;
+
+    let queryByTestId!: ReturnType<typeof render>["queryByTestId"];
+    await act(async () => {
+      ({ queryByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    expect(queryByTestId("hybrid-input-bar")).toBeNull();
+  });
+
+  it("onSend calls notifyUserInput before terminalClient.submit", async () => {
+    setupBoundTerminal();
+
+    let getByTestId!: ReturnType<typeof render>["getByTestId"];
+    await act(async () => {
+      ({ getByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByTestId("hybrid-input-send"));
+    });
+
+    expect(mockNotifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(mockTerminalSubmit).toHaveBeenCalledWith("term-1", "hello");
+    // Order matters (lesson #2187): notifyUserInput must precede submit.
+    expect(mockNotifyUserInput.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
+      mockTerminalSubmit.mock.invocationCallOrder?.[0] ?? 0
+    );
+  });
+
+  it("onSendKey calls notifyUserInput before terminalClient.sendKey", async () => {
+    setupBoundTerminal();
+
+    let getByTestId!: ReturnType<typeof render>["getByTestId"];
+    await act(async () => {
+      ({ getByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByTestId("hybrid-input-key"));
+    });
+
+    expect(mockNotifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(mockTerminalSendKey).toHaveBeenCalledWith("term-1", "escape");
+    expect(mockNotifyUserInput.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
+      mockTerminalSendKey.mock.invocationCallOrder?.[0] ?? 0
+    );
+  });
+
+  it("onSend and onSendKey are no-ops when isInputLocked is true", async () => {
+    setupBoundTerminal({ isInputLocked: true });
+
+    let getByTestId!: ReturnType<typeof render>["getByTestId"];
+    await act(async () => {
+      ({ getByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByTestId("hybrid-input-send"));
+      fireEvent.click(getByTestId("hybrid-input-key"));
+    });
+
+    expect(mockNotifyUserInput).not.toHaveBeenCalled();
+    expect(mockTerminalSubmit).not.toHaveBeenCalled();
+    expect(mockTerminalSendKey).not.toHaveBeenCalled();
+  });
+
+  it("renders HybridInputBar as disabled when isInputLocked is true", async () => {
+    setupBoundTerminal({ isInputLocked: true });
+
+    let queryByTestId!: ReturnType<typeof render>["queryByTestId"];
+    await act(async () => {
+      ({ queryByTestId } = render(<HelpPanel width={380} />));
+    });
+
+    expect(queryByTestId("hybrid-input-bar")?.getAttribute("data-disabled")).toBe("true");
+  });
+
+  it("Escape with focus inside .cm-editor does not close the panel (autocomplete swallow)", () => {
+    setupBoundTerminal();
+
+    const { container } = render(<HelpPanel width={380} />);
+
+    // Simulate CodeMirror focus inside the assistant panel — `closest(".cm-editor")`
+    // matches and `panelRef.current?.contains(active)` is true.
+    const panel = container.querySelector("#daintree-assistant-panel");
+    expect(panel).not.toBeNull();
+    const editor = document.createElement("div");
+    editor.className = "cm-editor";
+    const textarea = document.createElement("textarea");
+    editor.appendChild(textarea);
+    panel!.appendChild(editor);
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    const escapeMock = vi.mocked(useEscapeStack);
+    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    expect(callback).toBeTypeOf("function");
+
+    act(() => {
+      callback?.();
+    });
+
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
+  it("Escape with focus inside a .cm-editor OUTSIDE the panel still closes it", () => {
+    setupBoundTerminal();
+
+    render(<HelpPanel width={380} />);
+
+    // Simulate a CodeMirror editor in a different panel (e.g. FileViewer) by
+    // attaching it to document.body — outside the assistant panel root.
+    const editor = document.createElement("div");
+    editor.className = "cm-editor";
+    const textarea = document.createElement("textarea");
+    editor.appendChild(textarea);
+    document.body.appendChild(editor);
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    const escapeMock = vi.mocked(useEscapeStack);
+    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    expect(callback).toBeTypeOf("function");
+
+    act(() => {
+      callback?.();
+    });
+
+    // External CodeMirror must not trap the assistant's Escape handler.
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
+
+    document.body.removeChild(editor);
   });
 });

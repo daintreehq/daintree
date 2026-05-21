@@ -3,6 +3,8 @@ import { AgentIdSchema, LaunchLocationSchema, TerminalSpawnSourceSchema } from "
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY } from "@/config/agents";
 import type { ActionId } from "@shared/types/actions";
@@ -34,10 +36,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       requestedId: z.string().optional(),
       force: z.boolean().optional(),
     }),
-    resultSchema: z.object({
-      terminalId: z.string(),
-      location: LaunchLocationSchema,
-    }),
+    resultSchema: z
+      .object({
+        terminalId: z.string(),
+        location: LaunchLocationSchema,
+      })
+      .nullable(),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
         agentId,
@@ -109,15 +114,19 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   // Per-agent shortcut actions (`agent.claude`, `agent.codex`, …) accept
   // optional `location` and `spawnedBy` args so MCP-initiated launches can set
   // placement and be marked non-focus-stealing. See #6959, #7669.
-  const shortcutLaunchSchema = z.object({
-    location: LaunchLocationSchema.optional(),
-    spawnedBy: TerminalSpawnSourceSchema.optional(),
-  });
+  const shortcutLaunchSchema = z
+    .object({
+      location: LaunchLocationSchema.optional(),
+      spawnedBy: TerminalSpawnSourceSchema.optional(),
+    })
+    .optional();
 
-  const shortcutResultSchema = z.object({
-    terminalId: z.string(),
-    location: LaunchLocationSchema,
-  });
+  const shortcutResultSchema = z
+    .object({
+      terminalId: z.string(),
+      location: LaunchLocationSchema,
+    })
+    .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
     const actionId = `agent.${id}` as ActionId;
@@ -170,6 +179,30 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agent.browser", () => ({
+    id: "agent.browser",
+    title: "Launch Browser",
+    description: "Launch a browser panel",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: shortcutLaunchSchema,
+    resultSchema: shortcutResultSchema,
+    run: async (args: unknown) => {
+      const { location, spawnedBy } = (args ?? {}) as {
+        location?: "grid" | "dock";
+        spawnedBy?: TerminalSpawnSource;
+      };
+      const result = await callbacks.onLaunchAgent("browser", {
+        location,
+        spawnedBy,
+      });
+      if (!result) return null;
+      return { terminalId: result.terminalId, location: result.location };
+    },
+  }));
+
   actions.set("agent.focusNextWaiting", () => ({
     id: "agent.focusNextWaiting",
     title: "Focus Next Waiting Agent",
@@ -187,6 +220,67 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
       }
       state.focusNextWaiting(state.isInTrash, validWorktreeIds);
+    },
+  }));
+
+  actions.set("agent.focusNextWaitingGlobal", () => ({
+    id: "agent.focusNextWaitingGlobal",
+    title: "Focus Next Waiting Agent (All Projects)",
+    description:
+      "Jump to the next project with a waiting agent. Cycles across all projects in sidebar order, wrapping around.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const projectState = useProjectStore.getState();
+      const stats = useProjectStatsStore.getState().stats;
+      const projects = projectState.projects;
+      if (projects.length === 0) return;
+
+      const currentProjectId = projectState.currentProject?.id ?? null;
+      const currentIdx = currentProjectId
+        ? projects.findIndex((p) => p.id === currentProjectId)
+        : -1;
+
+      // Start the search at the position AFTER the current project so the
+      // first comparison hits the next candidate, not currentProject itself.
+      // When currentProject isn't in the list (stale state, recently removed),
+      // start from the head. Wrap around the full list so a single waiting
+      // agent in currentProject still resolves (to a local focus dispatch).
+      const startIdx = currentIdx >= 0 ? currentIdx + 1 : 0;
+      let target: { id: string } | null = null;
+      for (let i = 0; i < projects.length; i++) {
+        const idx = (startIdx + i) % projects.length;
+        const candidate = projects[idx];
+        if (!candidate) continue;
+        const waiting = stats[candidate.id]?.waitingAgentCount ?? 0;
+        if (waiting > 0) {
+          target = candidate;
+          break;
+        }
+      }
+
+      if (!target) return;
+
+      if (target.id === currentProjectId) {
+        // Same-project: just cycle within the active view.
+        const panelState = usePanelStore.getState();
+        const worktreeData = getCurrentViewStore().getState();
+        const validWorktreeIds = new Set<string>();
+        for (const [id, wt] of worktreeData.worktrees) {
+          validWorktreeIds.add(id);
+          if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
+        }
+        panelState.focusNextWaiting(panelState.isInTrash, validWorktreeIds);
+        return;
+      }
+
+      // Cross-project: switch with a one-shot focus intent. The main process
+      // delivers `project:focus-on-activate` to the incoming view once the
+      // paint gate resolves (cold start) or immediately on cache hit, and
+      // the renderer subscriber dispatches local `agent.focusNextWaiting`.
+      await projectState.switchProject(target.id, { focusIntent: "focus-next-waiting" });
     },
   }));
 
@@ -249,7 +343,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Query agent state; returns state, waitingReason ('prompt'|'question', non-null when waiting), terminalId, found.",
+      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -258,7 +352,23 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       agentId: z
         .string()
         .min(1)
-        .describe("Agent ID to look up (e.g., 'claude', 'codex'). From terminal.list[].agentId."),
+        .describe(
+          "Agent id to look up (e.g. 'claude', 'codex') — from `terminal.list` entries' `agentId` field."
+        ),
+    }),
+    examples: [
+      {
+        args: { agentId: "claude" },
+        description: "Check whether the Claude agent is working, waiting, or idle",
+      },
+    ],
+    resultSchema: z.object({
+      agentId: z.string(),
+      state: z.string().nullable(),
+      waitingReason: z.string().nullable(),
+      lastTransitionAt: z.number().nullable(),
+      terminalId: z.string().nullable(),
+      found: z.boolean(),
     }),
     run: async (args: unknown) => {
       const { agentId } = args as { agentId: string };

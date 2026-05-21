@@ -76,6 +76,12 @@ let rememberedProjectTab: SettingsTab = "project:general";
 // attention after the user has oriented.
 const SETTINGS_HIGHLIGHT_DECAY_MS = 1500;
 
+// Hover-intent delay before speculatively mounting a settings tab's lazy
+// panel. Short enough that the panel's IPC reads are usually settled by the
+// time the user clicks; long enough that a mouse sweep across nav items
+// doesn't mount every tab at once.
+export const SETTINGS_TAB_HOVER_INTENT_MS = 150;
+
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
 // MCP / AI / API — those stay uppercase.
@@ -132,6 +138,15 @@ function SettingsDialogInner({
   const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
     () => new Set<SettingsTab>([initialTab])
   );
+
+  // AppDialog uses useAnimatedPresence and keeps children mounted through
+  // the ~120ms exit animation, so a hover-intent timer scheduled near close
+  // can fire while the dialog is animating out. Read this ref inside the
+  // timer callback to skip the speculative mount when the dialog is closing.
+  const isOpenRef = useRef(isOpen);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const hasProject = !!projectId;
 
@@ -379,8 +394,12 @@ function SettingsDialogInner({
 
   const searchResults = useMemo(
     () =>
-      filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs, scope: activeScope }),
-    [deferredQuery, modifiedTabs, activeScope]
+      filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, {
+        modifiedTabs,
+        scope: activeScope,
+        hasProject,
+      }),
+    [deferredQuery, modifiedTabs, activeScope, hasProject]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
@@ -405,8 +424,15 @@ function SettingsDialogInner({
     // Defer scrollToSection together with the tab change. Setting it
     // urgently would let the previously-active tab's effect consume the
     // pending id (it sees isActive=true after the urgent commit but
-    // before the transition makes the new tab active).
+    // before the transition makes the new tab active). The scope switch
+    // must share the transition so the scope toggle and tab content
+    // commit together — splitting them yields a torn render where the
+    // toggle flips while the panel still shows the previous scope.
+    const nextScope = scopeForTab(tab);
     startTransition(() => {
+      if (nextScope !== activeScope) {
+        setActiveScope(nextScope);
+      }
       setActiveTab(tab);
       setScrollToSection(sectionId ?? null);
     });
@@ -602,6 +628,7 @@ function SettingsDialogInner({
               <NavGroup key={group.label} label={group.label}>
                 {group.entries.map((entry) => {
                   const tabId = entry.id as SettingsTab;
+                  const isLazy = entry.importKind === "lazy";
                   return (
                     <NavItem
                       key={entry.id}
@@ -614,6 +641,14 @@ function SettingsDialogInner({
                       modified={modifiedTabs.has(tabId)}
                       hasError={tabsWithErrors.has(tabId)}
                       onSelect={handleNavSelect}
+                      onPrefetchImport={isLazy ? entry.importer : undefined}
+                      onPrefetchMount={
+                        isLazy
+                          ? () => {
+                              if (isOpenRef.current) markTabVisited(tabId);
+                            }
+                          : undefined
+                      }
                     />
                   );
                 })}
@@ -803,8 +838,8 @@ function SettingsDialogInner({
                                   projectId={projectId}
                                   isOpen={isOpen}
                                   globalEnvVars={globalEnvVars}
+                                  globalScrollbackLines={scrollbackLines}
                                   projectLabel={projectLabel}
-                                  onNavigateToTab={handleNavSelect}
                                   isActive={isActive && !isSearching}
                                   scrollToSectionId={scrollToSection}
                                   onScrollToSectionHandled={handleScrollToSectionHandled}
@@ -877,8 +912,8 @@ function ProjectFormTabContent({
   projectId,
   isOpen,
   globalEnvVars,
+  globalScrollbackLines,
   projectLabel,
-  onNavigateToTab,
   isActive,
   scrollToSectionId,
   onScrollToSectionHandled,
@@ -888,8 +923,8 @@ function ProjectFormTabContent({
   projectId: string;
   isOpen: boolean;
   globalEnvVars: Record<string, string>;
+  globalScrollbackLines: number;
   projectLabel: string;
-  onNavigateToTab: (tab: SettingsTab) => void;
   isActive: boolean;
   scrollToSectionId: string | null;
   onScrollToSectionHandled: (id: string) => void;
@@ -957,8 +992,6 @@ function ProjectFormTabContent({
           currentProject={projectForm.currentProject}
           runCommands={projectForm.runCommands}
           onRunCommandsChange={projectForm.setRunCommands}
-          defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
-          onDefaultWorktreeRecipeIdChange={projectForm.setDefaultWorktreeRecipeId}
           branchPrefixMode={projectForm.branchPrefixMode}
           onBranchPrefixModeChange={projectForm.setBranchPrefixMode}
           branchPrefixCustom={projectForm.branchPrefixCustom}
@@ -967,15 +1000,17 @@ function ProjectFormTabContent({
           onWorktreePathPatternChange={projectForm.setWorktreePathPattern}
           terminalShell={projectForm.terminalShell}
           onTerminalShellChange={projectForm.setTerminalShell}
+          onTerminalShellReset={() => projectForm.setTerminalShell(undefined)}
           terminalShellArgs={projectForm.terminalShellArgs}
           onTerminalShellArgsChange={projectForm.setTerminalShellArgs}
+          onTerminalShellArgsReset={() => projectForm.setTerminalShellArgs(undefined)}
           terminalDefaultCwd={projectForm.terminalDefaultCwd}
           onTerminalDefaultCwdChange={projectForm.setTerminalDefaultCwd}
+          onTerminalDefaultCwdReset={() => projectForm.setTerminalDefaultCwd(undefined)}
           terminalScrollback={projectForm.terminalScrollback}
           onTerminalScrollbackChange={projectForm.setTerminalScrollback}
-          recipes={projectForm.recipes}
-          recipesLoading={projectForm.recipesLoading}
-          onNavigateToRecipes={() => onNavigateToTab("project:recipes")}
+          onTerminalScrollbackReset={() => projectForm.setTerminalScrollback(undefined)}
+          effectiveScrollbackLines={globalScrollbackLines}
           resourceEnvironments={projectForm.resourceEnvironments}
           onResourceEnvironmentsChange={projectForm.setResourceEnvironments}
           activeResourceEnvironment={projectForm.activeResourceEnvironment}
@@ -1014,11 +1049,13 @@ function ProjectFormTabContent({
         />
       );
 
-    case "project:github":
+    case "project:code-forge":
       return (
         <LazyComp
-          githubRemote={projectForm.githubRemote}
-          onGithubRemoteChange={projectForm.setGithubRemote}
+          forgeRemote={projectForm.forgeRemote}
+          onForgeRemoteChange={projectForm.setForgeRemote}
+          forgeProviderOverride={projectForm.forgeProviderOverride}
+          onForgeProviderOverrideChange={projectForm.setForgeProviderOverride}
           projectPath={projectForm.currentProject?.path}
         />
       );
@@ -1047,6 +1084,61 @@ export function scrollAndHighlightSettingsSection(sectionId: string): boolean {
   el.classList.add("settings-highlight");
   setTimeout(() => el.classList.remove("settings-highlight"), SETTINGS_HIGHLIGHT_DECAY_MS);
   return true;
+}
+
+// Two-tier hover/focus prefetch for lazy settings tabs.
+//
+// - `onPrefetchImport` fires synchronously on enter — call the chunk's
+//   `import()` thunk. Idempotent: the browser module map dedupes repeat calls.
+// - `onPrefetchMount` fires after `delayMs` of sustained hover/focus — used
+//   to flip the tab into `visitedTabs` so its hidden panel mounts and the
+//   panel's `useEffect` IPC reads run before the user clicks.
+//
+// The delay timer is cancelled on leave/blur and on unmount to keep a
+// mouse-sweep across nav items from mounting every tab at once.
+export function useHoverIntentPrefetch({
+  onPrefetchImport,
+  onPrefetchMount,
+  delayMs = SETTINGS_TAB_HOVER_INTENT_MS,
+}: {
+  onPrefetchImport?: () => void;
+  onPrefetchMount?: () => void;
+  delayMs?: number;
+}): { onEnter: () => void; onLeave: () => void } {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    },
+    []
+  );
+
+  const onEnter = () => {
+    onPrefetchImport?.();
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (onPrefetchMount) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        onPrefetchMount();
+      }, delayMs);
+    }
+  };
+
+  const onLeave = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  return { onEnter, onLeave };
 }
 
 // Fires the scroll/highlight when its host subtree commits (via
@@ -1106,6 +1198,13 @@ interface NavItemProps {
   modified?: boolean;
   hasError?: boolean;
   onSelect: (tab: SettingsTab) => void;
+  // Fires synchronously on pointer-enter / focus. Use to start downloading
+  // the tab's lazy chunk (import() is idempotent, no debounce needed).
+  onPrefetchImport?: () => void;
+  // Fires after SETTINGS_TAB_HOVER_INTENT_MS of sustained hover or focus.
+  // Use to speculatively mount the hidden tab panel so its IPC reads fire
+  // before the user clicks. Cancelled on leave/blur.
+  onPrefetchMount?: () => void;
 }
 
 function NavItem({
@@ -1118,9 +1217,15 @@ function NavItem({
   modified,
   hasError,
   onSelect,
+  onPrefetchImport,
+  onPrefetchMount,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
   const selected = activeTab === tab;
+  const { onEnter, onLeave } = useHoverIntentPrefetch({
+    onPrefetchImport,
+    onPrefetchMount,
+  });
   return (
     <button
       role="tab"
@@ -1130,6 +1235,10 @@ function NavItem({
       tabIndex={selected ? 0 : -1}
       data-tab={tab}
       onClick={() => onSelect(tab)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      onFocus={onEnter}
+      onBlur={onLeave}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
@@ -1166,6 +1275,15 @@ function MatchBadge({ count }: { count: number }) {
       className="ml-auto text-[10px] font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none"
     >
       {count}
+    </span>
+  );
+}
+
+function ScopeChip({ scope }: { scope: SettingsScope }) {
+  const label = scope === "project" ? "Project" : "Global";
+  return (
+    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none shrink-0">
+      {label}
     </span>
   );
 }
@@ -1245,6 +1363,7 @@ function SearchResults({
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
+                <ScopeChip scope={result.scope} />
                 <span className="text-[10px] font-medium text-daintree-text/40 uppercase tracking-wide">
                   {result.tabLabel}
                 </span>

@@ -49,6 +49,7 @@ type PersistedDevPreviewFields =
   | "browserHistory"
   | "browserZoom"
   | "devPreviewConsoleOpen"
+  | "devPreviewConsoleTab"
   | "devPreviewScrollPosition"
   | "exitBehavior";
 
@@ -107,6 +108,9 @@ const devPreviewArbSpec = {
   browserHistory: fc.option(browserHistoryArb, { nil: undefined }),
   browserZoom: fc.option(zoomArb, { nil: undefined }),
   devPreviewConsoleOpen: fc.option(fc.boolean(), { nil: undefined }),
+  devPreviewConsoleTab: fc.option(fc.constantFrom("output" as const, "console" as const), {
+    nil: undefined,
+  }),
   devPreviewScrollPosition: fc.option(scrollPositionArb, { nil: undefined }),
   exitBehavior: fc.option(exitBehaviorArb, { nil: undefined }),
 } satisfies { [K in PersistedDevPreviewFields]-?: fc.Arbitrary<DevPreviewData[K]> };
@@ -210,6 +214,7 @@ describe("panel serializer round-trip (property tests)", () => {
         expect(restored.browserHistory).toEqual(fields.browserHistory);
         expect(restored.browserZoom).toBe(fields.browserZoom);
         expect(restored.devPreviewConsoleOpen).toBe(fields.devPreviewConsoleOpen);
+        expect(restored.devPreviewConsoleTab).toBe(fields.devPreviewConsoleTab);
         expect(restored.devPreviewScrollPosition).toEqual(fields.devPreviewScrollPosition);
 
         // exitBehavior is NOT returned by getDeserializer("dev-preview"); the real

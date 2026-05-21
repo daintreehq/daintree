@@ -1,26 +1,26 @@
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
+import type { BranchInfo } from "../../../../shared/types/git.js";
 import { generateWorktreePath, validatePathPattern } from "../../../../shared/utils/pathPattern.js";
 import { resolveWorktreePattern } from "../../../utils/worktreePattern.js";
-import { taskWorktreeService } from "../../../services/TaskWorktreeService.js";
-import { typedHandle } from "../../utils.js";
+import { gitServiceCache } from "../../../services/GitServiceCache.js";
+import { defineIpcNamespace, op } from "../../define.js";
 
 export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
-
-  const handleWorktreeListBranches = async (payload: { rootPath: string }) => {
+  const handleWorktreeListBranches = async (payload: {
+    rootPath: string;
+  }): Promise<BranchInfo[]> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
     return await deps.worktreeService.listBranches(payload.rootPath);
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches));
 
   const handleWorktreeFetchPRBranch = async (payload: {
     rootPath: string;
     prNumber: number;
     headRefName: string;
-  }) => {
+  }): Promise<void> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
@@ -33,23 +33,21 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
     if (!payload.headRefName || typeof payload.headRefName !== "string") {
       throw new Error("headRefName is required");
     }
-    return await deps.worktreeService.fetchPRBranch(
+    await deps.worktreeService.fetchPRBranch(
       payload.rootPath,
       payload.prNumber,
       payload.headRefName
     );
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch));
 
-  const handleWorktreeGetRecentBranches = async (payload: { rootPath: string }) => {
+  const handleWorktreeGetRecentBranches = async (payload: {
+    rootPath: string;
+  }): Promise<string[]> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
     return await deps.worktreeService.getRecentBranches(payload.rootPath);
   };
-  handlers.push(
-    typedHandle(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, handleWorktreeGetRecentBranches)
-  );
 
   const handleWorktreeGetDefaultPath = async (payload: {
     rootPath: string;
@@ -78,10 +76,9 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
 
     const initialPath = generateWorktreePath(rootPath, branchName, pattern);
 
-    const gitService = taskWorktreeService.getGitService(rootPath);
+    const gitService = gitServiceCache.getGitService(rootPath);
     return gitService.findAvailablePath(initialPath);
   };
-  handlers.push(typedHandle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath));
 
   const handleWorktreeGetAvailableBranch = async (payload: {
     rootPath: string;
@@ -101,12 +98,23 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
       throw new Error("Invalid branchName: must be a non-empty string");
     }
 
-    const gitService = taskWorktreeService.getGitService(rootPath);
+    const gitService = gitServiceCache.getGitService(rootPath);
     return gitService.findAvailableBranchName(branchName);
   };
-  handlers.push(
-    typedHandle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch)
-  );
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  const namespace = defineIpcNamespace({
+    name: "worktreeBranches",
+    ops: {
+      listBranches: op(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches),
+      fetchPRBranch: op(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch),
+      getRecentBranches: op(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, handleWorktreeGetRecentBranches),
+      getDefaultPath: op(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath),
+      getAvailableBranch: op(
+        CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH,
+        handleWorktreeGetAvailableBranch
+      ),
+    },
+  });
+
+  return namespace.register();
 }

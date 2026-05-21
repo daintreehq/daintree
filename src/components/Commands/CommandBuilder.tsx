@@ -453,7 +453,7 @@ export function CommandBuilder({
             <div className="text-center">
               <h3 className="text-lg font-medium text-daintree-text">Command Executed</h3>
               <p className="text-sm text-daintree-text/70 mt-1">
-                {executionResult.message ?? "The command completed successfully."}
+                {executionResult.message ?? "Command completed."}
               </p>
             </div>
           </div>

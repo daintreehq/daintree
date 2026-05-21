@@ -20,6 +20,11 @@ import type {
 import { CHANNELS } from "../../ipc/channels.js";
 import { ACTIONS_LIST_TOOL } from "../mcp-server/shared.js";
 import {
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+  WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
+} from "../../../shared/config/helpAssistantTierAllowlists.js";
+import {
   WAIT_UNTIL_IDLE_DESCRIPTION,
   WAIT_UNTIL_IDLE_INPUT_SCHEMA,
   WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
@@ -159,6 +164,13 @@ vi.mock("../McpPaneConfigService.js", () => ({
     isValidPaneToken: (token: string) => paneTokenTiers.has(token),
     getTierForToken: (token: string) => paneTokenTiers.get(token),
   },
+}));
+
+vi.mock("../SystemSleepService.js", () => ({
+  getSystemSleepService: vi.fn(() => ({
+    getAwakeTimeSince: vi.fn(() => Number.MAX_SAFE_INTEGER),
+    onWake: vi.fn(() => () => {}),
+  })),
 }));
 
 import { McpServerService } from "../McpServerService.js";
@@ -614,13 +626,15 @@ describe("McpServerService", () => {
     });
     expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
-    // Annotations — query tool
+    // Annotations — query tool. readOnly/idempotent from kind: "query";
+    // destructiveHint is false for queries (already declared read-only);
+    // openWorldHint defaults to true per spec.
     expect(safeTool?.annotations).toEqual({
       title: "List Actions",
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false,
-      openWorldHint: false,
+      openWorldHint: true,
     });
 
     // Annotations — destructive tool. `destructiveHint: true` is the
@@ -631,7 +645,7 @@ describe("McpServerService", () => {
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: true,
-      openWorldHint: false,
+      openWorldHint: true,
     });
   });
 
@@ -681,47 +695,57 @@ describe("McpServerService", () => {
     const queryFalse = result.tools.find((t) => t.name === "test.queryOverriddenFalse");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
-    // come from the `kind: "query"` default.
+    // come from the `kind: "query"` default. openWorldHint now defaults to true.
     expect(generate?.annotations).toEqual({
       title: "Generate Context",
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false,
-      openWorldHint: false,
+      openWorldHint: true,
     });
 
-    // Override flips readOnly/idempotent on; destructiveHint still comes from
-    // the `danger: "safe"` default.
+    // Override flips readOnly/idempotent on; destructiveHint and openWorldHint
+    // now come from the spec-conservative true defaults.
     expect(readOnlyCmd?.annotations).toEqual({
       title: "Read Only Command",
       readOnlyHint: true,
       idempotentHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
     });
 
-    // Explicit `false` overrides must win over the `kind: "query"` default —
+    // Explicit `false` overrides must win over kind-derived defaults —
     // this would silently break if `??` were ever swapped for `||`.
+    // destructiveHint is false for queries (!isQuery); openWorldHint defaults
+    // to true per spec.
     expect(queryFalse?.annotations).toEqual({
       title: "Query With False Overrides",
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: false,
-      openWorldHint: false,
+      openWorldHint: true,
     });
   });
 
-  it("ignores attempts to override openWorldHint via mcpAnnotations", async () => {
+  it("allows overriding openWorldHint via mcpAnnotations", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
-        // openWorldHint is category-derived; mcpAnnotations exposes only the
-        // three hint fields, so this entry's `category: "github"` must yield
-        // `openWorldHint: true` regardless of any per-action override.
+        // openWorldHint defaults to true; explicit false override must win.
+        createManifestEntry({
+          id: "keybinding.resetAll" as ActionId,
+          title: "Reset All Keybindings",
+          description: "Local-only destructive action",
+          category: "settings",
+          kind: "command",
+          danger: "confirm",
+          mcpAnnotations: { openWorldHint: false },
+        }),
+        // No override — must default to true (spec-conservative).
         createManifestEntry({
           id: "github.someTool" as ActionId,
           title: "Some GitHub Tool",
-          description: "Tool in an open-world category",
+          description: "Tool without openWorldHint override",
           category: "github",
           kind: "command",
           danger: "safe",
@@ -739,12 +763,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const tool = result.tools.find((t) => t.name === "github.someTool");
+    const localTool = result.tools.find((t) => t.name === "keybinding.resetAll");
+    const ghTool = result.tools.find((t) => t.name === "github.someTool");
 
-    expect(tool?.annotations?.openWorldHint).toBe(true);
+    expect(localTool?.annotations?.openWorldHint).toBe(false);
+    expect(ghTool?.annotations?.openWorldHint).toBe(true);
   });
 
-  it("sets openWorldHint true for network-bound categories and false for local ones", async () => {
+  it("defaults openWorldHint to true for all categories per spec", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
@@ -783,7 +809,7 @@ describe("McpServerService", () => {
 
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
-    expect(wtTool?.annotations?.openWorldHint).toBe(false);
+    expect(wtTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("falls back to renderer-modal dispatch when the client does not support elicitation", async () => {
@@ -2519,47 +2545,145 @@ describe("McpServerService", () => {
         title: "Mute Project Notifications",
         description: "Suppress future agent notifications for a project",
       }),
+      // Additional entries needed for full ACTION_TIER_ADDONS coverage.
+      createManifestEntry({
+        id: "worktree.setActive" as ActionId,
+        title: "Set Active Worktree",
+        description: "Set the active worktree for a project",
+      }),
+      createManifestEntry({
+        id: "worktree.refresh" as ActionId,
+        title: "Refresh Worktrees",
+        description: "Refresh worktree status from disk",
+      }),
+      createManifestEntry({
+        id: "terminal.inject" as ActionId,
+        title: "Inject Terminal Input",
+        description: "Inject text into a terminal",
+      }),
+      createManifestEntry({
+        id: "terminal.new" as ActionId,
+        title: "New Terminal",
+        description: "Create a new terminal",
+      }),
+      createManifestEntry({
+        id: "terminal.moveToDock" as ActionId,
+        title: "Move to Dock",
+        description:
+          "Move the target terminal from the grid to the dock. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      }),
+      createManifestEntry({
+        id: "terminal.moveToGrid" as ActionId,
+        title: "Move to Grid",
+        description:
+          "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      }),
+      createManifestEntry({
+        id: "terminal.toggleDock" as ActionId,
+        title: "Toggle Dock",
+        description:
+          "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
+      }),
+      waitUntilIdleManifestEntry(),
+      createManifestEntry({
+        id: "recipe.list" as ActionId,
+        title: "List Recipes",
+        description: "List available recipes",
+      }),
+      createManifestEntry({
+        id: "recipe.run" as ActionId,
+        title: "Run Recipe",
+        description: "Execute a recipe",
+      }),
+      createManifestEntry({
+        id: "copyTree.injectToTerminal" as ActionId,
+        title: "Inject CopyTree to Terminal",
+        description: "Inject generated context into a terminal",
+      }),
+      createManifestEntry({
+        id: "file.openInEditor" as ActionId,
+        title: "Open File in Editor",
+        description: "Open a file in the system editor",
+      }),
+      // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
+      createManifestEntry({
+        id: "git.stageFile" as ActionId,
+        title: "Stage File",
+        description: "Stage a file for commit",
+      }),
+      createManifestEntry({
+        id: "git.unstageFile" as ActionId,
+        title: "Unstage File",
+        description: "Unstage a file",
+      }),
+      createManifestEntry({
+        id: "git.stageAll" as ActionId,
+        title: "Stage All",
+        description: "Stage all changed files",
+      }),
+      createManifestEntry({
+        id: "git.unstageAll" as ActionId,
+        title: "Unstage All",
+        description: "Unstage all files",
+      }),
+      createManifestEntry({
+        id: "git.snapshotRevert" as ActionId,
+        title: "Revert Snapshot",
+        description: "Revert to a git snapshot",
+      }),
+      createManifestEntry({
+        id: "git.snapshotDelete" as ActionId,
+        title: "Delete Snapshot",
+        description: "Delete a git snapshot",
+      }),
+      createManifestEntry({
+        id: "forge.openIssue" as ActionId,
+        title: "Open Issue (Forge)",
+        description: "Open an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.openIssues" as ActionId,
+        title: "Open Issues (Forge)",
+        description: "Open the issues list via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.openPRs" as ActionId,
+        title: "Open PRs (Forge)",
+        description: "Open the pull requests list via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.openCommits" as ActionId,
+        title: "Open Commits (Forge)",
+        description: "Open the commits view via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.assignIssue" as ActionId,
+        title: "Assign Issue (Forge)",
+        description: "Assign an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.validateToken" as ActionId,
+        title: "Validate Token (Forge)",
+        description: "Validate credentials via the forge provider",
+      }),
+      createManifestEntry({
+        id: "github.openPR" as ActionId,
+        title: "Open PR",
+        description: "Open a pull request on GitHub",
+      }),
     ];
 
-    // Action tier owns full in-app orchestration: spawn agents, send prompts,
-    // close terminals, the workflow macro, theme/focus shortcuts. System tier
-    // is reserved for filesystem-destructive operations (worktree.delete),
-    // git mutations (commit/push/stage/snapshot), externally-visible writes
-    // (OS clipboard, GitHub issue/PR creation). See ACTION_TIER_ADDONS and
-    // SYSTEM_TIER_ADDONS in shared/config/helpAssistantTierAllowlists.ts.
-    const ACTION_TIER_TOOLS = [
-      "agent.launch",
-      "agent.terminal",
-      "agent.focusNextWaiting",
-      "agent.focusNextWorking",
-      "agent.focusNextAgent",
-      "agent.focusPreviousAgent",
-      "terminal.sendCommand",
-      "terminal.close",
-      "terminal.closeAll",
-      "terminal.kill",
-      "terminal.killAll",
-      "workflow.startWorkOnIssue",
-      "workflow.focusNextAttention",
-      "app.theme.pick",
-      "app.theme.browser.open",
-      "app.theme.toggle",
-      "project.update",
-      "project.saveSettings",
-      "project.muteNotifications",
-    ] as const;
+    // Tier action/addon sets are sourced from the production allowlists so a
+    // rename in shared/config/helpAssistantTierAllowlists.ts or actionIds.ts
+    // produces a test failure here instead of silent drift.
+    // The workbench spot-check array is deliberately minimal — the manifest
+    // only contains a subset of workbench entries. Action and system addon
+    // sets iterate all production entries (manifest gaps filled above).
 
-    const WORKBENCH_TIER_TOOLS = [
-      "workflow.prepBranchForReview",
-      "agentSettings.get",
-      "keybinding.getOverrides",
-    ] as const;
-
-    const SYSTEM_ONLY_TOOLS = [
-      "git.commit",
-      "git.push",
-      "worktree.delete",
-      "copyTree.generateAndCopyFile",
+    const WORKBENCH_SPOT_CHECKS = [
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "workflow.prepBranchForReview")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "agentSettings.get")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "keybinding.getOverrides")!,
     ] as const;
 
     // Fleet-broadcast primitives are renderer-only — they remain available
@@ -2597,16 +2721,16 @@ describe("McpServerService", () => {
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("actions.list");
       expect(ids).toContain("worktree.list");
-      for (const id of WORKBENCH_TIER_TOOLS) {
+      for (const id of WORKBENCH_SPOT_CHECKS) {
         expect(ids).toContain(id);
       }
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("copyTree.isAvailable");
-      for (const id of ACTION_TIER_TOOLS) {
+      for (const id of ACTION_TIER_ADDONS) {
         expect(ids).not.toContain(id);
       }
-      for (const id of SYSTEM_ONLY_TOOLS) {
+      for (const id of SYSTEM_TIER_ADDONS) {
         expect(ids).not.toContain(id);
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
@@ -2628,10 +2752,10 @@ describe("McpServerService", () => {
       expect(ids).toContain("worktree.list");
       expect(ids).not.toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
-      for (const id of ACTION_TIER_TOOLS) {
+      for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);
       }
-      for (const id of SYSTEM_ONLY_TOOLS) {
+      for (const id of SYSTEM_TIER_ADDONS) {
         expect(ids).not.toContain(id);
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
@@ -2653,10 +2777,10 @@ describe("McpServerService", () => {
       expect(ids).toContain("worktree.list");
       expect(ids).not.toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
-      for (const id of ACTION_TIER_TOOLS) {
+      for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);
       }
-      for (const id of SYSTEM_ONLY_TOOLS) {
+      for (const id of SYSTEM_TIER_ADDONS) {
         expect(ids).toContain(id);
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {

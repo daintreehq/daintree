@@ -11,22 +11,33 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
-import { SessionStore as RealSessionStore } from "../sessionStore.js";
+import { SessionStore as RealSessionStore, consumeToken } from "../sessionStore.js";
+import { GrantCache } from "../grantCache.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
   RETRIABLE_ERROR_CODES,
   TIER_NOT_PERMITTED_CODE,
   EXECUTION_ERROR_CODE,
+  SESSION_BINDING_GONE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   ELICITATION_FAILED_CODE,
+  MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_DEDUP_ALLOWLIST,
+  MCP_RATE_LIMITED_CODE,
+  RATE_LIMIT_TIERS,
   unwrapDispatchResult,
 } from "../shared.js";
+import { SessionBindingError } from "../rendererBridge.js";
 
 function fakeSessionStore(
   tier: "workbench" | "action" | "system" | "external" = "workbench"
 ): SessionStore {
+  // Real GrantCache instance with sweeping disabled — tests drive lazy
+  // eviction via the optional `now` clock when they need to assert
+  // expiry, and they call dispose() at teardown.
+  const grantCache = new GrantCache({ sweepIntervalMs: 0 });
   const store = {
     sessions: new Map(),
     httpSessions: new Map(),
@@ -35,6 +46,8 @@ function fakeSessionStore(
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
+    rateLimitBuckets: new Map(),
+    grantCache,
     drain: vi.fn(),
     getTier: vi.fn(() => tier),
     createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
@@ -42,6 +55,11 @@ function fakeSessionStore(
     resetIdleTimer: vi.fn(),
     resetHttpIdleTimer: vi.fn(),
     clearDedupState: vi.fn(),
+    // Permissive by default so existing suites aren't throttled; the
+    // rate-limit suite overrides this with a counting stub or the real
+    // implementation.
+    consumeRateLimitToken: vi.fn(() => ({ allowed: true })),
+    clearRateLimitState: vi.fn(),
   } as unknown as SessionStore;
   return store;
 }
@@ -406,7 +424,7 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(2);
   });
 
-  it("honors explicit requestKey over arg hash and strips it before dispatch", async () => {
+  it("returns collision error when same requestKey used with different args (result-cache)", async () => {
     const dispatchAction = vi
       .fn()
       .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk" } } });
@@ -416,20 +434,117 @@ describe("CallTool idempotency dedup", () => {
     });
     const server = createSessionServer("dedup-5", deps);
 
-    // Same requestKey, different args — should still dedup as the same call.
     await callTool(server, {
       name: "terminal.new",
       arguments: { requestKey: "rk-1", spawnedBy: { kind: "user" } },
     });
-    await callTool(server, {
+    const second = (await callTool(server, {
       name: "terminal.new",
       arguments: { requestKey: "rk-1", spawnedBy: { kind: "agent" } },
-    });
+    })) as { isError?: boolean; content: Array<{ text: string }> };
 
     expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second.isError).toBe(true);
+    expect(second.content[0].text).toContain(MCP_DEDUP_KEY_COLLISION_CODE);
     // requestKey must not reach dispatchAction.
     const dispatchedArgs = dispatchAction.mock.calls[0][1] as Record<string, unknown>;
     expect(dispatchedArgs).not.toHaveProperty("requestKey");
+  });
+
+  it("returns collision error when same requestKey used with different args (in-flight)", async () => {
+    let resolveDispatch: ((envelope: unknown) => void) | undefined;
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve as (envelope: unknown) => void;
+        })
+    );
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-5b", deps);
+
+    // Fire the first call — it will register in-flight and then await dispatch.
+    const first = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-inflight", spawnedBy: { kind: "user" } },
+    });
+
+    // Yield microtasks so the first handler registers its in-flight entry.
+    for (let i = 0; i < 50 && !resolveDispatch; i++) {
+      await Promise.resolve();
+    }
+    expect(resolveDispatch).toBeDefined();
+
+    // Second call with same requestKey but different args — must return collision
+    // synchronously, not await the in-flight promise.
+    const second = (await callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-inflight", spawnedBy: { kind: "agent" } },
+    })) as { isError?: boolean; content: Array<{ text: string }> };
+
+    expect(second.isError).toBe(true);
+    expect(second.content[0].text).toContain(MCP_DEDUP_KEY_COLLISION_CODE);
+
+    // Resolve the first call so it doesn't hang.
+    resolveDispatch!({ result: { ok: true, result: { terminalId: "t-inflight" } } });
+    await first;
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedup still works with explicit requestKey and same args (result-cache)", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-rk-ok" } } });
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-rk-ok", deps);
+
+    const args = { requestKey: "rk-same", spawnedBy: { kind: "user" } };
+    const first = await callTool(server, { name: "terminal.new", arguments: args });
+    const second = await callTool(server, { name: "terminal.new", arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it("dedup still works with explicit requestKey and same args (in-flight)", async () => {
+    let resolveDispatch: ((envelope: unknown) => void) | undefined;
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve as (envelope: unknown) => void;
+        })
+    );
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-rk-inflight", deps);
+
+    const a = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-same2", spawnedBy: { kind: "user" } },
+    });
+    const b = callTool(server, {
+      name: "terminal.new",
+      arguments: { requestKey: "rk-same2", spawnedBy: { kind: "user" } },
+    });
+
+    for (let i = 0; i < 50 && !resolveDispatch; i++) {
+      await Promise.resolve();
+    }
+    expect(resolveDispatch).toBeDefined();
+
+    resolveDispatch!({ result: { ok: true, result: { terminalId: "t-rk-if-ok" } } });
+
+    const [resultA, resultB] = await Promise.all([a, b]);
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(resultA).toEqual(resultB);
   });
 
   it("does not cache failed dispatches; retries re-dispatch", async () => {
@@ -1093,6 +1208,38 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.retriable).toBe(true);
     expect(parsed.message).toContain("transport went away");
   });
+
+  it("maps SessionBindingError to SESSION_BINDING_GONE with retriable=false (#8432)", async () => {
+    const manifest = [
+      {
+        id: "files.search",
+        title: "Files: search",
+        description: "Search",
+        category: "files",
+        danger: "safe" as const,
+        source: ["agent"] as const,
+      },
+    ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockRejectedValue(new SessionBindingError(42)),
+    });
+    const server = createSessionServer("s-binding", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe(SESSION_BINDING_GONE);
+    expect(parsed.retriable).toBe(false);
+    expect(parsed.message).toContain("Do not retry");
+    expect(parsed.message).toContain("42");
+  });
 });
 
 describe("Resource error envelope (integration through sessionServer)", () => {
@@ -1213,5 +1360,550 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       expect((err as McpError).code).toBe(ErrorCode.InvalidRequest);
       expect((err as McpError).message).toContain("Unknown resource URI");
     }
+  });
+});
+
+describe("sessionServer grant cache fallback (#8442)", () => {
+  async function callTool(
+    server: ReturnType<typeof createSessionServer>,
+    params: { name: string; arguments?: Record<string, unknown> }
+  ) {
+    const handlers = (
+      server as unknown as {
+        _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+      }
+    )._requestHandlers;
+    const handler = handlers.get("tools/call");
+    if (!handler) throw new Error("tools/call handler not found");
+    return handler(
+      {
+        method: "tools/call",
+        params,
+        jsonrpc: "2.0",
+        id: 1,
+      },
+      {
+        signal: new AbortController().signal,
+        _meta: {},
+        sendNotification: vi.fn(),
+        requestId: 1,
+      }
+    );
+  }
+
+  it("floor-permitted tool never consults the grant cache", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // worktree.list is in WORKBENCH_TOOLS → static floor permits.
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    expect(dispatchAction).toHaveBeenCalled();
+    expect(checkSpy).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("denied tool with an active grant dispatches and refreshes TTL on success", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
+    resetIdle.mockClear();
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const notify = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, notifyTierMismatch: notify });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(notify).not.toHaveBeenCalled();
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(resetIdle).toHaveBeenCalledWith("s");
+    sessionStore.grantCache.dispose();
+  });
+
+  it("grant for tool A does not authorize tool B in the same session", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const dispatchAction = vi.fn();
+    const notify = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, notifyTierMismatch: notify });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // worktree.createWithRecipe is action-tier, distinct from worktree.delete.
+    const result = (await callTool(server, {
+      name: "worktree.createWithRecipe",
+      arguments: { branchName: "x" },
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.createWithRecipe" })
+    );
+    sessionStore.grantCache.dispose();
+  });
+
+  it("failed dispatch through a grant does not refresh the TTL", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
+    const dispatchAction = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: "BOOM", message: "boom" } },
+    });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(dispatchAction).toHaveBeenCalled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("denials below the silence threshold fire the banner", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    const notify = vi.fn();
+    const audit = vi.fn();
+    const deps = fakeDeps({
+      sessionStore,
+      notifyTierMismatch: notify,
+      appendAuditRecord: audit,
+    });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // 1st denial.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    // 2nd denial: still fires (threshold = 2 means 1st AND 2nd fire).
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    // 3rd denial: suppressed but audited.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    // Every denial wrote an audit record.
+    const unauthorizedRecords = audit.mock.calls.filter(
+      (call) => call[0]?.outcome?.kind === "unauthorized"
+    );
+    expect(unauthorizedRecords).toHaveLength(3);
+    // The third record carries bannerSuppressed: true.
+    expect(unauthorizedRecords[2][0]).toMatchObject({ bannerSuppressed: true });
+    expect(unauthorizedRecords[0][0].bannerSuppressed).toBeUndefined();
+    expect(unauthorizedRecords[1][0].bannerSuppressed).toBeUndefined();
+
+    sessionStore.grantCache.dispose();
+  });
+
+  it("issueGrant zeroes the denial counter — banner re-arms after explicit approval", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    const notify = vi.fn();
+    const deps = fakeDeps({ sessionStore, notifyTierMismatch: notify });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // Push the counter past the silence threshold.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(true);
+
+    // Approval mints a grant + resets counter.
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(false);
+
+    sessionStore.grantCache.dispose();
+  });
+
+  it("terminal.waitUntilIdle refreshes the grant TTL and resets idle timer on success", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
+    resetIdle.mockClear();
+    sessionStore.grantCache.issueGrant("s", "terminal.waitUntilIdle");
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
+
+    // waitUntilIdle is a main-process short-circuit, NOT a renderer
+    // dispatch — it has its own success-path block that must apply the
+    // grant-refresh + idle-timer reset.
+    const handleWaitUntilIdle = vi.fn().mockResolvedValue({
+      idleReason: "idle" as const,
+      durationMs: 1000,
+      finalState: "idle",
+    });
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({
+      sessionStore,
+      handleWaitUntilIdle,
+      dispatchAction,
+    });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "terminal.waitUntilIdle",
+      arguments: { terminalId: "t1", timeoutMs: 1000 },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    expect(handleWaitUntilIdle).toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(resetIdle).toHaveBeenCalledWith("s");
+    sessionStore.grantCache.dispose();
+  });
+});
+
+function parseToolErrorPayload(result: { content: unknown; isError?: boolean }): {
+  code: string;
+  retriable: boolean;
+  details?: { retryAfter?: number };
+} {
+  const text = (result as { content: Array<{ text: string }> }).content[0].text;
+  return JSON.parse(text);
+}
+
+describe("consumeToken (pure token bucket)", () => {
+  const mutation = RATE_LIMIT_TIERS.mutation; // capacity 10, 10/min
+
+  it("allows up to capacity then rejects with a positive retryAfter", () => {
+    const bucket = { tokens: mutation.capacity, lastRefillMs: 1000 };
+    for (let i = 0; i < mutation.capacity; i++) {
+      expect(consumeToken(bucket, mutation, 1000).allowed).toBe(true);
+    }
+    const rejected = consumeToken(bucket, mutation, 1000);
+    expect(rejected.allowed).toBe(false);
+    if (!rejected.allowed) {
+      expect(rejected.retryAfter).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("refills proportionally to elapsed wall-clock", () => {
+    const bucket = { tokens: 0, lastRefillMs: 0 };
+    // 10/min => one token every 6000ms. After 6000ms exactly one token.
+    const r = consumeToken(bucket, mutation, 6000);
+    expect(r.allowed).toBe(true);
+    expect(bucket.tokens).toBeCloseTo(0, 5);
+  });
+
+  it("caps refill at capacity (no unbounded accrual while idle)", () => {
+    const bucket = { tokens: 0, lastRefillMs: 0 };
+    // A huge idle gap must not let the bucket exceed capacity.
+    consumeToken(bucket, mutation, 60 * 60 * 1000);
+    expect(bucket.tokens).toBeLessThanOrEqual(mutation.capacity);
+  });
+
+  it("never returns a sub-second retryAfter", () => {
+    const bucket = { tokens: 0.99, lastRefillMs: 0 };
+    const r = consumeToken(bucket, RATE_LIMIT_TIERS.highFreqRead, 0);
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.retryAfter).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("SessionStore.consumeRateLimitToken", () => {
+  it("exhausts the mutation tier (git.commit) after capacity calls", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
+    }
+    const rejected = store.consumeRateLimitToken("s", "git.commit", 1000);
+    expect(rejected.allowed).toBe(false);
+    store.drain();
+  });
+
+  it("uses the high-frequency tier for read tools (terminal.getStatus)", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.highFreqRead.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(true);
+    }
+    expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(false);
+    store.drain();
+  });
+
+  it("falls back to the standard tier for unmapped tools", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.standard.capacity;
+    for (let i = 0; i < cap; i++) {
+      expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(true);
+    }
+    expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(false);
+    store.drain();
+  });
+
+  it("isolates buckets per session", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("session-a", "git.push", 1000);
+    }
+    expect(store.consumeRateLimitToken("session-a", "git.push", 1000).allowed).toBe(false);
+    // A fresh session is unaffected by session-a's exhausted bucket.
+    expect(store.consumeRateLimitToken("session-b", "git.push", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("isolates buckets per tool within a session", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("s", "git.commit", 1000);
+    }
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
+    expect(store.consumeRateLimitToken("s", "git.push", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("clearRateLimitState resets the session's buckets", () => {
+    const store = new RealSessionStore(() => {});
+    const cap = RATE_LIMIT_TIERS.mutation.capacity;
+    for (let i = 0; i < cap; i++) {
+      store.consumeRateLimitToken("s", "git.commit", 1000);
+    }
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
+    store.clearRateLimitState("s");
+    // Fresh bucket — full capacity again.
+    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
+    store.drain();
+  });
+
+  it("drain() tears down all rate-limit buckets", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("s", "git.commit", 1000);
+    expect(store.rateLimitBuckets.has("s")).toBe(true);
+    store.drain();
+    expect(store.rateLimitBuckets.size).toBe(0);
+  });
+
+  it("revokeSession() tears down the rate-limit buckets for a live session", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("live", "git.commit", 1000);
+    expect(store.rateLimitBuckets.has("live")).toBe(true);
+    // Install a minimal HTTP session so revokeSession() has an entry to
+    // tear down (it returns false and no-ops without one).
+    store.httpSessions.set("live", {
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+      server: {},
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    } as unknown as typeof store.httpSessions extends Map<string, infer V> ? V : never);
+    expect(store.revokeSession("live")).toBe(true);
+    expect(store.rateLimitBuckets.has("live")).toBe(false);
+    store.drain();
+  });
+
+  it("does not advance lastRefillMs backward on a clock step-back", () => {
+    const store = new RealSessionStore(() => {});
+    store.consumeRateLimitToken("s", "git.commit", 10000);
+    store.consumeRateLimitToken("s", "git.commit", 9000); // clock went back
+    const bucket = store.rateLimitBuckets.get("s")!.get("git.commit")!;
+    expect(bucket.lastRefillMs).toBe(10000);
+    store.consumeRateLimitToken("s", "git.commit", 10001);
+    expect(bucket.lastRefillMs).toBe(10001);
+    store.drain();
+  });
+});
+
+describe("CallTool rate limiting (handler integration)", () => {
+  it("rejects with MCP_RATE_LIMITED + retryAfter when the bucket is exhausted", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 7,
+    });
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, appendAuditRecord });
+    const server = createSessionServer("rl-1", deps);
+
+    const result = (await callTool(server, {
+      name: "git.commit",
+      arguments: { message: "x" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const payload = parseToolErrorPayload(result);
+    expect(payload.code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(payload.retriable).toBe(true);
+    expect(payload.details?.retryAfter).toBe(7);
+    // Rate limit runs before dispatch — the action never ran.
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("writes a rate_limited audit record before returning", async () => {
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 3,
+    });
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ sessionStore, appendAuditRecord });
+    const server = createSessionServer("rl-2", deps);
+
+    await callTool(server, { name: "git.push", arguments: {} });
+
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    const arg = appendAuditRecord.mock.calls[0]![0] as {
+      outcome: { kind: string; retryAfter?: number };
+      toolId: string;
+    };
+    expect(arg.toolId).toBe("git.push");
+    expect(arg.outcome.kind).toBe("rate_limited");
+    expect(arg.outcome.retryAfter).toBe(3);
+  });
+
+  it("runs before dedup — an exhausted bucket short-circuits an allowlisted tool", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const sessionStore = fakeSessionStore("system");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 1,
+    });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("rl-3", deps);
+
+    // terminal.new is dedup-allowlisted; rate-limit must win the race.
+    const result = (await callTool(server, {
+      name: "terminal.new",
+      arguments: { spawnedBy: { kind: "user" } },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(sessionStore.dedupInFlight.size).toBe(0);
+  });
+
+  it("does not consume a token for tier-denied calls (auth precedes rate limit)", async () => {
+    // workbench tier cannot call git.commit; the tier check returns first
+    // and the rate-limit token must not be charged.
+    const sessionStore = fakeSessionStore("workbench");
+    const deps = fakeDeps({ sessionStore });
+    const server = createSessionServer("rl-4", deps);
+
+    const result = (await callTool(server, {
+      name: "git.commit",
+      arguments: { message: "x" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).not.toBe(MCP_RATE_LIMITED_CODE);
+    expect(sessionStore.consumeRateLimitToken).not.toHaveBeenCalled();
+  });
+
+  it("lets allowed calls dispatch normally", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const sessionStore = fakeSessionStore("system");
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("rl-5", deps);
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: { query: "x" },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    expect(sessionStore.consumeRateLimitToken).toHaveBeenCalledWith("rl-5", "files.search");
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a token even when the call is served from the dedup cache", async () => {
+    // Real store so dedup actually caches; spy on the real token bucket to
+    // prove rate-limit runs before dedup for *cached* hits, not just
+    // in-flight ones.
+    const store = new RealSessionStore(() => {});
+    store.sessionTierMap.set("rl-dedup", "system");
+    const consumeSpy = vi.spyOn(store, "consumeRateLimitToken");
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { sha: "abc" } } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("rl-dedup", deps);
+
+    const args = { message: "one" };
+    await callTool(server, { name: "git.commit", arguments: args });
+    await callTool(server, { name: "git.commit", arguments: args });
+
+    // Second call is a dedup cache hit (dispatch ran once) but the token
+    // was still charged on both — runaway loops stay bounded.
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(consumeSpy).toHaveBeenCalledTimes(2);
+    store.drain();
+  });
+
+  it("rate-limits a grant-authorized call (auth passes, rate limit fails)", async () => {
+    // Workbench tier can't call worktree.delete; a per-tool grant lifts the
+    // auth gate. The rate limiter must still reject, and the tier-mismatch
+    // banner must NOT fire (this is not an authorization failure).
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("rl-grant", "worktree.delete");
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 4,
+    });
+    const dispatchAction = vi.fn();
+    const notifyTierMismatch = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction, notifyTierMismatch });
+    const server = createSessionServer("rl-grant", deps);
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "w1" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(notifyTierMismatch).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+});
+
+describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
+  it("retains the original creation-tool cohort", () => {
+    for (const tool of [
+      "terminal.new",
+      "worktree.createWithRecipe",
+      "agent.launch",
+      "recipe.run",
+    ]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
+    }
+  });
+
+  it("adds the git/forge mutation cohort", () => {
+    for (const tool of ["git.commit", "git.push", "forge.openIssue", "github.openPR"]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
+    }
+  });
+
+  it("stays bounded — does not blanket every mutation", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("git.stageAll")).toBe(false);
+    expect(MCP_DEDUP_ALLOWLIST.has("terminal.sendCommand")).toBe(false);
   });
 });

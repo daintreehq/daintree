@@ -373,18 +373,25 @@ export async function getWorktreeChangesWithStats(
 
       const [{ toplevelRaw, headOid }, logOutput] = await Promise.all([
         revParsePromise,
-        git.raw(["log", "-1", "--format=%ct%n%s"]).catch(() => ""),
+        git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => ""),
       ]);
 
       const gitRoot = realpathSync(toplevelRaw.trim());
 
       let lastCommitMessage: string | undefined;
       let lastCommitTimestampMs: number | undefined;
+      let lastCommitAuthor: { name: string; email: string } | undefined;
       if (logOutput) {
-        const [tsLine, ...msgLines] = logOutput.split("\n");
+        const [tsLine, authorName, authorEmail, ...msgParts] = logOutput.split("\t");
         const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
         lastCommitTimestampMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : undefined;
-        lastCommitMessage = msgLines.join("\n").trim() || undefined;
+        lastCommitMessage = msgParts.join("\t").trim() || undefined;
+        if (authorName?.trim()) {
+          lastCommitAuthor = {
+            name: authorName.trim(),
+            email: (authorEmail ?? "").trim() || "",
+          };
+        }
       }
 
       // Deduplicate: a partially-staged file appears in both `modified` and
@@ -689,6 +696,7 @@ export async function getWorktreeChangesWithStats(
         lastUpdated: Date.now(),
         lastCommitMessage,
         lastCommitTimestampMs,
+        lastCommitAuthor,
         ahead: tracking ? status.ahead : undefined,
         behind: tracking ? status.behind : undefined,
         tracking,

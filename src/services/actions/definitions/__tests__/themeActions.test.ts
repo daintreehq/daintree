@@ -99,9 +99,8 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("light-a");
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", message: "Theme: Light A" })
-    );
+    // Success path is silent — the repainted UI is the confirmation.
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("switches from light to preferred dark scheme and persists", async () => {
@@ -118,9 +117,7 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("dark-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("dark-a");
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", message: "Theme: Dark A" })
-    );
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("is a no-op when resolved target equals current scheme", async () => {
@@ -182,7 +179,7 @@ describe("app.theme.toggle", () => {
     // Must NOT be light-a (the wrong-type fallback). Must be some built-in dark scheme.
     expect(selectedId).not.toBe("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith(selectedId);
-    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("shows error toast when persistence fails, skips success toast", async () => {

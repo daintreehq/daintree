@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   getInvalidCommandMessage,
@@ -40,11 +41,16 @@ interface DevPreviewSession extends DevPreviewSessionState {
   lastErrorKey: string | null;
   pendingUrl: string | null;
   readinessAbort: AbortController | null;
+  markerSeen: boolean;
   needsInstall: boolean;
   isRunningInstall: boolean;
   installAttemptedGeneration: number | null;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
+  phaseLabel?: "Compiling";
+  compilingEmitted: boolean;
+  compilingTimer: ReturnType<typeof setTimeout> | null;
+  forceKilled?: boolean;
 }
 
 const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
@@ -53,7 +59,18 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "running",
 ]);
 
+// Framework build/dep caches wiped by restartAndClearCache, relative to the
+// session cwd. node_modules/.vite is Vite's dep-optimization cache and is
+// distinct from a root-level .vite directory.
+const CACHE_DIRS: readonly string[] = [
+  ".next",
+  ".vite",
+  ".turbo",
+  path.join("node_modules", ".vite"),
+];
+
 const DEFAULT_TIMEOUT_MS = 8000;
+const DEV_PREVIEW_STOP_ESCALATION_MS = 5000;
 const STALE_START_RECOVERY_MS = 10000;
 const STARTUP_REPLAY_DELAY_MS = 1500;
 const REPLAY_HISTORY_MAX_LINES = 300;
@@ -112,6 +129,7 @@ export class DevPreviewSessionService {
     for (const session of this.sessions.values()) {
       this.clearStartupReplay(session);
       session.readinessAbort?.abort();
+      this.clearCompiling(session);
     }
     for (const terminalId of this.terminalToSession.keys()) {
       this.ptyClient.setIpcDataMirror(terminalId, false);
@@ -140,6 +158,7 @@ export class DevPreviewSessionService {
       worktreeId: request.worktreeId ?? null,
     });
     const key = createSessionKey(request.projectId, request.panelId);
+    let state: DevPreviewSessionState | undefined;
     await this.runLocked(key, async () => {
       if (this.disposed) return;
       const session = this.getOrCreateSession(request.projectId, request.panelId);
@@ -190,8 +209,9 @@ export class DevPreviewSessionService {
       }
 
       await this.ensureSessionTerminal(session);
+      state = this.getSessionState(request.projectId, request.panelId);
     });
-    return this.getSessionState(request.projectId, request.panelId);
+    return state ?? this.getSessionState(request.projectId, request.panelId);
   }
 
   async restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
@@ -202,6 +222,7 @@ export class DevPreviewSessionService {
       projectId: request.projectId,
     });
     const key = createSessionKey(request.projectId, request.panelId);
+    let state: DevPreviewSessionState | undefined;
     try {
       await this.runLocked(key, async () => {
         const session = this.sessions.get(key);
@@ -220,6 +241,7 @@ export class DevPreviewSessionService {
             terminalId: null,
             isRestarting: false,
           });
+          state = this.getSessionState(request.projectId, request.panelId);
           return;
         }
 
@@ -228,10 +250,12 @@ export class DevPreviewSessionService {
           url: null,
           error: null,
           isRestarting: true,
+          forceKilled: undefined,
         });
 
         await this.stopSessionTerminal(session, "restart");
         await this.spawnSessionTerminal(session);
+        state = this.getSessionState(request.projectId, request.panelId);
       });
     } finally {
       markPerformance(PERF_MARKS.DEVPREVIEW_RESTART_END, {
@@ -240,7 +264,145 @@ export class DevPreviewSessionService {
         durationMs: Date.now() - restartStartedAt,
       });
     }
+    return state ?? this.getSessionState(request.projectId, request.panelId);
+  }
+
+  async restartAndClearCache(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
+    validateSessionRequest(request);
+    const key = createSessionKey(request.projectId, request.panelId);
+    await this.runLocked(key, async () => {
+      const session = this.sessions.get(key);
+      if (!session) return;
+
+      const commandError = getInvalidCommandMessage(session.devCommand);
+      if (commandError) {
+        if (session.terminalId) {
+          await this.stopSessionTerminal(session, "invalid-command");
+        }
+        this.updateSession(session, {
+          status: "error",
+          error: { type: "unknown", message: commandError },
+          url: null,
+          assignedUrl: null,
+          terminalId: null,
+          isRestarting: false,
+        });
+        return;
+      }
+
+      this.updateSession(session, {
+        status: "starting",
+        url: null,
+        error: null,
+        isRestarting: true,
+      });
+
+      // Caches must be deleted only after the PTY is confirmed dead — Vite and
+      // Next.js hold file handles on these directories, and a live process
+      // causes EPERM on Windows.
+      await this.stopSessionTerminal(session, "restart-clear-cache");
+
+      const deletionError = await this.clearCacheDirs(session.cwd);
+      if (deletionError) {
+        this.updateSession(session, {
+          status: "error",
+          url: null,
+          assignedUrl: null,
+          error: {
+            type: "unknown",
+            message: `Failed to clear cache: ${deletionError}`,
+          },
+          terminalId: null,
+          isRestarting: false,
+        });
+        return;
+      }
+
+      await this.spawnSessionTerminal(session);
+    });
     return this.getSessionState(request.projectId, request.panelId);
+  }
+
+  async reinstallAndRestart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
+    validateSessionRequest(request);
+    const key = createSessionKey(request.projectId, request.panelId);
+    await this.runLocked(key, async () => {
+      const session = this.sessions.get(key);
+      if (!session) return;
+
+      const commandError = getInvalidCommandMessage(session.devCommand);
+      if (commandError) {
+        if (session.terminalId) {
+          await this.stopSessionTerminal(session, "invalid-command");
+        }
+        this.updateSession(session, {
+          status: "error",
+          error: { type: "unknown", message: commandError },
+          url: null,
+          assignedUrl: null,
+          terminalId: null,
+          isRestarting: false,
+        });
+        return;
+      }
+
+      this.updateSession(session, {
+        status: "starting",
+        url: null,
+        error: null,
+        isRestarting: true,
+      });
+
+      await this.stopSessionTerminal(session, "reinstall-restart");
+
+      // node_modules deletion uses retries because Windows Defender frequently
+      // holds locks on files mid-scan, surfacing as transient EPERM/EBUSY.
+      try {
+        await fsPromises.rm(path.join(session.cwd, "node_modules"), {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        });
+      } catch (err) {
+        const message = formatErrorMessage(err, "Failed to remove node_modules");
+        this.updateSession(session, {
+          status: "error",
+          url: null,
+          assignedUrl: null,
+          error: {
+            type: "unknown",
+            message: `Failed to remove node_modules: ${message}`,
+          },
+          terminalId: null,
+          isRestarting: false,
+        });
+        return;
+      }
+
+      // runInstall spawns its own install PTY; the handleExit chain respawns
+      // the dev server when the install exits 0. Do NOT call
+      // spawnSessionTerminal here — that would double-spawn.
+      await this.runInstall(session);
+    });
+    return this.getSessionState(request.projectId, request.panelId);
+  }
+
+  /**
+   * Deletes the framework cache directories under cwd. Returns an error
+   * message string if any deletion failed, or null on success. `force: true`
+   * makes missing directories a no-op.
+   */
+  private async clearCacheDirs(cwd: string): Promise<string | null> {
+    const failures: string[] = [];
+    for (const dir of CACHE_DIRS) {
+      try {
+        await fsPromises.rm(path.join(cwd, dir), { recursive: true, force: true });
+      } catch (err) {
+        failures.push(`${dir} (${formatErrorMessage(err, "deletion failed")})`);
+      }
+    }
+    return failures.length > 0 ? failures.join(", ") : null;
   }
 
   async stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
@@ -250,15 +412,32 @@ export class DevPreviewSessionService {
       const session = this.sessions.get(key);
       if (!session) return;
 
-      await this.stopSessionTerminal(session, "stop");
-      this.updateSession(session, {
-        status: "stopped",
-        url: null,
-        assignedUrl: null,
-        error: null,
-        terminalId: null,
-        isRestarting: false,
-      });
+      if (session.terminalId) {
+        this.updateSession(session, { status: "stopping", isRestarting: false });
+        const stopStartedAt = performance.now();
+        await this.stopSessionTerminal(session, "stop", DEV_PREVIEW_STOP_ESCALATION_MS);
+        const forceKilled = performance.now() - stopStartedAt >= DEV_PREVIEW_STOP_ESCALATION_MS;
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          assignedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          forceKilled,
+          phaseLabel: undefined,
+        });
+      } else {
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          assignedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          phaseLabel: undefined,
+        });
+      }
     });
     return this.getSessionState(request.projectId, request.panelId);
   }
@@ -364,6 +543,7 @@ export class DevPreviewSessionService {
       generation: 0,
       updatedAt: Date.now(),
       updatedAtPerformanceMs: performance.now(),
+      phaseLabel: undefined,
       cwd: "",
       devCommand: "",
       turbopackEnabled: true,
@@ -372,10 +552,13 @@ export class DevPreviewSessionService {
       lastErrorKey: null,
       pendingUrl: null,
       readinessAbort: null,
+      markerSeen: false,
       needsInstall: false,
       isRunningInstall: false,
       installAttemptedGeneration: null,
       startupReplayTimer: null,
+      compilingEmitted: false,
+      compilingTimer: null,
     };
     this.sessions.set(key, session);
     return session;
@@ -397,6 +580,8 @@ export class DevPreviewSessionService {
         isRestarting: false,
         generation: 0,
         updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
       };
     }
     return this.toPublicState(session);
@@ -415,6 +600,8 @@ export class DevPreviewSessionService {
       isRestarting: session.isRestarting,
       generation: session.generation,
       updatedAt: session.updatedAt,
+      phaseLabel: session.phaseLabel,
+      forceKilled: session.forceKilled,
     };
   }
 
@@ -431,6 +618,8 @@ export class DevPreviewSessionService {
         | "isRestarting"
         | "worktreeId"
         | "generation"
+        | "phaseLabel"
+        | "forceKilled"
       >
     >
   ): void {
@@ -443,6 +632,8 @@ export class DevPreviewSessionService {
     if (updates.isRestarting !== undefined) session.isRestarting = updates.isRestarting;
     if (updates.worktreeId !== undefined) session.worktreeId = updates.worktreeId;
     if (updates.generation !== undefined) session.generation = updates.generation;
+    if ("phaseLabel" in updates) session.phaseLabel = updates.phaseLabel;
+    if ("forceKilled" in updates) session.forceKilled = updates.forceKilled;
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
     this.onStateChanged(this.toPublicState(session));
@@ -469,7 +660,12 @@ export class DevPreviewSessionService {
         const terminalId = session.terminalId;
         this.attachTerminal(session, terminalId);
         if (!RUNNING_STATES.has(session.status)) {
-          this.updateSession(session, { status: "starting", error: null, url: null });
+          this.updateSession(session, {
+            status: "starting",
+            error: null,
+            url: null,
+            forceKilled: undefined,
+          });
         }
 
         if ((session.status === "starting" || session.status === "installing") && !session.url) {
@@ -491,6 +687,7 @@ export class DevPreviewSessionService {
       session.readinessAbort?.abort();
       session.readinessAbort = null;
       session.pendingUrl = null;
+      session.markerSeen = false;
       session.needsInstall = false;
       session.isRunningInstall = false;
       this.updateSession(session, { terminalId: null, url: null, assignedUrl: null });
@@ -529,7 +726,9 @@ export class DevPreviewSessionService {
 
     session.buffer = "";
     session.lastErrorKey = null;
+    session.markerSeen = false;
     session.assignedUrl = assignedUrl;
+    this.clearCompiling(session);
     this.attachTerminal(session, terminalId);
     this.updateSession(session, {
       terminalId,
@@ -538,6 +737,7 @@ export class DevPreviewSessionService {
       assignedUrl,
       error: null,
       generation: nextGeneration,
+      forceKilled: undefined,
     });
 
     try {
@@ -556,6 +756,19 @@ export class DevPreviewSessionService {
         projectId: session.projectId,
         terminalId,
       });
+
+      // The allocated PORT is authoritative for the common zero-config path.
+      // Keep output URL detection below as an override for servers that choose
+      // their own port, but do not depend on a single terminal line to start.
+      setTimeout(() => {
+        if (this.disposed) return;
+        if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
+        if (session.status !== "starting" || session.url || session.readinessAbort) return;
+
+        const abort = new AbortController();
+        session.readinessAbort = abort;
+        this.pollServerReadiness(session, assignedUrl, abort.signal, nextGeneration);
+      }, 0);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to start dev server");
       this.detachTerminal(session);
@@ -650,11 +863,17 @@ export class DevPreviewSessionService {
     session.terminalId = null;
   }
 
-  private async stopSessionTerminal(session: DevPreviewSession, context: string): Promise<void> {
+  private async stopSessionTerminal(
+    session: DevPreviewSession,
+    context: string,
+    escalationDelayMs?: number
+  ): Promise<void> {
     this.clearStartupReplay(session);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
     session.pendingUrl = null;
+    session.markerSeen = false;
+    this.clearCompiling(session);
     session.needsInstall = false;
     session.isRunningInstall = false;
 
@@ -666,7 +885,11 @@ export class DevPreviewSessionService {
     session.lastErrorKey = null;
 
     try {
-      this.ptyClient.kill(terminalId, `dev-preview:${context}`);
+      if (escalationDelayMs !== undefined) {
+        this.ptyClient.kill(terminalId, `dev-preview:${context}`, { escalationDelayMs });
+      } else {
+        this.ptyClient.kill(terminalId, `dev-preview:${context}`);
+      }
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
       if (!this.isBenignMissingTerminalError(message)) {
@@ -715,6 +938,17 @@ export class DevPreviewSessionService {
     }
   }
 
+  private clearCompiling(session: DevPreviewSession): void {
+    if (session.compilingTimer !== null) {
+      clearTimeout(session.compilingTimer);
+      session.compilingTimer = null;
+    }
+    session.compilingEmitted = false;
+    if (session.phaseLabel === "Compiling") {
+      session.phaseLabel = undefined;
+    }
+  }
+
   private handleData(id: string, data: string | Uint8Array): void {
     if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
@@ -728,6 +962,7 @@ export class DevPreviewSessionService {
     const result = this.detector.scanOutput(dataString, session.buffer);
     session.buffer = result.buffer;
 
+    let urlJustStarted = false;
     if (result.url && result.url !== session.url && result.url !== session.pendingUrl) {
       markPerformance(PERF_MARKS.DEVPREVIEW_URL_DETECTED, {
         panelId: session.panelId,
@@ -740,14 +975,67 @@ export class DevPreviewSessionService {
       const abort = new AbortController();
       session.readinessAbort = abort;
       session.pendingUrl = result.url;
+      // A new URL (e.g. a port change) starts a fresh poll; allow its own
+      // readiness marker to accelerate it again.
+      session.markerSeen = false;
+
+      this.clearCompiling(session);
 
       this.pollServerReadiness(session, result.url, abort.signal, session.generation);
+      urlJustStarted = true;
+    }
+
+    // A framework readiness line ("ready in N ms", "✓ Ready in", "compiled
+    // successfully") confirms the HTTP server is bound. When a poll is already
+    // mid-cycle (sleeping between HEAD attempts), abort it and re-probe now to
+    // skip the remaining poll interval. The poll itself stays the fallback for
+    // unrecognized frameworks, so no marker means no behavior change.
+    if (result.readyMarker && !session.markerSeen && !urlJustStarted && session.pendingUrl) {
+      session.markerSeen = true;
+      session.readinessAbort?.abort();
+      const abort = new AbortController();
+      session.readinessAbort = abort;
+      this.pollServerReadiness(session, session.pendingUrl, abort.signal, session.generation);
+    }
+
+    // A readyMarker without a pending URL (post-install, pre-URL detection)
+    // signals the framework is compiling. Debounce at 600ms to avoid label
+    // flicker from markers that fire on consecutive data chunks.
+    if (
+      result.readyMarker &&
+      !session.compilingEmitted &&
+      session.status === "starting" &&
+      !session.pendingUrl &&
+      !session.isRunningInstall &&
+      session.compilingTimer === null
+    ) {
+      session.compilingTimer = setTimeout(() => {
+        session.compilingTimer = null;
+        if (
+          session.status === "starting" &&
+          !session.pendingUrl &&
+          !session.url &&
+          !session.compilingEmitted
+        ) {
+          session.compilingEmitted = true;
+          this.updateSession(session, { phaseLabel: "Compiling" });
+        }
+      }, 600);
     }
 
     if (!result.error) return;
     const errorKey = `${result.error.type}:${result.error.message}`;
     if (errorKey === session.lastErrorKey) return;
     session.lastErrorKey = errorKey;
+
+    // Cancel any in-flight readiness poll: a server that still answers HEAD on
+    // a half-started port would otherwise resolve to "running" and clobber the
+    // error/installing status we are about to set.
+    session.readinessAbort?.abort();
+    session.readinessAbort = null;
+    session.pendingUrl = null;
+    session.markerSeen = false;
+    this.clearCompiling(session);
 
     if (result.error.type === "missing-dependencies") {
       session.needsInstall = true;
@@ -765,6 +1053,7 @@ export class DevPreviewSessionService {
       url: null,
       assignedUrl: null,
       isRestarting: false,
+      phaseLabel: undefined,
     });
   }
 
@@ -779,6 +1068,8 @@ export class DevPreviewSessionService {
     session.readinessAbort?.abort();
     session.readinessAbort = null;
     session.pendingUrl = null;
+    session.markerSeen = false;
+    this.clearCompiling(session);
 
     this.detachTerminal(session);
     session.buffer = "";
@@ -800,6 +1091,7 @@ export class DevPreviewSessionService {
         },
         terminalId: null,
         isRestarting: false,
+        phaseLabel: undefined,
       });
       return;
     }
@@ -823,6 +1115,7 @@ export class DevPreviewSessionService {
         error,
         terminalId: null,
         isRestarting: false,
+        phaseLabel: undefined,
       });
       return;
     }
@@ -834,6 +1127,7 @@ export class DevPreviewSessionService {
       error: null,
       terminalId: null,
       isRestarting: false,
+      phaseLabel: undefined,
     });
   }
 
@@ -894,7 +1188,9 @@ export class DevPreviewSessionService {
   }
 
   private detectInstallCommand(cwd: string): string {
-    if (existsSync(path.join(cwd, "bun.lockb"))) return "bun install";
+    if (existsSync(path.join(cwd, "bun.lock")) || existsSync(path.join(cwd, "bun.lockb"))) {
+      return "bun install";
+    }
     if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm install";
     if (existsSync(path.join(cwd, "yarn.lock"))) return "yarn install";
     return "npm install";
@@ -916,11 +1212,13 @@ export class DevPreviewSessionService {
 
         if (ready) {
           session.needsInstall = false;
+          this.clearCompiling(session);
           this.updateSession(session, {
             status: "running",
             url,
             error: null,
             isRestarting: false,
+            phaseLabel: undefined,
           });
           markPerformance(PERF_MARKS.DEVPREVIEW_RUNNING, {
             panelId: session.panelId,
@@ -938,6 +1236,7 @@ export class DevPreviewSessionService {
               message: `Dev server at ${url} did not respond within ${READINESS_TIMEOUT_MS / 1000} seconds`,
             },
             isRestarting: false,
+            phaseLabel: undefined,
           });
         }
       })
@@ -963,6 +1262,7 @@ export class DevPreviewSessionService {
             message: `Dev server readiness check failed: ${message}`,
           },
           isRestarting: false,
+          phaseLabel: undefined,
         });
       });
   }

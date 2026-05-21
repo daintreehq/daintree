@@ -93,18 +93,17 @@ describe("EventBuffer adversarial", () => {
   });
 
   it("returns filtered snapshots that cannot reintroduce redacted payloads", () => {
-    events.emit("task:created", {
-      taskId: "task-1",
-      worktreeId: "wt-1",
-      description: "apiKey=super-secret",
+    events.emit("agent:output", {
+      agentId: "agent-1",
+      data: "apiKey=super-secret",
       timestamp: 1,
     });
 
-    const [record] = buffer.getFiltered({ taskId: "task-1" });
-    record.payload.description = "apiKey=super-secret";
+    const [record] = buffer.getFiltered({ agentId: "agent-1" });
+    record.payload.data = "apiKey=super-secret";
 
     expect(buffer.getFiltered({ search: "super-secret" })).toEqual([]);
-    expect(buffer.getFiltered({ taskId: "task-1" })[0].payload.description).toBe(
+    expect(buffer.getFiltered({ agentId: "agent-1" })[0].payload.data).toBe(
       "[REDACTED - May contain sensitive information]"
     );
   });

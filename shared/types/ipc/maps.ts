@@ -1,15 +1,8 @@
 import type { StagingStatus } from "../git.js";
-import type { AgentId, AgentState } from "../agent.js";
+import type { AgentId } from "../agent.js";
 import type { VoiceInputStatus } from "../voice.js";
-import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
-import type {
-  Project,
-  ProjectSettings,
-  RunCommand,
-  TerminalRecipe,
-  TerminalSnapshot,
-} from "../project.js";
+import type { Project, ProjectSettings, RunCommand, TerminalRecipe } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { AgentSettings } from "../agentSettings.js";
@@ -17,38 +10,14 @@ import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 import type {
-  HelpAssistantSettings,
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
   VoiceInputSettings,
 } from "./api.js";
 
+import type { TerminalActivityPayload } from "./terminal.js";
 import type {
-  WorktreeSetActivePayload,
-  WorktreeDeletePayload,
-  CreateWorktreeOptions,
-  BranchInfo,
-  WorktreeConfig,
-  CreateForTaskPayload,
-  CleanupTaskOptions,
-  AttachIssuePayload,
-  DetachIssuePayload,
-  IssueAssociation,
-} from "./worktree.js";
-import type {
-  TerminalSpawnOptions,
-  TerminalReconnectResult,
-  BackendTerminalInfo,
-  TerminalInfoPayload,
-  TerminalActivityPayload,
-  SemanticSearchMatch,
-} from "./terminal.js";
-import type {
-  SaveArtifactOptions,
-  SaveArtifactResult,
-  ApplyPatchOptions,
-  ApplyPatchResult,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -80,7 +49,6 @@ import type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
-  CliInstallStatus,
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
@@ -91,7 +59,7 @@ import type {
   AgentInstallResult,
   AgentInstallProgressEvent,
 } from "./system.js";
-import type { AppState, HydrateResult } from "./app.js";
+import type { AppState, BootResult, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord } from "./events.js";
@@ -101,6 +69,7 @@ import type {
   ProjectStatusMap,
   ProjectSwitchPayload,
   ProjectSwitchOutgoingState,
+  ProjectWorktreeLoadStatusPayload,
 } from "./project.js";
 import type {
   RepositoryStats,
@@ -125,9 +94,6 @@ import type {
   SnapshotInfo,
   SnapshotRevertResult,
 } from "./git.js";
-import type { TerminalConfig } from "./config.js";
-import type { SystemSleepMetrics } from "./systemSleep.js";
-import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -135,7 +101,7 @@ import type {
   FileReadResult,
 } from "./files.js";
 import type { DevPreviewStateChangedPayload } from "./devPreview.js";
-import type { ServiceConnectivityPayload, ServiceConnectivitySnapshot } from "./connectivity.js";
+import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
@@ -152,9 +118,8 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../pty-host.js";
-import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
-import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
-import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
+import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
   DemoMoveToPayload,
@@ -172,10 +137,21 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
 } from "./system.js";
-import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
+import type { CloneRepoOptions, CloneRepoProgressEvent, CloneRepoResult } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
-import type { AgentSessionRecord } from "./agentSessionHistory.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
+import type {
+  AuthValidation,
+  ForgeProviderEntry,
+  ResolvedForgeProvider,
+  PushErrorClassification,
+  Issue,
+  PR,
+  Page,
+  RepoMetadata,
+  ListOptions,
+} from "../forge.js";
+import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -205,6 +181,7 @@ export interface OnboardingState {
   newsletterPromptSeen: boolean;
   waitingNudgeSeen: boolean;
   seenAgentIds: string[];
+  availabilityFirstSeen: Record<string, number>;
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
@@ -221,6 +198,13 @@ export interface MainProcessToastPayload {
   type: "success" | "error" | "info" | "warning";
   title?: string;
   message: string;
+  /**
+   * Rate-limit bucket override threaded through to `notify({ rateLimitKey })`.
+   * Without this, payloads share a bucket keyed only on `type` (e.g. all
+   * `"error"` toasts), so an unrelated burst of errors can absorb a billing-
+   * critical notification into a generic overflow row.
+   */
+  rateLimitKey?: string;
   action?: {
     label: string;
     /** IPC channel to invoke when the action button is clicked */
@@ -235,153 +219,6 @@ export interface MainProcessToastPayload {
 
 /** Maps IPC channels to their args/result types for type-safe invoke/handle */
 export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
-  // Worktree channels
-  "worktree:get-all": {
-    args: [];
-    result: WorktreeState[];
-  };
-  "worktree:refresh": {
-    args: [];
-    result: void;
-  };
-  "worktree:pr-refresh": {
-    args: [];
-    result: void;
-  };
-  "worktree:pr-status": {
-    args: [];
-    result: import("../workspace-host.js").PRServiceStatus | null;
-  };
-  "worktree:set-active": {
-    args: [payload: WorktreeSetActivePayload];
-    result: void;
-  };
-  "worktree:create": {
-    args: [payload: { rootPath: string; options: CreateWorktreeOptions }];
-    result: string;
-  };
-  "worktree:list-branches": {
-    args: [payload: { rootPath: string }];
-    result: BranchInfo[];
-  };
-  "worktree:get-recent-branches": {
-    args: [payload: { rootPath: string }];
-    result: string[];
-  };
-  "worktree:get-default-path": {
-    args: [payload: { rootPath: string; branchName: string }];
-    result: string;
-  };
-  "worktree:get-available-branch": {
-    args: [payload: { rootPath: string; branchName: string }];
-    result: string;
-  };
-  "worktree:delete": {
-    args: [payload: WorktreeDeletePayload];
-    result: void;
-  };
-  "worktree:create-for-task": {
-    args: [payload: CreateForTaskPayload];
-    result: WorktreeState;
-  };
-  "worktree:get-by-task-id": {
-    args: [taskId: string];
-    result: WorktreeState[];
-  };
-  "worktree:cleanup-task": {
-    args: [taskId: string, options?: CleanupTaskOptions];
-    result: void;
-  };
-  "worktree:attach-issue": {
-    args: [payload: AttachIssuePayload];
-    result: void;
-  };
-  "worktree:detach-issue": {
-    args: [payload: DetachIssuePayload];
-    result: void;
-  };
-  "worktree:get-issue-association": {
-    args: [worktreeId: string];
-    result: IssueAssociation | null;
-  };
-  "worktree:get-all-issue-associations": {
-    args: [];
-    result: Record<string, IssueAssociation>;
-  };
-  "worktree:restart-service": {
-    args: [];
-    result: void;
-  };
-
-  // Terminal channels
-  "terminal:spawn": {
-    args: [options: TerminalSpawnOptions];
-    result: string;
-  };
-  "terminal:submit": {
-    args: [id: string, text: string];
-    result: void;
-  };
-  "terminal:kill": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:trash": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:restore": {
-    args: [id: string];
-    result: boolean;
-  };
-  "terminal:wake": {
-    args: [id: string];
-    result: { state: string | null; warnings?: string[] };
-  };
-  "terminal:get-for-project": {
-    args: [projectId: string];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:reconnect": {
-    args: [terminalId: string];
-    result: TerminalReconnectResult;
-  };
-  "terminal:replay-history": {
-    args: [payload: { terminalId: string; maxLines?: number }];
-    result: { replayed: number };
-  };
-  "terminal:get-serialized-state": {
-    args: [terminalId: string];
-    result: string | null;
-  };
-  "terminal:get-serialized-states": {
-    args: [terminalIds: string[]];
-    result: Record<string, string | null>;
-  };
-  "terminal:get-shared-buffers": {
-    args: [];
-    result: {
-      visualBuffers: SharedArrayBuffer[];
-      signalBuffer: SharedArrayBuffer | null;
-    };
-  };
-  "terminal:get-analysis-buffer": {
-    args: [];
-    result: SharedArrayBuffer | null;
-  };
-  "terminal:get-info": {
-    args: [id: string];
-    result: TerminalInfoPayload;
-  };
-  "terminal:force-resume": {
-    args: [id: string];
-    result: void;
-  };
-  "terminal:restart-service": {
-    args: [];
-    result: void;
-  };
-
   // Files channels
   "files:search": {
     args: [payload: FileSearchPayload];
@@ -397,16 +234,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "agent-help:get": {
     args: [request: AgentHelpRequest];
     result: AgentHelpResult;
-  };
-
-  // Artifact channels
-  "artifact:save-to-file": {
-    args: [options: SaveArtifactOptions];
-    result: SaveArtifactResult | null;
-  };
-  "artifact:apply-patch": {
-    args: [options: ApplyPatchOptions];
-    result: ApplyPatchResult;
   };
 
   // CopyTree channels
@@ -437,20 +264,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "copytree:test-config": {
     args: [payload: CopyTreeTestConfigPayload];
     result: CopyTreeTestConfigResult;
-  };
-
-  // Editor channels
-  "editor:get-config": {
-    args: [projectId?: string];
-    result: import("../editor.js").EditorGetConfigResult;
-  };
-  "editor:set-config": {
-    args: [payload: import("../editor.js").EditorSetConfigPayload];
-    result: void;
-  };
-  "editor:discover": {
-    args: [];
-    result: import("../editor.js").DiscoveredEditor[];
   };
 
   // System channels
@@ -608,6 +421,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: HydrateResult;
   };
+  "app:boot": {
+    args: [];
+    result: BootResult;
+  };
   "app:quit": {
     args: [];
     result: void;
@@ -632,11 +449,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: { success: boolean };
   };
-  "menu:show-context": {
-    args: [payload: ShowContextMenuPayload];
-    result: string | null;
-  };
-
   // Window channels
   "window:toggle-fullscreen": {
     args: [];
@@ -765,7 +577,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Project;
   };
   "project:switch": {
-    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
+    args: [
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { focusIntent?: "focus-next-waiting" },
+    ];
     result: Project;
   };
   "project:prefetch-hydrate": {
@@ -836,49 +652,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "project:delete-recipe": {
     args: [payload: { projectId: string; recipeId: string }];
-    result: void;
-  };
-  "project:get-terminals": {
-    args: [projectId: string];
-    result: TerminalSnapshot[];
-  };
-  "project:set-terminals": {
-    args: [payload: { projectId: string; terminals: TerminalSnapshot[] }];
-    result: void;
-  };
-  "project:get-terminal-sizes": {
-    args: [projectId: string];
-    result: Record<string, { cols: number; rows: number }>;
-  };
-  "project:set-terminal-sizes": {
-    args: [
-      payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> },
-    ];
-    result: void;
-  };
-  "project:get-tab-groups": {
-    args: [projectId: string];
-    result: TabGroup[];
-  };
-  "project:set-tab-groups": {
-    args: [payload: { projectId: string; tabGroups: TabGroup[] }];
-    result: void;
-  };
-  "project:get-focus-mode": {
-    args: [projectId: string];
-    result: {
-      focusMode: boolean;
-      focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-    };
-  };
-  "project:set-focus-mode": {
-    args: [
-      payload: {
-        projectId: string;
-        focusMode: boolean;
-        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-      },
-    ];
     result: void;
   };
   "project:read-claude-md": {
@@ -1030,42 +803,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Terminal config channels
-  "terminal-config:get": {
-    args: [];
-    result: TerminalConfig;
-  };
-  "terminal-config:set-scrollback": {
-    args: [scrollbackLines: number];
-    result: void;
-  };
-  "terminal-config:set-performance-mode": {
-    args: [performanceMode: boolean];
-    result: void;
-  };
-  "terminal-config:set-font-size": {
-    args: [fontSize: number];
-    result: void;
-  };
-  "terminal-config:set-font-family": {
-    args: [fontFamily: string];
-    result: void;
-  };
-  "terminal-config:set-hybrid-input-enabled": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-hybrid-input-auto-focus": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-color-scheme": {
-    args: [schemeId: string];
-    result: void;
-  };
-  "terminal-config:set-custom-schemes": {
-    args: [schemes: unknown];
-    result: void;
-  };
   "terminal-config:import-color-scheme": {
     args: [];
     result:
@@ -1079,11 +816,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
           };
         }
       | { ok: false; errors: string[] };
-  };
-
-  "terminal-config:set-screen-reader-mode": {
-    args: [mode: "auto" | "on" | "off"];
-    result: void;
   };
 
   // Accessibility channels
@@ -1232,48 +964,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Portal channels
-  // System Sleep channels
-  "system-sleep:get-metrics": {
-    args: [];
-    result: SystemSleepMetrics;
-  };
-  "system-sleep:get-awake-time": {
-    args: [startTimestamp: number];
-    result: number;
-  };
-  "system-sleep:reset": {
-    args: [];
-    result: void;
-  };
-
-  // Hibernation channels
-  "hibernation:get-config": {
-    args: [];
-    result: HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<HibernationConfig>];
-    result: HibernationConfig;
-  };
-
-  // Idle terminal notification channels
-  "idle-terminal:get-config": {
-    args: [];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:update-config": {
-    args: [config: Partial<IdleTerminalNotifyConfig>];
-    result: IdleTerminalNotifyConfig;
-  };
-  "idle-terminal:close-project": {
-    args: [projectId: string];
-    result: void;
-  };
-  "idle-terminal:dismiss-project": {
-    args: [projectId: string];
-    result: void;
-  };
-
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -1298,34 +988,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "keybinding:import-profile": {
     args: [];
     result: KeybindingImportResult;
-  };
-
-  // Worktree Config channels
-  "worktree-config:get": {
-    args: [];
-    result: WorktreeConfig;
-  };
-  "worktree-config:set-pattern": {
-    args: [payload: { pattern: string }];
-    result: WorktreeConfig;
-  };
-  "worktree-config:set-wsl-git": {
-    args: [payload: { worktreeId: string; enabled: boolean }];
-    result: void;
-  };
-  "worktree-config:dismiss-wsl-banner": {
-    args: [payload: { worktreeId: string }];
-    result: void;
-  };
-
-  // Gemini channels
-  "gemini:get-status": {
-    args: [];
-    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string };
-  };
-  "gemini:enable-alternate-buffer": {
-    args: [];
-    result: { success: boolean };
   };
 
   // Plugin channels
@@ -1368,38 +1030,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "store-update:set-settings": {
     args: [enabled: boolean];
     result: { enabled: boolean };
-  };
-
-  // Agent Capabilities channels
-  "agent-capabilities:get-registry": {
-    args: [];
-    result: AgentRegistry;
-  };
-  "agent-capabilities:get-agent-ids": {
-    args: [];
-    result: string[];
-  };
-  "agent-capabilities:get-agent-metadata": {
-    args: [agentId: string];
-    result: AgentMetadata | null;
-  };
-  "agent-capabilities:is-agent-enabled": {
-    args: [agentId: string];
-    result: boolean;
-  };
-  "agent-capabilities:get-ccr-presets": {
-    args: [];
-    result: AgentPreset[];
-  };
-
-  // Daintree CLI install channels
-  "cli:install": {
-    args: [];
-    result: CliInstallStatus;
-  };
-  "cli:get-status": {
-    args: [];
-    result: CliInstallStatus;
   };
 
   // Clipboard channels — handlers throw `AppError` on failure (CLIPBOARD_EMPTY,
@@ -1466,153 +1096,96 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [schemeId: string];
     result: void;
   };
-  "telemetry:get": {
-    args: [];
-    result: { enabled: boolean; hasSeenPrompt: boolean };
-  };
-  "telemetry:set-enabled": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "telemetry:mark-prompt-shown": {
-    args: [];
-    result: void;
-  };
-  "telemetry:track": {
-    args: [event: string, properties: Record<string, unknown>];
-    result: void;
-  };
-  "telemetry:preview-get-state": {
-    args: [];
-    result: TelemetryPreviewState;
-  };
-  "telemetry:preview-toggle": {
-    args: [active: boolean];
-    result: TelemetryPreviewState;
-  };
-
   // GPU
   "gpu:get-status": {
     args: [];
-    result: { hardwareAccelerationDisabled: boolean };
+    result: { hardwareAccelerationDisabled: boolean; angleFallbackActive: boolean };
   };
   "gpu:set-hardware-acceleration": {
     args: [enabled: boolean];
     result: void;
   };
 
-  // Privacy & Data
-  "privacy:get-settings": {
+  // Forge integration
+  "forge:get-settings": {
     args: [];
-    result: {
-      telemetryLevel: "off" | "errors" | "full";
-      logRetentionDays: 0 | 7 | 30 | 90;
-      dataFolderPath: string;
-    };
+    result: { defaultProviderId: string | null };
   };
-  "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
+  "forge:set-default-provider": {
+    args: [providerId: string | null];
+    result: { defaultProviderId: string | null };
+  };
+  "forge:get-providers": {
+    args: [];
+    result: ForgeProviderEntry[];
+  };
+  "forge:resolve-provider": {
+    args: [projectId: string, remoteUrl?: string];
+    result: ResolvedForgeProvider;
+  };
+  "forge:open-issues": {
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
-  "privacy:set-log-retention": {
-    args: [days: 0 | 7 | 30 | 90];
+  "forge:open-prs": {
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
-  "privacy:open-data-folder": {
-    args: [];
+  "forge:open-commits": {
+    args: [cwd: string, branch?: string];
     result: void;
   };
-  "privacy:clear-cache": {
-    args: [];
+  "forge:open-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
     result: void;
   };
-  "privacy:reset-all-data": {
-    args: [];
-    result: void;
-  };
-  "privacy:get-data-folder-path": {
-    args: [];
+  "forge:get-issue-url": {
+    args: [payload: { cwd: string; issueNumber: number }];
     result: string;
   };
-
-  // Sentry
-  "sentry:get-consent-state": {
-    args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
-  };
-
-  // Onboarding
-  "onboarding:get": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:set-step": {
-    args: [step: string | null | { step: string | null; agentSetupIds?: string[] }];
+  "forge:assign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;
   };
-  "onboarding:complete": {
-    args: [];
+  "forge:validate-token": {
+    args: [token: string];
+    result: AuthValidation;
+  };
+  "forge:set-credential": {
+    args: [providerId: string, credentials: Record<string, string>];
+    result: AuthValidation;
+  };
+  "forge:get-credential-status": {
+    args: [providerId: string];
+    result: { hasCredential: boolean };
+  };
+  "forge:clear-credential": {
+    args: [providerId: string];
     result: void;
   };
-  "onboarding:mark-toast-seen": {
-    args: [];
-    result: void;
+  "forge:list-issues": {
+    args: [payload: { cwd: string; opts?: ListOptions }];
+    result: Page<Issue>;
   };
-  "onboarding:mark-newsletter-seen": {
-    args: [];
-    result: void;
+  "forge:list-prs": {
+    args: [payload: { cwd: string; opts?: ListOptions }];
+    result: Page<PR>;
   };
-  "onboarding:mark-waiting-nudge-seen": {
-    args: [];
-    result: void;
+  "forge:get-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: Issue | null;
   };
-  "onboarding:mark-agents-seen": {
-    args: [agentIds: string[]];
-    result: OnboardingState;
+  "forge:get-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: PR | null;
   };
-  "onboarding:dismiss-welcome-card": {
-    args: [];
-    result: OnboardingState;
+  "forge:get-repo-metadata": {
+    args: [payload: { cwd: string }];
+    result: RepoMetadata;
   };
-  "onboarding:dismiss-setup-banner": {
-    args: [];
-    result: OnboardingState;
-  };
-  "onboarding:checklist-get": {
-    args: [];
-    result: ChecklistState;
-  };
-  "onboarding:checklist-dismiss": {
-    args: [];
-    result: void;
-  };
-  "onboarding:checklist-mark-item": {
-    args: [item: ChecklistItemId];
-    result: void;
-  };
-  "onboarding:checklist-mark-celebration-shown": {
-    args: [];
-    result: void;
-  };
-
-  // Milestones
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
-    result: void;
-  };
-
-  // Shortcut Hints
-  "shortcut-hints:get-counts": {
-    args: [];
-    result: Record<string, number>;
-  };
-  "shortcut-hints:increment-count": {
-    args: [actionId: string];
-    result: void;
+  "forge:classify-push-error": {
+    args: [payload: { cwd: string; stderr: string }];
+    result: { providerId: string; classification: PushErrorClassification | null } | null;
   };
 
   // Voice input
@@ -1625,15 +1198,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Help assistant
-  "help-assistant:get-settings": {
-    args: [];
-    result: HelpAssistantSettings;
-  };
-  "help-assistant:set-settings": {
-    args: [patch: Partial<HelpAssistantSettings>];
-    result: void;
-  };
   "voice-input:start": {
     args: [];
     result: { ok: true } | { ok: false; error: string };
@@ -1685,60 +1249,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: import("./crashRecovery.js").CrashRecoveryConfig;
   };
 
-  // MCP Server channels
-  "mcp-server:get-status": {
-    args: [];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-enabled": {
-    args: [enabled: boolean];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:set-port": {
-    args: [port: number | null];
-    result: import("./mcpServer.js").McpServerStatusSnapshot;
-  };
-  "mcp-server:rotate-api-key": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-config-snippet": {
-    args: [];
-    result: string;
-  };
-  "mcp-server:get-audit-records": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditRecord[];
-  };
-  "mcp-server:get-audit-config": {
-    args: [];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-audit-stats": {
-    args: [];
-    result: import("./mcpServer.js").McpAuditStats;
-  };
-  "mcp-server:clear-audit-log": {
-    args: [];
-    result: void;
-  };
-  "mcp-server:set-audit-enabled": {
-    args: [enabled: boolean];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:set-audit-max-records": {
-    args: [max: number];
-    result: { enabled: boolean; maxRecords: number };
-  };
-  "mcp-server:get-runtime-state": {
-    args: [];
-    result: import("./mcpServer.js").McpRuntimeSnapshot;
-  };
-  "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
-    result: { sessionId: string; tier: "workbench" | "action" | "system" };
-  };
-
   // Webview console capture
   "webview:start-console-capture": {
     args: [webContentsId: number, paneId: string];
@@ -1760,18 +1270,12 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [webContentsId: number, panelId: string];
     result: void;
   };
+  "webview:get-scroll-position": {
+    args: [webContentsId: number];
+    result: number;
+  };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
-  // Agent session history channels
-  "agent-session:list": {
-    args: [payload: { worktreeId?: string }];
-    result: AgentSessionRecord[];
-  };
-  "agent-session:clear": {
-    args: [payload: { worktreeId?: string }];
-    result: void;
-  };
-
   // App Agent channels
   "app-agent:get-config": {
     args: [];
@@ -1834,38 +1338,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: GitHubRateLimitDetails | null;
   };
-
-  // Per-service connectivity channels
-  "connectivity:get-state": {
-    args: [];
-    result: ServiceConnectivitySnapshot;
+  "github:resolve-author-avatar": {
+    args: [email: string];
+    result: string | null;
   };
 
   // Scratch (throwaway one-off agent workspace) channels
   // Global env channels
   // Global recipe channels
-  "global:get-recipes": {
-    args: [];
-    result: TerminalRecipe[];
-  };
-  "global:add-recipe": {
-    args: [payload: { recipe: TerminalRecipe }];
-    result: void;
-  };
-  "global:update-recipe": {
-    args: [
-      payload: {
-        recipeId: string;
-        updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
-      },
-    ];
-    result: void;
-  };
-  "global:delete-recipe": {
-    args: [payload: { recipeId: string }];
-    result: void;
-  };
-
   // Help channels
   // Project clone channels
   "project:clone-repo": {
@@ -1885,16 +1365,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "project:get-notification-overrides": {
     args: [projectIds: string[]];
     result: Record<string, Partial<NotificationSettings>>;
-  };
-
-  // Draft inputs
-  "project:get-draft-inputs": {
-    args: [projectId: string];
-    result: Record<string, string>;
-  };
-  "project:set-draft-inputs": {
-    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
-    result: void;
   };
 
   // In-repo recipe channels
@@ -1917,6 +1387,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "project:get-inrepo-presets": {
     args: [projectId: string];
     result: Record<string, AgentPreset[]>;
+  };
+  "project:list-remotes": {
+    args: [cwd: string];
+    result: Array<{
+      name: string;
+      fetchUrl: string;
+      parsedRepo: { owner: string; repo: string } | null;
+    }>;
   };
 
   // Recipe import/export
@@ -1957,50 +1435,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: PrerequisiteSpec[];
   };
 
-  // Additional terminal config channels
-  "terminal-config:set-resource-monitoring": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-memory-leak-detection": {
-    args: [enabled: boolean];
-    result: void;
-  };
-  "terminal-config:set-memory-leak-auto-restart": {
-    args: [thresholdMb: number];
-    result: void;
-  };
-  "terminal-config:set-cached-project-views": {
-    args: [cachedProjectViews: number];
-    result: void;
-  };
-  "terminal-config:set-recent-scheme-ids": {
-    args: [ids: unknown];
-    result: void;
-  };
-
-  // Additional terminal snapshot channels
-  "terminal:get-all": {
-    args: [];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:get-available": {
-    args: [];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:get-by-state": {
-    args: [state: AgentState];
-    result: BackendTerminalInfo[];
-  };
-  "terminal:graceful-kill": {
-    args: [id: string];
-    result: string | null;
-  };
-  "terminal:search-semantic-buffers": {
-    args: [query: string, isRegex: boolean];
-    result: SemanticSearchMatch[];
-  };
-
   // Webview lifecycle / dialog / OAuth channels
   "webview:set-lifecycle-state": {
     args: [webContentsId: number, frozen: boolean];
@@ -2021,13 +1455,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>,
     ];
-    /** Resolves with `{ success: true }` on success or `null` if the loopback was aborted. Throws `AppError` on hard failure. */
-    result: { success: true } | null;
+    result: import("../oauth.js").OAuthLoopbackResult;
   };
-
-  // Additional worktree channels
-  "worktree:fetch-pr-branch": {
-    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
+  "webview:cancel-oauth-loopback": {
+    args: [payload: { panelId: string }];
     result: void;
   };
 }
@@ -2070,6 +1501,20 @@ export interface IpcEventMap {
   "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
+  // Watchdog deadlock detector — emitted once when the main-process watchdog
+  // hits its restart cap and deadlock detection becomes inactive for the
+  // session. Renderer surfaces a recovery banner so the user can restart it.
+  "watchdog:disabled": {
+    attemptCount: number;
+    lastExitCode: number | null;
+    timestamp: number;
+  };
+  // Cleared global state after a successful manual restart — every window
+  // dismisses its WatchdogDisabledBanner. Broadcast (not window-scoped) so
+  // dispatching the action from one window also clears stale banners in
+  // sibling windows of a multi-window session.
+  "watchdog:active": void;
+
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
   "agent:all-clear": { timestamp: number };
@@ -2092,6 +1537,13 @@ export interface IpcEventMap {
   // Git init events
   "project:init-git-progress": GitInitProgressEvent;
 
+  /**
+   * Git clone progress (main → renderer). Targeted to the originating window
+   * when known, broadcast to all renderers as a fallback. Lifecycle stages and
+   * payload shape live in `shared/types/ipc/gitClone.ts`.
+   */
+  "project:clone-progress": CloneRepoProgressEvent;
+
   // PR detection events
   "pr:detected": PRDetectedPayload;
   "pr:cleared": PRClearedPayload;
@@ -2105,6 +1557,12 @@ export interface IpcEventMap {
 
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;
+
+  // Provider-keyed forge rate-limit / token-health state push. Carries the
+  // canonical providerId so the renderer keys state per provider — GitHub and
+  // any additional forge provider share these channels without cross-talk.
+  "forge:rate-limit-changed": ForgeRateLimitChangedPayload;
+  "forge:token-health-changed": ForgeTokenHealthChangedPayload;
 
   // Combined repo stats + first page of open issues + open PRs push, emitted
   // after every successful poll. Lets renderers prime githubResourceCache
@@ -2123,6 +1581,29 @@ export interface IpcEventMap {
   "mcp-server:runtime-state-changed": import("./mcpServer.js").McpRuntimeSnapshot;
 
   /**
+   * Pinned MCP help-session manifest request. Main process emits this on the
+   * pinned WebContents and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE`, correlated by `requestId`.
+   * The response channel itself is a renderer→main fire-and-forget send and
+   * is tracked in `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "mcp:get-manifest-request": { requestId: string };
+
+  /**
+   * Pinned MCP help-session action dispatch request. Same request/response
+   * pattern as `mcp:get-manifest-request`; renderer replies via
+   * `CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE`. `context` is the optional
+   * pinned-session `ActionContext` override (#8317).
+   */
+  "mcp:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args: unknown;
+    confirmed: boolean;
+    context?: import("../actions.js").ActionContext;
+  };
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)
@@ -2137,6 +1618,12 @@ export interface IpcEventMap {
     targetTier: "workbench" | "action" | "system" | null;
   };
 
+  /**
+   * Targeted push: a grant lifecycle event for an MCP tool approval.
+   * Sent to the pinned WebContents so the renderer can track grant state.
+   */
+  "mcp-server:grant-lifecycle": import("./mcpServer.js").McpGrantLifecyclePayload;
+
   // Error events
   "error:notify": ErrorRecord;
   "error:retry-progress": RetryProgressPayload;
@@ -2150,6 +1637,8 @@ export interface IpcEventMap {
 
   // Project events
   "project:on-switch": ProjectSwitchPayload;
+  "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
+  "project:focus-on-activate": { intent: "focus-next-waiting" };
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
@@ -2177,12 +1666,18 @@ export interface IpcEventMap {
   "system-sleep:on-wake": number;
 
   // Menu events
-  "menu:action": string;
+  "menu:action": { actionId: string; args?: unknown };
 
   // Window events
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  // Per-window push event fired by `ProcessMemoryMonitor` mitigation tiers
+  // 1 and 2. The renderer compresses every BACKGROUND-tier terminal's
+  // hibernation timer to a much shorter delay (5s / 0s) so idle agent
+  // panes release memory immediately under OS pressure instead of waiting
+  // for the fixed 30s window. Renderer handler in `setupResourceListeners`.
+  "window:accelerate-hibernation": { level: 1 | 2 };
   // Main asks renderers to report process.getBlinkMemoryInfo() so
   // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
   // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
@@ -2243,6 +1738,23 @@ export interface IpcEventMap {
     panelId: string;
     url: string;
     canOpenExternal: boolean;
+  };
+
+  // Webview OAuth loopback status — phase transitions from main process
+  "webview:oauth-loopback-status": {
+    panelId: string;
+    phase: "token-exchange-intercepted" | "completed" | "timed-out" | "error";
+    message?: string;
+  };
+
+  // Webview render process became unresponsive (>30s no input processing)
+  "webview:unresponsive": {
+    panelId: string;
+  };
+
+  // Webview render process recovered from unresponsive state
+  "webview:responsive": {
+    panelId: string;
   };
 
   // Voice input events
@@ -2308,6 +1820,25 @@ export interface IpcEventMap {
     kinds: import("../../config/panelKindRegistry.js").PanelKindConfig[];
   };
 
+  // Plugin toolbar button registry events (main → renderer).
+  // `complete` is true only for an authoritative snapshot (a plugin unload —
+  // i.e. uninstall — where the registry reflects exactly the currently-loaded
+  // set). Load-time broadcasts are partial/growing because plugins load
+  // concurrently and `initialize()` is deferred, so the renderer must NOT
+  // prune persisted hide preferences off a non-`complete` snapshot.
+  "plugin:toolbar-buttons-changed": {
+    buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+    complete: boolean;
+  };
+
+  // Plugin file-decoration invalidation (main → renderer). Carries only the
+  // changed scope (optionally narrowed to `paths`) — never decoration data.
+  // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
+  "plugin:decorations-changed": {
+    scope: string;
+    paths?: string[];
+  };
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2364,6 +1895,7 @@ export type IpcEventBusMap = Pick<
   | "window:fullscreen-change"
   | "window:reclaim-memory"
   | "window:destroy-hidden-webviews"
+  | "window:accelerate-hibernation"
   | "window:disk-space-status"
   | "window:sample-blink-memory"
   | "window:sample-renderer-elu"
@@ -2380,6 +1912,10 @@ export type IpcEventBusMap = Pick<
   | "plugin:actions-changed"
   // Plugin panel kind registry (global broadcast)
   | "plugin:panel-kinds-changed"
+  // Plugin toolbar button registry (global broadcast)
+  | "plugin:toolbar-buttons-changed"
+  // Plugin file-decoration invalidation (global broadcast)
+  | "plugin:decorations-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"
@@ -2389,6 +1925,9 @@ export type IpcEventBusMap = Pick<
   // Terminal observability
   | "terminal:reliability-metric"
   | "terminal:status"
+  // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
+  | "watchdog:disabled"
+  | "watchdog:active"
 >;
 
 /**

@@ -19,7 +19,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("fix-path", () => ({ default: vi.fn() }));
 vi.mock("node:v8", () => ({ default: { setFlagsFromString: vi.fn() } }));
 vi.mock("node:vm", () => ({ default: { runInNewContext: vi.fn() } }));
 vi.mock("os", () => ({

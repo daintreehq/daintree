@@ -9,6 +9,7 @@ let mockRecipes: Array<{
   worktreeId?: string;
 }> = [];
 const runRecipeMock = vi.fn();
+const actionDispatchMock = vi.fn();
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 
@@ -20,6 +21,12 @@ vi.mock("@/store/recipeStore", () => ({
       getState: () => ({ runRecipe: runRecipeMock }),
     }
   ),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: (...args: unknown[]) => actionDispatchMock(...args),
+  },
 }));
 
 // Mock UI primitives so the test focuses on this component's behavior, not
@@ -53,12 +60,22 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     disabled,
+    title,
+    className,
   }: {
     children: ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
+    title?: string;
+    className?: string;
   }) => (
-    <button type="button" onClick={() => onSelect?.()} disabled={disabled}>
+    <button
+      type="button"
+      onClick={() => onSelect?.()}
+      disabled={disabled}
+      title={title}
+      className={className}
+    >
       {children}
     </button>
   ),
@@ -69,15 +86,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 import { DockLaunchButton } from "../DockLaunchButton";
+import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 
-const AGENTS = [
-  { id: "claude", name: "Claude", isEnabled: true },
-  { id: "gemini", name: "Gemini", isEnabled: false },
+const AGENTS: DockLaunchAgent[] = [
+  { id: "claude", name: "Claude", availability: "ready" },
+  { id: "gemini", name: "Gemini", availability: "blocked" },
 ];
 
 beforeEach(() => {
   mockRecipes = [];
   runRecipeMock.mockReset();
+  actionDispatchMock.mockReset();
   dropdownCloseAutoFocusSpy = null;
   dropdownPointerDownOutsideSpy = null;
 });
@@ -113,7 +132,7 @@ describe("DockLaunchButton", () => {
     expect(labels).toEqual(["Launch agent", "Launch panel", "Launch recipe"]);
   });
 
-  it("invokes onLaunchAgent for an agent and respects disabled state", () => {
+  it("invokes onLaunchAgent for a launchable agent", () => {
     const onLaunchAgent = vi.fn();
     const { getByText } = render(
       <DockLaunchButton
@@ -127,10 +146,103 @@ describe("DockLaunchButton", () => {
 
     fireEvent.click(getByText("Claude"));
     expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+  });
 
-    onLaunchAgent.mockClear();
+  it("routes non-launchable agent clicks to the agent settings subtab", () => {
+    const onLaunchAgent = vi.fn();
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={onLaunchAgent}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
     fireEvent.click(getByText("Gemini"));
     expect(onLaunchAgent).not.toHaveBeenCalled();
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "gemini" },
+      { source: "menu" }
+    );
+  });
+
+  it("discriminates tooltip copy between blocked and installed-only agents", () => {
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={[
+          { id: "claude", name: "Claude", availability: "ready" },
+          { id: "gemini", name: "Gemini", availability: "blocked" },
+          { id: "codex", name: "Codex", availability: "installed" },
+        ]}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    // Launchable: no tooltip override on the row itself.
+    expect(getByText("Claude").getAttribute("title")).toBeNull();
+    // Blocked: endpoint-security copy.
+    expect(getByText("Gemini").getAttribute("title")).toBe(
+      "Gemini is blocked by endpoint security. Click to configure."
+    );
+    // Installed but not launchable (e.g. WSL): generic setup copy.
+    expect(getByText("Codex").getAttribute("title")).toBe("Codex needs setup. Click to configure.");
+  });
+
+  it("dims non-launchable agent rows with opacity-70", () => {
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    expect(getByText("Claude").className).not.toContain("opacity-70");
+    expect(getByText("Gemini").className).toContain("opacity-70");
+  });
+
+  it("treats unauthenticated agents as launchable (CLI handles auth at runtime)", () => {
+    const onLaunchAgent = vi.fn();
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={[{ id: "codex", name: "Codex", availability: "unauthenticated" }]}
+        hasDevPreview={false}
+        onLaunchAgent={onLaunchAgent}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    fireEvent.click(getByText("Codex"));
+    expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+    // Soft dim and settings tooltip must not leak onto a launchable row.
+    expect(getByText("Codex").className).not.toContain("opacity-70");
+    expect(getByText("Codex").getAttribute("title")).toBeNull();
+  });
+
+  it("keeps non-launchable rows selectable (no disabled attribute)", () => {
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+
+    // Regression guard: the pre-fix behavior was a disabled, dead-end row.
+    expect(getByText("Gemini").hasAttribute("disabled")).toBe(false);
   });
 
   it("always exposes Terminal and Browser, gates Dev preview on hasDevPreview", () => {

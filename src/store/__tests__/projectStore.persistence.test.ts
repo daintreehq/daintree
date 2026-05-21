@@ -11,6 +11,7 @@ const projectClientMock = {
   reopen: vi.fn(),
   openDialog: vi.fn(),
   onSwitch: vi.fn(() => () => {}),
+  onWorktreeLoadStatus: vi.fn(() => () => {}),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
   detectRunners: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("../slices", () => ({
 vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
+    cancel: vi.fn(),
   },
   panelToSnapshot: vi.fn(),
 }));

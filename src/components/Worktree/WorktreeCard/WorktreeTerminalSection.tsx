@@ -156,7 +156,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
             ref={dragHandle?.setActivatorNodeRef}
             type="button"
             data-drag-handle
-            className="cursor-grab rounded text-text-muted opacity-0 group-hover/termrow:opacity-100 focus-visible:opacity-100 transition-opacity hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 active:cursor-grabbing"
+            className="cursor-grab rounded text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 active:cursor-grabbing"
             aria-label="Drag to move terminal"
             {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
           >

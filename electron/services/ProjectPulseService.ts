@@ -16,12 +16,42 @@ import type {
 interface CacheEntry {
   pulse: ProjectPulse;
   timestamp: number;
+  headSha: string | null;
+  headBranch: string | undefined;
 }
+
+interface HeadProbeResult {
+  sha: string | null;
+  branch: string | undefined;
+}
+
+// Sentinel returned by probeHeadSha when the worktree path was deleted —
+// distinct from `null` (which means "valid repo with no commits"). Keeps the
+// equality check honest so a missing path doesn't silently match a cached
+// empty pulse.
+const PROBE_MISSING_PATH_SENTINEL = "__missing__";
+// Sentinel for unexpected probe errors. Never matches a cached SHA so the
+// caller always falls through to a real recompute (fail open to freshness).
+const PROBE_ERROR_SENTINEL = "__probe-error__";
 
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_SIZE = 100;
 const MAX_COMMITS_FOR_HEATMAP = 20_000;
 const VERBOSE_PROJECT_PULSE_LOGGING = process.env.DAINTREE_VERBOSE === "1";
+
+const NO_COMMITS_PATTERNS = [
+  "fatal: ambiguous argument 'head'",
+  "unknown revision",
+  "needed a single revision",
+  "does not have any commits yet",
+  "not a valid object name",
+  "bad default revision 'head'",
+];
+
+function isNoCommitsError(errorMessage: string): boolean {
+  const lower = errorMessage.toLowerCase();
+  return NO_COMMITS_PATTERNS.some((p) => lower.includes(p));
+}
 
 function logProjectPulseDebug(message: string, context?: Record<string, unknown>): void {
   if (!VERBOSE_PROJECT_PULSE_LOGGING) return;
@@ -103,8 +133,27 @@ export class ProjectPulseService {
     const cached = this.cache.get(cacheKey);
 
     if (!options.forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-      logProjectPulseDebug("ProjectPulse cache hit", { cacheKey });
-      return cached.pulse;
+      // Lightweight probe: if HEAD and the current branch both still match
+      // the cached entry, serve the cache. Falls through to recompute when
+      // either changes so commits, rebases, AND branch switches (e.g.
+      // checkout to a new branch at the same SHA) surface inside the TTL.
+      const probe = await this.probeHead(options.worktreePath);
+      // Re-check the cache entry: invalidate() may have fired during the
+      // await above, deleting the entry. Use the freshly-fetched entry so
+      // we don't serve data that was just invalidated.
+      const fresh = this.cache.get(cacheKey);
+      if (fresh === cached && probe.sha === cached.headSha && probe.branch === cached.headBranch) {
+        logProjectPulseDebug("ProjectPulse cache hit", { cacheKey });
+        return cached.pulse;
+      }
+      logProjectPulseDebug("ProjectPulse cache invalidated by probe", {
+        cacheKey,
+        cachedSha: cached.headSha,
+        currentSha: probe.sha,
+        cachedBranch: cached.headBranch,
+        currentBranch: probe.branch,
+        entryStillPresent: fresh === cached,
+      });
     }
 
     const existing = this.inFlight.get(cacheKey);
@@ -121,9 +170,14 @@ export class ProjectPulseService {
 
     const promise = (async () => {
       try {
-        const pulse = await this.computePulse(options, controller!.signal);
+        const { pulse, headSha, headBranch } = await this.computePulse(options, controller!.signal);
         if (!controller!.signal.aborted) {
-          this.cache.set(cacheKey, { pulse, timestamp: Date.now() });
+          this.cache.set(cacheKey, {
+            pulse,
+            timestamp: Date.now(),
+            headSha,
+            headBranch,
+          });
           this.pruneCache();
         }
         return pulse;
@@ -154,10 +208,45 @@ export class ProjectPulseService {
     }
   }
 
+  // Reads HEAD + current branch with the shared no-commits taxonomy. Used by
+  // the cheap probe in getPulse — no signal so a pending invalidate can't
+  // abort the validity check and trick the caller into a needless recompute.
+  private async probeHead(worktreePath: string): Promise<HeadProbeResult> {
+    if (!existsSync(worktreePath)) {
+      // Distinct from no-commits null so a deleted worktree falls through to
+      // computePulse (which throws "Worktree path does not exist") instead of
+      // serving a stale empty-repo cache.
+      return { sha: PROBE_MISSING_PATH_SENTINEL, branch: undefined };
+    }
+    try {
+      const git = createHardenedGit(worktreePath);
+      const shaOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
+      const sha = shaOut.trim() || null;
+      let branch: string | undefined;
+      try {
+        const branchOut = await git.raw(["rev-parse", "--abbrev-ref", "HEAD"]);
+        const trimmed = branchOut.trim();
+        branch = trimmed === "HEAD" ? undefined : trimmed;
+      } catch {
+        branch = undefined;
+      }
+      return { sha, branch };
+    } catch (error) {
+      const message = formatErrorMessage(error, "Failed to probe git HEAD");
+      if (isNoCommitsError(message)) {
+        return { sha: null, branch: undefined };
+      }
+      // Unexpected error: fall through to recompute rather than silently
+      // serving stale data.
+      logProjectPulseDebug("ProjectPulse HEAD probe failed", { worktreePath, error: message });
+      return { sha: PROBE_ERROR_SENTINEL, branch: undefined };
+    }
+  }
+
   private async computePulse(
     options: GetProjectPulseOptions,
     signal?: AbortSignal
-  ): Promise<ProjectPulse> {
+  ): Promise<{ pulse: ProjectPulse; headSha: string | null; headBranch: string | undefined }> {
     const {
       worktreePath,
       worktreeId,
@@ -179,28 +268,22 @@ export class ProjectPulseService {
       throw new Error(`Not a git repository: ${worktreePath}`);
     }
 
+    let headSha: string | null;
     try {
-      await git.raw(["rev-parse", "--verify", "HEAD"]);
+      const headOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
+      headSha = headOut.trim() || null;
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to read git HEAD");
-      const noCommitsPatterns = [
-        "fatal: ambiguous argument 'HEAD'",
-        "unknown revision",
-        "needed a single revision",
-        "does not have any commits yet",
-        "not a valid object name",
-        "bad default revision 'HEAD'",
-      ];
-      if (noCommitsPatterns.some((p) => errorMessage.toLowerCase().includes(p.toLowerCase()))) {
+      if (isNoCommitsError(errorMessage)) {
         logProjectPulseDebug("Repository has no commits, returning empty pulse", { worktreeId });
-        return this.createEmptyPulse(options);
+        return { pulse: this.createEmptyPulse(options), headSha: null, headBranch: undefined };
       }
       logError("Failed to get HEAD revision", {
         error: errorMessage,
         worktreeId,
         worktreePath,
       });
-      throw new Error(`Failed to read git HEAD: ${errorMessage}`);
+      throw new Error(`Failed to read git HEAD: ${errorMessage}`, { cause: error });
     }
 
     let branch: string | undefined;
@@ -287,7 +370,7 @@ export class ProjectPulseService {
       durationMs: Date.now() - startTime,
     });
 
-    return pulse;
+    return { pulse, headSha, headBranch: branch };
   }
 
   private async computeHeatmap(git: SimpleGit, rangeDays: PulseRangeDays): Promise<HeatCell[]> {

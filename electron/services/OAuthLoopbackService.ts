@@ -9,6 +9,8 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { app, shell } from "electron";
 
 export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
+export type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
+import type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
 
 const CALLBACK_PATH = "/oauth/callback";
 const TIMEOUT_MS = 300_000; // 5 minutes
@@ -25,29 +27,13 @@ function escapeHtml(str: string): string {
 interface LoopbackSession {
   server: Server;
   timeout: NodeJS.Timeout;
-  settle: (value: string | null) => void;
+  settle: (result: OAuthLoopbackResult) => void;
 }
 
 /** Active loopback sessions keyed by panelId */
 const activeSessions = new Map<string, LoopbackSession>();
 
-/**
- * Start the OAuth loopback flow.
- *
- * @param authUrl - The original OAuth authorization URL (blocked by dev-preview)
- * @param panelId - The dev-preview panel ID (prevents duplicate flows)
- * @returns The original callback URL, the loopback URI used, and the original redirect_uri — or null
- */
-export interface OAuthLoopbackResult {
-  callbackUrl: string;
-  loopbackRedirectUri: string;
-  originalRedirectUri: string;
-}
-
-export function startOAuthLoopback(
-  authUrl: string,
-  panelId: string
-): Promise<OAuthLoopbackResult | null> {
+export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OAuthLoopbackResult> {
   cancelOAuthLoopback(panelId);
 
   const parsed = new URL(authUrl);
@@ -55,22 +41,27 @@ export function startOAuthLoopback(
 
   if (!originalRedirectUri) {
     console.warn("[OAuthLoopback] No redirect_uri found in auth URL");
-    return Promise.resolve(null);
+    return Promise.resolve({ success: false, cause: "server-error" });
+  }
+
+  // Validate redirect_uri is a parseable absolute URL — a relative path would
+  // throw inside the HTTP server handler, leaving the promise unsettled.
+  try {
+    new URL(originalRedirectUri);
+  } catch {
+    console.warn("[OAuthLoopback] Invalid redirect_uri:", originalRedirectUri);
+    return Promise.resolve({ success: false, cause: "server-error" });
   }
 
   return new Promise((resolve) => {
     let settled = false;
     let capturedLoopbackUri = "";
 
-    const settle = (callbackUrl: string | null) => {
+    const settle = (result: OAuthLoopbackResult) => {
       if (settled) return;
       settled = true;
       cleanup(panelId);
-      resolve(
-        callbackUrl
-          ? { callbackUrl, loopbackRedirectUri: capturedLoopbackUri, originalRedirectUri }
-          : null
-      );
+      resolve(result);
     };
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -110,12 +101,17 @@ export function startOAuthLoopback(
       );
 
       // Forward to the webview regardless — the app handles error params itself
-      settle(originalCallback.toString());
+      settle({
+        success: true,
+        callbackUrl: originalCallback.toString(),
+        loopbackRedirectUri: capturedLoopbackUri,
+        originalRedirectUri,
+      });
     });
 
     server.on("error", (err) => {
       console.error("[OAuthLoopback] Server error:", err);
-      settle(null);
+      settle({ success: false, cause: "server-error" });
     });
 
     // Don't keep the event loop alive for this server
@@ -125,7 +121,7 @@ export function startOAuthLoopback(
       const address = server.address();
       if (!address || typeof address === "string") {
         console.error("[OAuthLoopback] Failed to get server address");
-        settle(null);
+        settle({ success: false, cause: "server-error" });
         return;
       }
 
@@ -141,13 +137,13 @@ export function startOAuthLoopback(
 
       void shell.openExternal(parsed.toString()).catch((err) => {
         console.error("[OAuthLoopback] Failed to open system browser:", err);
-        settle(null);
+        settle({ success: false, cause: "open-external-failed" });
       });
     });
 
     const timeout = setTimeout(() => {
       console.warn(`[OAuthLoopback] Timed out after ${TIMEOUT_MS}ms for panel ${panelId}`);
-      settle(null);
+      settle({ success: false, cause: "timed-out" });
     }, TIMEOUT_MS);
 
     activeSessions.set(panelId, { server, timeout, settle });
@@ -160,7 +156,7 @@ export function startOAuthLoopback(
 export function cancelOAuthLoopback(panelId: string): void {
   const session = activeSessions.get(panelId);
   if (session) {
-    session.settle(null);
+    session.settle({ success: false, cause: "cancelled" });
   }
 }
 
@@ -169,7 +165,7 @@ export function cancelOAuthLoopback(panelId: string): void {
  */
 export function shutdownAllLoopbacks(): void {
   for (const [, session] of activeSessions) {
-    session.settle(null);
+    session.settle({ success: false, cause: "cancelled" });
   }
 }
 

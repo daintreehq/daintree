@@ -5,7 +5,7 @@ import { useOverlayState } from "@/hooks";
 import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { MODIFIER_SEARCH_MAP, isChordPrefix, normalizeQuery } from "@/lib/kbdShortcut";
 import { keybindingService } from "../../services/KeybindingService";
-import type { KeybindingConfig } from "../../services/KeybindingService";
+import type { RegisteredKeybindingConfig } from "../../services/KeybindingService";
 
 const CATEGORY_ORDER = [
   "Terminal",
@@ -23,7 +23,7 @@ interface ShortcutReferenceDialogProps {
   onClose: () => void;
 }
 
-interface ShortcutSearchItem extends KeybindingConfig {
+interface ShortcutSearchItem extends RegisteredKeybindingConfig {
   effectiveCombo: string;
   displayCombo: string;
   normalizedCombo: string;

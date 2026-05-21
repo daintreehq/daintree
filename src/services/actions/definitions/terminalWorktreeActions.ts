@@ -102,7 +102,7 @@ export function registerTerminalWorktreeActions(
     scope: "renderer",
     isEnabled: (ctx: ActionContext) => {
       const data = getTerminalWorktree(ctx);
-      return data !== null && !!data.worktree.prUrl;
+      return data !== null && !!data.worktree.linked?.pr?.url;
     },
     disabledReason: (ctx: ActionContext) => {
       if (!ctx.focusedTerminalId) return "No focused terminal";
@@ -111,12 +111,12 @@ export function registerTerminalWorktreeActions(
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
-      if (!worktree.prUrl) return "Worktree has no associated pull request";
+      if (!worktree.linked?.pr?.url) return "Worktree has no associated pull request";
       return undefined;
     },
     run: async (_args: unknown, ctx: ActionContext) => {
       const data = getTerminalWorktree(ctx);
-      if (!data || !data.worktree.prUrl) return;
+      if (!data || !data.worktree.linked?.pr?.url) return;
 
       const result = await actionService.dispatch(
         "worktree.openPR",

@@ -4,10 +4,15 @@ import { useProjectStore } from "@/store";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const viewArgsSchema = z.object({
-  path: z.string(),
-  rootPath: z.string().optional(),
-  line: z.number().int().positive().optional(),
-  col: z.number().int().positive().optional(),
+  path: z.string().describe("Absolute or repo-relative file path to open."),
+  rootPath: z
+    .string()
+    .optional()
+    .describe(
+      "Repository root used to resolve a relative `path` (a worktree `path` from `worktree.list`)."
+    ),
+  line: z.number().int().positive().optional().describe("1-based line to scroll to."),
+  col: z.number().int().positive().optional().describe("1-based column to scroll to."),
 });
 
 const openInEditorArgsSchema = z.object({
@@ -24,12 +29,23 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
   actions.set("file.view", () => ({
     id: "file.view",
     title: "View File",
-    description: "Open a file in the in-app file viewer modal",
+    description:
+      "Open a file in the in-app file viewer modal (read-only, with optional line/column scroll). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — repo root used to resolve a relative `path`; `line`/`col` (optional, positive ints) to scroll to a location. Returns nothing (fires the viewer event). Errors when `path` is missing. Use `file.openInEditor` instead to open in the external editor.",
     category: "files",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: viewArgsSchema,
+    examples: [
+      {
+        args: { path: "src/services/ActionService.ts" },
+        description: "View a repo-relative file in the in-app viewer",
+      },
+      {
+        args: { path: "src/index.css", line: 1084 },
+        description: "Open a file scrolled to a specific line",
+      },
+    ],
     run: async (args: unknown) => {
       const { path, rootPath, line, col } = args as z.infer<typeof viewArgsSchema>;
       window.dispatchEvent(

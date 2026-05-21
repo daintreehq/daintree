@@ -11,7 +11,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { Folders } from "@/components/icons";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
@@ -26,8 +26,6 @@ export interface ToolbarButtonMetadata {
   icon: ComponentType<ToolbarButtonIconProps>;
   description: string;
 }
-
-const AGENT_ID_SET = new Set<string>(BUILT_IN_AGENT_IDS);
 
 // Built-in agent entries are derived from the canonical agent registry so the
 // icon shown in Settings, the agent tray, and the overflow dropdown all
@@ -119,7 +117,7 @@ export function isToolbarButtonVisible(
   agentSettings: AgentSettings | null | undefined,
   agentAvailability: CliAvailability | null | undefined
 ): boolean {
-  if (AGENT_ID_SET.has(buttonId)) {
+  if (isBuiltInAgentId(buttonId)) {
     return isAgentToolbarVisible(agentSettings?.agents?.[buttonId], agentAvailability?.[buttonId]);
   }
   return pinnedButtons[buttonId] !== false;

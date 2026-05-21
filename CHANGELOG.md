@@ -1,5 +1,221 @@
 # Changelog
 
+## [0.12.0] - 2026-05-21
+
+A large release centered on cold-start and memory — the boot path was instrumented end to end and trimmed, and the memory-pressure mitigation ladder is now closed-loop. Fleet broadcast, crash recovery, and the worktree sidebar were each substantially reworked; forge integration was generalized off GitHub into a provider model, and the MCP server gained audit tooling and abuse caps.
+
+### Features
+
+**Forge & plugins**
+
+- Forge provider model — remote-URL routing selects the active provider, with global default and per-project override settings (#8057, #8110, #8111, #8112)
+- Plugins can register forge providers and contribute per-file forge badges via a file-decoration API (#8058, #8511)
+- Unified Code Forge settings tab replaces the separate GitHub and Forge tabs, with real per-provider settings and auth surfaces (#8329, #8330, #8454, #8525)
+- Preferences gained a Forge Integrations section (#8064)
+- Commit-author avatars now resolve through a forge-agnostic provider system (#8514)
+
+**Fleet broadcast**
+
+- Per-target edit and skip in the broadcast popover (#8691)
+- Fuzzy matching replaces substring/regex in the fleet picker (#8695)
+- Cold-start fleet picker can toggle replace vs append (#8694)
+- Broadcasts confirm on the resolved fan-out rather than the source draft (#8689)
+- Saved fleets split into Pinned and Smart-Sets sections, with frecency ranking (#8692, #8693)
+- Fleet preset menu items show armed panel count and dim unmatched panes on hover (#8688, #8696)
+
+**Worktree sidebar & overview**
+
+- Virtualized worktree sidebar with keyboard-accessible windowing (#8393)
+- Worktree rows show blocking git states, dirty status, last commit author and time, base-branch divergence, and fetch staleness (#8380, #8381, #8382, #8483, #8484, #8485)
+- Row badges are ordered by salience and surface alarms when the sidebar is collapsed (#8379, #8763)
+- Worktrees overview gained multi-select, keyboard navigation, clickable aggregate stats, and bulk close/remove (#8385, #8653, #8655, #8766)
+- Worktree filter chip counts switched to disjunctive faceting (#8390)
+- Placeholder card renders while a worktree is being created; delete progress shows on the card (#8414, #8417)
+- Sidebar surfaces filter scope, drag-disabled reasons, and a disabled drag handle when reorder is unavailable (#8391, #8395)
+- Worktree lifecycle failures are now recoverable from the card (#8401)
+
+**Terminal**
+
+- Terminal search gained an overview ruler, regex error surface, whole-word toggle, and search history recall (#8532, #8539)
+- Hibernated terminals are surfaced in pane chrome with a new Sleep action; hibernation is idle-aware and memory-pressure adaptive (#8534, #8536)
+- Double-click a panel title to maximize it (#8707)
+- Last-active panel per worktree is prioritized on restore (#8703)
+- Terminal dock actions are exposed to the Daintree Assistant (#8594)
+
+**Dev preview**
+
+- Dev preview toolbar reaches parity with the browser pane — screenshot, devtools, console capture, rotation, DPR, and zoom-to-fit (#8262, #8268, #8279)
+- Viewport presets use full device emulation instead of a user-agent swap (#8278)
+- Staged stuck-start UX replaces silent auto-restart, with tiered restart vocabulary and an explicit Stop control (#8275, #8276, #8277)
+- Empty state shows detection preview and a runner picker; blocked-navigation banner was rebuilt (#8263, #8267)
+- Broader run-command detection with Procfile/mise.toml support and pre-launch port extraction (#8266)
+
+**MCP server & assistant**
+
+- MCP audit settings with filters, search, NDJSON export, and latency SLO bands (#8437)
+- Audit records correlate to assistant turns; a turn-outcome diagnostics view and in-process anomaly detector surface operator signals (#8430, #8433, #8438)
+- Progressive tool disclosure in the MCP manifest (#8459)
+- Time-bounded per-tool grants replace sticky tier elevation, with an abuse cap on repeated auth failures (#8442, #8467)
+- HybridInputBar is wired into the Daintree Assistant (#8185)
+- Runaway-loop protection rate-limits the CallTool path (#8468)
+
+**Crash recovery & safe mode**
+
+- Crash recovery defaults to silent restore with a clearer opt-in (#8677)
+- Safe mode quarantines repeat-suspect panels instead of dropping all panels; suspect panels are surfaced more visibly (#8679, #8704)
+- Watchdog-disabled state now shows a recovery banner (#8674)
+
+**Toolbar & dock**
+
+- Right-click "Unpin from toolbar" works across all live toolbar buttons; plugin buttons render as hideable rows in settings (#8182, #8183)
+- Keyboard navigation added to the dock chip rail (#8170)
+- Voice recording stays pinned out of toolbar overflow while actively recording (#8158)
+- "Copy path" surfaces in the modal and toolbar project pickers (#8222)
+
+**Settings**
+
+- Settings tab content prefetches on hover/focus (#8760)
+- Cross-scope settings search merged with a per-row scope chip (#8235)
+- Unified override-vs-inherit UI across project-settings tabs (#8238)
+- Default worktree recipe selector moved onto the Recipes tab as a per-row pin (#8233)
+
+**Other**
+
+- Cross-project shortcut to focus the next waiting agent (#8418)
+- Destructive confirms wired across terminal, session, and remaining direct-IPC bypass sites (#8242, #8245)
+- No-worktree main-canvas empty state was reworked (#8645)
+
+### Bug Fixes
+
+**Fleet broadcast**
+
+- Progress counter no longer hidden for small fleets; counter is duration-gated (#8686)
+- Cancel announcement now includes the skipped count (#8687)
+- Targets no longer left armed on ENOTCONN/ENXIO/EINVAL; dead PTYs auto-disarm on structured broadcast (#8690, #8706)
+- Retry no longer fires empty writes; partial failures surface inline (#8705)
+- Raw broadcast no longer leaves a stuck directing state or writes to hidden cross-worktree terminals (#8255)
+
+**Worktree**
+
+- Worktrees no longer marked finished while an agent is still working (#8223)
+- Phantom sidebar rows clear after an external worktree removal (#8510)
+- External worktree removes are no longer swallowed by the topology suppress window (#8412)
+- Watcher degradation now has a persistent indicator and recovery path (#8413)
+- Worktree-load failures surface instead of triggering a partial switch rollback (#8400)
+- Teardown phase status is no longer overwritten when the next phase starts (#8406)
+- "All caught up" no longer shown for empty worktree filters (#8650, #8745)
+- Clone-into-project flow tightened, with a GitHub-aware recovery action on auth failure (#8408, #8411)
+- Sidebar zero-result empty states now have a path back to the overview (#8383)
+- In-flight worktree delete mutations recover across host crashes (#8405)
+
+**Terminal**
+
+- Focus no longer jumps from xterm back to the hybrid input on agent panes (#8487)
+- Unfocused terminal panes no longer swallow shift+click or leak drag events (#8531)
+- Scrollback restore failures surface as an inline warning instead of failing silently (#8535)
+- Visible terminals fully refresh on project switch-back (#8562)
+- Stale panel chrome from memo comparator drift fixed (#8588)
+- Per-pane terminal banners are suppressed while the PTY host is down (#8676)
+- Agent state detection no longer depends on terminal panel size (#8701)
+- Panel grid no longer shrinks agent terminals below a usable size (#8702)
+- ResourceGovernor no longer flaps between pause and force-resume under load (#8616)
+
+**Crash recovery & safe mode**
+
+- GPU crash monitor hardened against no-op restarts and non-atomic flag writes (#8671)
+- Main-process watchdog hardened against false-positive SIGKILLs and slow-leak crash loops (#8672)
+- Slow-flap blind spot closed in the crash-loop guard decay window (#8683)
+- Corrupt crash-loop state is quarantined and stale temp files are swept (#8684)
+- Global recovery banners coordinate with stacked precedence (#8678)
+- GPU ANGLE fallback state now has a UI signal (#8673)
+- Emergency recovery reset and crash-recovery reset are gated behind a confirm with preview (#8675, #8697)
+- SafeModeBanner restart elevated to a destructive confirm with a View logs action (#8685)
+
+**Dev preview**
+
+- Dev preview joins project URL history and preserves its route on restart (#8273)
+- render-process-gone and unresponsive states surface as inline banners (#8270)
+- Scroll position is preserved when eviction follows a freeze (#8281)
+
+**Cold-start & windows**
+
+- Cold project switch no longer flashes on paint-gate timeout (#8606)
+- Background throttling now applies to cached project views (#8599)
+- Primary window tracks the active window rather than registration order (#8600)
+- Global services stay alive across last-window-close, closing a re-init race (#8604)
+- ResourceProfileService memory controls reach every window (#8605)
+- Event-loop-lag detector no longer gets stuck in efficiency mode (#8615)
+
+**MCP server & assistant**
+
+- Daintree Assistant agent can be switched while a Codex session is bound (#8353)
+- Codex assistant no longer tells users to switch to Claude despite having Daintree MCP wired (#8354)
+- MCP dispatch no longer ignores the contextOverride field (#8317)
+- MCP dedup no longer returns a cached result when a requestKey collides with new args (#8429)
+- MCP session idle timer survives laptop suspend/resume (#8466)
+- Help-session MCP dispatch no longer silently targets the wrong worktree (#8432)
+- Daintree Assistant allowlist broadened for forge CLI commands (#8360)
+
+**UI & toolbar**
+
+- Toolbar roving-tabindex fixed under overflow and portal menus (#8163)
+- Toolbar overflow no longer oscillates at boundary item widths (#8157)
+- Dock shadow now visible on light themes (#8156)
+- Dock popover stays open while typing into the agent input (#8368)
+- Warm-cache flash on the Avatar and ProjectSwitcher trigger eliminated (#8244)
+- Dismiss button no longer floats mid-banner in the panel-count warning (#8291)
+- Open-in-grid button no longer overlaps the status indicator in docked agent panels (#8359)
+- Non-launchable agents no longer dead-end in the dock launch menu (#8155)
+- Attach Issue picker no longer shows stale or mislabeled search results (#8647)
+- Project switcher MRU ordering targets the correct project (#8561)
+
+**Settings & infrastructure**
+
+- Env var editor no longer describes plaintext storage as "securely stored" (#8234)
+- Invalid worktree path pattern no longer aborts auto-save of unrelated fields (#8236)
+- Workspace host no longer respawns forever in a crash-ready loop (#8553)
+- Worktree MessagePort transport hardened against silent failures (#8551)
+- GitOperationError metadata is preserved across the contextBridge boundary (#8567)
+
+### Performance
+
+**Cold-start & memory**
+
+- Cold-start IPC fan-out collapsed into a single batched boot invoke (#8620)
+- Independent hydration steps run concurrently to cut serial IPC round-trips (#8619)
+- Two blocking steps trimmed from the cold-start critical path (#8622)
+- Synchronous shell spawn no longer blocks main-process startup (#8625)
+- First React render no longer blocked by Sentry initialization (#8632)
+- ActionService defers JSON Schema compilation to first use instead of compiling all schemas at cold start (#8614)
+- app:// handler sends caching headers so the V8 code cache persists across launches (#8624)
+- Renderer first-render import closure trimmed and the monolithic App.tsx chunk split (#8626, #8627)
+- ProcessMemoryMonitor pressure thresholds scale with device RAM (#8633)
+- Memory-pressure mitigation ladder is now closed-loop (#8634)
+
+**Project views**
+
+- Project-view eviction switched to pure LRU, targeting the least-used renderer (#8602)
+- Efficiency profile no longer discards cached views without memory pressure (#8603)
+
+**Rendering & multi-agent load**
+
+- Agent-status and panel-store writes batched into one write per frame (#8589, #8592)
+- GridPanel restructured to id-based store subscriptions; useContentGridContext subscription narrowed to stop per-agent re-renders (#8591, #8593)
+- Panel grid resize batches reflows one frame at a time (#8597)
+- Terminal refresh-tier classification is now fleet-aware (#8596)
+- Agent terminals no longer flash when 20+ are visible (#8378)
+- Renderer stops writing to xterm after a panel backgrounds (#8365)
+- WebGL context cap and resource-profile ceilings raised; the circuit breaker coalesces memory-pressure context-loss bursts (#8540, #8541)
+- ResourceProfileService reacts to many-agent fleet load (#8623)
+- Per-row sidebar subscriptions stop full-list re-renders on each poll (#8389)
+
+**Forge & git**
+
+- PR detection batches lookups via a forge findPRsByBranches capability (#8384)
+- Idle git-status cost cut in WorktreeMonitor (#8396)
+- GitHub rate-limit throttling is now adaptive and budget-aware; wasteful polling in stats and health queries was cut (#8756, #8757)
+- PortBatcher no longer allocates a fresh buffer on every flush (#8367)
+
 ## [0.11.1] - 2026-05-17
 
 Stability follow-up to v0.11.0. Walks back two terminal rendering regressions, refreshes project stats on trash and restore without waiting for the 5s poll, and lets the Daintree Assistant resume across project-view LRU eviction. The release pipeline also splits into three independent per-OS workflows.

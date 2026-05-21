@@ -1,10 +1,21 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, Edit3, Download, FileDown, Check, Globe } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Edit3,
+  Download,
+  FileDown,
+  Check,
+  Globe,
+  Pin,
+  AlertTriangle,
+} from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useRecipeStore } from "@/store/recipeStore";
+import { actionService } from "@/services/ActionService";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -33,7 +44,6 @@ export function RecipesTab({
   const {
     recipes,
     loadRecipes,
-    deleteRecipe,
     exportRecipe,
     importRecipe,
     isLoading: recipesLoading,
@@ -110,15 +120,19 @@ export function RecipesTab({
 
   const handleDeleteRecipe = async (recipeId: string) => {
     setDeleteError(null);
-    try {
-      await deleteRecipe(recipeId);
+    const result = await actionService.dispatch(
+      "recipe.delete",
+      { recipeId },
+      { source: "user", confirmed: true }
+    );
+    if (result.ok) {
       if (recipeId === defaultWorktreeRecipeId) {
         onDefaultWorktreeRecipeIdChange(undefined);
       }
       setRecipeToDelete(null);
-    } catch (err) {
-      logError("Failed to delete recipe", err);
-      setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
+    } else {
+      logError("Failed to delete recipe", result.error);
+      setDeleteError(formatErrorMessage(result.error, "Failed to delete recipe"));
     }
   };
 
@@ -185,7 +199,32 @@ export function RecipesTab({
           commands and settings.
         </p>
 
-        <div className="space-y-2">
+        <div id="project-default-recipe" className="space-y-2">
+          {!recipesLoading &&
+            defaultWorktreeRecipeId &&
+            !recipes.find((r) => r.id === defaultWorktreeRecipeId && !r.worktreeId) && (
+              <div
+                className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20"
+                role="alert"
+              >
+                <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm text-status-warning">Default recipe unavailable</p>
+                  <p className="text-xs text-daintree-text/60 mt-1">
+                    The previously pinned recipe was deleted or is no longer eligible. Pin another
+                    recipe or clear the default below.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDefaultWorktreeRecipeIdChange(undefined)}
+                    className="mt-2 h-7 px-2 text-xs"
+                  >
+                    Clear default
+                  </Button>
+                </div>
+              </div>
+            )}
           {recipesLoading ? (
             <Skeleton
               label="Loading recipes"
@@ -208,6 +247,8 @@ export function RecipesTab({
             <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
+                const isEligibleForDefault = !recipe.worktreeId;
+                const isDefault = recipe.id === defaultWorktreeRecipeId;
                 return (
                   <div
                     key={recipe.id}
@@ -243,6 +284,12 @@ export function RecipesTab({
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
+                          {isDefault && (
+                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                              <Pin className="h-3 w-3" />
+                              Default
+                            </span>
+                          )}
                           {recipe.showInEmptyState && (
                             <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                               Empty State
@@ -259,55 +306,90 @@ export function RecipesTab({
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleEditRecipe(recipe)}
-                              className="h-7 px-2"
-                              aria-label={`Edit recipe ${recipe.name}`}
-                            >
-                              <Edit3 />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Edit recipe</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleExportRecipe(recipe.id)}
-                              className="h-7 px-2"
-                              aria-label={
-                                exported
-                                  ? `Recipe ${recipe.name} exported to clipboard`
-                                  : `Export recipe ${recipe.name} to clipboard`
-                              }
-                            >
-                              {exported ? <Check className="text-status-success" /> : <Download />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            {exported ? "Exported" : "Export recipe to clipboard"}
-                          </TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setRecipeToDelete(recipe.id)}
-                              className="h-7 px-2"
-                              aria-label={`Delete recipe ${recipe.name}`}
-                            >
-                              <Trash2 className="text-status-error" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Delete recipe</TooltipContent>
-                        </Tooltip>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isEligibleForDefault && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() =>
+                                  onDefaultWorktreeRecipeIdChange(isDefault ? undefined : recipe.id)
+                                }
+                                aria-pressed={isDefault}
+                                aria-label={
+                                  isDefault
+                                    ? `Unset ${recipe.name} as default worktree recipe`
+                                    : `Set ${recipe.name} as default worktree recipe`
+                                }
+                                className={`h-7 px-2 transition-opacity ${
+                                  isDefault
+                                    ? "opacity-100"
+                                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                                }`}
+                              >
+                                <Pin className={isDefault ? "fill-current" : undefined} />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {isDefault ? "Unset default recipe" : "Set as default recipe"}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEditRecipe(recipe)}
+                                className="h-7 px-2"
+                                aria-label={`Edit recipe ${recipe.name}`}
+                              >
+                                <Edit3 />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">Edit recipe</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleExportRecipe(recipe.id)}
+                                className="h-7 px-2"
+                                aria-label={
+                                  exported
+                                    ? `Recipe ${recipe.name} exported to clipboard`
+                                    : `Export recipe ${recipe.name} to clipboard`
+                                }
+                              >
+                                {exported ? (
+                                  <Check className="text-status-success" />
+                                ) : (
+                                  <Download />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {exported ? "Exported" : "Export recipe to clipboard"}
+                            </TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setRecipeToDelete(recipe.id)}
+                                className="h-7 px-2"
+                                aria-label={`Delete recipe ${recipe.name}`}
+                              >
+                                <Trash2 className="text-status-error" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">Delete recipe</TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
                     </div>
                   </div>

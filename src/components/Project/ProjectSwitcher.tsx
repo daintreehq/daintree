@@ -8,8 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useProjectSwitcherPalette } from "@/hooks";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { useProjectSwitcherPalette, useDohertyGate } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -34,6 +33,7 @@ export function ProjectSwitcher() {
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isLoading = useProjectStore((state) => state.isLoading);
+  const showLoadingSpinner = useDohertyGate(isLoading);
   const projectSwitcher = useProjectSwitcherPalette();
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
@@ -84,14 +84,6 @@ export function ProjectSwitcher() {
       void projectSwitcher.togglePinProject(projectId);
     },
     [projectSwitcher]
-  );
-
-  const { copy: copyProjectPath } = useCopyWithFeedback();
-  const handleCopyPath = useCallback(
-    (path: string) => {
-      void copyProjectPath(path);
-    },
-    [copyProjectPath]
   );
 
   const handleSelectNewWindow = useCallback(
@@ -157,7 +149,7 @@ export function ProjectSwitcher() {
             onCloseProject={handleCloseProject}
             onLocateProject={handleLocateProject}
             onTogglePinProject={handleTogglePinProject}
-            onCopyPath={handleCopyPath}
+            onCopyPath={projectSwitcher.copyPath}
             onSelectNewWindow={handleSelectNewWindow}
             onHoverProject={projectSwitcher.onHoverProject}
             onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
@@ -173,11 +165,11 @@ export function ProjectSwitcher() {
             <Button
               variant="outline"
               className="w-full justify-between text-muted-foreground border-dashed h-12 active:scale-100"
-              disabled={isLoading}
+              disabled={showLoadingSpinner}
               onClick={() => projectSwitcher.open("dropdown")}
             >
               <span>Select Project...</span>
-              {isLoading ? (
+              {showLoadingSpinner ? (
                 <Spinner size="md" className="shrink-0" />
               ) : (
                 <ChevronsUpDown className="opacity-50" />
@@ -226,7 +218,7 @@ export function ProjectSwitcher() {
         onLocateProject={handleLocateProject}
         onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={handleOpenSettings}
-        onCopyPath={handleCopyPath}
+        onCopyPath={projectSwitcher.copyPath}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
         removeConfirmProject={projectSwitcher.removeConfirmProject}
@@ -246,7 +238,7 @@ export function ProjectSwitcher() {
                 "hover:bg-surface-panel-elevated transition-colors",
                 "active:scale-100"
               )}
-              disabled={isLoading}
+              disabled={showLoadingSpinner}
               onClick={() => projectSwitcher.open("dropdown")}
             >
               <div className="flex items-center gap-3 text-left min-w-0">
@@ -261,7 +253,7 @@ export function ProjectSwitcher() {
                   </span>
                 </div>
               </div>
-              {isLoading ? (
+              {showLoadingSpinner ? (
                 <Spinner size="md" className="shrink-0 text-text-muted" />
               ) : (
                 <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />

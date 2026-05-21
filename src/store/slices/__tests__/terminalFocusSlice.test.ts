@@ -9,6 +9,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 const mockGetActiveWorktreeId = vi.fn(() => "worktree-1" as string | null);
+const mockStampLastActive = vi.fn();
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
@@ -54,7 +55,7 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState,
       getState,
       {} as never
@@ -144,7 +145,7 @@ describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState,
       getState,
       {} as never
@@ -248,7 +249,7 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState,
       getState,
       {} as never
@@ -451,7 +452,7 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
       makeTerminal("dock-2", "dock"),
     ];
     const { getTerminals, setState, getState } = setup();
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState as never,
       getState as never,
       {} as never
@@ -631,11 +632,11 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    const focusSlice = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
-      setState,
-      getState,
-      {} as never
-    );
+    const focusSlice = createTerminalFocusSlice(
+      getTerminals,
+      mockGetActiveWorktreeId,
+      mockStampLastActive
+    )(setState, getState, {} as never);
     // Add setActiveTab stub — in the real store this comes from the registry slice
     state = { ...focusSlice, setActiveTab: vi.fn() } as TerminalFocusSlice & {
       setActiveTab: ReturnType<typeof vi.fn>;
@@ -777,7 +778,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   beforeEach(() => {
     vi.clearAllMocks();
     const { getTerminals, setState, getState } = setup();
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState as never,
       getState as never,
       {} as never
@@ -955,7 +956,7 @@ describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () 
         state = { ...currentState, ...updates };
       }
     );
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState as never,
       getState as never,
       {} as never
@@ -1125,7 +1126,7 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState,
       getState,
       {} as never
@@ -1231,7 +1232,7 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
       makeTerminal("dock-1", "dock"),
     ];
     const { getTerminals, setState, getState } = setup();
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
       setState as never,
       getState as never,
       {} as never
@@ -1405,5 +1406,96 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
 
     state.openDockTerminal("dock-1");
     expect(state.previousFocusedId).toBe("a");
+  });
+});
+
+// Issue #8703 — the focus stamp pinpoints the last user-intent focus per panel
+// so the restore predicate can promote each worktree's most-recent panel.
+describe("TerminalFocusSlice - lastActiveAt stamping (issue #8703)", () => {
+  const makeTerminal = (
+    id: string,
+    location: "grid" | "dock" | "trash" | "background" = "grid"
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [makeTerminal("a"), makeTerminal("b"), makeTerminal("dock-1", "dock")];
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  it("activateTerminal stamps the focused panel", () => {
+    state.activateTerminal("a");
+    expect(mockStampLastActive).toHaveBeenCalledWith("a");
+  });
+
+  it("setFocused stamps the focused panel", () => {
+    state.setFocused("b");
+    expect(mockStampLastActive).toHaveBeenCalledWith("b");
+  });
+
+  it("openDockTerminal stamps the opened dock panel", () => {
+    state.openDockTerminal("dock-1");
+    expect(mockStampLastActive).toHaveBeenCalledWith("dock-1");
+  });
+
+  it("activateTerminal(null) does not stamp", () => {
+    state.activateTerminal(null);
+    expect(mockStampLastActive).not.toHaveBeenCalled();
+  });
+
+  it("setFocused(null) does not stamp", () => {
+    state.setFocused(null);
+    expect(mockStampLastActive).not.toHaveBeenCalled();
+  });
+
+  it("activateTerminal does not stamp when the terminal is not in the registry", () => {
+    state.activateTerminal("not-here");
+    expect(mockStampLastActive).not.toHaveBeenCalled();
+  });
+
+  it("setFocused does not stamp when the terminal id is unknown", () => {
+    // setFocused still updates focusedId optimistically, but stamping is gated
+    // on terminal existence so transient pre-registration calls don't write
+    // ghost timestamps onto missing panels.
+    state.setFocused("not-here");
+    expect(mockStampLastActive).not.toHaveBeenCalled();
+  });
+
+  it("openDockTerminal does not stamp when the panel is not an openable dock terminal", () => {
+    // The early-return branch (non-dock or missing terminal) clears dock state
+    // without registering user focus — no stamp should fire.
+    state.openDockTerminal("a"); // "a" is a grid panel, not dock
+    expect(mockStampLastActive).not.toHaveBeenCalled();
   });
 });

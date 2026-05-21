@@ -58,7 +58,16 @@ import {
   type RendererConnection,
 } from "./pty-host/handlers/index.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
+import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
+import { markHostPerformance } from "./utils/hostPerformance.js";
+
+// First user-code statement after all imports settle. ESM hoists native
+// module dlopen (node-pty, ProcessTreeCache native deps) ahead of any
+// statement here, so this is the earliest feasible proxy for "native modules
+// loaded". The exact dlopen instant is not reachable from ESM.
+markHostPerformance(PERF_MARKS.PTY_HOST_NATIVE_MODULE_READY);
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -259,6 +268,7 @@ const resourceGovernor = new ResourceGovernor({
       lastInputTime: t.lastInputTime,
       agentState: t.agentState,
     })),
+  trimBuffers: () => ptyManager.trimScrollback(SCROLLBACK_MIN),
   getPendingBytesSnapshot: () => {
     // Merge SAB-path, IPC-path, and per-window MessagePort-path queue depths so
     // the reliability gauge captures every in-flight byte the pty-host is holding.
@@ -362,14 +372,22 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       typeof data === "string" ? new Uint8Array(Buffer.from(data, "utf8")) : new Uint8Array(data);
     const byteCount = chunk.byteLength;
 
+    const termProject = terminalInfo?.projectId ?? null;
+    const targets: RendererConnection[] = [];
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
-      const termProject = terminalInfo?.projectId ?? null;
       const filtered = windowProject !== null && termProject !== windowProject;
-
       if (filtered) continue;
+      targets.push(conn);
+    }
 
-      if (conn.batcher.write(id, chunk, byteCount)) {
+    // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
+    // batcher receives it: a transfer detaches the buffer, and per-batcher flush
+    // timing is independent, so with 2+ targets any flush would neuter the chunk
+    // out from under siblings still waiting to copy it. Sole target → owned.
+    const owned = targets.length === 1;
+    for (const conn of targets) {
+      if (conn.batcher.write(id, chunk, byteCount, owned)) {
         visualWritten = true;
       }
     }
@@ -529,9 +547,10 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
-  // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB write succeeded.
-  // Skip mirroring for suspended/backgrounded terminals to respect backpressure semantics.
-  if (visualWritten && ipcDataMirrorTerminals.has(id) && !isSuspended && !isBackgrounded) {
+  // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB
+  // write succeeded. Background terminals still need this low-volume mirror
+  // because their visual stream is intentionally suppressed.
+  if (ipcDataMirrorTerminals.has(id) && !isSuspended && (visualWritten || isBackgrounded)) {
     sendEvent({ type: "data", id, data: toStringForIpc(data) });
   }
 
@@ -960,6 +979,7 @@ async function initialize(): Promise<void> {
     console.log("[PtyHost] ProcessTreeCache started");
 
     // Notify Main that we're ready (after cache is initialized, before pool is warmed)
+    markHostPerformance(PERF_MARKS.PTY_HOST_READY_POSTED);
     sendEvent({ type: "ready" });
     console.log("[PtyHost] Initialized and ready (accepting IPC)");
 

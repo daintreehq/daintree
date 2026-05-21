@@ -8,7 +8,7 @@ const VALID_TABS: SettingsTab[] = [
   "terminalAppearance",
   "worktree",
   "agents",
-  "github",
+  "code-forge",
   "portal",
   "toolbar",
   "notifications",
@@ -26,7 +26,7 @@ const VALID_TABS: SettingsTab[] = [
   "project:recipes",
   "project:commands",
   "project:notifications",
-  "project:github",
+  "project:code-forge",
 ];
 
 /**
@@ -49,7 +49,7 @@ describe("Settings remembered-tab fallback logic", () => {
   });
 
   it("uses defaultTab when explicitly provided (targeted open)", () => {
-    expect(deriveActiveTab("github", "privacy")).toBe("github");
+    expect(deriveActiveTab("code-forge", "privacy")).toBe("code-forge");
   });
 
   it('defaults to "general" when both defaultTab is undefined and rememberedTab is "general"', () => {
@@ -129,8 +129,8 @@ describe("Untargeted open scope derivation (issue #4657)", () => {
   });
 
   it("targeted open preserves scope from defaultTab (global tab)", () => {
-    const result = deriveUntargetedOpenState(true, "github", "privacy");
-    expect(result).toEqual({ scope: "global", tab: "github" });
+    const result = deriveUntargetedOpenState(true, "code-forge", "privacy");
+    expect(result).toEqual({ scope: "global", tab: "code-forge" });
   });
 
   it("targeted open preserves scope from defaultTab (project tab)", () => {
@@ -140,7 +140,7 @@ describe("Untargeted open scope derivation (issue #4657)", () => {
 
   it("does not derive state when dialog is closed", () => {
     expect(deriveUntargetedOpenState(false, undefined, "privacy")).toBeNull();
-    expect(deriveUntargetedOpenState(false, "github", "privacy")).toBeNull();
+    expect(deriveUntargetedOpenState(false, "code-forge", "privacy")).toBeNull();
   });
 
   it("untargeted open is idempotent (calling twice gives same result)", () => {

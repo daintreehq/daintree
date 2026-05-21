@@ -250,4 +250,78 @@ describe("SearchablePalette footer", () => {
     expect(fn).toHaveBeenCalledWith(null);
     expect(document.body.textContent).toContain("to fallback");
   });
+
+  describe("footer stability when action label is unchanged", () => {
+    function renderWithSelectedIndex(
+      selectedIndex: number,
+      getActionLabel: (item: Item | null) => string
+    ) {
+      return (
+        <SearchablePalette<Item>
+          isOpen
+          query=""
+          results={items}
+          selectedIndex={selectedIndex}
+          onQueryChange={() => {}}
+          onSelectPrevious={() => {}}
+          onSelectNext={() => {}}
+          onConfirm={() => {}}
+          onClose={() => {}}
+          getItemId={(item) => item.id}
+          renderItem={(item) => (
+            <button key={item.id} data-testid={`row-${item.id}`}>
+              {item.label}
+            </button>
+          )}
+          label="Test"
+          ariaLabel="Test palette"
+          getActionLabel={getActionLabel}
+        />
+      );
+    }
+
+    it("does not rebuild the footer chip when the derived label is unchanged across selection moves", () => {
+      // Stable label — the action verb is the same regardless of which item
+      // is selected (e.g. "Switch terminal" in QuickSwitcher). This is the
+      // exact regression #8106 documents: arrow-keying must not rebuild the
+      // footer chip when the rendered text is identical.
+      const stableLabel = (_item: Item | null) => "Switch terminal";
+
+      const { rerender } = render(renderWithSelectedIndex(0, stableLabel));
+
+      // Snapshot the footer DOM node identity. If the memoized JSX is stable
+      // across selection changes, React reuses the same DOM nodes — the kbd
+      // element under the footer keeps the same identity. The dialog portals
+      // into document.body so query the body, not the render container.
+      const initialDialog = document.body.querySelector("[role='dialog']");
+      expect(initialDialog).not.toBeNull();
+      const initialKbds = Array.from(initialDialog!.querySelectorAll("kbd"));
+      // Footer kbd entries are: "↵", "↑", "↓", "Esc". Grab the primary "↵".
+      const initialPrimaryKbd = initialKbds.find((kbd) => kbd.textContent === "↵");
+      expect(initialPrimaryKbd).toBeDefined();
+
+      rerender(renderWithSelectedIndex(1, stableLabel));
+      rerender(renderWithSelectedIndex(2, stableLabel));
+
+      const finalDialog = document.body.querySelector("[role='dialog']");
+      const finalPrimaryKbd = Array.from(finalDialog!.querySelectorAll("kbd")).find(
+        (kbd) => kbd.textContent === "↵"
+      );
+      // Same DOM node identity proves React's reconciler bailed out — the
+      // memoized JSX element kept the same reference so no remount occurred.
+      expect(finalPrimaryKbd).toBe(initialPrimaryKbd);
+      expect(document.body.textContent).toContain("to switch terminal");
+    });
+
+    it("rebuilds the footer chip when the derived label changes across selection moves", () => {
+      const labelFn = (item: Item | null) => (item ? `Switch to ${item.label}` : "Pick");
+
+      const { rerender } = render(renderWithSelectedIndex(0, labelFn));
+      expect(document.body.textContent).toContain("to switch to alpha");
+
+      rerender(renderWithSelectedIndex(1, labelFn));
+      expect(document.body.textContent).toContain("to switch to bravo");
+      expect(document.body.textContent).not.toContain("to switch to alpha");
+    });
+  });
 });

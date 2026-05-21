@@ -71,7 +71,7 @@ interface IssueTooltipContentProps {
 }
 
 export function IssueTooltipContent({ data }: IssueTooltipContentProps) {
-  const stateColor = data.state === "OPEN" ? "text-github-open" : "text-github-merged";
+  const stateColor = data.state === "OPEN" ? "text-pr-open" : "text-pr-merged";
 
   return (
     <div className="space-y-2 max-w-[280px]">
@@ -128,10 +128,10 @@ interface PRTooltipContentProps {
 export function PRTooltipContent({ data }: PRTooltipContentProps) {
   const stateColor =
     data.state === "MERGED"
-      ? "text-github-merged"
+      ? "text-pr-merged"
       : data.state === "CLOSED"
-        ? "text-github-closed"
-        : "text-github-open";
+        ? "text-pr-closed"
+        : "text-pr-open";
 
   const stateLabel = data.isDraft ? "Draft" : data.state.toLowerCase();
 
@@ -144,10 +144,10 @@ export function PRTooltipContent({ data }: PRTooltipContentProps) {
           className={cn(
             "text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize",
             data.state === "MERGED"
-              ? "bg-github-merged/20 text-github-merged"
+              ? "bg-pr-merged/20 text-pr-merged"
               : data.state === "CLOSED"
-                ? "bg-github-closed/20 text-github-closed"
-                : "bg-github-open/20 text-github-open"
+                ? "bg-pr-closed/20 text-pr-closed"
+                : "bg-pr-open/20 text-pr-open"
           )}
         >
           {stateLabel}

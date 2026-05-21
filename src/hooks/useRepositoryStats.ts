@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { GitHubRateLimitKind, RepositoryStats } from "../types";
+// eslint-disable-next-line no-restricted-imports
 import { githubClient, projectClient } from "@/clients";
 import { isTokenRelatedError } from "@/lib/githubErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
+import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
+import { useSystemWakeStore } from "@/store/systemWakeStore";
 
 function isValidPagePayload(page: unknown): page is {
   items: unknown[];
@@ -52,6 +55,11 @@ export type FreshnessLevel = "fresh" | "aging" | "stale-disk" | "errored";
 export interface UseRepositoryStatsReturn {
   stats: RepositoryStats | null;
   loading: boolean;
+  // True while a refetch is in flight regardless of whether stats are already
+  // available. Distinct from `loading`, which narrows to the first-fetch
+  // (no-data-yet) case so background revalidations don't flip skeletons or
+  // loading indicators back on top of stale-but-visible data.
+  isValidating: boolean;
   error: string | null;
   isTokenError: boolean;
   isStale: boolean;
@@ -84,6 +92,7 @@ export interface UseRepositoryStatsReturn {
 export function useRepositoryStats(): UseRepositoryStatsReturn {
   const [stats, setStats] = useState<RepositoryStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isStale, setIsStale] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
@@ -108,17 +117,15 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     projectPath: string | null;
   }>({ issueCount: null, prCount: null, projectPath: null });
 
-  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isVisibleRef = useRef(!document.hidden);
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
-  const queuedFetchRef = useRef<{ pending: boolean; force: boolean }>({
-    pending: false,
-    force: false,
-  });
-  const activeFetchIdRef = useRef(0);
-  const invalidatedFetchIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Apply a `RepositoryStats` result to local state — shared by the network
   // fetch path (`fetchStats`) and the broadcast push path
@@ -192,20 +199,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     []
   );
 
-  const fetchStats = useCallback(
-    async (force = false) => {
-      if (inFlightRef.current) {
-        queuedFetchRef.current.pending = true;
-        queuedFetchRef.current.force = queuedFetchRef.current.force || force;
-        invalidatedFetchIdRef.current = activeFetchIdRef.current;
-        return;
-      }
-
+  const polling = usePollingLifecycle({
+    fetchFn: async ({ force, isInvalidated }) => {
       try {
-        inFlightRef.current = true;
-        activeFetchIdRef.current += 1;
-        const fetchId = activeFetchIdRef.current;
-
         const project = await projectClient.getCurrent();
         if (!project) {
           if (mountedRef.current) {
@@ -219,26 +215,36 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           return;
         }
 
-        setLoading(true);
+        if (mountedRef.current) {
+          // Always signal that a refetch is in flight so callers can show a
+          // subtle in-progress affordance without hiding visible data. Only
+          // flip the full `loading` skeleton when no result has been applied
+          // yet — once `applyStatsResult` has run (network or disk hydration),
+          // background revalidations (wake, focus, interval, manual refresh)
+          // must not flash the skeleton over existing rows.
+          setIsValidating(true);
+          if (!hasAppliedResultRef.current) setLoading(true);
+        }
 
         const repoStats = await githubClient.getRepoStats(project.path, force);
 
-        if (mountedRef.current) {
-          if (invalidatedFetchIdRef.current === fetchId) {
-            return;
-          }
+        if (!mountedRef.current) return;
+        if (isInvalidated()) return;
 
-          // Ignore results from previous project (race condition protection)
-          if (
-            lastKnownCountsRef.current.projectPath !== null &&
-            lastKnownCountsRef.current.projectPath !== project.path
-          ) {
-            return;
-          }
-
-          applyStatsResult(repoStats, { projectPath: project.path });
+        // Ignore results from previous project (race condition protection)
+        if (
+          lastKnownCountsRef.current.projectPath !== null &&
+          lastKnownCountsRef.current.projectPath !== project.path
+        ) {
+          return;
         }
+
+        applyStatsResult(repoStats, { projectPath: project.path });
       } catch (err) {
+        // Bail when the fetch was superseded — applying the old project's
+        // error to the new project's state would surface a stale error and
+        // push `calculateNextInterval` into ERROR_BACKOFF_INTERVAL.
+        if (isInvalidated()) return;
         if (mountedRef.current) {
           const errorMessage = formatErrorMessage(err, "Failed to fetch repository stats");
           setError(errorMessage);
@@ -247,121 +253,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       } finally {
         if (mountedRef.current) {
           setLoading(false);
-        }
-        inFlightRef.current = false;
-        if (mountedRef.current && queuedFetchRef.current.pending) {
-          const queuedForce = queuedFetchRef.current.force;
-          queuedFetchRef.current = { pending: false, force: false };
-          void fetchStats(queuedForce);
+          setIsValidating(false);
         }
       }
     },
-    [applyStatsResult]
-  );
-
-  const scheduleNextPoll = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearTimeout(pollTimerRef.current);
-    }
-
-    let interval = isVisibleRef.current ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
-    if (lastErrorRef.current) {
-      interval = ERROR_BACKOFF_INTERVAL;
-    }
-
-    const resetAt = rateLimitResetAtRef.current;
-    if (resetAt !== null && resetAt > Date.now()) {
-      interval = resetAt - Date.now() + RATE_LIMIT_RESUME_BUFFER_MS;
-    }
-
-    pollTimerRef.current = setTimeout(() => {
-      fetchStats().then(() => {
-        if (mountedRef.current) {
-          scheduleNextPoll();
-        }
-      });
-    }, interval);
-  }, [fetchStats]);
-
-  const refresh = useCallback(
-    async (options?: { force?: boolean }) => {
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
+    calculateNextInterval: ({ isVisible }) => {
+      const resetAt = rateLimitResetAtRef.current;
+      if (resetAt !== null && resetAt > Date.now()) {
+        return resetAt - Date.now() + RATE_LIMIT_RESUME_BUFFER_MS;
       }
-      await fetchStats(options?.force ?? false);
-      if (mountedRef.current) {
-        scheduleNextPoll();
-      }
+      if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
+      return isVisible ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
     },
-    [fetchStats, scheduleNextPoll]
-  );
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      isVisibleRef.current = !document.hidden;
-
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-
-      if (isVisibleRef.current) {
-        fetchStats().then(() => {
-          if (mountedRef.current) {
-            scheduleNextPoll();
-          }
-        });
-      } else {
-        scheduleNextPoll();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [fetchStats, scheduleNextPoll]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-
-    return () => {
-      mountedRef.current = false;
-      queuedFetchRef.current = { pending: false, force: false };
-      invalidatedFetchIdRef.current = null;
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    fetchStats().then(() => {
-      if (mountedRef.current) {
-        scheduleNextPoll();
-      }
-    });
-  }, [fetchStats, scheduleNextPoll]);
-
-  useEffect(() => {
-    const handleSidebarRefresh = () => {
-      void refresh({ force: true });
-    };
-    window.addEventListener("daintree:refresh-sidebar", handleSidebarRefresh);
-    return () => {
-      window.removeEventListener("daintree:refresh-sidebar", handleSidebarRefresh);
-    };
-  }, [refresh]);
-
-  useEffect(() => {
-    const cleanup = projectClient.onSwitch(() => {
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-
+    onProjectSwitch: () => {
+      if (!mountedRef.current) return;
       // Clear preserved counts on project switch to prevent cross-contamination
       lastKnownCountsRef.current = { issueCount: null, prCount: null, projectPath: null };
       hasAppliedResultRef.current = false;
@@ -378,16 +283,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // freshness tier as `errored` until its first poll completes.
       setError(null);
       lastErrorRef.current = null;
-
-      fetchStats().then(() => {
-        if (mountedRef.current) {
-          scheduleNextPoll();
-        }
-      });
-    });
-
-    return cleanup;
-  }, [fetchStats, scheduleNextPoll]);
+    },
+  });
 
   // Cold-start hydration: before the first poll completes, ask main for the
   // disk-persisted first page so the very first dropdown click after launch
@@ -542,6 +439,21 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [applyStatsResult]);
 
+  // Coalesce sleep-wake fetches onto the shared wake-coordinator slice
+  // (#8066). The store bumps `wakeEpoch` once per qualifying wake; every
+  // consumer reacts to the same epoch instead of independently registering
+  // `system.onWake` listeners or duplicating short-sleep heuristics. The
+  // `lastSeenWakeEpochRef` is seeded with the current value at mount so a
+  // component that arrives after a previous wake doesn't fire a spurious
+  // refetch.
+  const wakeEpoch = useSystemWakeStore((s) => s.wakeEpoch);
+  const lastSeenWakeEpochRef = useRef(useSystemWakeStore.getState().wakeEpoch);
+  useEffect(() => {
+    if (wakeEpoch <= lastSeenWakeEpochRef.current) return;
+    lastSeenWakeEpochRef.current = wakeEpoch;
+    void polling.refresh();
+  }, [wakeEpoch, polling]);
+
   useEffect(() => {
     const cleanup = githubClient.onRateLimitChanged((payload) => {
       if (!mountedRef.current) return;
@@ -551,29 +463,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
 
-      // Cancel any pending poll scheduled against the old state so it
-      // can't race with the state-change handler (e.g. firing a
-      // redundant fetch right after our immediate refresh kicks off).
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-
       // When the limit clears, run an immediate refresh so the UI updates
-      // without waiting a full poll interval; otherwise reschedule against
-      // the new resume time.
+      // without waiting a full poll interval; `refresh` clears the timer,
+      // fetches, and reschedules against the new rate-limit-aware interval.
+      // When blocked, just reschedule against the new resume time.
       if (!payload.blocked) {
-        void fetchStats().then(() => {
-          if (mountedRef.current) {
-            scheduleNextPoll();
-          }
-        });
-      } else if (mountedRef.current) {
-        scheduleNextPoll();
+        void polling.refresh();
+      } else {
+        polling.scheduleNextPoll();
       }
     });
     return cleanup;
-  }, [fetchStats, scheduleNextPoll]);
+  }, [polling]);
 
   const isTokenError = isTokenRelatedError(error);
 
@@ -623,6 +524,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   return {
     stats,
     loading,
+    isValidating,
     error,
     isTokenError,
     isStale,
@@ -630,6 +532,6 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     rateLimitResetAt,
     rateLimitKind,
     freshnessLevel,
-    refresh,
+    refresh: polling.refresh,
   };
 }

@@ -35,14 +35,14 @@ import {
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
+import { pruneOldLogs } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { exposeGc } from "../setup/environment.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
-import { getProjectViewManager } from "./windowRef.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -424,11 +424,6 @@ export async function initGlobalServices(
             } catch {
               /* non-critical */
             }
-            try {
-              exposeGc?.();
-            } catch {
-              /* non-critical */
-            }
             if (windowRegistry) {
               for (const wCtx of windowRegistry.all()) {
                 if (!wCtx.browserWindow.isDestroyed()) {
@@ -474,6 +469,26 @@ export async function initGlobalServices(
           hibernateIdleProjects: async () => {
             await getHibernationService().hibernateUnderMemoryPressure();
           },
+          accelerateTerminalHibernation: (level: 1 | 2) => {
+            // Fan the per-window push event so every renderer compresses
+            // its hibernation timer. Mirrors the destroyHiddenWebviews
+            // fanout pattern above — broadcastToRenderer is not used
+            // because the renderer's TerminalInstanceService is window-
+            // scoped (xterm instances live in a single project view), so
+            // there's nothing to gain from a global broadcast.
+            if (!windowRegistry) return;
+            for (const wCtx of windowRegistry.all()) {
+              if (wCtx.browserWindow.isDestroyed()) continue;
+              try {
+                sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                  name: "window:accelerate-hibernation",
+                  payload: { level },
+                });
+              } catch {
+                /* non-critical */
+              }
+            }
+          },
           trimPtyHostState: () => {
             getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);
           },
@@ -509,11 +524,12 @@ export async function initGlobalServices(
             for (const wCtx of windowRegistry.all()) {
               const w = wCtx.browserWindow;
               if (w.isDestroyed()) continue;
-              // Cached/loading views have setBackgroundThrottling(true) which
-              // throttles JS timers and the LoAF observer, producing burst
-              // signal that doesn't reflect user-visible lag. Only sample
-              // active views; fall back to the app webContents for windows
-              // still on the bootstrap shell (no PVM yet).
+              // Cached/loading views are CPU-throttled (Emulation.setCPUThrottlingRate)
+              // or Efficiency-frozen (Page.setWebLifecycleState) which slows
+              // JS timers and the LoAF observer, producing burst signal that
+              // doesn't reflect user-visible lag. Only sample active views;
+              // fall back to the app webContents for windows still on the
+              // bootstrap shell (no PVM yet).
               const pvm = wCtx.services.projectViewManager;
               const targets = pvm
                 ? pvm
@@ -550,7 +566,11 @@ export async function initGlobalServices(
         getPtyClient: () => getPtyClient(),
         getWorkspaceClient: () => getWorkspaceClientRef(),
         getHibernationService: () => getHibernationService(),
-        getProjectViewManager: () => getProjectViewManager(),
+        getAllProjectViewManagers: () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
         getUserCachedViewLimit: () =>
           store.get("terminalConfig")?.cachedProjectViews ??
@@ -688,6 +708,22 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "session-eviction",
     run: () => evictStaleSessionFiles(),
+  });
+
+  registerDeferredTask({
+    name: "prune-old-logs",
+    run: () => {
+      // Deferred (post first-interactive) so the synchronous fs scan doesn't
+      // block cold start. Note: `userData/debug/*.log` files have their mtimes
+      // refreshed by `clearDebugLogs` during `initializeLogger` (pre-deferral),
+      // so debug stubs effectively survive each prune cycle. They're empty
+      // (0 bytes) so the accumulation is harmless; `userData/logs/` is still
+      // pruned correctly because its files are appended-to, not truncated.
+      const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
+      if (retentionDays > 0) {
+        pruneOldLogs(app.getPath("userData"), retentionDays);
+      }
+    },
   });
 
   return "ok";

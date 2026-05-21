@@ -283,9 +283,15 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
           ) : (
             <div className="flex items-center justify-center h-full">
               {logs.length === 0 && !previousSessionEntry ? (
-                <EmptyState variant="zero-data" scale="sidebar" title="No logs yet" />
+                <EmptyState
+                  key="zero-data"
+                  variant="zero-data"
+                  scale="sidebar"
+                  title="No logs yet"
+                />
               ) : (
                 <EmptyState
+                  key="user-cleared"
                   variant="user-cleared"
                   scale="sidebar"
                   title="No new logs this session"

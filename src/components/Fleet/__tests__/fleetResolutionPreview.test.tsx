@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { hasRecipeVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import {
+  useFleetTargetOverridesStore,
+  __resetFleetTargetOverridesStoreForTesting,
+} from "@/store/fleetTargetOverridesStore";
 import { usePanelStore } from "@/store/panelStore";
 import { FleetDraftingPill } from "../FleetDraftingPill";
 import type { TerminalInstance } from "@shared/types";
@@ -17,6 +21,7 @@ function resetStores() {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useFleetResolutionPreviewStore.getState().clear();
+  __resetFleetTargetOverridesStoreForTesting();
 }
 
 function seedPanel(panel: TerminalInstance) {
@@ -280,5 +285,105 @@ describe("FleetDraftingPill", () => {
 
     render(<FleetDraftingPill />);
     expect(screen.queryByTestId("fleet-resolution-popover")).toBeNull();
+  });
+});
+
+describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
+  beforeEach(() => {
+    resetStores();
+    const a1 = makeAgent("t-1");
+    const a2 = makeAgent("t-2");
+    usePanelStore.setState({
+      panelsById: { "t-1": a1, "t-2": a2 },
+      panelIds: ["t-1", "t-2"],
+    });
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    useFleetResolutionPreviewStore.getState().setDraft("deploy {{branch_name}}");
+  });
+
+  it("renders one textarea per non-excluded row", () => {
+    render(<FleetDraftingPill />);
+    const textareas = screen.getAllByTestId("fleet-resolution-row-textarea");
+    expect(textareas).toHaveLength(2);
+  });
+
+  it("writes overrides through the store when the textarea changes", () => {
+    render(<FleetDraftingPill />);
+    const textareas = screen.getAllByTestId(
+      "fleet-resolution-row-textarea"
+    ) as HTMLTextAreaElement[];
+    fireEvent.change(textareas[1]!, { target: { value: "custom override" } });
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("custom override");
+  });
+
+  it("clears the override when the textarea returns to the resolved default", () => {
+    render(<FleetDraftingPill />);
+    const previews = useFleetResolutionPreviewStore.getState().previews;
+    const t2Resolved = previews.find((p) => p.terminalId === "t-2")!.resolvedPayload;
+    const textareas = screen.getAllByTestId(
+      "fleet-resolution-row-textarea"
+    ) as HTMLTextAreaElement[];
+    fireEvent.change(textareas[1]!, { target: { value: "edited" } });
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("edited");
+    fireEvent.change(textareas[1]!, { target: { value: t2Resolved } });
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBeUndefined();
+  });
+
+  it("toggles a skip via the include checkbox", () => {
+    render(<FleetDraftingPill />);
+    const checkboxes = screen.getAllByTestId("fleet-resolution-row-include") as HTMLInputElement[];
+    expect(checkboxes[1]!.checked).toBe(true);
+    fireEvent.click(checkboxes[1]!);
+    expect(useFleetTargetOverridesStore.getState().skippedIds.has("t-2")).toBe(true);
+  });
+
+  it("prevents Enter inside an override textarea from bubbling", () => {
+    render(<FleetDraftingPill />);
+    const textarea = screen.getAllByTestId(
+      "fleet-resolution-row-textarea"
+    )[0] as HTMLTextAreaElement;
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    const result = textarea.dispatchEvent(event);
+    // defaultPrevented = true means the handler called preventDefault.
+    expect(result).toBe(false);
+  });
+
+  it("clears overrides when the popover closes (user dismiss)", () => {
+    render(<FleetDraftingPill />);
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "x");
+      useFleetTargetOverridesStore.getState().setSkipped("t-2", true);
+    });
+    // Simulate user dismissing the popover.
+    act(() => {
+      useFleetResolutionPreviewStore.getState().setOpen(false);
+    });
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
+    expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
+  });
+
+  it("disables the textarea for skipped targets", () => {
+    render(<FleetDraftingPill />);
+    act(() => {
+      useFleetTargetOverridesStore.getState().setSkipped("t-2", true);
+    });
+    const textareas = screen.getAllByTestId(
+      "fleet-resolution-row-textarea"
+    ) as HTMLTextAreaElement[];
+    expect(textareas[1]!.disabled).toBe(true);
+  });
+
+  it("shows a divergence dot on the trigger when overrides or skips exist", () => {
+    render(<FleetDraftingPill />);
+    expect(screen.queryByTestId("fleet-drafting-pill-divergence-dot")).toBeNull();
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "x");
+    });
+    expect(screen.getByTestId("fleet-drafting-pill-divergence-dot")).toBeTruthy();
   });
 });

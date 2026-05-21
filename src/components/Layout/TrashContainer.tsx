@@ -272,7 +272,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Recently Closed</span>
+              <span className="text-xs font-medium text-daintree-text/70">Recently closed</span>
               <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
             </div>
 

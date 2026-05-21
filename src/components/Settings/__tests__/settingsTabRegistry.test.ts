@@ -129,11 +129,11 @@ describe("SETTINGS_REGISTRY", () => {
     }
   });
 
-  it("project:automation declares needsOnNavigateToTab", () => {
+  it("project:automation does not require onNavigateToTab", () => {
     const automation = allEntries.find((e) => e.id === "project:automation");
     expect(automation).toBeDefined();
     if (automation && automation.importKind === "lazy") {
-      expect((automation as LazySettingsTabEntry).needsOnNavigateToTab).toBe(true);
+      expect((automation as LazySettingsTabEntry).needsOnNavigateToTab).toBeFalsy();
     }
   });
 
@@ -246,7 +246,7 @@ describe("getSettingsNavGroups", () => {
       "project:recipes",
       "project:commands",
       "project:notifications",
-      "project:github",
+      "project:code-forge",
     ];
     expect(groups[0]!.entries.map((e) => e.id)).toEqual(expectedOrder);
   });

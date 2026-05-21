@@ -83,6 +83,16 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
     toIndex: number
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
+  /**
+   * Prune `pinnedButtons` entries for plugin buttons (`plugin.` prefix) that
+   * are no longer in the loaded plugin set. `pinnedButtons` is renderer-local
+   * persisted state with no main-process access, so an uninstalled plugin's
+   * stale hide entry can only be swept here, driven by the plugin lifecycle
+   * snapshot in `usePluginToolbarButtons`. Built-in (non-`plugin.`) keys are
+   * never touched. No-ops (returns state unchanged) when nothing is stale so
+   * the per-snapshot call doesn't churn the persist layer.
+   */
+  sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
   setDefaultSelection: (selection: ToolbarPreferences["launcher"]["defaultSelection"]) => void;
   setDefaultAgent: (agent: ToolbarPreferences["launcher"]["defaultAgent"]) => void;
@@ -135,6 +145,21 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             delete pinned[buttonId];
           } else {
             pinned[buttonId] = false;
+          }
+          return {
+            layout: { ...state.layout, pinnedButtons: pinned },
+          };
+        }),
+      sweepStalePluginPinnedButtons: (validIds) =>
+        set((state) => {
+          const validSet = new Set(validIds);
+          const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
+            (key) => key.startsWith("plugin.") && !validSet.has(key)
+          );
+          if (staleKeys.length === 0) return state;
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          for (const key of staleKeys) {
+            delete pinned[key as AnyToolbarButtonId];
           }
           return {
             layout: { ...state.layout, pinnedButtons: pinned },

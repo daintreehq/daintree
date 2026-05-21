@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { EnvironmentVariablesEditor } from "../EnvironmentVariablesEditor";
 import type { EnvVar } from "../projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
@@ -12,6 +12,10 @@ vi.mock("@/lib/utils", () => ({
 
 function makeEnvVar(key: string, value: string): EnvVar {
   return { id: `env-${key}`, key, value };
+}
+
+function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
+  return { runCommands: [], ...overrides };
 }
 
 const defaultProps = {
@@ -165,6 +169,148 @@ describe("EnvironmentVariablesEditor", () => {
 
       const nameInputs = screen.getAllByLabelText("Environment variable name");
       expect(nameInputs.length).toBe(1);
+    });
+  });
+
+  describe("copy and storage accuracy", () => {
+    it("describes sensitive names as kept out of the shared settings file (not 'securely stored')", () => {
+      const { container } = render(<EnvironmentVariablesEditor {...defaultProps} />);
+
+      expect(screen.getByText(/kept out of the shared settings file/i)).toBeTruthy();
+      expect(container.textContent ?? "").not.toMatch(/securely stored/i);
+    });
+
+    it("does not render the old yellow 'Insecure sensitive variables' banner", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain-value")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+          onFlush={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+
+      expect(screen.queryByText(/insecure sensitive variables detected/i)).toBeNull();
+      expect(screen.queryByText(/saving moves them into secure storage/i)).toBeNull();
+    });
+
+    it("labels secured rows as 'Kept out of shared settings'", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "secret-value")]}
+          settings={makeSettings({ secureEnvironmentVariables: ["API_KEY"] })}
+        />
+      );
+
+      expect(screen.getByLabelText("Kept out of shared settings")).toBeTruthy();
+      expect(screen.queryByLabelText("Stored securely")).toBeNull();
+    });
+
+    it("labels insecure rows as 'Stored in the shared settings file'", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain-value")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+        />
+      );
+
+      expect(screen.getByLabelText("Stored in the shared settings file")).toBeTruthy();
+      expect(screen.queryByLabelText("Stored in plaintext")).toBeNull();
+    });
+  });
+
+  describe("migration link", () => {
+    it("renders singular 'Move 1 value out of shared settings' for one insecure key", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+          onFlush={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Move 1 value out of shared settings" })
+      ).toBeTruthy();
+    });
+
+    it("renders plural 'Move N values out of shared settings' for multiple insecure keys", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "a"), makeEnvVar("SECRET_TOKEN", "b")]}
+          settings={makeSettings({
+            insecureEnvironmentVariables: ["API_KEY", "SECRET_TOKEN"],
+          })}
+          onFlush={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Move 2 values out of shared settings" })
+      ).toBeTruthy();
+    });
+
+    it("does not render the migration link when onFlush is undefined", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /Move .* out of shared settings/ })).toBeNull();
+    });
+
+    it("does not render the migration link when there are no insecure keys", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          settings={makeSettings({ insecureEnvironmentVariables: [] })}
+          onFlush={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /Move .* out of shared settings/ })).toBeNull();
+    });
+
+    it("calls onFlush when the migration link is clicked", async () => {
+      const onFlush = vi.fn().mockResolvedValue(undefined);
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+          onFlush={onFlush}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Move 1 value out of shared settings" }));
+
+      await waitFor(() => {
+        expect(onFlush).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("does not migrate and surfaces a top-level error when an unrelated row is invalid", () => {
+      const onFlush = vi.fn().mockResolvedValue(undefined);
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("API_KEY", "plain"), makeEnvVar("BAD-NAME", "x")]}
+          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
+          onFlush={onFlush}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Move 1 value out of shared settings" }));
+
+      expect(onFlush).not.toHaveBeenCalled();
+      expect(screen.getByText(/fix the errors above before saving/i)).toBeTruthy();
     });
   });
 });

@@ -46,7 +46,23 @@ export type CdpConsoleType =
   | "table"
   | "count"
   | "timeEnd"
-  | "assert";
+  | "assert"
+  // Rows sourced from CDP `Log.entryAdded` (browser-emitted: CSP violations,
+  // network failures, deprecations) rather than `Runtime.consoleAPICalled`.
+  | "log-entry";
+
+// Source classification for `Log.entryAdded` rows. Mirrors the Chromium
+// `LogEntry.source` enum (subset we surface); unknown sources fall back to "other".
+export type CdpLogEntrySource =
+  | "javascript"
+  | "network"
+  | "deprecation"
+  | "security"
+  | "violation"
+  | "intervention"
+  | "recommendation"
+  | "worker"
+  | "other";
 
 export interface SerializedConsoleRow {
   id: number;
@@ -59,6 +75,9 @@ export interface SerializedConsoleRow {
   groupDepth: number;
   timestamp: number;
   navigationGeneration: number;
+  // Present only on `cdpType: "log-entry"` rows — classifies the browser
+  // subsystem that emitted the entry (CSP/security, network, deprecation, …).
+  category?: CdpLogEntrySource;
 }
 
 export interface CdpPropertyDescriptor {

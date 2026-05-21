@@ -26,6 +26,10 @@ export function getPluginToolbarButtonIds(): PluginToolbarButtonId[] {
   return Object.keys(TOOLBAR_BUTTON_REGISTRY) as PluginToolbarButtonId[];
 }
 
+export function getAllPluginToolbarButtonConfigs(): ToolbarButtonConfig[] {
+  return Object.values(TOOLBAR_BUTTON_REGISTRY);
+}
+
 export function isRegisteredPluginButton(id: string): boolean {
   return id.startsWith("plugin.") && id in TOOLBAR_BUTTON_REGISTRY;
 }

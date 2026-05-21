@@ -7,10 +7,10 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/fake/userData" },
 }));
 
-const mockGetCurrentDiskSpaceStatus = vi.fn();
+const mockGetWritesSuppressed = vi.fn();
 
-vi.mock("../../DiskSpaceMonitor.js", () => ({
-  getCurrentDiskSpaceStatus: () => mockGetCurrentDiskSpaceStatus(),
+vi.mock("../../diskPressureState.js", () => ({
+  getWritesSuppressed: () => mockGetWritesSuppressed(),
 }));
 
 const mockPragma = vi.fn();
@@ -232,11 +232,7 @@ describe("openDb", () => {
   });
 
   it("throws before constructing a Database when disk space is critical", () => {
-    mockGetCurrentDiskSpaceStatus.mockReturnValue({
-      status: "critical",
-      availableMb: 100,
-      writesSuppressed: true,
-    });
+    mockGetWritesSuppressed.mockReturnValue(true);
 
     expect(() => openDb("/fake/userData/daintree.db", "/fake/migrations")).toThrow(
       /disk space is critical/
@@ -249,11 +245,7 @@ describe("openDb", () => {
     // "critical" so writes can keep draining at the warning tier. We force the
     // constructor to throw a sentinel error so we don't depend on the rest of
     // openDb's wiring; reaching the constructor at all proves the guard passed.
-    mockGetCurrentDiskSpaceStatus.mockReturnValue({
-      status: "warning",
-      availableMb: 1024,
-      writesSuppressed: false,
-    });
+    mockGetWritesSuppressed.mockReturnValue(false);
     const sentinel = new Error("sentinel — should not be reached on critical");
     mockDatabaseConstructor.mockImplementation(() => ({ error: sentinel }));
 
@@ -278,11 +270,7 @@ describe("withDiskRecovery", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     pragma = vi.fn();
     sqlite = { pragma } as unknown as SqliteHandle;
-    mockGetCurrentDiskSpaceStatus.mockReturnValue({
-      status: "normal",
-      availableMb: 4096,
-      writesSuppressed: false,
-    });
+    mockGetWritesSuppressed.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -295,7 +283,7 @@ describe("withDiskRecovery", () => {
     expect(withDiskRecovery(sqlite, fn)).toBe("ok");
     expect(fn).toHaveBeenCalledTimes(1);
     expect(pragma).not.toHaveBeenCalled();
-    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+    expect(mockGetWritesSuppressed).not.toHaveBeenCalled();
   });
 
   it("checkpoints WAL and retries once on SQLITE_FULL when disk is not critical", () => {
@@ -325,11 +313,7 @@ describe("withDiskRecovery", () => {
   });
 
   it("retries when disk status is warning (not just normal)", () => {
-    mockGetCurrentDiskSpaceStatus.mockReturnValue({
-      status: "warning",
-      availableMb: 1024,
-      writesSuppressed: false,
-    });
+    mockGetWritesSuppressed.mockReturnValue(false);
     const fn = vi
       .fn<() => string>()
       .mockImplementationOnce(() => {
@@ -356,7 +340,7 @@ describe("withDiskRecovery", () => {
     expect(() => withDiskRecovery(sqlite, fn)).toThrow(err);
     expect(fn).toHaveBeenCalledTimes(1);
     expect(pragma).not.toHaveBeenCalled();
-    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+    expect(mockGetWritesSuppressed).not.toHaveBeenCalled();
   });
 
   it("does not crash and rethrows when error.code is not a string", () => {
@@ -371,11 +355,7 @@ describe("withDiskRecovery", () => {
   });
 
   it("re-throws original error and does not retry when disk is critical", () => {
-    mockGetCurrentDiskSpaceStatus.mockReturnValue({
-      status: "critical",
-      availableMb: 100,
-      writesSuppressed: true,
-    });
+    mockGetWritesSuppressed.mockReturnValue(true);
     const fullErr = makeError("SQLITE_FULL", "no space left");
     const fn = vi.fn(() => {
       throw fullErr;
@@ -395,7 +375,7 @@ describe("withDiskRecovery", () => {
     expect(() => withDiskRecovery(sqlite, fn)).toThrow(corruptErr);
     expect(fn).toHaveBeenCalledTimes(1);
     expect(pragma).not.toHaveBeenCalled();
-    expect(mockGetCurrentDiskSpaceStatus).not.toHaveBeenCalled();
+    expect(mockGetWritesSuppressed).not.toHaveBeenCalled();
   });
 
   it("propagates the retry error if the second attempt also throws", () => {

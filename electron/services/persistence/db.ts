@@ -4,7 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
-import { getCurrentDiskSpaceStatus } from "../DiskSpaceMonitor.js";
+import { getWritesSuppressed } from "../diskPressureState.js";
 import * as schema from "./schema.js";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
@@ -76,7 +76,7 @@ export function openDb(
   // Pre-flight disk-space gate. better-sqlite3's constructor creates the file
   // on open; on a critical-pressure volume that leaves a zero-byte database
   // for probeDb to quarantine next boot. Bail before allocating a handle.
-  if (getCurrentDiskSpaceStatus().status === "critical") {
+  if (getWritesSuppressed()) {
     throw new Error("Cannot open database: disk space is critical");
   }
 
@@ -228,7 +228,7 @@ export function withDiskRecovery<T>(sqlite: Database.Database, fn: () => T): T {
     return fn();
   } catch (error) {
     if (!isDiskFullError(error)) throw error;
-    if (getCurrentDiskSpaceStatus().status === "critical") throw error;
+    if (getWritesSuppressed()) throw error;
 
     console.warn("[DB] Disk-full error, attempting WAL truncate and retry:", error);
     try {

@@ -1,4 +1,7 @@
 import net from "node:net";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import concurrently from "concurrently";
 
 const DEFAULT_PORT = 5173;
@@ -48,6 +51,10 @@ async function main() {
   const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);
   const devServerUrl = `http://${host}:${port}`;
+  const freshUserDataDir =
+    process.env.DAINTREE_RESET_DATA === "1"
+      ? fs.mkdtempSync(path.join(os.tmpdir(), "daintree-dev-fresh-"))
+      : null;
 
   if (port !== requestedPort) {
     console.log(
@@ -62,9 +69,14 @@ async function main() {
     DAINTREE_DEV_SERVER_HOST: host,
     DAINTREE_DEV_SERVER_PORT: String(port),
     DAINTREE_DEV_SERVER_URL: devServerUrl,
+    ...(freshUserDataDir ? { DAINTREE_DEV_USER_DATA_DIR: freshUserDataDir } : {}),
   };
   delete sharedEnv.ELECTRON_RUN_AS_NODE;
   delete sharedEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
+
+  if (freshUserDataDir) {
+    console.log(`[dev] Using fresh Electron userData ${freshUserDataDir}`);
+  }
 
   const { result } = concurrently(
     [
@@ -93,7 +105,13 @@ async function main() {
     }
   );
 
-  await result;
+  try {
+    await result;
+  } finally {
+    if (freshUserDataDir && process.env.DAINTREE_KEEP_FRESH_PROFILE !== "1") {
+      fs.rmSync(freshUserDataDir, { recursive: true, force: true });
+    }
+  }
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

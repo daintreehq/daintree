@@ -57,4 +57,15 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
       duration: 0,
     });
   }
+
+  if (hydrateResult.crashLoopStateRecovery) {
+    const { quarantinedPath } = hydrateResult.crashLoopStateRecovery;
+    notify({
+      type: "warning",
+      title: "Crash-loop state corrupted",
+      message: `The crash-loop tracker file was corrupted and has been reset. The corrupt file is preserved at: ${quarantinedPath}`,
+      priority: "high",
+      duration: 0,
+    });
+  }
 }

@@ -60,15 +60,15 @@ function buildDerivedMeta(
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
   const isComplete =
     !!worktree.issueNumber &&
-    !!worktree.prNumber &&
+    !!worktree.linked?.pr &&
     !hasChanges &&
     worktree.worktreeChanges !== null;
 
   let lifecycleStage: WorktreeLifecycleStage | null = null;
   if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-    if (worktree.prState === "merged") {
+    if (worktree.linked?.pr?.state === "merged") {
       lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-    } else if (worktree.prState === "open") {
+    } else if (worktree.linked?.pr?.state === "open") {
       lifecycleStage = "in-review";
     }
   }
@@ -96,7 +96,7 @@ function worktreeMatchesQuery(worktree: WorktreeState, query: string): boolean {
   if (!query) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
-    return worktree.issueNumber === exactNum || worktree.prNumber === exactNum;
+    return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
   }
   return scoreWorktree(worktree, query) > 0;
 }
@@ -120,7 +120,7 @@ export function getVisibleWorktreesForCycling(
     groupByType: isGroupedByType,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
     alwaysShowActive,
@@ -173,7 +173,7 @@ export function getVisibleWorktreesForCycling(
     query,
     statusFilters,
     typeFilters,
-    githubFilters,
+    prIssueFilters,
     sessionFilters,
     activityFilters,
   };

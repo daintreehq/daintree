@@ -207,8 +207,12 @@ class TerminalRegistryController {
   /**
    * Apply renderer policy for a terminal (affects refresh rate).
    */
-  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
-    terminalInstanceService.applyRendererPolicy(id, tier);
+  applyRendererPolicy(
+    id: string,
+    tier: TerminalRefreshTier,
+    options?: { fleetDriven?: boolean }
+  ): void {
+    terminalInstanceService.applyRendererPolicy(id, tier, options);
   }
 
   /**

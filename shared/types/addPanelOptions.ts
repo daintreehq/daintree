@@ -145,8 +145,16 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
+  devPreviewConsoleTab?: "output" | "console";
   /** Active viewport preset for responsive emulation (undefined = fill) */
   viewportPreset?: ViewportPresetId;
+  /** Whether the active viewport preset is rotated to landscape */
+  viewportRotated?: boolean;
+  /** Device-pixel-ratio override for the active viewport preset */
+  viewportDpr?: 1 | 2 | 3;
+  /** Whether the viewport is scaled to fit the available pane */
+  viewportFit?: boolean;
   /** Last captured scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
 }

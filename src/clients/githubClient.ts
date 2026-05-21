@@ -20,6 +20,24 @@ import type {
   GitHubListOptions,
   GitHubListResponse,
 } from "@shared/types/github";
+import type { RateLimitInfo } from "@shared/types/forge";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+
+/**
+ * Project the provider-agnostic {@link RateLimitInfo} the workspace-host
+ * observed onto the GitHub-flavored {@link GitHubRateLimitPayload} existing
+ * GitHub consumers expect. GitHub is blocked when its budget is spent
+ * (`remaining === 0`) or a secondary/abuse throttle is active.
+ */
+function toGitHubRateLimitPayload(info: RateLimitInfo): GitHubRateLimitPayload {
+  const blocked = info.remaining === 0 || info.secondaryThrottled === true;
+  if (!blocked) return { blocked: false, kind: null };
+  return {
+    blocked: true,
+    kind: info.secondaryThrottled ? "secondary" : "primary",
+    ...(info.resetAt != null ? { resetAt: info.resetAt } : {}),
+  };
+}
 
 export const githubClient = {
   getRepoStats: (cwd: string, bypassCache = false): Promise<RepositoryStats> => {
@@ -107,7 +125,13 @@ export const githubClient = {
   },
 
   onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void): (() => void) => {
-    return window.electron.github.onRateLimitChanged(callback);
+    // Rate-limit state now flows over the provider-keyed forge channel for
+    // every provider. Filter to GitHub's canonical id and project back to the
+    // GitHub-flavored payload so GitHub consumers are unchanged.
+    return window.electron.forge.onRateLimitChanged((payload) => {
+      if (payload.providerId !== BUILTIN_GITHUB_PROVIDER_ID) return;
+      callback(toGitHubRateLimitPayload(payload.state));
+    });
   },
 
   getRateLimitDetails: (): Promise<GitHubRateLimitDetails | null> => {

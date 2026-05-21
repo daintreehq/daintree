@@ -386,6 +386,155 @@ describe("AppDialog focus trapping", () => {
     });
   });
 
+  describe("AppDialog destructive variant", () => {
+    it('renders role="alertdialog" when variant is destructive', async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="destructive"
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <p>Content</p>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(screen.getByTestId("test-dialog").getAttribute("role")).toBe("alertdialog");
+    });
+
+    it('renders role="dialog" for the default variant', async () => {
+      renderDialog();
+      await act(() => vi.runAllTimersAsync());
+
+      expect(screen.getByTestId("test-dialog").getAttribute("role")).toBe("dialog");
+    });
+
+    it("auto-focuses the Cancel button by default for destructive variant", async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="destructive"
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <input type="text" placeholder="Some input" />
+            </AppDialog.Body>
+            <AppDialog.Footer
+              secondaryAction={{ label: "Cancel", onClick: () => {} }}
+              primaryAction={{ label: "Delete worktree", onClick: () => {} }}
+            />
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      expect((document.activeElement as HTMLElement).textContent).toBe("Cancel");
+    });
+
+    it('focuses the confirm button when initialFocus="confirm"', async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="default"
+            initialFocus="confirm"
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <input type="text" placeholder="Some input" />
+            </AppDialog.Body>
+            <AppDialog.Footer
+              secondaryAction={{ label: "Cancel", onClick: () => {} }}
+              primaryAction={{ label: "Save", onClick: () => {} }}
+            />
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("confirm");
+    });
+
+    it('does not move focus when initialFocus="none"', async () => {
+      const outerInput = document.createElement("input");
+      document.body.appendChild(outerInput);
+      outerInput.focus();
+      expect(document.activeElement).toBe(outerInput);
+
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} initialFocus="none" data-testid="test-dialog">
+            <AppDialog.Body>
+              <button type="button">Inside</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(document.activeElement).toBe(outerInput);
+      document.body.removeChild(outerInput);
+    });
+
+    it("falls back to first tabbable when destructive footer has no data-confirm-role marker", async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={true}
+            onClose={() => {}}
+            variant="destructive"
+            data-testid="test-dialog"
+          >
+            <AppDialog.Body>
+              <button type="button">First inside body</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      expect(document.activeElement).toBeInstanceOf(HTMLButtonElement);
+      expect((document.activeElement as HTMLElement).textContent).toBe("First inside body");
+    });
+
+    it("tags footer Cancel button with data-confirm-role=cancel", async () => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
+            <AppDialog.Body>
+              <p>Content</p>
+            </AppDialog.Body>
+            <AppDialog.Footer
+              secondaryAction={{ label: "Cancel", onClick: () => {} }}
+              primaryAction={{ label: "Save", onClick: () => {} }}
+            />
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(cancel.getAttribute("data-confirm-role")).toBe("cancel");
+      expect(save.getAttribute("data-confirm-role")).toBe("confirm");
+    });
+  });
+
   it("does not interfere with focus in portaled popovers outside dialogRef", async () => {
     renderDialog();
     await act(() => vi.runAllTimersAsync());

@@ -7,11 +7,27 @@
       "LS(**)",
       "WebFetch",
       "mcp__daintree-docs__*",
-      "Bash(gh issue list*)",
-      "Bash(gh issue view*)",
-      "Bash(gh issue search*)",
-      "Bash(gh search issues*)"
+      "Bash(gh *)",
+      "Bash(glab *)",
+      "Bash(tea *)"
     ],
-    "deny": ["Write(**)", "Edit(**)", "MultiEdit(**)", "Bash(**)"]
+    "deny": [
+      "Write(**)",
+      "Edit(**)",
+      "MultiEdit(**)",
+      "Bash(gh issue create*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh repo create*)",
+      "Bash(gh repo delete*)",
+      "Bash(glab issue create*)",
+      "Bash(glab mr create*)",
+      "Bash(glab mr merge*)",
+      "Bash(tea issue create*)",
+      "Bash(tea issues create*)",
+      "Bash(tea pr create*)",
+      "Bash(tea pulls create*)",
+      "Bash(tea pulls merge*)"
+    ]
   }
 }

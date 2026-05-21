@@ -4,6 +4,7 @@ export * from "./copyTree.js";
 export * from "./system.js";
 export * from "./project.js";
 export * from "./github.js";
+export * from "./forge.js";
 export * from "./hibernation.js";
 export * from "./idleTerminals.js";
 export * from "./systemSleep.js";

@@ -8,22 +8,106 @@ const toolbarOverflowLabels: Record<string, string> = {
   "Open Terminal": "Terminal",
   "Open Browser": "Browser",
   "Open settings": "Settings",
+  "Copy Context": "Copy Context",
 };
 
 const toolbarButtonIds: Record<string, string> = {
   "Open Terminal": "terminal",
   "Open Browser": "browser",
   "Open settings": "settings",
+  "Copy Context": "copy-tree",
 };
 
 const toolbarShortcuts: Record<string, string> = {
   "Open Terminal": `${mod}+Alt+t`,
   "Open Browser": `${mod}+Alt+b`,
   "Open settings": `${mod}+,`,
+  "Copy Context": `${mod}+Shift+c`,
 };
 
 function extractExactAriaLabel(selector: string): string | null {
   return selector.match(/aria-label="([^"]+)"/)?.[1] ?? null;
+}
+
+type ToolbarCommandReachability = "visible" | "overflow" | "missing";
+
+async function getToolbarCommandReachability(
+  page: Page,
+  selector: string,
+  label: string | null
+): Promise<ToolbarCommandReachability> {
+  const toolbarButtonId = label ? (toolbarButtonIds[label] ?? null) : null;
+
+  return page.evaluate(
+    ({ selector, toolbarButtonId }) => {
+      const isVisibleElement = (element: Element): boolean => {
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (
+          rect.bottom <= 0 ||
+          rect.right <= 0 ||
+          rect.top >= window.innerHeight ||
+          rect.left >= window.innerWidth
+        ) {
+          return false;
+        }
+
+        let current: Element | null = element;
+        while (current) {
+          if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") {
+            return false;
+          }
+          const style = window.getComputedStyle(current);
+          if (style.display === "none" || style.visibility === "hidden") {
+            return false;
+          }
+          current = current.parentElement;
+        }
+
+        return true;
+      };
+
+      const queryVisible = (root: ParentNode, cssSelector: string): boolean => {
+        try {
+          return Array.from(root.querySelectorAll(cssSelector)).some(isVisibleElement);
+        } catch {
+          return false;
+        }
+      };
+
+      const toolbars = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="toolbar"][aria-label="Main toolbar"]')
+      ).filter(isVisibleElement);
+
+      for (const toolbar of toolbars) {
+        if (queryVisible(toolbar, selector)) {
+          return "visible";
+        }
+
+        if (!toolbarButtonId) continue;
+
+        const wrappers = Array.from(
+          toolbar.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")
+        ).filter((wrapper) => wrapper.getAttribute("data-toolbar-button-id") === toolbarButtonId);
+
+        if (wrappers.some((wrapper) => queryVisible(wrapper, "button"))) {
+          return "visible";
+        }
+
+        const hasRegisteredToolbarButton = wrappers.some(
+          (wrapper) => wrapper.getAttribute("data-toolbar-placeholder") !== "true"
+        );
+        const hasVisibleOverflowTrigger = queryVisible(toolbar, "[data-toolbar-overflow-trigger]");
+
+        if (hasRegisteredToolbarButton && hasVisibleOverflowTrigger) {
+          return "overflow";
+        }
+      }
+
+      return "missing";
+    },
+    { selector, toolbarButtonId }
+  );
 }
 
 async function clickFirstVisible(
@@ -37,13 +121,132 @@ async function clickFirstVisible(
     if (!(await candidate.isVisible({ timeout: visibilityTimeout }).catch(() => false))) {
       continue;
     }
+    if (
+      !(await candidate
+        .click({ timeout: visibilityTimeout, trial: true })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      continue;
+    }
+
     try {
       await candidate.click({ timeout: clickTimeout, noWaitAfter: true });
-      return true;
     } catch {
-      // Another toolbar layout pass may have moved the item into overflow.
+      // Linux CI can time out after Playwright has reached the "performing click
+      // action" phase. Retrying alternate locators or shortcuts can fire
+      // non-idempotent toolbar actions twice, so stop after one actionable click.
+    }
+    return true;
+  }
+  return false;
+}
+
+async function hasVisible(locator: Locator, visibilityTimeout = 250): Promise<boolean> {
+  const count = await locator.count();
+  for (let i = 0; i < count; i++) {
+    if (
+      await locator
+        .nth(i)
+        .isVisible({ timeout: visibilityTimeout })
+        .catch(() => false)
+    ) {
+      return true;
     }
   }
+  return false;
+}
+
+function getToolbarButtonLocators(toolbar: Locator, selector: string, label: string | null) {
+  const locators: Locator[] = [];
+
+  if (label) {
+    const toolbarButtonId = toolbarButtonIds[label];
+    if (toolbarButtonId) {
+      locators.push(toolbar.locator(`[data-toolbar-button-id="${toolbarButtonId}"] button`));
+    }
+
+    locators.push(toolbar.getByRole("button", { name: label, exact: true }));
+  }
+
+  locators.push(toolbar.locator(selector));
+  return locators;
+}
+
+async function clickToolbarOverflowItem(
+  page: Page,
+  toolbar: Locator,
+  label: string,
+  timeout: number
+): Promise<boolean> {
+  const menuLabel = toolbarOverflowLabels[label] ?? label;
+  const overflowTriggers = toolbar.locator("[data-toolbar-overflow-trigger]");
+  const count = await overflowTriggers.count();
+
+  for (let i = 0; i < count; i++) {
+    const trigger = overflowTriggers.nth(i);
+    if (!(await trigger.isVisible({ timeout: 1000 }).catch(() => false))) {
+      continue;
+    }
+
+    try {
+      await trigger.click({ timeout: 1000 });
+      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      if (await menuItem.isVisible({ timeout: 500 }).catch(() => false)) {
+        const isActionable = await menuItem
+          .click({ timeout: 1000, trial: true })
+          .then(() => true)
+          .catch(() => false);
+        if (!isActionable) {
+          await page.keyboard.press("Escape").catch(() => undefined);
+          continue;
+        }
+        try {
+          await menuItem.click({ timeout });
+        } catch {
+          // Same ambiguity as direct toolbar buttons: once the menu item was
+          // actionable, do not retry the same non-idempotent command elsewhere.
+        }
+        return true;
+      }
+    } catch {
+      // Another toolbar layout pass may have changed which overflow menu owns the item.
+    }
+
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+
+  return false;
+}
+
+async function hasToolbarOverflowItem(
+  page: Page,
+  toolbar: Locator,
+  label: string
+): Promise<boolean> {
+  const menuLabel = toolbarOverflowLabels[label] ?? label;
+  const overflowTriggers = toolbar.locator("[data-toolbar-overflow-trigger]");
+  const count = await overflowTriggers.count();
+
+  for (let i = 0; i < count; i++) {
+    const trigger = overflowTriggers.nth(i);
+    if (!(await trigger.isVisible({ timeout: 250 }).catch(() => false))) {
+      continue;
+    }
+
+    try {
+      await trigger.click({ timeout: 1000 });
+      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      const visible = await menuItem.isVisible({ timeout: 500 }).catch(() => false);
+      await page.keyboard.press("Escape").catch(() => undefined);
+      if (visible) {
+        return true;
+      }
+    } catch {
+      await page.keyboard.press("Escape").catch(() => undefined);
+    }
+  }
+
   return false;
 }
 
@@ -62,45 +265,14 @@ export async function clickToolbarButton(
   const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
   const label = extractExactAriaLabel(selector);
 
-  if (label) {
-    const toolbarButtonId = toolbarButtonIds[label];
-    if (toolbarButtonId) {
-      const buttonById = toolbar.locator(`[data-toolbar-button-id="${toolbarButtonId}"] button`);
-      if (await clickFirstVisible(buttonById, 3000, 1000)) {
-        return;
-      }
-    }
-
-    const roleButtons = toolbar.getByRole("button", { name: label, exact: true });
-    if (await clickFirstVisible(roleButtons, 3000, 1000)) {
+  for (const candidate of getToolbarButtonLocators(toolbar, selector, label)) {
+    if (await clickFirstVisible(candidate, 3000, 1000)) {
       return;
     }
   }
 
-  const button = toolbar.locator(selector);
-
-  if (await clickFirstVisible(button)) {
+  if (label && (await clickToolbarOverflowItem(page, toolbar, label, timeout))) {
     return;
-  }
-
-  // Button might be in the overflow menu — look for and open it
-  const overflowTrigger = toolbar.getByRole("button", { name: /more/i }).first();
-  if (await overflowTrigger.isVisible({ timeout: 1000 }).catch(() => false)) {
-    try {
-      await overflowTrigger.click();
-
-      // Extract the aria-label from the selector to find the menu item
-      if (label) {
-        const menuItem = page.getByRole("menuitem", {
-          name: toolbarOverflowLabels[label] ?? label,
-          exact: true,
-        });
-        await menuItem.click({ timeout });
-        return;
-      }
-    } catch {
-      await page.keyboard.press("Escape").catch(() => undefined);
-    }
   }
 
   if (label && toolbarShortcuts[label]) {
@@ -109,6 +281,44 @@ export async function clickToolbarButton(
   }
 
   throw new Error(`Toolbar button ${label ?? selector} was not visible or present`);
+}
+
+/**
+ * Assert that a toolbar command can be reached either as a visible button or
+ * through the overflow menu. Use this for toolbar responsiveness checks where
+ * direct button visibility depends on CI viewport width.
+ */
+export async function expectToolbarButtonReachable(
+  page: Page,
+  selector: string,
+  timeout = 5000
+): Promise<void> {
+  await dismissBlockingPalette(page);
+
+  const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
+  const label = extractExactAriaLabel(selector);
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const reachability = await getToolbarCommandReachability(page, selector, label);
+    if (reachability !== "missing") {
+      return;
+    }
+
+    for (const candidate of getToolbarButtonLocators(toolbar, selector, label)) {
+      if (await hasVisible(candidate)) {
+        return;
+      }
+    }
+
+    if (label && (await hasToolbarOverflowItem(page, toolbar, label))) {
+      return;
+    }
+
+    await page.waitForTimeout(100);
+  }
+
+  throw new Error(`Toolbar button ${label ?? selector} was not reachable`);
 }
 
 /**

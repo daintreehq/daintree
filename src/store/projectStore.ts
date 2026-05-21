@@ -15,6 +15,7 @@ import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import {
+  clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
   getWorktreeSelectionSnapshot,
@@ -74,6 +75,12 @@ interface ProjectState {
   currentProject: Project | null;
   isLoading: boolean;
   error: string | null;
+  /**
+   * Set when a project switch committed to the new project but its worktree
+   * load threw (#8400). Surfaced as a Tier 3 inline recovery banner. Transient
+   * — never persisted, cleared on the next switch start or a successful retry.
+   */
+  worktreeLoadError: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
   createFolderDialogOpen: boolean;
@@ -87,7 +94,11 @@ interface ProjectState {
     options?: { skipDubiousOwnershipRetry?: boolean }
   ) => Promise<void>;
   createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
-  switchProject: (projectId: string) => Promise<void>;
+  switchProject: (
+    projectId: string,
+    options?: { focusIntent?: "focus-next-waiting" }
+  ) => Promise<void>;
+  setWorktreeLoadError: (error: string | null) => void;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   enableInRepoSettings: (id: string) => Promise<Project>;
   disableInRepoSettings: (id: string) => Promise<Project>;
@@ -125,8 +136,12 @@ interface ProjectState {
 interface ProjectStoreListenerState {
   applyUpdated: ((project: Project) => void) | null;
   applyRemoved: ((projectId: string) => void) | null;
+  applyWorktreeLoadStatus:
+    | ((payload: { projectId: string; worktreeLoadError: string | null }) => void)
+    | null;
   updatedRegistered: boolean;
   removedRegistered: boolean;
+  worktreeLoadStatusRegistered: boolean;
 }
 
 const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
@@ -146,8 +161,10 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
   const created: ProjectStoreListenerState = {
     applyUpdated: null,
     applyRemoved: null,
+    applyWorktreeLoadStatus: null,
     updatedRegistered: false,
     removedRegistered: false,
+    worktreeLoadStatusRegistered: false,
   };
   target[PROJECT_STORE_LISTENER_STATE_KEY] = created;
   return created;
@@ -226,6 +243,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
   error: null,
+  worktreeLoadError: null,
 
   addProjectByPath: async (path, options) => {
     set({ isLoading: true, error: null });
@@ -289,6 +307,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                       markError,
                       "Failed to mark directory as safe"
                     );
+                    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                     notify({
                       type: "error",
                       title: "Failed to mark as safe",
@@ -394,7 +413,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     await get().addProjectByPath("");
   },
 
-  switchProject: async (projectId) => {
+  switchProject: async (projectId, options) => {
     if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
 
@@ -407,11 +426,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const currentProjectId = get().currentProject?.id;
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    set({ isLoading: true, error: null });
+    // Clear any stale worktree-load banner atomically with the switch start so
+    // the previous project's failure never coexists with the new project (#8400,
+    // mirrors the #4451 atomic-swap fix).
+    set({ isLoading: true, error: null, worktreeLoadError: null });
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
-    projectClient.switch(projectId, outgoingState).catch((error) => {
+    projectClient.switch(projectId, outgoingState, options).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
       }
@@ -437,6 +459,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       });
       set({ error: message, isLoading: false });
     });
+  },
+
+  setWorktreeLoadError: (worktreeLoadError) => {
+    set({ worktreeLoadError });
   },
 
   updateProject: async (id, updates) => {
@@ -532,13 +558,20 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
 
     try {
+      // Closing the active project deletes its persisted panel state in main.
+      // Drop any queued renderer-side saves so a debounce cannot rewrite the
+      // just-deleted state while terminals are being killed.
+      panelPersistence.cancel();
       const result = await projectClient.close(projectId, { killTerminals: true });
+      panelPersistence.cancel();
 
       logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
         projectId,
       });
 
-      set({ currentProject: null });
+      clearFleetArmingThroughAccessor();
+      set({ currentProject: null, worktreeLoadError: null });
+      clearPanelStoreForSwitchThroughAccessor();
       await get().loadProjects();
 
       return result;
@@ -563,7 +596,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const currentProjectId = get().currentProject?.id;
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, error: null, worktreeLoadError: null });
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
@@ -729,6 +762,21 @@ if (typeof window !== "undefined" && window.electron?.project) {
       return { projects, currentProject };
     });
   };
+  // The worktree-load-status event resolves the banner for the project this
+  // view now shows. The production path targets a single view, but the legacy
+  // path broadcasts to every view (incl. LRU-cached other-project views), so
+  // ignore events whose projectId doesn't match this view's current project.
+  // The guard is *permissive*: a cold-started view may receive the event before
+  // `getCurrentProject()` has populated `currentProject`, so a null
+  // currentProject still accepts the targeted event rather than dropping it.
+  listenerState.applyWorktreeLoadStatus = (payload) => {
+    useProjectStore.setState((state) => {
+      if (state.currentProject && state.currentProject.id !== payload.projectId) {
+        return state;
+      }
+      return { worktreeLoadError: payload.worktreeLoadError };
+    });
+  };
 
   const projectApi = window.electron.project;
   if (projectApi.onUpdated && !listenerState.updatedRegistered) {
@@ -742,6 +790,17 @@ if (typeof window !== "undefined" && window.electron?.project) {
     listenerState.removedRegistered = true;
     projectApi.onRemoved((projectId) => {
       listenerState.applyRemoved?.(projectId);
+    });
+  }
+  // Guarded like onUpdated/onRemoved above: partial environments (and test
+  // doubles that only stub the methods they exercise) may not expose this.
+  if (
+    typeof projectClient.onWorktreeLoadStatus === "function" &&
+    !listenerState.worktreeLoadStatusRegistered
+  ) {
+    listenerState.worktreeLoadStatusRegistered = true;
+    projectClient.onWorktreeLoadStatus((payload) => {
+      listenerState.applyWorktreeLoadStatus?.(payload);
     });
   }
 }

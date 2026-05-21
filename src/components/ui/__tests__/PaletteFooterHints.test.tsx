@@ -20,8 +20,8 @@ describe("PaletteFooterHints", () => {
   const defaultProps = {
     primaryHint: { keys: ["↵"], label: "to create" },
     hints: [
-      { keys: ["↑", "↓"], label: "to navigate" },
-      { keys: ["Esc"], label: "to close" },
+      { keys: ["↑", "↓"], label: "navigate" },
+      { keys: ["Esc"], label: "close" },
     ],
   };
 
@@ -33,29 +33,27 @@ describe("PaletteFooterHints", () => {
 
   it("renders all secondary hints ambient — no popover, no help button", () => {
     render(<PaletteFooterHints {...defaultProps} />);
-    expect(screen.getByText("to navigate")).toBeTruthy();
-    expect(screen.getByText("to close")).toBeTruthy();
+    expect(screen.getByText("navigate")).toBeTruthy();
+    expect(screen.getByText("close")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /keyboard shortcuts/i })).toBeNull();
   });
 
   it("renders all keys for a multi-key hint", () => {
-    render(
-      <PaletteFooterHints primaryHint={{ keys: ["↑", "↓"], label: "to navigate" }} hints={[]} />
-    );
+    render(<PaletteFooterHints primaryHint={{ keys: ["↑", "↓"], label: "navigate" }} hints={[]} />);
     expect(screen.getByText("↑")).toBeTruthy();
     expect(screen.getByText("↓")).toBeTruthy();
   });
 
   it("renders no secondary chips when hints is empty", () => {
     render(<PaletteFooterHints primaryHint={defaultProps.primaryHint} hints={[]} />);
-    expect(screen.queryByText("to navigate")).toBeNull();
-    expect(screen.queryByText("to close")).toBeNull();
+    expect(screen.queryByText("navigate")).toBeNull();
+    expect(screen.queryByText("close")).toBeNull();
   });
 
   it("applies width-priority drop classes — last hint hides earliest", () => {
     const { container } = render(<PaletteFooterHints {...defaultProps} />);
-    const escChip = screen.getByText("to close").parentElement;
-    const navChip = screen.getByText("to navigate").parentElement;
+    const escChip = screen.getByText("close").parentElement;
+    const navChip = screen.getByText("navigate").parentElement;
     // Esc is rightmost (index 1 of 2) → from-end index 0 → highest breakpoint.
     expect(escChip?.className).toContain("@max-[380px]/palette-footer:hidden");
     // ↑↓ is index 0 of 2 → from-end index 1 → lower breakpoint, hides only when narrower.

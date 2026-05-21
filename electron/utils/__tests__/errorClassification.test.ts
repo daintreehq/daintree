@@ -63,7 +63,7 @@ describe("classifyError", () => {
     expect(result.recoveryAction).toEqual({
       label: "Sign in with GitHub",
       actionId: "app.settings.openTab",
-      args: { tab: "github" },
+      args: { tab: "code-forge", subtab: "github" },
     });
   });
 

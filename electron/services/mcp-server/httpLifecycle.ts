@@ -11,7 +11,16 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
-import type { HelpTokenValidator, HelpSessionWebContentsResolver, McpTier } from "./shared.js";
+import type {
+  HelpTokenValidator,
+  HelpSessionWebContentsResolver,
+  HelpSessionActionContextResolver,
+  McpTier,
+} from "./shared.js";
+import type {
+  McpIssueGrantResult,
+  McpRevokeSessionGrantsResult,
+} from "../../../shared/types/ipc/mcpServer.js";
 import {
   extractBearerToken,
   isAuthorized,
@@ -22,6 +31,7 @@ import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServ
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
+import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
   MAX_PORT_RETRIES,
@@ -37,6 +47,7 @@ export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
   auditService: AuditService;
   turnOutcomeService: TurnOutcomeService;
+  abusePolicy: AbusePolicy;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,
@@ -53,7 +64,8 @@ export interface HttpLifecycleDeps {
     id: number,
     actionId: string,
     args: unknown,
-    confirmed?: boolean
+    confirmed?: boolean,
+    contextOverride?: import("../../../shared/types/actions.js").ActionContext
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   handleWaitUntilIdle: (
     rawArgs: unknown,
@@ -88,6 +100,7 @@ export class HttpLifecycle {
   private stopPromise: Promise<void> | null = null;
   private helpTokenValidator: HelpTokenValidator | null = null;
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
+  private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -141,6 +154,10 @@ export class HttpLifecycle {
     this.helpSessionWebContentsResolver = resolver;
   }
 
+  setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
+    this.helpSessionActionContextResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver for the
    * pinned WebContents id. Returns null for non-help bearers (api-key /
@@ -152,6 +169,21 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.helpSessionWebContentsResolver(token);
+  }
+
+  /**
+   * Parses a Bearer header and asks the help-session resolver for the
+   * `ActionContext` snapshot bound to it at provision time (#8317). Returns
+   * null for non-help bearers so external/api-key sessions keep their live
+   * focused-window context in `buildSessionServerDeps`.
+   */
+  private resolveActionContext(
+    authHeader: string
+  ): import("../../../shared/types/actions.js").ActionContext | null {
+    if (!this.helpSessionActionContextResolver) return null;
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.helpSessionActionContextResolver(token);
   }
 
   private getConfig() {
@@ -269,6 +301,10 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    // Mirror the planned-stop path so an unexpected close also wipes
+    // the abuse-policy state. Otherwise denial counters would leak
+    // into the lifetime of any subsequent restart.
+    this.deps.abusePolicy.clear();
 
     for (const cleanup of this.deps.cleanupListeners) {
       try {
@@ -358,6 +394,12 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        // The drain wipes session-scoped state (grants, dedup, pins);
+        // the abuse-policy denial Map is owned alongside but lives on
+        // `HttpLifecycle.deps` so we clear it here in lockstep. Without
+        // this, the policy retains denial counters across a stop/start
+        // cycle for sessionIds that will never reappear.
+        this.deps.abusePolicy.clear();
 
         for (const cleanup of this.deps.cleanupListeners) {
           try {
@@ -463,9 +505,45 @@ export class HttpLifecycle {
       return;
     }
 
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
+
+    // Extract the claimed session identifier before the auth gate so a 401 on
+    // a session-carrying request feeds the per-session abuse policy. Handshake-
+    // level requests (GET /sse, initial Streamable HTTP without a session
+    // header) have no session to associate with and remain global-only.
+    let claimedSessionId: string | undefined;
+    if (req.method === "POST" && url.pathname === "/messages") {
+      claimedSessionId = url.searchParams.get("sessionId") ?? undefined;
+    } else if (url.pathname === "/mcp") {
+      const headerValue = req.headers["mcp-session-id"];
+      const mcpSessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+      if (mcpSessionId) claimedSessionId = mcpSessionId;
+    }
+
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
       this.deps.auditService.recordAuth401();
+      if (claimedSessionId) {
+        const result = this.deps.abusePolicy.recordDenial(claimedSessionId, "auth401");
+        if (result.tripped) {
+          const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId);
+          this.deps.sessionStore.revokeSession(claimedSessionId);
+          this.deps.abusePolicy.dropSession(claimedSessionId);
+          if (pinnedId !== undefined) {
+            const wc = webContentsModule.fromId(pinnedId);
+            if (wc && !wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+                  sessionId: claimedSessionId,
+                  denialKind: "auth401",
+                });
+              } catch (err) {
+                console.error("[MCP] session-revoked send failed:", err);
+              }
+            }
+          }
+        }
+      }
       res.writeHead(401, {
         "Content-Type": "text/plain",
         "WWW-Authenticate": 'Bearer realm="Daintree MCP"',
@@ -473,8 +551,6 @@ export class HttpLifecycle {
       res.end("Unauthorized");
       return;
     }
-
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
     if (req.method === "GET" && url.pathname === "/sse") {
       const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
@@ -493,19 +569,35 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
       }
 
+      const boundActionContext = this.resolveActionContext(authHeader);
+      if (boundActionContext !== null) {
+        this.deps.sessionStore.sessionContextMap.set(sessionId, boundActionContext);
+      }
+
       const deps = this.buildSessionServerDeps(sessionId);
       const server = createSessionServer(sessionId, deps);
 
       const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
-      this.deps.sessionStore.sessions.set(sessionId, { transport, idleTimer });
+      this.deps.sessionStore.sessions.set(sessionId, { transport, server, idleTimer });
       transport.onclose = () => {
         const session = this.deps.sessionStore.sessions.get(sessionId);
         if (session) {
           clearTimeout(session.idleTimer);
           this.deps.sessionStore.sessions.delete(sessionId);
         }
+        this.deps.sessionStore.clearElevationTimer(sessionId);
         this.deps.sessionStore.sessionTierMap.delete(sessionId);
+        // Revoke before deleting the WebContents pin so the lifecycle
+        // emitter can still find the pinned renderer for the
+        // `grant.revoked` push. The audit record carries the
+        // `session-ended` reason. Without this, grants accumulate
+        // forever in the cache across a long-running session lifecycle.
+        this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
+        this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
 
@@ -514,8 +606,16 @@ export class HttpLifecycle {
       } catch (err) {
         clearTimeout(idleTimer);
         this.deps.sessionStore.sessions.delete(sessionId);
+        this.deps.sessionStore.clearElevationTimer(sessionId);
         this.deps.sessionStore.sessionTierMap.delete(sessionId);
+        // Same pin-before-clear ordering — the connect failure path
+        // mirrors normal close cleanup.
+        this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
+        this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.clearDedupState(sessionId);
+        this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.abusePolicy.dropSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
         throw err;
@@ -582,6 +682,11 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWebContentsMap.set(newSessionId, pinnedWebContentsId);
     }
 
+    const boundActionContext = this.resolveActionContext(authHeader);
+    if (boundActionContext !== null) {
+      this.deps.sessionStore.sessionContextMap.set(newSessionId, boundActionContext);
+    }
+
     const deps = this.buildSessionServerDeps(newSessionId);
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
@@ -613,8 +718,16 @@ export class HttpLifecycle {
         clearTimeout(session.idleTimer);
         this.deps.sessionStore.httpSessions.delete(id);
       }
+      this.deps.sessionStore.clearElevationTimer(id);
       this.deps.sessionStore.sessionTierMap.delete(id);
+      // Pin-before-revoke ordering identical to the SSE path above —
+      // see `transport.onclose` in the GET /sse branch.
+      this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
+      this.deps.sessionStore.sessionContextMap.delete(id);
+      this.deps.sessionStore.clearDedupState(id);
+      this.deps.sessionStore.clearRateLimitState(id);
+      this.deps.abusePolicy.dropSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
@@ -630,12 +743,24 @@ export class HttpLifecycle {
           clearTimeout(session.idleTimer);
           this.deps.sessionStore.httpSessions.delete(id);
         }
+        this.deps.sessionStore.clearElevationTimer(id);
         this.deps.sessionStore.sessionTierMap.delete(id);
+        this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
+        this.deps.sessionStore.sessionContextMap.delete(id);
+        this.deps.sessionStore.clearDedupState(id);
+        this.deps.sessionStore.clearRateLimitState(id);
+        this.deps.abusePolicy.dropSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
+        this.deps.sessionStore.clearElevationTimer(newSessionId);
         this.deps.sessionStore.sessionTierMap.delete(newSessionId);
+        this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
+        this.deps.sessionStore.sessionContextMap.delete(newSessionId);
+        this.deps.sessionStore.clearDedupState(newSessionId);
+        this.deps.sessionStore.clearRateLimitState(newSessionId);
+        this.deps.abusePolicy.dropSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }
       await transport.close().catch(() => {});
@@ -676,7 +801,13 @@ export class HttpLifecycle {
     ) => {
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id !== undefined && pinnedDispatch) {
-        return pinnedDispatch(id, actionId, args, confirmed);
+        // Replay the provision-time context snapshot so the assistant's
+        // tool call targets the worktree/terminal the user had focused
+        // when they launched it — not wherever focus drifted to during
+        // the model's turn (#8317). Absent for context-less sessions, in
+        // which case pinned dispatch falls back to live renderer context.
+        const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
+        return pinnedDispatch(id, actionId, args, confirmed, boundContext);
       }
       return this.deps.dispatchAction(actionId, args, confirmed);
     };
@@ -713,6 +844,31 @@ export class HttpLifecycle {
         }
       };
 
+    const recordDenial: import("./sessionServer.js").SessionServerDeps["recordDenial"] = (
+      sessionId,
+      kind
+    ) => {
+      return this.deps.abusePolicy.recordDenial(sessionId, kind);
+    };
+
+    const notifySessionRevoked: import("./sessionServer.js").SessionServerDeps["notifySessionRevoked"] =
+      (payload) => {
+        const id =
+          payload.pinnedWebContentsId ??
+          this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        try {
+          wc.send(CHANNELS.MCP_SESSION_REVOKED, {
+            sessionId: payload.sessionId,
+            denialKind: payload.denialKind,
+          });
+        } catch (err) {
+          console.error("[MCP] session-revoked send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -723,14 +879,21 @@ export class HttpLifecycle {
         // `summarizeMcpArgs` — running the scrubber after truncation would
         // miss bearer tokens whose body got cut below the scrubber's
         // 8-char minimum match length.
+        const turnId = this.deps.turnOutcomeService.getCurrentTurnIdForSession(sessionId);
         this.deps.auditService.appendRecord({
           ...input,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
+          ...(turnId !== null ? { turnId } : {}),
         });
       },
       getCachedManifest,
       getFullToolSurface: () => this.getConfig().fullToolSurface === true,
       notifyTierMismatch,
+      recordDenial,
+      notifySessionRevoked,
+      clearDenialState: (sessionId) => {
+        this.deps.abusePolicy.dropSession(sessionId);
+      },
     };
   }
 
@@ -786,7 +949,72 @@ export class HttpLifecycle {
       return { sessionId, tier: current };
     }
     this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
+    // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
+    // of awake time the session silently decays back to its token-resolved
+    // baseline (`current`, the pre-elevation tier) so a stale "Always allow"
+    // can't outlive the user's intent (#8462). Each accepted approval
+    // refreshes the window from now; a chained re-elevation preserves the
+    // original baseline.
+    this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
     return { sessionId, tier };
+  }
+
+  /**
+   * Mint a time-bounded per-`(sessionId, toolId)` grant — the "Approve
+   * once" pathway that replaces sticky session-tier elevation for single
+   * tool calls (#8442). Validates the same caller-pin invariant as
+   * {@link setSessionTier}: only the renderer that minted the session
+   * can issue grants on its behalf.
+   */
+  issueGrant(sessionId: string, toolId: string, callerWcId?: number): McpIssueGrantResult {
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new Error("Invalid sessionId");
+    }
+    if (!toolId || typeof toolId !== "string") {
+      throw new Error("Invalid toolId");
+    }
+    if (
+      !this.deps.sessionStore.sessions.has(sessionId) &&
+      !this.deps.sessionStore.httpSessions.has(sessionId)
+    ) {
+      throw new Error("Session is no longer active");
+    }
+    const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+    if (pinnedWcId === undefined) {
+      throw new Error("Session is not eligible for renderer tier elevation");
+    }
+    if (callerWcId !== undefined && callerWcId !== pinnedWcId) {
+      throw new Error("Caller is not the pinned renderer for this session");
+    }
+    const entry = this.deps.sessionStore.grantCache.issueGrant(sessionId, toolId);
+    return {
+      sessionId,
+      toolId,
+      ttlMs: entry.ttlMs,
+      expiresAt: entry.expiresAt,
+    };
+  }
+
+  /**
+   * Drop every grant currently held by the session. Caller-pin checked
+   * identically to {@link issueGrant}. Returns the count of revoked
+   * grants for the renderer's confirmation copy.
+   */
+  revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new Error("Invalid sessionId");
+    }
+    // Caller-pin is enforced when the session is still alive; if the
+    // session has already drained (idle reaper / explicit close) the
+    // pin map is empty and the revoke becomes an idempotent no-op so
+    // the renderer's cleanup pass after a banner dismissal succeeds
+    // even though there's nothing left to drop.
+    const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+    if (pinnedWcId !== undefined && callerWcId !== undefined && callerWcId !== pinnedWcId) {
+      throw new Error("Caller is not the pinned renderer for this session");
+    }
+    const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
+    return { sessionId, revokedCount };
   }
 
   getStatus(): {

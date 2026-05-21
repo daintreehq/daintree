@@ -129,7 +129,7 @@ describe("TrashGroupItem", () => {
       );
       expect(container.textContent).toContain("First tab");
       expect(container.textContent).not.toContain("+0 more");
-      expect(container.textContent).not.toContain("Tab Group");
+      expect(container.textContent).not.toContain("Tab group");
     });
 
     it("uses lastObservedTitle when present and non-useless", () => {
@@ -262,7 +262,7 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      expect(container.textContent).toContain("Tab Group (2 tabs)");
+      expect(container.textContent).toContain("Tab group (2 tabs)");
     });
 
     it("uses the active tab when activeTabId points to non-first panel", () => {
@@ -290,7 +290,7 @@ describe("TrashGroupItem", () => {
           earliestExpiry={Date.now() + 20000}
         />
       );
-      expect(container.textContent).toContain("Tab Group (2 tabs)");
+      expect(container.textContent).toContain("Tab group (2 tabs)");
       expect(container.textContent).not.toContain("First tab +1 more");
       expect(container.textContent).not.toContain("Second tab +1 more");
     });

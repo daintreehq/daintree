@@ -3,12 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { TerminalInstance } from "@shared/types";
 
 const broadcastMock = vi.hoisted(() => vi.fn<(ids: string[], data: string) => void>());
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
+const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
+const enterFleetScopeMock = vi.hoisted(() => vi.fn<() => void>());
+const worktreeSelectionStateRef = vi.hoisted(() => ({
+  current: { activeWorktreeId: "wt-1" as string | null },
+}));
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -24,7 +30,17 @@ vi.mock("@/clients", async (importOriginal) => {
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     notifyUserInput: notifyUserInputMock,
+    notifyEnterPressed: notifyEnterPressedMock,
     clearDirectingState: clearDirectingStateMock,
+  },
+}));
+
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: {
+    getState: () => ({
+      activeWorktreeId: worktreeSelectionStateRef.current.activeWorktreeId,
+      enterFleetScope: enterFleetScopeMock,
+    }),
   },
 }));
 
@@ -54,7 +70,9 @@ function seedPanels(terminals: TerminalInstance[]): void {
 function resetStores(): void {
   broadcastMock.mockReset();
   notifyUserInputMock.mockReset();
+  notifyEnterPressedMock.mockReset();
   clearDirectingStateMock.mockReset();
+  enterFleetScopeMock.mockReset();
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -65,6 +83,10 @@ function resetStores(): void {
   });
   useFleetFailureStore.getState().clear();
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  // Default to unhydrated so existing tests don't accidentally trigger
+  // fleet-scope side effects. Cross-worktree tests opt in by hydrating.
+  useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
+  worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
 }
 
 describe("broadcastFleetRawInput", () => {
@@ -187,6 +209,144 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("t1", "rejected")).toBe(false);
     expect(notifyUserInputMock).not.toHaveBeenCalled();
   });
+
+  it("calls notifyEnterPressed on every target for a plain Enter submit (#8255)", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
+
+    expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
+
+    // Every target — origin included — gets notifyEnterPressed so the
+    // synthetic `directing` state closes optimistically. The custom xterm
+    // key handler bypasses the origin's own onEnterPressed listener path,
+    // so the origin needs it explicitly here.
+    const notifiedIds = notifyEnterPressedMock.mock.calls.map(([id]) => id).sort();
+    expect(notifiedIds).toEqual(["t1", "t2", "t3"]);
+  });
+
+  it("does not call notifyEnterPressed for non-submit payloads", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    // Codex soft-newline (LF) — not a submit.
+    broadcastFleetRawInput("t1", "\n");
+    // Legacy ESC+CR — not a submit (alt-Enter soft newline).
+    broadcastFleetRawInput("t1", "\x1b\r");
+    // Multi-byte payload containing CR — not a single Enter keystroke.
+    broadcastFleetRawInput("t1", "abc\r");
+    // Plain text — not a submit.
+    broadcastFleetRawInput("t1", "abc");
+
+    expect(notifyEnterPressedMock).not.toHaveBeenCalled();
+  });
+
+  it("auto-enters fleet scope when broadcast targets cross worktrees in scoped mode (#8255)", () => {
+    seedPanels([
+      makeTerminal("t1", { worktreeId: "wt-1" }),
+      makeTerminal("t2", { worktreeId: "wt-2" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    expect(broadcastFleetRawInput("t1", "ls\r")).toBe(true);
+    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enter fleet scope when targets are same-worktree", () => {
+    seedPanels([
+      makeTerminal("t1", { worktreeId: "wt-1" }),
+      makeTerminal("t2", { worktreeId: "wt-1" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    broadcastFleetRawInput("t1", "ls\r");
+    expect(enterFleetScopeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not enter fleet scope in legacy mode even when cross-worktree", () => {
+    seedPanels([
+      makeTerminal("t1", { worktreeId: "wt-1" }),
+      makeTerminal("t2", { worktreeId: "wt-2" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    broadcastFleetRawInput("t1", "ls\r");
+    expect(enterFleetScopeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not enter fleet scope before hydration (preserves persisted-mode load order)", () => {
+    seedPanels([
+      makeTerminal("t1", { worktreeId: "wt-1" }),
+      makeTerminal("t2", { worktreeId: "wt-2" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    broadcastFleetRawInput("t1", "ls\r");
+    expect(enterFleetScopeMock).not.toHaveBeenCalled();
+  });
+
+  it("treats panels with undefined worktreeId as no-affiliation (no scope entry on their own)", () => {
+    const t1 = makeTerminal("t1", { worktreeId: "wt-1" });
+    const t2 = makeTerminal("t2");
+    // Strip the worktreeId so the lookup returns undefined.
+    delete (t2 as { worktreeId?: string }).worktreeId;
+    seedPanels([t1, t2]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    broadcastFleetRawInput("t1", "ls\r");
+    expect(enterFleetScopeMock).not.toHaveBeenCalled();
+  });
+
+  it("still enters fleet scope when an undefined-worktreeId target sits alongside a real cross-worktree target", () => {
+    const t1 = makeTerminal("t1", { worktreeId: "wt-1" });
+    const t2 = makeTerminal("t2");
+    delete (t2 as { worktreeId?: string }).worktreeId;
+    const t3 = makeTerminal("t3", { worktreeId: "wt-2" });
+    seedPanels([t1, t2, t3]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    broadcastFleetRawInput("t1", "ls\r");
+    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("enters fleet scope regardless of payload — non-Enter cross-worktree still promotes visibility", () => {
+    seedPanels([
+      makeTerminal("t1", { worktreeId: "wt-1" }),
+      makeTerminal("t2", { worktreeId: "wt-2" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+
+    // ESC+CR soft-newline (alt-Enter) — not a submit but still keystroke input.
+    expect(broadcastFleetRawInput("t1", "\x1b\r")).toBe(true);
+    expect(enterFleetScopeMock).toHaveBeenCalledTimes(1);
+    // notifyEnterPressed must NOT fire for the soft-newline payload.
+    expect(notifyEnterPressedMock).not.toHaveBeenCalled();
+  });
+
+  it("performs the raw broadcast alongside notifyEnterPressed for plain Enter", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
+
+    expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
+
+    // The actual write still goes out — adding the notifyEnterPressed call
+    // must not gate or short-circuit the broadcast.
+    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2", "t3"], "\r");
+    expect(notifyEnterPressedMock.mock.calls.map(([id]) => id).sort()).toEqual(["t1", "t2", "t3"]);
+  });
 });
 
 describe("applyFleetBroadcastResult", () => {
@@ -230,19 +390,22 @@ describe("applyFleetBroadcastResult", () => {
     applyFleetBroadcastResult({
       results: [
         { id: "t1", ok: true },
-        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t2", ok: false, error: { code: "EAGAIN", message: "would block" } },
       ],
     });
 
     const failure = useFleetFailureStore.getState();
     expect(Array.from(failure.failedIds)).toEqual(["t2"]);
-    // Payload is intentionally empty for raw-input failures — single
-    // keystrokes aren't meaningful to retry, and the `Retry failed` action
-    // checks for a non-null payload before firing.
-    expect(failure.payload).toBe("");
+    // Payload is intentionally null for raw-input failures — single
+    // keystrokes aren't meaningful to retry, and `fleet.retryFailures`
+    // guards on `payload == null` to skip the IPC write. An empty string
+    // would slip past the loose-equality guard (#8705).
+    expect(failure.payload).toBeNull();
 
     const arming = useFleetArmingStore.getState();
     expect(arming.armedIds.has("t2")).toBe(true);
+
+    expect(clearDirectingStateMock).not.toHaveBeenCalled();
   });
 
   it("treats failures with no errno code as permanent (defensive default)", () => {
@@ -262,6 +425,28 @@ describe("applyFleetBroadcastResult", () => {
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
   });
 
+  it.each(["ENOTCONN", "ENXIO", "EINVAL"])(
+    "disarms the target on %s without recording a chip",
+    (code) => {
+      seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      broadcastFleetRawInput("t1", "x");
+
+      applyFleetBroadcastResult({
+        results: [
+          { id: "t1", ok: true },
+          { id: "t2", ok: false, error: { code, message: `write failure: ${code}` } },
+        ],
+      });
+
+      const arming = useFleetArmingStore.getState();
+      expect(arming.armedIds.has("t2")).toBe(false);
+      expect(arming.armedIds.has("t1")).toBe(true);
+      expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    }
+  );
+
   it("handles a mixed batch — disarm permanent, record non-permanent", () => {
     seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3"), makeTerminal("t4")]);
     useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4"]);
@@ -271,7 +456,7 @@ describe("applyFleetBroadcastResult", () => {
       results: [
         { id: "t1", ok: true },
         { id: "t2", ok: false, error: { code: "EPIPE", message: "broken pipe" } },
-        { id: "t3", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t3", ok: false, error: { code: "EAGAIN", message: "would block" } },
         { id: "t4", ok: true },
       ],
     });
@@ -281,6 +466,9 @@ describe("applyFleetBroadcastResult", () => {
     expect(arming.armedIds.has("t3")).toBe(true);
 
     expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t3"]);
+
+    expect(clearDirectingStateMock).toHaveBeenCalledWith("t2");
+    expect(clearDirectingStateMock).not.toHaveBeenCalledWith("t3");
   });
 
   it("does nothing when every target succeeded", () => {
@@ -296,5 +484,28 @@ describe("applyFleetBroadcastResult", () => {
 
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
     expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+  });
+
+  it("dismisses a prior failure when the next write to that target succeeds", () => {
+    // Mirrors fleetEnterBroadcast's dismiss-on-success — a stale red dot
+    // shouldn't linger after the user has visibly recovered the pane.
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+      ],
+    });
+    expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: true },
+      ],
+    });
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
   });
 });

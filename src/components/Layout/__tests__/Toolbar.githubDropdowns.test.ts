@@ -33,10 +33,12 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   });
 
   it("clears issue search query in onClose callback", () => {
-    // Find the LazyGitHubResourceList occurrence (second type="issue"), not the skeleton (first)
-    const firstIssueIdx = source.indexOf('type="issue"');
-    const lazyIssueIdx = source.indexOf('type="issue"', firstIssueIdx + 1);
-    const issuesOnClose = source.slice(lazyIssueIdx, lazyIssueIdx + 300);
+    // Anchor on the unique LazyGitHubResourceList tag — `type="issue"` now
+    // appears three times (eager + skeleton + lazy) and Prettier wrapping
+    // varies the line layout, so a char-offset slice from the Nth match is
+    // brittle. The lazy resource list's onClose is what this test guards.
+    const lazyIssueIdx = source.indexOf("<LazyGitHubResourceList");
+    const issuesOnClose = source.slice(lazyIssueIdx, lazyIssueIdx + 400);
     expect(issuesOnClose).toContain('setIssueSearchQuery("")');
   });
 

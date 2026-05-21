@@ -37,7 +37,11 @@ export {
 } from "./useKeybinding";
 export { useGlobalKeybindings, usePendingChord } from "./useGlobalKeybindings";
 export { keybindingService } from "../services/KeybindingService";
-export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
+export type {
+  KeyScope,
+  KeybindingConfig,
+  RegisteredKeybindingConfig,
+} from "../services/KeybindingService";
 
 export { useProjectSettings } from "./useProjectSettings";
 export { useProjectSettingsForm } from "./useProjectSettingsForm";
@@ -77,7 +81,6 @@ export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
 
 export { useMenuActions } from "./useMenuActions";
-export type { UseMenuActionsOptions } from "./useMenuActions";
 
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
@@ -110,7 +113,10 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
 
-export { useDeferredLoading } from "./useDeferredLoading";
+export { useDeferredLoading, useDohertyGate, useSkeletonGate } from "./useDeferredLoading";
+
+export { useTabLoad } from "./useTabLoad";
+export type { UseTabLoadOptions, UseTabLoadResult } from "./useTabLoad";
 
 export { useSlowCall } from "./useSlowCall";
 export type { UseSlowCallOptions, UseSlowCallReturn } from "./useSlowCall";

@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { webContents as webContentsModule } from "electron";
 import { store } from "../store.js";
+import { CHANNELS } from "../ipc/channels.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   AssistantTurnRecord,
   McpAuditRecord,
   McpAuditStats,
+  McpGrantLifecyclePayload,
+  McpIssueGrantResult,
+  McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
   TurnOutcomeClass,
@@ -17,11 +23,13 @@ import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle } from "./mcp-server/waitUntilIdle.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
+import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
   HelpTokenValidator,
   HelpSessionWebContentsResolver,
+  HelpSessionActionContextResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -63,13 +71,41 @@ export class McpServerService {
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
   constructor() {
-    this.sessionStore = new SessionStore((sessionId) => {
-      cleanupResourceSubscriptions(sessionId, this.sessionStore);
-    });
-
     this.auditService = new AuditService(
       (patch) => this.persistConfig(patch),
       () => this.getConfig()
+    );
+
+    // AbusePolicy must be constructed BEFORE SessionStore so the
+    // store can call into it on every per-session cleanup hook. The
+    // `dropAbuseState` callback ties the policy's denial counter map
+    // to the same lifecycle as the rest of the per-session state.
+    const abusePolicy = new AbusePolicy({
+      readConfig: () => this.getConfig(),
+    });
+
+    this.sessionStore = new SessionStore(
+      (sessionId) => {
+        cleanupResourceSubscriptions(sessionId, this.sessionStore);
+      },
+      {
+        emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
+        dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
+        onTierDecayed: (sessionId) => {
+          // Tier just decayed to the workbench baseline (#8462). Push a
+          // tools/list_changed so the model re-fetches the now-narrowed
+          // manifest instead of calling a tool it no longer has. The
+          // session map is the freshness check — a transport closing
+          // between the lookup and the send rejects harmlessly.
+          const session =
+            this.sessionStore.httpSessions.get(sessionId) ??
+            this.sessionStore.sessions.get(sessionId);
+          session?.server.sendToolListChanged().catch(() => {
+            // Transport already closing/closed — the model will see the
+            // narrowed surface on its next list call regardless.
+          });
+        },
+      }
     );
 
     this.turnOutcomeService = new TurnOutcomeService({
@@ -108,6 +144,14 @@ export class McpServerService {
     });
     this.persistentListeners.push(offExited);
 
+    try {
+      getSystemSleepService().onWake(() => {
+        this.sessionStore.recomputeIdleTimers();
+      });
+    } catch {
+      // SystemSleepService may not be initialized yet at early startup.
+    }
+
     this.bridge = createRendererBridge(
       this.pendingManifests,
       this.pendingDispatches,
@@ -118,12 +162,13 @@ export class McpServerService {
       sessionStore: this.sessionStore,
       auditService: this.auditService,
       turnOutcomeService: this.turnOutcomeService,
+      abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
       dispatchAction: (actionId, args, confirmed) =>
         this.bridge.dispatchAction(actionId, args, confirmed),
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
-      dispatchActionForWebContents: (id, actionId, args, confirmed) =>
-        this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed),
+      dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
+        this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
       handleWaitUntilIdle: (rawArgs, signal) => handleWaitUntilIdle(rawArgs, signal),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       clearCachedManifest: () => this.bridge.clearCache(),
@@ -169,6 +214,10 @@ export class McpServerService {
 
   setHelpSessionWebContentsResolver(resolver: HelpSessionWebContentsResolver | null): void {
     this.httpLifecycle.setHelpSessionWebContentsResolver(resolver);
+  }
+
+  setHelpSessionActionContextResolver(resolver: HelpSessionActionContextResolver | null): void {
+    this.httpLifecycle.setHelpSessionActionContextResolver(resolver);
   }
 
   private emitStatusChange(): void {
@@ -375,6 +424,57 @@ export class McpServerService {
     callerWcId?: number
   ): { sessionId: string; tier: McpTier } {
     return this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
+  }
+
+  /**
+   * Mint a per-`(sessionId, toolId)` grant for the named tool (Approve
+   * once). Validates caller pin against the WebContents the session was
+   * minted in — only that renderer can issue grants on its behalf.
+   * Returns the grant metadata so the renderer can render a countdown.
+   */
+  issueGrant(sessionId: string, toolId: string, callerWcId?: number): McpIssueGrantResult {
+    return this.httpLifecycle.issueGrant(sessionId, toolId, callerWcId);
+  }
+
+  /**
+   * Revoke every grant for a session in one call. Caller-pin checked
+   * identically to {@link issueGrant}. Returns the count of grants
+   * dropped so the renderer can show a confirmation toast.
+   */
+  revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
+    return this.httpLifecycle.revokeSessionGrants(sessionId, callerWcId);
+  }
+
+  /**
+   * Emitter wired into the {@link SessionStore}'s `GrantCache` at
+   * construction time. Writes an audit-log entry and pushes a targeted
+   * lifecycle event to the renderer pinned at session handshake. Send
+   * is always targeted — grant state is session-scoped and broadcasting
+   * to every WebContents would leak security state to other windows.
+   */
+  private emitGrantLifecycle(sessionId: string, payload: McpGrantLifecyclePayload): void {
+    try {
+      this.auditService.appendGrantRecord({
+        type: payload.type,
+        sessionId: payload.sessionId,
+        toolId: payload.toolId,
+        ttlMs: payload.ttlMs,
+        expiresAt: payload.expiresAt,
+        revokedReason: payload.revokedReason,
+      });
+    } catch (err) {
+      console.error("[MCP] Failed to append grant audit record:", err);
+    }
+
+    const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
+    if (id === undefined) return;
+    const wc = webContentsModule.fromId(id);
+    if (!wc || wc.isDestroyed()) return;
+    try {
+      wc.send(CHANNELS.MCP_GRANT_LIFECYCLE, payload);
+    } catch (err) {
+      console.error("[MCP] grant lifecycle send failed:", err);
+    }
   }
 
   // Delegates for test access — tests call .bind(service) on these.

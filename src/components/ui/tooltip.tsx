@@ -4,6 +4,7 @@ import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
+import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 
 type TooltipProviderProps = React.ComponentProps<typeof TooltipPrimitiveType.Provider>;
 
@@ -146,28 +147,45 @@ type TooltipContentProps = React.ComponentPropsWithoutRef<typeof TooltipPrimitiv
 const TooltipContent = React.forwardRef<
   React.ElementRef<typeof TooltipPrimitiveType.Content>,
   TooltipContentProps
->(({ className, sideOffset = 4, collisionPadding = 8, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  if (!radix) return null;
-  const Portal = radix.TooltipPrimitive.Portal;
-  const Content = radix.TooltipPrimitive.Content;
-  return (
-    <Portal>
-      <Content
-        ref={ref}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
-        className={cn(
-          "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-daintree-text",
-          "animate-in fade-in-0 zoom-in-95 duration-150 data-[state=closed]:animate-out data-[state=closed]:duration-[100ms] data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-          className
-        )}
-        {...props}
-      />
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      collisionPadding = 8,
+      sticky = "partial",
+      hideWhenDetached = true,
+      style,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    const isDockPopoverChild = useIsDockPopoverChild();
+    if (!radix) return null;
+    const Portal = radix.TooltipPrimitive.Portal;
+    const Content = radix.TooltipPrimitive.Content;
+    return (
+      <Portal>
+        <Content
+          ref={ref}
+          sideOffset={sideOffset}
+          collisionPadding={collisionPadding}
+          sticky={sticky}
+          hideWhenDetached={hideWhenDetached}
+          style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
+          className={cn(
+            "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-daintree-text",
+            "animate-in fade-in-0 zoom-in-95 duration-150 data-[state=closed]:animate-out data-[state=closed]:duration-[100ms] data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            className
+          )}
+          {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        />
+      </Portal>
+    );
+  }
+);
 TooltipContent.displayName = "TooltipContent";
 
 export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };

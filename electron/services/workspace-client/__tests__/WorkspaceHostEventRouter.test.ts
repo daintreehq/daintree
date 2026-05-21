@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceHostEventRouter } from "../WorkspaceHostEventRouter.js";
+import { CHANNELS } from "../../../ipc/channels.js";
 import type { WorkspaceHostEvent } from "../../../../shared/types/workspace-host.js";
+import type {
+  WorktreeLifecyclePhase,
+  WorktreeLifecycleState,
+} from "../../../../shared/types/worktree.js";
 import type { ProcessEntry, CopyTreeProgressCallback } from "../types.js";
 import type { WorkspaceHostProcess } from "../../WorkspaceHostProcess.js";
 
@@ -12,12 +17,19 @@ vi.mock("../../events.js", () => ({
   events: { emit: vi.fn() },
 }));
 
-vi.mock("../../github/index.js", () => ({
-  gitHubRateLimitService: { applyRemoteState: vi.fn() },
-}));
-
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
+import type { RateLimitInfo } from "../../../../shared/types/forge.js";
+
+const FAKE_PROVIDER_ID = "acme.gitlab.gitlab";
+
+function forgeRateLimitEvent(
+  providerId: string,
+  state: RateLimitInfo
+): Extract<WorkspaceHostEvent, { type: "forge-rate-limit-changed" }> {
+  return { type: "forge-rate-limit-changed", providerId, state };
+}
 
 function makeEntry(overrides: Partial<ProcessEntry> = {}): ProcessEntry {
   return {
@@ -51,6 +63,8 @@ function makeWorktreeUpdateEvent(
       worktreeId: "wt-1",
       ...overrides,
     },
+    epoch: "550e8400-e29b-41d4-a716-446655440000",
+    seq: 1,
   };
 }
 
@@ -123,6 +137,38 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("watcher-recovered resets one-shot toast guards", () => {
+    it("does not emit a toast itself", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, { type: "watcher-recovered" });
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("re-arms the inotify toast so a relapse re-notifies", () => {
+      const entry = makeEntry();
+
+      router.routeHostEvent(entry, { type: "inotify-limit-reached" });
+      router.routeHostEvent(entry, { type: "inotify-limit-reached" });
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+
+      router.routeHostEvent(entry, { type: "watcher-recovered" });
+      router.routeHostEvent(entry, { type: "inotify-limit-reached" });
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-arms the emfile toast so a relapse re-notifies", () => {
+      const entry = makeEntry();
+
+      router.routeHostEvent(entry, { type: "emfile-limit-reached" });
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+
+      router.routeHostEvent(entry, { type: "watcher-recovered" });
+      router.routeHostEvent(entry, { type: "emfile-limit-reached" });
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("inotify and emfile are independent", () => {
     it("allows both limit types to fire independently", () => {
       const entry = makeEntry();
@@ -142,6 +188,434 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entry, event);
 
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
+    });
+  });
+
+  describe("cloud resource teardown failure notifications", () => {
+    const lifecycleStatus = (
+      phase: WorktreeLifecyclePhase,
+      state: WorktreeLifecycleState,
+      startedAt: number
+    ) => ({ phase, state, startedAt });
+
+    const expectedToast = {
+      type: "error",
+      title: "Cloud resource may still be running",
+      message:
+        "The teardown script didn't complete — your cloud resource may still be active and billing",
+      rateLimitKey: "cloud-teardown-failure",
+    };
+
+    it("fires inbox notification when resource-teardown fails", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expectedToast
+      );
+    });
+
+    it("fires inbox notification when resource-teardown times out", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "timed-out", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expectedToast
+      );
+    });
+
+    it("still emits the normal worktree-update side-effects when a toast fires", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
+    });
+
+    it("does not fire on resource-teardown running snapshot", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "running", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("does not fire on resource-teardown success", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "success", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("does not fire on local config-teardown failure (asymmetric rule)", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("teardown", "failed", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+      // Normal routing must still happen even when the toast is skipped.
+      expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
+    });
+
+    it("does not fire on local config-teardown timeout (asymmetric rule)", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("teardown", "timed-out", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("debounces duplicate snapshots of the same (worktreeId, startedAt)", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+      router.routeHostEvent(entry, event);
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires again for a new teardown attempt with a different startedAt", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 2000),
+        })
+      );
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("fires independently for different worktrees with the same startedAt", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          id: "wt-1",
+          worktreeId: "wt-1",
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          id: "wt-2",
+          worktreeId: "wt-2",
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("debounce covers different terminal states of the same attempt", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "timed-out", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not throw when lifecycleStatus is absent", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent();
+
+      expect(() => router.routeHostEvent(entry, event)).not.toThrow();
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+      expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
+    });
+  });
+
+  describe("linked is the source of truth on re-emit (#8452)", () => {
+    it("derives canonical providerId/owner/repo from linked on sys:pr:detected", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "pr-detected",
+        worktreeId: "wt-1",
+        prNumber: 1234,
+        prUrl: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+        prState: "open",
+        prTitle: "Add widget",
+        providerId: "acme.gitlab",
+        linked: {
+          providerId: "acme.gitlab",
+          pr: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 1234,
+              rawData: null,
+            },
+            url: "https://gitlab.acme.com/acme-corp/my-project/-/merge_requests/1234",
+            state: "open",
+          },
+        },
+      });
+
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:pr:detected",
+        expect.objectContaining({
+          worktreeId: "wt-1",
+          prNumber: 1234,
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+        })
+      );
+    });
+
+    it("derives canonical providerId/owner/repo from linked on sys:issue:detected", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "issue-detected",
+        worktreeId: "wt-2",
+        issueNumber: 88,
+        issueTitle: "Widget request",
+        providerId: "acme.gitlab",
+        linked: {
+          providerId: "acme.gitlab",
+          issue: {
+            ref: {
+              providerId: "acme.gitlab",
+              owner: "acme-corp",
+              repo: "my-project",
+              number: 88,
+              rawData: null,
+            },
+            title: "Widget request",
+          },
+        },
+      });
+
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:issue:detected",
+        expect.objectContaining({
+          worktreeId: "wt-2",
+          issueNumber: 88,
+          providerId: "acme.gitlab",
+          owner: "acme-corp",
+          repo: "my-project",
+        })
+      );
+    });
+  });
+
+  describe("forge-rate-limit-changed (provider-agnostic routing)", () => {
+    const blocked: RateLimitInfo = { limit: null, remaining: 0, resetAt: 1_700_000_000_000 };
+    const cleared: RateLimitInfo = { limit: null, remaining: null, resetAt: null };
+
+    it("broadcasts GitHub's state on the forge channel tagged with its providerId", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        state: blocked,
+      });
+    });
+
+    it("broadcasts a non-GitHub provider's state on the same channel with its own providerId", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: blocked,
+      });
+    });
+
+    it("never calls gitHubRateLimitService — there is no GitHub fast-path", () => {
+      // The router no longer imports gitHubRateLimitService; the only side
+      // effect for a forge rate-limit event is the broadcast asserted above.
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.FORGE_RATE_LIMIT_CHANGED,
+        expect.objectContaining({ providerId: BUILTIN_GITHUB_PROVIDER_ID })
+      );
+    });
+
+    it("forwards cleared state through the same channel", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, cleared));
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: cleared,
+      });
+    });
+
+    it("suppresses an exhausted-quota block within the credential-change guard window", () => {
+      const now = 10_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("applies the guard per-provider — a different provider is unaffected", () => {
+      const now = 10_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        // Fake provider had no credential change — its block is not suppressed.
+        router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, blocked));
+
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+        expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+          providerId: FAKE_PROVIDER_ID,
+          state: blocked,
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("respects the exact guard-window fence-post (4999 suppress, 5000 pass)", () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(1_000_000);
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+
+        // 4999ms after the credential change — still inside the window.
+        nowSpy.mockReturnValue(1_004_999);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+        // Exactly 5000ms — `delta < GUARD_MS` is false, so it passes.
+        nowSpy.mockReturnValue(1_005_000);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("broadcasts the exact ForgeRateLimitChangedPayload shape", () => {
+      const entry = makeEntry();
+      const state: RateLimitInfo = {
+        limit: 5000,
+        remaining: 0,
+        resetAt: 1_700_000_000_000,
+        secondaryThrottled: true,
+      };
+      router.routeHostEvent(entry, forgeRateLimitEvent(FAKE_PROVIDER_ID, state));
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        state: { limit: 5000, remaining: 0, resetAt: 1_700_000_000_000, secondaryThrottled: true },
+      });
+    });
+
+    it("broadcasts again once the guard window elapses", () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(10_000_000);
+        const entry = makeEntry();
+        router.updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
+          kind: "bearer",
+          value: "tok",
+        });
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+        // 6s later — past the 5s guard window.
+        nowSpy.mockReturnValue(10_006_000);
+        router.routeHostEvent(entry, forgeRateLimitEvent(BUILTIN_GITHUB_PROVIDER_ID, blocked));
+        expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("forge-token-health-changed", () => {
+    it("broadcasts provider-keyed token health on the forge channel", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "forge-token-health-changed",
+        providerId: FAKE_PROVIDER_ID,
+        isUnhealthy: true,
+      });
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
+        providerId: FAKE_PROVIDER_ID,
+        isUnhealthy: true,
+      });
     });
   });
 });

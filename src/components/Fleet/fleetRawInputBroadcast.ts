@@ -3,21 +3,12 @@ import { registerFleetInputBroadcastHandler } from "@/services/terminal/fleetInp
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 import type { BroadcastWriteResultPayload } from "@shared/types";
-
-/**
- * Errno codes that mean the target PTY is permanently gone — the renderer
- * should auto-disarm so the user isn't typing into a dead pane. Other
- * failures still surface the failure chip but leave the arming alone.
- */
-const PERMANENT_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "EPIPE",
-  "EIO",
-  "EBADF",
-  "ECONNRESET",
-]);
+import { PERMANENT_FAILURE_CODES } from "./fleetBroadcast";
 
 function resolveLiveFleetTargetIds(): string[] {
   const { armOrder, armedIds } = useFleetArmingStore.getState();
@@ -42,6 +33,32 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   const targets = resolveLiveFleetTargetIds();
   if (targets.length < 2 || !targets.includes(originId)) return false;
 
+  // Auto-enter fleet scope when targets span worktrees so cross-worktree
+  // armed terminals are actually rendered while raw input is in flight —
+  // otherwise the user is firing keystrokes into hidden panes. Gated on
+  // `mode === "scoped"` + hydrated so legacy users keep their existing
+  // silent-write behavior. `enterFleetScope` is idempotent.
+  const scopeFlag = useFleetScopeFlagStore.getState();
+  if (scopeFlag.isHydrated && scopeFlag.mode === "scoped") {
+    const { panelsById } = usePanelStore.getState();
+    const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+    let hasCrossWorktreeTarget = false;
+    for (const id of targets) {
+      const targetWorktreeId = panelsById[id]?.worktreeId;
+      // `undefined` is treated as "no worktree affiliation" — global/unowned
+      // terminals don't drive scope entry on their own. A real cross-worktree
+      // target (a non-undefined id that differs from the active worktree) is
+      // still detected when present alongside such a terminal.
+      if (targetWorktreeId !== undefined && targetWorktreeId !== activeWorktreeId) {
+        hasCrossWorktreeTarget = true;
+        break;
+      }
+    }
+    if (hasCrossWorktreeTarget) {
+      useWorktreeSelectionStore.getState().enterFleetScope();
+    }
+  }
+
   terminalClient.broadcast(targets, data);
   // Mirror the origin's xterm onData → onUserInput path on every non-origin
   // target so the `directing` indicator fires fleet-wide. Pass the raw
@@ -50,6 +67,23 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   for (const id of targets) {
     if (id === originId) continue;
     terminalInstanceService.notifyUserInput(id, data);
+  }
+  // Plain Enter is a submit. Mirror the structured-submit pattern from
+  // `fleetExecution.ts`: optimistically advance `directing → working` for
+  // every target (origin included — its own xterm onKey path is bypassed
+  // when broadcast intercepts the raw input). Permanent failures fall
+  // through to `applyFleetBroadcastResult`, which also disarms the target;
+  // its `clearDirectingState` call is a no-op once we've already advanced
+  // to `working` (TerminalAgentStateController guards on `agentState ===
+  // "directing"`), so a dead-pipe target briefly reads as `working` until
+  // the PTY's own exit signal drives the state machine forward. Disarm +
+  // exit are the load-bearing recovery paths.
+  // Match `\r` exactly — `\n` is Codex soft-newline, `\x1b\r` is legacy
+  // ESC+CR, neither is a submit.
+  if (data === "\r") {
+    for (const id of targets) {
+      terminalInstanceService.notifyEnterPressed(id);
+    }
   }
   // Bump the broadcast signal so the ribbon can fire a one-shot commit
   // flash. Counter increments only; subscribers diff against their last
@@ -72,11 +106,13 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
  *   and we'd just thrash the store. An unknown errno is treated as permanent
  *   on purpose: the safer default is to stop typing into a target whose
  *   write semantics we can't reason about.
- * - Non-permanent failures (e.g., `ENOSPC`) leave arming alone and record a
+ * - Non-permanent failures (e.g., `EAGAIN`) leave arming alone and record a
  *   transient failure entry so the user sees the chip. The chip's "Retry
  *   failed" path is a no-op for the raw-input transport (single keystrokes
- *   are not meaningful to replay), and `recordFailure` is called with an
- *   empty payload to make that explicit.
+ *   are not meaningful to replay), so `recordFailure` is called with a
+ *   `null` payload. `fleet.retryFailures` guards on `payload == null` and
+ *   will skip the IPC write — using `""` here would slip through that guard
+ *   and fire real empty-byte writes against live PTYs (#8705).
  *
  * Exported for testing — production wires this into the IPC subscription
  * registered at module load.
@@ -86,15 +122,32 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
 
   const nonPermanentFailedIds: string[] = [];
   const permanentlyFailedIds: string[] = [];
+  const succeededIds: string[] = [];
   for (const result of payload.results) {
-    if (result.ok) continue;
+    if (result.ok) {
+      succeededIds.push(result.id);
+      continue;
+    }
     const code = result.error?.code;
-    // Unknown errno → permanent. We can't tell if the target is recoverable,
+    // Missing errno → permanent. We can't tell if the target is recoverable,
     // so the safer default is to disarm rather than keep firing keystrokes.
     if (!code || PERMANENT_FAILURE_CODES.has(code)) {
       permanentlyFailedIds.push(result.id);
     } else {
       nonPermanentFailedIds.push(result.id);
+    }
+  }
+
+  // A successful write to a previously-failed target clears the dot — same
+  // pattern as `fleetEnterBroadcast.ts`. Without this the banner persists
+  // after the user has visibly recovered (e.g. ENOSPC freed and the next
+  // keystroke landed).
+  if (succeededIds.length > 0) {
+    const failedSet = useFleetFailureStore.getState().failedIds;
+    if (failedSet.size > 0) {
+      for (const id of succeededIds) {
+        if (failedSet.has(id)) useFleetFailureStore.getState().dismissId(id);
+      }
     }
   }
 
@@ -106,10 +159,10 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
   });
 
   if (nonPermanentFailedIds.length > 0) {
-    // Empty payload — raw input has no meaningful retry, and the
-    // `Retry failed` action checks for a non-null payload before firing.
+    // Null payload — raw input has no meaningful retry, and the
+    // `Retry failed` action checks for `payload == null` before firing.
     // The chip still surfaces so the user notices something rejected.
-    useFleetFailureStore.getState().recordFailure("", nonPermanentFailedIds);
+    useFleetFailureStore.getState().recordFailure(null, nonPermanentFailedIds);
   }
 
   if (permanentlyFailedIds.length > 0) {

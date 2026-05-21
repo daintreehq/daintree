@@ -1,6 +1,12 @@
 import type { DevServerError } from "../../utils/devServerErrors.js";
 
-export type DevPreviewSessionStatus = "stopped" | "starting" | "installing" | "running" | "error";
+export type DevPreviewSessionStatus =
+  | "stopped"
+  | "starting"
+  | "installing"
+  | "running"
+  | "stopping"
+  | "error";
 
 export interface DevPreviewEnsureRequest {
   panelId: string;
@@ -33,6 +39,8 @@ export interface DevPreviewSessionState {
   isRestarting: boolean;
   generation: number;
   updatedAt: number;
+  phaseLabel?: "Compiling";
+  forceKilled?: boolean;
 }
 
 export interface DevPreviewStateChangedPayload {

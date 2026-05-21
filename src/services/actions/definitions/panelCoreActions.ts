@@ -23,6 +23,28 @@ export function registerPanelCoreActions(
         location: z.enum(["grid", "dock", "trash", "background"]).optional(),
       })
       .optional(),
+    resultSchema: z.object({
+      panels: z.array(
+        z.object({
+          id: z.string(),
+          kind: z.string(),
+          type: z.unknown().nullable(),
+          worktreeId: z.string().nullable(),
+          title: z.string().nullable(),
+          location: z.string(),
+          agentId: z.string().nullable(),
+          agentState: z.string().nullable(),
+        })
+      ),
+      dock: z.object({ panelCount: z.number() }),
+      portal: z.object({
+        isOpen: z.boolean(),
+        tabCount: z.number(),
+        activeTabId: z.string().nullable(),
+      }),
+      focusedPanelId: z.string().nullable(),
+      maximizedPanelId: z.string().nullable(),
+    }),
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;

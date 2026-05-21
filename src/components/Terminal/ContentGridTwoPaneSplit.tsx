@@ -49,8 +49,7 @@ export function ContentGridTwoPaneSplit({
             focusedId={ctx.focusedId}
             activeWorktreeId={ctx.activeWorktreeId}
             isInTrash={ctx.isInTrash}
-            onAddTabLeft={() => ctx.handleAddTabForPanel(ctx.twoPaneTerminals![0])}
-            onAddTabRight={() => ctx.handleAddTabForPanel(ctx.twoPaneTerminals![1])}
+            onAddTabForPanel={ctx.handleAddTabForPanel}
           />
           <GridFullOverlay maxTerminals={ctx.maxGridCapacity} show={ctx.showGridFullOverlay} />
         </div>

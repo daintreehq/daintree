@@ -28,6 +28,20 @@ export interface ProjectSwitchPayload {
   hydrateResult?: HydrateResult;
 }
 
+/**
+ * Targeted `project:worktree-load-status` event. Sent to a single activated
+ * project view (production view-swap path) or broadcast on the legacy switch
+ * path. `worktreeLoadError` is the formatted failure string, or null when the
+ * load succeeded (so a stale banner on a reactivated cached view clears). See
+ * #8400.
+ */
+export interface ProjectWorktreeLoadStatusPayload {
+  /** The project whose worktree load this status describes. */
+  projectId: string;
+  /** Formatted load failure, or null when the load succeeded. */
+  worktreeLoadError: string | null;
+}
+
 /** Result from project:close operation. Failures throw `AppError`. */
 export interface ProjectCloseResult {
   /** Total number of processes killed */

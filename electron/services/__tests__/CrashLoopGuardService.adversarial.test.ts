@@ -95,12 +95,16 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(stateAfterFailure).toEqual(stateBeforeFailure);
   });
 
-  it("counts only launches strictly inside the rapid-crash window boundary", () => {
+  it("counts only launches strictly inside the crash-window boundary", () => {
     const now = Date.now();
+    const window = 30 * 60_000;
+    // One launch exactly at the window edge (excluded by strict `<`), one
+    // 1ms inside (included). Stale `crashes: 9` is ignored — derived from
+    // the filtered launches array, not trusted from disk.
     writeStateFile(statePath, {
       version: 1,
       crashes: 9,
-      launches: [now - 300_000, now - 299_999],
+      launches: [now - window, now - (window - 1)],
       cleanExit: false,
       lastReset: now - 5_000,
     });
@@ -113,23 +117,41 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(readStateFile(statePath).crashes).toBe(1);
   });
 
-  it("keeps clean-exit state fresh when markCleanExit wins before the stability timer fires", () => {
+  it("markCleanExit writes a clean state independent of any prior timer (regression #8683)", () => {
     const guard = new CrashLoopGuardService();
     guard.initialize();
-    guard.startStabilityTimer();
     guard.markCleanExit();
 
-    vi.advanceTimersByTime(5 * 60 * 1000);
+    // Advance well past the prior stability-timer deadline — there should
+    // be no timer to fire, no late write that could clobber the clean state.
+    vi.advanceTimersByTime(30 * 60 * 1000);
 
     const parsed = readStateFile(statePath);
     expect(parsed).toMatchObject({
       version: 1,
-      crashes: 0,
       cleanExit: true,
-      launches: [],
     });
     expect(guard.isSafeMode()).toBe(false);
     expect(guard.shouldRelaunch()).toBe(true);
+  });
+
+  it("slow flap of four 6-minute-spaced crashes accumulates safe mode (regression #8683)", () => {
+    const start = new Date("2026-04-13T12:00:00.000Z").getTime();
+
+    // Three prior unclean boots, then a fourth that reads the prior three
+    // as crashes-from-disk and trips safe mode. Under the prior 5-min
+    // rapid window those earlier entries had decayed and the fourth boot
+    // would have stayed normal.
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(start + i * 6 * 60_000);
+      new CrashLoopGuardService().initialize();
+    }
+
+    vi.setSystemTime(start + 3 * 6 * 60_000);
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+    expect(guard.isSafeMode()).toBe(true);
+    expect(guard.getCrashCount()).toBe(3);
   });
 
   it("replaces partially valid persisted state with a fully valid shape", () => {
@@ -150,21 +172,121 @@ describe("CrashLoopGuardService adversarial", () => {
     expect(Array.isArray(parsed.launches)).toBe(true);
   });
 
-  it("does not keep relaunch disabled after old launches roll out of the hard-stop window", () => {
+  it("quarantine survives a chmod failure (rename is authoritative)", () => {
+    writeStateFile(statePath, { not: "valid", structure: true });
+    const chmodSpy = vi.spyOn(fs, "chmodSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EPERM: not permitted"), { code: "EPERM" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+    expect(fs.existsSync(guard.getQuarantinedStatePath()!)).toBe(true);
+    chmodSpy.mockRestore();
+  });
+
+  it("rename failure in quarantine leaves quarantinedStatePath null without throwing", () => {
+    writeStateFile(statePath, { not: "valid" });
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.getQuarantinedStatePath()).toBeNull();
+    renameSpy.mockRestore();
+  });
+
+  it("sweep failure (readdirSync throws) does not prevent boot", () => {
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    });
+
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+    expect(guard.isSafeMode()).toBe(false);
+    readdirSpy.mockRestore();
+  });
+
+  it("quarantines state with non-finite numeric fields (Infinity from JSON overflow)", () => {
+    // JSON.parse turns numeric overflow into Infinity. Without an isFinite
+    // guard the file would pass type validation, then JSON.stringify on the
+    // write-back would emit `null` — corrupting the file on the next boot
+    // instead of the current one. Quarantine immediately.
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        // eslint-disable-next-line no-loss-of-precision
+        crashes: 1e309, // → Infinity after JSON.parse
+        launches: [],
+        cleanExit: false,
+        lastReset: Date.now(),
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
+  it("quarantines state when lastReset is Infinity", () => {
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        crashes: 0,
+        launches: [],
+        cleanExit: false,
+        // eslint-disable-next-line no-loss-of-precision
+        lastReset: 1e309,
+      }),
+      "utf8"
+    );
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.getQuarantinedStatePath()).toMatch(/\.corrupted\.\d+$/);
+  });
+
+  it("prune tolerates `.corrupted.*` siblings with malformed timestamps", () => {
+    // A malformed entry that would parse to NaN if naively coerced.
+    fs.writeFileSync(
+      path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"),
+      "x",
+      "utf8"
+    );
+    // The regex requires \d+, so this entry is ignored entirely.
+    const guard = new CrashLoopGuardService();
+    expect(() => guard.initialize()).not.toThrow();
+
+    // Non-matching entry is preserved (we only act on regex matches).
+    expect(fs.existsSync(path.join(tmpDir, "crash-loop-state.json.corrupted.not-a-number"))).toBe(
+      true
+    );
+  });
+
+  it("does not keep relaunch disabled after old launches roll out of the crash window", () => {
     const now = Date.now();
+    // Four launches outside the 30-min window (decayed) plus two inside —
+    // safe mode and relaunch should reflect only the recent two.
     writeStateFile(statePath, {
       version: 1,
       crashes: 5,
       launches: [
-        now - 320_000,
-        now - 310_000,
-        now - 305_000,
-        now - 301_000,
+        now - 35 * 60_000,
+        now - 34 * 60_000,
+        now - 33 * 60_000,
+        now - 31 * 60_000,
         now - 1_000,
         now - 500,
       ],
       cleanExit: false,
-      lastReset: now - 120_000,
+      lastReset: now - 2 * 60_000,
     });
 
     const guard = new CrashLoopGuardService();

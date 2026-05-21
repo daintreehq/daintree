@@ -24,6 +24,7 @@ const EXPECTED_STORE_IDS = [
   "toolbarPreferencesStore",
   "projectStore",
   "urlHistoryStore",
+  "terminalSearchHistoryStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
@@ -38,6 +39,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   toolbarPreferencesStore: "daintree-toolbar-preferences",
   projectStore: "project-storage",
   urlHistoryStore: "daintree-url-history",
+  terminalSearchHistoryStore: "daintree-terminal-search-history",
 };
 
 beforeAll(async () => {
@@ -55,6 +57,7 @@ beforeAll(async () => {
     import("../../toolbarPreferencesStore"),
     import("../../projectStore"),
     import("../../urlHistoryStore"),
+    import("../../terminalSearchHistoryStore"),
   ]);
 });
 

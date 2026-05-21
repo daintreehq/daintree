@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
 import { cliAvailabilityClient } from "@/clients";
@@ -22,6 +23,7 @@ import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { AddPresetDialog } from "./AddPresetDialog";
 import { AgentScopeEditor } from "./AgentScopeEditor";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentCard, AgentInstallSection } from "@/components/agents/AgentCard";
@@ -57,9 +59,10 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
         });
         // Stay in capture mode so the user can retry — closing silently after
         // a failed IPC would discard the captured combo with no recovery path.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          message: "Couldn't save shortcut. Try again.",
+          message: "Couldn't save shortcut",
           duration: 3000,
           priority: "high",
         });
@@ -80,9 +83,10 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
       logError("[AgentSettings] Failed to reset agent shortcut", undefined, {
         error: result.error,
       });
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
-        message: "Couldn't reset shortcut. Try again.",
+        message: "Couldn't reset shortcut",
         duration: 3000,
         priority: "high",
       });
@@ -160,9 +164,9 @@ export function AgentSettings({
 }: AgentSettingsProps) {
   const {
     settings,
-    isLoading,
-    error: loadError,
+    error: storeError,
     initialize,
+    refresh,
     updateAgent,
     setAgentPinned,
     reset,
@@ -175,14 +179,16 @@ export function AgentSettings({
   const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
 
-  const [loadTimedOut, setLoadTimedOut] = useState(false);
-
-  useEffect(() => {
-    void initialize();
-    setLoadTimedOut(false);
-    const timer = setTimeout(() => setLoadTimedOut(true), 10_000);
-    return () => clearTimeout(timer);
-  }, [initialize]);
+  // initialize() is singleflight via the store's `initPromise` — retries must
+  // route through refresh() to issue a fresh IPC. The store catches load
+  // failures internally and surfaces them via its `error` field; the hook
+  // only watches for the timeout case.
+  const { loadError: timeoutError, retryAction } = useTabLoad({
+    initialize,
+    retry: refresh,
+    timeoutMessage: "Agent settings took too long to load.",
+  });
+  const loadError = timeoutError ?? storeError;
 
   useEffect(() => {
     void initializeCliAvailability();
@@ -345,43 +351,10 @@ export function AgentSettings({
     );
   }
 
-  if (isLoading && !settings) {
-    if (isLoading && loadTimedOut) {
-      return (
-        <div className="flex flex-col items-center justify-center h-32 gap-3">
-          <div className="text-status-error text-sm">Settings load timed out</div>
-          <button
-            onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-          >
-            Reload Application
-          </button>
-        </div>
-      );
-    }
-    return (
-      <div className="flex items-center justify-center h-32">
-        <div className="text-daintree-text/60 text-sm">Loading settings...</div>
-      </div>
-    );
-  }
-
-  if (loadError || !settings) {
-    return (
-      <div className="flex flex-col items-center justify-center h-32 gap-3">
-        <div className="text-status-error text-sm">{loadError || "Failed to load settings"}</div>
-        <button
-          onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-        >
-          Reload Application
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
+      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>

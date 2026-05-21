@@ -1,4 +1,128 @@
 {
+  "plugins/builtin/github/renderer/components/BulkActionBar.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 6,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+      }
+    ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/CommitList.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
+      }
+    ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/CommitListItem.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/GitHubDropdownSkeletons.tsx": {
+    "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/GitHubListItem.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/GitHubResourceList.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/components/IssueSelector.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "plugins/builtin/github/renderer/hooks/useGitHubResourceListSWR.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+      }
+    ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/App.tsx": {
     "success": 0,
     "skip": 0,
@@ -191,7 +315,7 @@
     "pipelineErrors": []
   },
   "src/components/DevPreview/DevPreviewPane.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
     "error": 2,
     "pipeline": 0,
@@ -215,8 +339,8 @@
     "pipeline": 0,
     "errorBailouts": [
       {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
+        "category": "Refs",
+        "reason": "Cannot access refs during render"
       }
     ],
     "skipReasons": [],
@@ -282,7 +406,7 @@
     "pipelineErrors": []
   },
   "src/components/DragDrop/DndProvider.tsx": {
-    "success": 4,
+    "success": 5,
     "skip": 0,
     "error": 1,
     "pipeline": 0,
@@ -323,7 +447,7 @@
     "pipelineErrors": []
   },
   "src/components/DragDrop/PlaceholderContent.tsx": {
-    "success": 5,
+    "success": 6,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -481,16 +605,11 @@
     "pipelineErrors": []
   },
   "src/components/Fleet/FleetArmingRibbon.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 1,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -513,7 +632,7 @@
     "pipelineErrors": []
   },
   "src/components/Fleet/FleetPickerContent.tsx": {
-    "success": 8,
+    "success": 7,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -593,95 +712,7 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/GitHub/BulkActionBar.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/BulkCreateWorktreeDialog.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 6,
-    "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/CommitList.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 2,
-    "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/CommitListItem.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/GitHubDropdownSkeletons.tsx": {
-    "success": 3,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/GitHubListItem.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/GitHubResourceList.tsx": {
+  "src/components/Git/GitPullRebaseConfirmDialog.tsx": {
     "success": 2,
     "skip": 0,
     "error": 0,
@@ -690,30 +721,12 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/GitHub/IssueSelector.tsx": {
-    "success": 1,
+  "src/components/Git/GitPushConfirmDialog.tsx": {
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
     "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/GitHub/useGitHubResourceListSWR.ts": {
-    "success": 0,
-    "skip": 0,
-    "error": 2,
-    "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -729,22 +742,45 @@
   "src/components/HelpPanel/HelpPanel.tsx": {
     "success": 1,
     "skip": 0,
-    "error": 3,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/HelpPanel/HelpPanelBanners.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/HelpPanel/HelpPanelHeader.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/HelpPanel/HelpPanelVersionGate.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/KeyboardShortcuts/AgentShortcutCapture.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -815,7 +851,7 @@
     "pipelineErrors": []
   },
   "src/components/Layout/BackgroundContainer.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -874,30 +910,29 @@
     "pipelineErrors": []
   },
   "src/components/Layout/DockedTabGroup.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 1,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Layout/DockedTerminalItem.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 1,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Layout/ErrorsContainer.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1074,7 +1109,7 @@
     "pipelineErrors": []
   },
   "src/components/Layout/VoiceRecordingToolbarButton.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -1083,7 +1118,7 @@
     "pipelineErrors": []
   },
   "src/components/Layout/WaitingContainer.tsx": {
-    "success": 1,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -1405,6 +1440,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Project/ForgeProviderTab.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Project/GeneralTab.tsx": {
     "success": 0,
     "skip": 0,
@@ -1423,15 +1467,6 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Project/GitHubTab.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
   "src/components/Project/GitInitDialog.tsx": {
     "success": 0,
     "skip": 0,
@@ -1443,15 +1478,6 @@
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
       }
     ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Project/ProjectMruSwitcherOverlay.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1629,6 +1655,15 @@
     "pipelineErrors": []
   },
   "src/components/Recovery/HostCrashBanner.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Recovery/RestoreConfirmationBanner.tsx": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -1756,7 +1791,7 @@
     "pipelineErrors": []
   },
   "src/components/Settings/AgentSettings.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
     "error": 1,
     "pipeline": 0,
@@ -1896,12 +1931,30 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Settings/ForgeIntegrationsTab.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      }
+    ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Settings/GeneralTab.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 9,
+    "error": 10,
     "pipeline": 0,
     "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
       {
         "category": "Todo",
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
@@ -2089,6 +2142,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Settings/OverrideField.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Settings/PortalSettingsTab.tsx": {
     "success": 3,
     "skip": 0,
@@ -2163,7 +2225,7 @@
     "pipelineErrors": []
   },
   "src/components/Settings/SettingsDialog.tsx": {
-    "success": 9,
+    "success": 11,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -2329,7 +2391,7 @@
     "pipelineErrors": []
   },
   "src/components/Settings/ToolbarSettingsTab.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -2579,6 +2641,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Terminal/AgentCompletionBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Terminal/ArtifactOverlay.tsx": {
     "success": 2,
     "skip": 0,
@@ -2751,7 +2822,7 @@
     "pipelineErrors": []
   },
   "src/components/Terminal/PromptHistoryPalette.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -2872,6 +2943,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Terminal/TerminalDestructiveActionConfirmDialog.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Terminal/TerminalErrorBanner.tsx": {
     "success": 1,
     "skip": 0,
@@ -2927,7 +3007,7 @@
     "pipelineErrors": []
   },
   "src/components/Terminal/TerminalPane.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -2945,7 +3025,7 @@
     "pipelineErrors": []
   },
   "src/components/Terminal/TerminalRestartStatusBanner.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -3354,11 +3434,16 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/DiffViewer.tsx": {
-    "success": 3,
+    "success": 2,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
-    "errorBailouts": [],
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
+      }
+    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3461,9 +3546,13 @@
   "src/components/Worktree/ReviewHub/CommitPanel.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 3,
     "pipeline": 0,
     "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
       {
         "category": "Todo",
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
@@ -3477,9 +3566,9 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx": {
-    "success": 0,
+    "success": 2,
     "skip": 0,
-    "error": 3,
+    "error": 4,
     "pipeline": 0,
     "errorBailouts": [
       {
@@ -3492,7 +3581,11 @@
       },
       {
         "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
       }
     ],
     "skipReasons": [],
@@ -3507,12 +3600,59 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Worktree/ReviewHub/ForcePushConfirmDialog.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      }
+    ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Worktree/ReviewHub/ReviewHub.tsx": {
     "success": 1,
     "skip": 0,
-    "error": 3,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 9,
     "pipeline": 0,
     "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
+      },
       {
         "category": "Todo",
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
@@ -3565,6 +3705,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Worktree/WorktreeCard/FocusedSubLine.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Worktree/WorktreeCard/GitHubTooltipContent.tsx": {
     "success": 5,
     "skip": 0,
@@ -3575,11 +3724,16 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/IssueBadge.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
-    "errorBailouts": [],
+    "errorBailouts": [
+      {
+        "category": "Refs",
+        "reason": "Cannot access refs during render"
+      }
+    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3665,7 +3819,7 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx": {
-    "success": 3,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -3688,6 +3842,15 @@
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
       }
     ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/WorktreeCard/hooks/useGitHubBadgeFreshness.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4413,6 +4576,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/ui/DockPopoverChildContext.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/ui/EmptyState.tsx": {
     "success": 1,
     "skip": 0,
@@ -4467,8 +4639,17 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/ui/ScrollPill.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/ui/ScrollShadow.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -4549,7 +4730,7 @@
     "pipelineErrors": []
   },
   "src/components/ui/context-menu.tsx": {
-    "success": 9,
+    "success": 15,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -4558,7 +4739,7 @@
     "pipelineErrors": []
   },
   "src/components/ui/dropdown-menu.tsx": {
-    "success": 9,
+    "success": 15,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -4585,6 +4766,15 @@
     "pipelineErrors": []
   },
   "src/components/ui/popover.tsx": {
+    "success": 4,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/ui/radix-loader.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -4594,7 +4784,7 @@
     "pipelineErrors": []
   },
   "src/components/ui/select.tsx": {
-    "success": 7,
+    "success": 10,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -4617,7 +4807,7 @@
     "pipelineErrors": []
   },
   "src/components/ui/tooltip.tsx": {
-    "success": 1,
+    "success": 4,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -4811,15 +5001,6 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/hooks/app/useSystemWakeHandler.ts": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
   "src/hooks/app/useThemeBrowserSettingsBridge.ts": {
     "success": 1,
     "skip": 0,
@@ -4936,6 +5117,15 @@
         "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
       }
     ],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useAudioDevices.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5155,6 +5345,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/hooks/useGitHubRateLimit.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/hooks/useGitHubTokenExpiryNotification.ts": {
     "success": 1,
     "skip": 0,
@@ -5201,7 +5400,7 @@
     "pipelineErrors": []
   },
   "src/hooks/useGlobalKeybindings.ts": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -5210,15 +5409,6 @@
     "pipelineErrors": []
   },
   "src/hooks/useGlobalMinuteTicker.ts": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/hooks/useGlobalSecondTicker.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -5396,7 +5586,7 @@
     "pipelineErrors": []
   },
   "src/hooks/useOverlayState.ts": {
-    "success": 2,
+    "success": 4,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -5465,6 +5655,24 @@
     "error": 0,
     "pipeline": 0,
     "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/usePollingLifecycle.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0,
+    "errorBailouts": [
+      {
+        "category": "Todo",
+        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
+      },
+      {
+        "category": "Todo",
+        "reason": "Unsupported declaration type for hoisting"
+      }
+    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5695,6 +5903,15 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/hooks/useStoreUpdateListener.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/hooks/useTabOverflow.ts": {
     "success": 1,
     "skip": 0,
@@ -5737,7 +5954,7 @@
     "pipelineErrors": []
   },
   "src/hooks/useTerminalSelectors.ts": {
-    "success": 7,
+    "success": 8,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -5791,6 +6008,15 @@
     "pipelineErrors": []
   },
   "src/hooks/useVerticalScrollShadows.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useVisibilityAwareInterval.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
@@ -5918,7 +6144,16 @@
     "pipelineErrors": []
   },
   "src/panels/registry.tsx": {
-    "success": 2,
+    "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/panels/review/ReviewPane.tsx": {
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0,

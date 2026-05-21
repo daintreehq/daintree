@@ -8,6 +8,54 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-capabilities:get-agent-ids": {
+    args: [];
+    result: string[];
+  };
+  "agent-capabilities:get-agent-metadata": {
+    args: [agentId: string];
+    result: import("./agentCapabilities.js").AgentMetadata | null;
+  };
+  "agent-capabilities:get-ccr-presets": {
+    args: [];
+    result: import("../../config/agentRegistry.js").AgentPreset[];
+  };
+  "agent-capabilities:get-registry": {
+    args: [];
+    result: import("./agentCapabilities.js").AgentRegistry;
+  };
+  "agent-capabilities:is-agent-enabled": {
+    args: [agentId: string];
+    result: boolean;
+  };
+  "agent-session:clear": {
+    args: [payload: { worktreeId?: string | undefined }];
+    result: void;
+  };
+  "agent-session:list": {
+    args: [payload: { worktreeId?: string | undefined }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "app:clear-quarantined-panel": {
+    args: [panelId: string];
+    result: { cleared: boolean };
+  };
+  "artifact:apply-patch": {
+    args: [options: import("./agent.js").ApplyPatchOptions];
+    result: import("./agent.js").ApplyPatchResult;
+  };
+  "artifact:save-to-file": {
+    args: [options: import("./agent.js").SaveArtifactOptions];
+    result: import("./agent.js").SaveArtifactResult | null;
+  };
+  "cli:get-status": {
+    args: [];
+    result: import("./system.js").CliInstallStatus;
+  };
+  "cli:install": {
+    args: [];
+    result: import("./system.js").CliInstallStatus;
+  };
   "clipboard:read-selection": {
     args: [];
     result: { text: string };
@@ -47,6 +95,10 @@ export interface GeneratedIpcInvokeMap {
   "commands:list": {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
+  };
+  "connectivity:get-state": {
+    args: [];
+    result: import("./connectivity.js").ServiceConnectivitySnapshot;
   };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
@@ -140,7 +192,15 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:reinstall-and-restart": {
+    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
+  };
   "dev-preview:restart": {
+    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
+  };
+  "dev-preview:restart-and-clear-cache": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
@@ -150,6 +210,21 @@ export interface GeneratedIpcInvokeMap {
   };
   "dev-preview:stop-by-panel": {
     args: [request: import("./devPreview.js").DevPreviewStopByPanelRequest];
+    result: void;
+  };
+  "editor:discover": {
+    args: [];
+    result: import("../editor.js").DiscoveredEditor[];
+  };
+  "editor:get-config": {
+    args: [projectId?: string | undefined];
+    result: {
+      preferredEditor: import("../editor.js").EditorConfig | null;
+      discoveredEditors: import("../editor.js").DiscoveredEditor[];
+    };
+  };
+  "editor:set-config": {
+    args: [payload: import("../editor.js").EditorSetConfigPayload];
     result: void;
   };
   "event-inspector:clear": {
@@ -164,12 +239,54 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "gemini:enable-alternate-buffer": {
+    args: [];
+    result: { success: boolean };
+  };
+  "gemini:get-status": {
+    args: [];
+    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;
   };
   "global-env:set": {
     args: [payload: { variables: Record<string, string> }];
+    result: void;
+  };
+  "global:add-recipe": {
+    args: [payload: { recipe: import("../project.js").TerminalRecipe }];
+    result: void;
+  };
+  "global:delete-recipe": {
+    args: [payload: { recipeId: string }];
+    result: void;
+  };
+  "global:get-recipes": {
+    args: [];
+    result: import("../project.js").TerminalRecipe[];
+  };
+  "global:update-recipe": {
+    args: [
+      payload: {
+        recipeId: string;
+        updates: Partial<
+          Omit<
+            import("../project.js").TerminalRecipe,
+            "id" | "projectId" | "worktreeId" | "createdAt"
+          >
+        >;
+      },
+    ];
+    result: void;
+  };
+  "help-assistant:get-settings": {
+    args: [];
+    result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:set-settings": {
+    args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
   "help:get-folder-path": {
@@ -181,7 +298,14 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "help:provision-session": {
-    args: [input: { projectId: string; projectPath: string; agentId: string }];
+    args: [
+      input: {
+        projectId: string;
+        projectPath: string;
+        agentId: string;
+        context?: import("../actions.js").ActionContext | undefined;
+      },
+    ];
     result: {
       sessionId: string;
       sessionPath: string;
@@ -203,6 +327,170 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "hibernation:get-config": {
+    args: [];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "hibernation:update-config": {
+    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
+    result: import("./hibernation.js").HibernationConfig;
+  };
+  "idle-terminal:close-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:dismiss-project": {
+    args: [projectId: string];
+    result: void;
+  };
+  "idle-terminal:get-config": {
+    args: [];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "idle-terminal:update-config": {
+    args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
+    result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "mcp-server:clear-audit-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:clear-turn-outcome-log": {
+    args: [];
+    result: void;
+  };
+  "mcp-server:export-audit-log": {
+    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    result: boolean;
+  };
+  "mcp-server:get-audit-config": {
+    args: [];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:get-audit-records": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditRecord[];
+  };
+  "mcp-server:get-audit-stats": {
+    args: [];
+    result: import("./mcpServer.js").McpAuditStats;
+  };
+  "mcp-server:get-config-snippet": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:get-runtime-state": {
+    args: [];
+    result: import("./mcpServer.js").McpRuntimeSnapshot;
+  };
+  "mcp-server:get-status": {
+    args: [];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:get-turn-outcome-records": {
+    args: [];
+    result: import("./mcpServer.js").AssistantTurnRecord[];
+  };
+  "mcp-server:issue-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpIssueGrantResult;
+  };
+  "mcp-server:revoke-session-grants": {
+    args: [payload: { sessionId: string }];
+    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
+  };
+  "mcp-server:rotate-api-key": {
+    args: [];
+    result: string;
+  };
+  "mcp-server:set-audit-enabled": {
+    args: [enabled: boolean];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-audit-max-records": {
+    args: [max: number];
+    result: { enabled: boolean; maxRecords: number };
+  };
+  "mcp-server:set-enabled": {
+    args: [enabled: boolean];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-port": {
+    args: [port: number | null];
+    result: import("./mcpServer.js").McpServerStatusSnapshot;
+  };
+  "mcp-server:set-session-tier": {
+    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
+    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "menu:show-context": {
+    args: [payload: import("../menu.js").ShowContextMenuPayload];
+    result: string | null;
+  };
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
+    result: void;
+  };
+  "onboarding:checklist-dismiss": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-get": {
+    args: [];
+    result: import("./maps.js").ChecklistState;
+  };
+  "onboarding:checklist-mark-celebration-shown": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-mark-item": {
+    args: [item: import("./maps.js").ChecklistItemId];
+    result: void;
+  };
+  "onboarding:complete": {
+    args: [];
+    result: void;
+  };
+  "onboarding:dismiss-setup-banner": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:dismiss-welcome-card": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:get": {
+    args: [];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-agents-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:mark-newsletter-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-waiting-nudge-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:record-agent-first-seen": {
+    args: [agentIds: string[]];
+    result: import("./maps.js").OnboardingState;
+  };
+  "onboarding:set-step": {
+    args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
+    result: void;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
@@ -214,6 +502,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:actions-unregister": {
     args: [pluginId: string, actionId: string];
     result: void;
+  };
+  "plugin:file-decorations-get": {
+    args: [scope: string, paths: string[]];
+    result: Record<string, import("../forge.js").FileDecoration>;
+  };
+  "plugin:forge-providers-get": {
+    args: [];
+    result: import("../forge.js").RegisteredForgeProvider[];
   };
   "plugin:list": {
     args: [];
@@ -275,6 +571,97 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
+  "project:clone-cancel": {
+    args: [];
+    result: void;
+  };
+  "project:clone-repo": {
+    args: [options: import("./gitClone.js").CloneRepoOptions];
+    result: import("./gitClone.js").CloneRepoResult;
+  };
+  "project:get-draft-inputs": {
+    args: [projectId: string];
+    result: Record<string, string>;
+  };
+  "project:get-focus-mode": {
+    args: [projectId: string];
+    result: {
+      focusMode: boolean;
+      focusPanelState: import("../project.js").FocusPanelState | undefined;
+    };
+  };
+  "project:get-tab-groups": {
+    args: [projectId: string];
+    result: import("../panel.js").TabGroup[];
+  };
+  "project:get-terminal-sizes": {
+    args: [projectId: string];
+    result: Record<string, { cols: number; rows: number }>;
+  };
+  "project:get-terminals": {
+    args: [projectId: string];
+    result: import("../project.js").PanelSnapshot[];
+  };
+  "project:set-draft-inputs": {
+    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    result: void;
+  };
+  "project:set-focus-mode": {
+    args: [
+      payload: {
+        projectId: string;
+        focusMode: boolean;
+        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean } | undefined;
+      },
+    ];
+    result: void;
+  };
+  "project:set-tab-groups": {
+    args: [payload: { projectId: string; tabGroups: import("../panel.js").TabGroup[] }];
+    result: void;
+  };
+  "project:set-terminal-sizes": {
+    args: [
+      payload: { projectId: string; terminalSizes: Record<string, { cols: number; rows: number }> },
+    ];
+    result: void;
+  };
+  "project:set-terminals": {
+    args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
+    result: void;
+  };
   "scratch:create": {
     args: [name?: string | undefined];
     result: import("../scratch.js").Scratch;
@@ -306,8 +693,315 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../scratch.js").Scratch;
   };
+  "sentry:get-consent-state": {
+    args: [];
+    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+  };
+  "shortcut-hints:get-counts": {
+    args: [];
+    result: Record<string, number>;
+  };
+  "shortcut-hints:increment-count": {
+    args: [actionId: string];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: import("../slashCommands.js").SlashCommandListRequest];
     result: import("../slashCommands.js").SlashCommand[];
+  };
+  "system-sleep:get-awake-time": {
+    args: [startTimestamp: number];
+    result: number;
+  };
+  "system-sleep:get-metrics": {
+    args: [];
+    result: import("./systemSleep.js").SystemSleepMetrics;
+  };
+  "system-sleep:reset": {
+    args: [];
+    result: void;
+  };
+  "telemetry:get": {
+    args: [];
+    result: { enabled: boolean; hasSeenPrompt: boolean };
+  };
+  "telemetry:mark-prompt-shown": {
+    args: [];
+    result: void;
+  };
+  "telemetry:preview-get-state": {
+    args: [];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:preview-toggle": {
+    args: [active: boolean];
+    result: import("./telemetryPreview.js").TelemetryPreviewState;
+  };
+  "telemetry:set-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "telemetry:track": {
+    args: [eventName: string, properties: Record<string, unknown>];
+    result: void;
+  };
+  "terminal-config:get": {
+    args: [];
+    result: import("./config.js").TerminalConfig;
+  };
+  "terminal-config:set-cached-project-views": {
+    args: [cachedProjectViews: number];
+    result: void;
+  };
+  "terminal-config:set-color-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "terminal-config:set-custom-schemes": {
+    args: [schemes: unknown];
+    result: void;
+  };
+  "terminal-config:set-font-family": {
+    args: [fontFamily: string];
+    result: void;
+  };
+  "terminal-config:set-font-size": {
+    args: [fontSize: number];
+    result: void;
+  };
+  "terminal-config:set-hybrid-input-auto-focus": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-hybrid-input-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-auto-restart": {
+    args: [thresholdMb: number];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-detection": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-performance-mode": {
+    args: [performanceMode: boolean];
+    result: void;
+  };
+  "terminal-config:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+  "terminal-config:set-resource-monitoring": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-screen-reader-mode": {
+    args: [mode: "off" | "auto" | "on"];
+    result: void;
+  };
+  "terminal-config:set-scrollback": {
+    args: [scrollbackLines: number];
+    result: void;
+  };
+  "terminal:force-resume": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:get-all": {
+    args: [];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-analysis-buffer": {
+    args: [];
+    result: SharedArrayBuffer | null;
+  };
+  "terminal:get-available": {
+    args: [];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-by-state": {
+    args: [state: string];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-for-project": {
+    args: [projectId: string];
+    result: import("./terminal.js").BackendTerminalInfo[];
+  };
+  "terminal:get-info": {
+    args: [id: string];
+    result: import("./terminal.js").TerminalInfoPayload;
+  };
+  "terminal:get-serialized-state": {
+    args: [terminalId: string];
+    result: string | null;
+  };
+  "terminal:get-serialized-states": {
+    args: [terminalIds: string[]];
+    result: Record<string, string | null>;
+  };
+  "terminal:get-shared-buffers": {
+    args: [];
+    result: { visualBuffers: SharedArrayBuffer[]; signalBuffer: SharedArrayBuffer | null };
+  };
+  "terminal:graceful-kill": {
+    args: [id: string];
+    result: string | null;
+  };
+  "terminal:kill": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:reconnect": {
+    args: [terminalId: string];
+    result: import("./terminal.js").TerminalReconnectResult;
+  };
+  "terminal:replay-history": {
+    args: [__0: { terminalId: string; maxLines: number }];
+    result: { replayed: number };
+  };
+  "terminal:restart-service": {
+    args: [];
+    result: void;
+  };
+  "terminal:restore": {
+    args: [id: string];
+    result: boolean;
+  };
+  "terminal:search-semantic-buffers": {
+    args: [query: string, isRegex: boolean];
+    result: import("./terminal.js").SemanticSearchMatch[];
+  };
+  "terminal:spawn": {
+    args: [
+      validatedOptions: {
+        cols: number;
+        rows: number;
+        id?: string | undefined;
+        kind?: string | undefined;
+        launchAgentId?: string | undefined;
+        projectId?: string | undefined;
+        cwd?: string | undefined;
+        shell?: string | undefined;
+        command?: string | undefined;
+        env?: Record<string, string> | undefined;
+        title?: string | undefined;
+        titleMode?: "default" | "custom" | undefined;
+        restore?: boolean | undefined;
+        isEphemeral?: boolean | undefined;
+        agentLaunchFlags?: string[] | undefined;
+        agentModelId?: string | undefined;
+        worktreeId?: string | undefined;
+        agentPresetId?: string | undefined;
+        agentPresetColor?: string | undefined;
+        originalAgentPresetId?: string | undefined;
+      },
+    ];
+    result: string;
+  };
+  "terminal:submit": {
+    args: [id: string, text: string];
+    result: void;
+  };
+  "terminal:trash": {
+    args: [id: string];
+    result: void;
+  };
+  "terminal:wake": {
+    args: [id: string];
+    result: { state: string | null; warnings?: string[] | undefined };
+  };
+  "watchdog:restart": {
+    args: [];
+    result: void;
+  };
+  "worktree-config:dismiss-wsl-banner": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
+  "worktree-config:get": {
+    args: [];
+    result: import("./worktree.js").WorktreeConfig;
+  };
+  "worktree-config:set-pattern": {
+    args: [payload: { pattern: string }];
+    result: import("./worktree.js").WorktreeConfig;
+  };
+  "worktree-config:set-wsl-git": {
+    args: [payload: { worktreeId: string; enabled: boolean }];
+    result: void;
+  };
+  "worktree:attach-issue": {
+    args: [payload: import("./worktree.js").AttachIssuePayload];
+    result: void;
+  };
+  "worktree:create": {
+    args: [payload: { rootPath: string; options: import("../git.js").CreateWorktreeOptions }];
+    result: string;
+  };
+  "worktree:delete": {
+    args: [payload: import("./worktree.js").WorktreeDeletePayload];
+    result: void;
+  };
+  "worktree:detach-issue": {
+    args: [payload: import("./worktree.js").DetachIssuePayload];
+    result: void;
+  };
+  "worktree:fetch-pr-branch": {
+    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
+    result: void;
+  };
+  "worktree:get-all": {
+    args: [];
+    result: import("../worktree.js").WorktreeState[];
+  };
+  "worktree:get-all-issue-associations": {
+    args: [];
+    result: Record<string, import("./worktree.js").IssueAssociation>;
+  };
+  "worktree:get-available-branch": {
+    args: [payload: { rootPath: string; branchName: string }];
+    result: string;
+  };
+  "worktree:get-default-path": {
+    args: [payload: { rootPath: string; branchName: string }];
+    result: string;
+  };
+  "worktree:get-issue-association": {
+    args: [worktreeId: string];
+    result: import("./worktree.js").IssueAssociation | null;
+  };
+  "worktree:get-recent-branches": {
+    args: [payload: { rootPath: string }];
+    result: string[];
+  };
+  "worktree:list-branches": {
+    args: [payload: { rootPath: string }];
+    result: import("../git.js").BranchInfo[];
+  };
+  "worktree:pr-refresh": {
+    args: [];
+    result: void;
+  };
+  "worktree:pr-status": {
+    args: [];
+    result: import("../workspace-host.js").PRServiceStatus | null;
+  };
+  "worktree:refresh": {
+    args: [worktreeId?: string | undefined];
+    result: void;
+  };
+  "worktree:restart-service": {
+    args: [];
+    result: void;
+  };
+  "worktree:retry-project-load": {
+    args: [];
+    result: void;
+  };
+  "worktree:set-active": {
+    args: [payload: import("./worktree.js").WorktreeSetActivePayload];
+    result: void;
   };
 }

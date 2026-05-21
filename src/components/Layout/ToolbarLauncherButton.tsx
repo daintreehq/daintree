@@ -1,10 +1,17 @@
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { SquareTerminal, Globe } from "lucide-react";
+import { SquareTerminal, Globe, Unplug } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 
 type LauncherType = "terminal" | "browser";
 
@@ -48,6 +55,7 @@ export function ToolbarLauncherButton({
   const shortcut = useKeybindingDisplay(config.keybindingAction);
   const ariaShortcut = useAriaKeyshortcuts(config.keybindingAction);
   const launcherHover = useShortcutHintHover(config.keybindingAction);
+  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const handleClick = useCallback(() => {
     onLaunchAgent(type);
@@ -56,25 +64,35 @@ export function ToolbarLauncherButton({
   const Icon = config.icon;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          {...launcherHover}
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={handleClick}
-          className={toolbarIconButtonClass}
-          aria-label={config.label}
-          aria-keyshortcuts={ariaShortcut}
-        >
-          <Icon />
-          <ShortcutRevealChip actionId={config.keybindingAction} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {createTooltipContent(config.tooltipLabel, shortcut)}
-      </TooltipContent>
-    </Tooltip>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              {...launcherHover}
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={handleClick}
+              className={toolbarIconButtonClass}
+              aria-label={config.label}
+              aria-keyshortcuts={ariaShortcut}
+            >
+              <Icon />
+              <ShortcutRevealChip actionId={config.keybindingAction} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipContent(config.tooltipLabel, shortcut)}
+          </TooltipContent>
+        </Tooltip>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        <ContextMenuItem onSelect={() => toggleButtonVisibility(type, "left")}>
+          <Unplug className="mr-2 h-3.5 w-3.5" />
+          Unpin from Toolbar
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

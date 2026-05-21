@@ -13,7 +13,6 @@ export const AgentStateSchema = z.preprocess(
 export const EventContextSchema = z.object({
   worktreeId: z.string().optional(),
   agentId: z.string().optional(),
-  taskId: z.string().optional(),
   runId: z.string().optional(),
   terminalId: z.string().optional(),
   issueNumber: z.number().int().positive().optional(),

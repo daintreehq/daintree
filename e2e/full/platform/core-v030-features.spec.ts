@@ -154,7 +154,9 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       ];
 
       for (const nav of navTabs) {
-        const navBtn = window.locator(`${SEL.settings.navSidebar} button`, { hasText: nav });
+        const navBtn = window
+          .locator(SEL.settings.navSidebar)
+          .getByRole("tab", { name: nav, exact: true });
         await expect(navBtn).toBeVisible({ timeout: T_SHORT });
         await navBtn.click();
         await window.waitForTimeout(200);

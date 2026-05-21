@@ -1,4 +1,3 @@
-import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
   TerminalSnapshotSchema,
@@ -7,7 +6,8 @@ import {
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
-import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { TERMINAL_LAYOUT_METHOD_CHANNELS } from "./terminalLayout.preload.js";
 
 /**
  * Validate and filter terminal snapshots using the Zod schema.
@@ -66,270 +66,266 @@ export function sanitizeDraftInputs(inputs: Record<string, unknown>): Record<str
   return sanitized;
 }
 
-export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
-
-  const handleProjectGetTerminals = async (projectId: string): Promise<TerminalSnapshot[]> => {
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    const state = await projectStore.getProjectState(projectId);
-    return state?.terminals ?? [];
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TERMINALS, handleProjectGetTerminals));
-
-  const handleProjectSetTerminals = async (payload: {
-    projectId: string;
-    terminals: TerminalSnapshot[];
-  }): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
-    const { projectId, terminals } = payload;
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (!Array.isArray(terminals)) {
-      throw new Error("Invalid terminals array");
-    }
-
-    const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
-
-    const existingState = await projectStore.getProjectState(projectId);
-    const newState = {
-      projectId,
-      activeWorktreeId: existingState?.activeWorktreeId,
-      sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: validTerminals,
-      tabGroups: existingState?.tabGroups ?? [],
-      terminalLayout: existingState?.terminalLayout,
-      focusMode: existingState?.focusMode,
-      focusPanelState: existingState?.focusPanelState,
-      terminalSizes: existingState?.terminalSizes,
-      draftInputs: existingState?.draftInputs,
-    };
-
-    await projectStore.saveProjectState(projectId, newState);
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TERMINALS, handleProjectSetTerminals));
-
-  const handleProjectGetTerminalSizes = async (
-    projectId: string
-  ): Promise<Record<string, { cols: number; rows: number }>> => {
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    const state = await projectStore.getProjectState(projectId);
-    return state?.terminalSizes ?? {};
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TERMINAL_SIZES, handleProjectGetTerminalSizes));
-
-  const handleProjectSetTerminalSizes = async (payload: unknown): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
-    const { projectId, terminalSizes } = payload as {
-      projectId: string;
-      terminalSizes: Record<string, { cols: number; rows: number }>;
-    };
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (
-      !terminalSizes ||
-      typeof terminalSizes !== "object" ||
-      Array.isArray(terminalSizes) ||
-      terminalSizes === null
-    ) {
-      throw new Error("Invalid terminal sizes");
-    }
-
-    const sanitizedSizes = sanitizeTerminalSizes(terminalSizes as Record<string, unknown>);
-
-    const existingState = await projectStore.getProjectState(projectId);
-    const newState = {
-      projectId,
-      activeWorktreeId: existingState?.activeWorktreeId,
-      sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: existingState?.terminals ?? [],
-      tabGroups: existingState?.tabGroups ?? [],
-      terminalLayout: existingState?.terminalLayout,
-      focusMode: existingState?.focusMode,
-      focusPanelState: existingState?.focusPanelState,
-      terminalSizes: sanitizedSizes,
-      draftInputs: existingState?.draftInputs,
-    };
-
-    await projectStore.saveProjectState(projectId, newState);
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TERMINAL_SIZES, handleProjectSetTerminalSizes));
-
-  const handleProjectGetTabGroups = async (projectId: string): Promise<TabGroup[]> => {
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    const state = await projectStore.getProjectState(projectId);
-    return state?.tabGroups ?? [];
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_GET_TAB_GROUPS, handleProjectGetTabGroups));
-
-  const handleProjectSetTabGroups = async (payload: {
-    projectId: string;
-    tabGroups: TabGroup[];
-  }): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
-    const { projectId, tabGroups } = payload;
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (!Array.isArray(tabGroups)) {
-      throw new Error("Invalid tabGroups array");
-    }
-
-    const sanitizedTabGroups = sanitizeTabGroups(tabGroups, projectId) as TabGroup[];
-
-    const existingState = await projectStore.getProjectState(projectId);
-    const newState = {
-      projectId,
-      activeWorktreeId: existingState?.activeWorktreeId,
-      sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: existingState?.terminals ?? [],
-      tabGroups: sanitizedTabGroups,
-      terminalLayout: existingState?.terminalLayout,
-      focusMode: existingState?.focusMode,
-      focusPanelState: existingState?.focusPanelState,
-      terminalSizes: existingState?.terminalSizes,
-      draftInputs: existingState?.draftInputs,
-    };
-    await projectStore.saveProjectState(projectId, newState);
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SET_TAB_GROUPS, handleProjectSetTabGroups));
-
-  const handleProjectGetFocusMode = async (
-    projectId: string
-  ): Promise<{
-    focusMode: boolean;
-    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-  }> => {
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    const state = await projectStore.getProjectState(projectId);
-    return {
-      focusMode: state?.focusMode ?? false,
-      focusPanelState: state?.focusPanelState,
-    };
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_GET_FOCUS_MODE, handleProjectGetFocusMode));
-
-  const handleProjectSetFocusMode = async (payload: {
-    projectId: string;
-    focusMode: boolean;
-    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
-  }): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
-    const { projectId, focusMode, focusPanelState } = payload;
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (typeof focusMode !== "boolean") {
-      throw new Error("Invalid focusMode value");
-    }
-
-    let validFocusPanelState: { sidebarWidth: number; diagnosticsOpen: boolean } | undefined;
-    if (focusPanelState !== undefined && focusPanelState !== null) {
-      if (
-        typeof focusPanelState !== "object" ||
-        typeof focusPanelState.sidebarWidth !== "number" ||
-        typeof focusPanelState.diagnosticsOpen !== "boolean"
-      ) {
-        throw new Error("Invalid focusPanelState structure");
+export const terminalLayoutNamespace = defineIpcNamespace({
+  name: "terminalLayout",
+  ops: {
+    getTerminals: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.getTerminals,
+      async (projectId: string): Promise<TerminalSnapshot[]> => {
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        const state = await projectStore.getProjectState(projectId);
+        return state?.terminals ?? [];
       }
-      if (
-        !Number.isFinite(focusPanelState.sidebarWidth) ||
-        focusPanelState.sidebarWidth < 0 ||
-        focusPanelState.sidebarWidth > 10000
-      ) {
-        throw new Error("Invalid sidebarWidth: must be finite and between 0-10000");
+    ),
+    setTerminals: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.setTerminals,
+      async (payload: { projectId: string; terminals: TerminalSnapshot[] }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { projectId, terminals } = payload;
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        if (!Array.isArray(terminals)) {
+          throw new Error("Invalid terminals array");
+        }
+
+        const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
+
+        const existingState = await projectStore.getProjectState(projectId);
+        const newState = {
+          projectId,
+          activeWorktreeId: existingState?.activeWorktreeId,
+          sidebarWidth: existingState?.sidebarWidth ?? 350,
+          terminals: validTerminals,
+          tabGroups: existingState?.tabGroups ?? [],
+          terminalLayout: existingState?.terminalLayout,
+          focusMode: existingState?.focusMode,
+          focusPanelState: existingState?.focusPanelState,
+          terminalSizes: existingState?.terminalSizes,
+          draftInputs: existingState?.draftInputs,
+        };
+
+        await projectStore.saveProjectState(projectId, newState);
       }
-      validFocusPanelState = {
-        sidebarWidth: focusPanelState.sidebarWidth,
-        diagnosticsOpen: focusPanelState.diagnosticsOpen,
+    ),
+    getTerminalSizes: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.getTerminalSizes,
+      async (projectId: string): Promise<Record<string, { cols: number; rows: number }>> => {
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        const state = await projectStore.getProjectState(projectId);
+        return state?.terminalSizes ?? {};
+      }
+    ),
+    setTerminalSizes: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.setTerminalSizes,
+      async (payload: {
+        projectId: string;
+        terminalSizes: Record<string, { cols: number; rows: number }>;
+      }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { projectId, terminalSizes } = payload;
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        if (
+          !terminalSizes ||
+          typeof terminalSizes !== "object" ||
+          Array.isArray(terminalSizes) ||
+          terminalSizes === null
+        ) {
+          throw new Error("Invalid terminal sizes");
+        }
+
+        const sanitizedSizes = sanitizeTerminalSizes(terminalSizes as Record<string, unknown>);
+
+        const existingState = await projectStore.getProjectState(projectId);
+        const newState = {
+          projectId,
+          activeWorktreeId: existingState?.activeWorktreeId,
+          sidebarWidth: existingState?.sidebarWidth ?? 350,
+          terminals: existingState?.terminals ?? [],
+          tabGroups: existingState?.tabGroups ?? [],
+          terminalLayout: existingState?.terminalLayout,
+          focusMode: existingState?.focusMode,
+          focusPanelState: existingState?.focusPanelState,
+          terminalSizes: sanitizedSizes,
+          draftInputs: existingState?.draftInputs,
+        };
+
+        await projectStore.saveProjectState(projectId, newState);
+      }
+    ),
+    getTabGroups: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.getTabGroups,
+      async (projectId: string): Promise<TabGroup[]> => {
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        const state = await projectStore.getProjectState(projectId);
+        return state?.tabGroups ?? [];
+      }
+    ),
+    setTabGroups: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.setTabGroups,
+      async (payload: { projectId: string; tabGroups: TabGroup[] }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { projectId, tabGroups } = payload;
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        if (!Array.isArray(tabGroups)) {
+          throw new Error("Invalid tabGroups array");
+        }
+
+        const sanitizedTabGroups = sanitizeTabGroups(tabGroups, projectId) as TabGroup[];
+
+        const existingState = await projectStore.getProjectState(projectId);
+        const newState = {
+          projectId,
+          activeWorktreeId: existingState?.activeWorktreeId,
+          sidebarWidth: existingState?.sidebarWidth ?? 350,
+          terminals: existingState?.terminals ?? [],
+          tabGroups: sanitizedTabGroups,
+          terminalLayout: existingState?.terminalLayout,
+          focusMode: existingState?.focusMode,
+          focusPanelState: existingState?.focusPanelState,
+          terminalSizes: existingState?.terminalSizes,
+          draftInputs: existingState?.draftInputs,
+        };
+        await projectStore.saveProjectState(projectId, newState);
+      }
+    ),
+    getFocusMode: op(TERMINAL_LAYOUT_METHOD_CHANNELS.getFocusMode, async (projectId: string) => {
+      if (typeof projectId !== "string" || !projectId) {
+        throw new Error("Invalid project ID");
+      }
+      const state = await projectStore.getProjectState(projectId);
+      return {
+        focusMode: state?.focusMode ?? false,
+        focusPanelState: state?.focusPanelState,
       };
-    }
+    }),
+    setFocusMode: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.setFocusMode,
+      async (payload: {
+        projectId: string;
+        focusMode: boolean;
+        focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+      }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { projectId, focusMode, focusPanelState } = payload;
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        if (typeof focusMode !== "boolean") {
+          throw new Error("Invalid focusMode value");
+        }
 
-    const existingState = await projectStore.getProjectState(projectId);
-    const newState = {
-      projectId,
-      activeWorktreeId: existingState?.activeWorktreeId,
-      sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: existingState?.terminals ?? [],
-      tabGroups: existingState?.tabGroups ?? [],
-      terminalLayout: existingState?.terminalLayout,
-      focusMode,
-      focusPanelState: validFocusPanelState,
-      terminalSizes: existingState?.terminalSizes,
-      draftInputs: existingState?.draftInputs,
-    };
+        let validFocusPanelState: { sidebarWidth: number; diagnosticsOpen: boolean } | undefined;
+        if (focusPanelState !== undefined && focusPanelState !== null) {
+          if (
+            typeof focusPanelState !== "object" ||
+            typeof focusPanelState.sidebarWidth !== "number" ||
+            typeof focusPanelState.diagnosticsOpen !== "boolean"
+          ) {
+            throw new Error("Invalid focusPanelState structure");
+          }
+          if (
+            !Number.isFinite(focusPanelState.sidebarWidth) ||
+            focusPanelState.sidebarWidth < 0 ||
+            focusPanelState.sidebarWidth > 10000
+          ) {
+            throw new Error("Invalid sidebarWidth: must be finite and between 0-10000");
+          }
+          validFocusPanelState = {
+            sidebarWidth: focusPanelState.sidebarWidth,
+            diagnosticsOpen: focusPanelState.diagnosticsOpen,
+          };
+        }
 
-    await projectStore.saveProjectState(projectId, newState);
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode));
+        const existingState = await projectStore.getProjectState(projectId);
+        const newState = {
+          projectId,
+          activeWorktreeId: existingState?.activeWorktreeId,
+          sidebarWidth: existingState?.sidebarWidth ?? 350,
+          terminals: existingState?.terminals ?? [],
+          tabGroups: existingState?.tabGroups ?? [],
+          terminalLayout: existingState?.terminalLayout,
+          focusMode,
+          focusPanelState: validFocusPanelState,
+          terminalSizes: existingState?.terminalSizes,
+          draftInputs: existingState?.draftInputs,
+        };
 
-  const handleProjectGetDraftInputs = async (
-    projectId: string
-  ): Promise<Record<string, string>> => {
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    const state = await projectStore.getProjectState(projectId);
-    return state?.draftInputs ?? {};
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_GET_DRAFT_INPUTS, handleProjectGetDraftInputs));
+        await projectStore.saveProjectState(projectId, newState);
+      }
+    ),
+    getDraftInputs: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.getDraftInputs,
+      async (projectId: string): Promise<Record<string, string>> => {
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        const state = await projectStore.getProjectState(projectId);
+        return state?.draftInputs ?? {};
+      }
+    ),
+    setDraftInputs: op(
+      TERMINAL_LAYOUT_METHOD_CHANNELS.setDraftInputs,
+      async (payload: {
+        projectId: string;
+        draftInputs: Record<string, string>;
+      }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { projectId, draftInputs } = payload;
+        if (typeof projectId !== "string" || !projectId) {
+          throw new Error("Invalid project ID");
+        }
+        if (
+          !draftInputs ||
+          typeof draftInputs !== "object" ||
+          Array.isArray(draftInputs) ||
+          draftInputs === null
+        ) {
+          throw new Error("Invalid draft inputs");
+        }
 
-  const handleProjectSetDraftInputs = async (payload: unknown): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
-    }
-    const { projectId, draftInputs } = payload as {
-      projectId: string;
-      draftInputs: Record<string, string>;
-    };
-    if (typeof projectId !== "string" || !projectId) {
-      throw new Error("Invalid project ID");
-    }
-    if (
-      !draftInputs ||
-      typeof draftInputs !== "object" ||
-      Array.isArray(draftInputs) ||
-      draftInputs === null
-    ) {
-      throw new Error("Invalid draft inputs");
-    }
+        const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
 
-    const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
+        const existingState = await projectStore.getProjectState(projectId);
+        const newState = {
+          projectId,
+          activeWorktreeId: existingState?.activeWorktreeId,
+          sidebarWidth: existingState?.sidebarWidth ?? 350,
+          terminals: existingState?.terminals ?? [],
+          tabGroups: existingState?.tabGroups ?? [],
+          terminalLayout: existingState?.terminalLayout,
+          focusMode: existingState?.focusMode,
+          focusPanelState: existingState?.focusPanelState,
+          terminalSizes: existingState?.terminalSizes,
+          draftInputs: sanitized,
+        };
 
-    const existingState = await projectStore.getProjectState(projectId);
-    const newState = {
-      projectId,
-      activeWorktreeId: existingState?.activeWorktreeId,
-      sidebarWidth: existingState?.sidebarWidth ?? 350,
-      terminals: existingState?.terminals ?? [],
-      tabGroups: existingState?.tabGroups ?? [],
-      terminalLayout: existingState?.terminalLayout,
-      focusMode: existingState?.focusMode,
-      focusPanelState: existingState?.focusPanelState,
-      terminalSizes: existingState?.terminalSizes,
-      draftInputs: sanitized,
-    };
+        await projectStore.saveProjectState(projectId, newState);
+      }
+    ),
+  },
+});
 
-    await projectStore.saveProjectState(projectId, newState);
-  };
-  handlers.push(typedHandle(CHANNELS.PROJECT_SET_DRAFT_INPUTS, handleProjectSetDraftInputs));
-
-  return () => handlers.forEach((cleanup) => cleanup());
+export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () => void {
+  return terminalLayoutNamespace.register();
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveTerminalChrome,
   deriveTerminalRuntimeIdentity,
+  terminalChromeDescriptorsEqual,
   terminalRuntimeIdentitiesEqual,
 } from "../terminalChrome";
 
@@ -227,5 +228,50 @@ describe("terminalRuntimeIdentitiesEqual", () => {
 
     expect(terminalRuntimeIdentitiesEqual(left, right)).toBe(true);
     expect(terminalRuntimeIdentitiesEqual(left, other)).toBe(false);
+  });
+});
+
+describe("terminalChromeDescriptorsEqual", () => {
+  it("detects hasExited differences (post-exit spinner suppression)", () => {
+    // Race: exitCode arrives before agentState transitions to "exited". Both
+    // descriptors share identity fields; only hasExited diverges. The equality
+    // check must catch this or the memo gate keeps the working spinner alive
+    // after the process has died.
+    const live = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+    });
+    const exited = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "working",
+      exitCode: 0,
+    });
+
+    expect(live.hasExited).toBe(false);
+    expect(exited.hasExited).toBe(true);
+    expect(terminalChromeDescriptorsEqual(live, exited)).toBe(false);
+  });
+
+  it("returns true for two equivalent descriptors", () => {
+    const a = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
+    const b = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
+    expect(terminalChromeDescriptorsEqual(a, b)).toBe(true);
+  });
+
+  it("returns true for identical references", () => {
+    const a = deriveTerminalChrome({ kind: "browser" });
+    expect(terminalChromeDescriptorsEqual(a, a)).toBe(true);
+  });
+
+  it("returns false when one side is undefined", () => {
+    const a = deriveTerminalChrome({ kind: "terminal" });
+    expect(terminalChromeDescriptorsEqual(a, undefined)).toBe(false);
+    expect(terminalChromeDescriptorsEqual(undefined, a)).toBe(false);
+  });
+
+  it("returns true when both sides are undefined", () => {
+    expect(terminalChromeDescriptorsEqual(undefined, undefined)).toBe(true);
   });
 });

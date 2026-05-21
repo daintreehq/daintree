@@ -53,8 +53,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     keywords: ["assistant", "support", "docs", "guide"],
     argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
     run: async (args?: unknown) => {
+      // Snapshot the renderer's action context BEFORE any await. This is
+      // bound to the MCP session at provision and replayed as the
+      // contextOverride on every assistant tool call, so a focus shift
+      // during the model's turn can't retarget actions onto the wrong
+      // worktree/terminal (#8317). Capturing after an await would
+      // reintroduce the exact stale-read race this fixes (lesson #5087).
+      // `currentProject` is captured in the same synchronous block so the
+      // session is provisioned with a project identity and context snapshot
+      // that are guaranteed consistent — a project switch during the
+      // `getFolderPath()` await can't split them (#8317).
+      const capturedContext = actionService.getContext();
+      const project = useProjectStore.getState().currentProject;
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Help Agent",
@@ -79,13 +92,13 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
-      const project = useProjectStore.getState().currentProject;
       let session: Awaited<ReturnType<typeof window.electron.help.provisionSession>> | null = null;
       if (!project) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Daintree Assistant",
-          message: "Project state is still loading. Try again.",
+          message: "Project state is still loading.",
         });
         return;
       }
@@ -95,6 +108,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           projectId: project.id,
           projectPath: project.path,
           agentId,
+          context: capturedContext,
         });
       } catch (err) {
         logError("Failed to provision help session", err);
@@ -102,6 +116,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           err && typeof err === "object" && "code" in err
             ? (err as Record<string, unknown>).code
             : undefined;
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: code === "MCP_NOT_READY" ? "Start MCP failed" : "Assistant launch failed",
@@ -114,6 +129,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       }
 
       if (!session) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Assistant launch failed",
@@ -158,6 +174,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           logError("Failed to revoke help session after failed launch", err);
         });
       }
+    },
+  }));
+
+  actions.set("help.gettingStarted.show", () => ({
+    id: "help.gettingStarted.show",
+    title: "Getting Started",
+    description: "Show the getting started checklist",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    nonRepeatable: true,
+    scope: "renderer",
+    keywords: ["onboarding", "checklist", "welcome", "tutorial"],
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
     },
   }));
 

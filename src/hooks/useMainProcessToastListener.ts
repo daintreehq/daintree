@@ -40,6 +40,7 @@ export function useMainProcessToastListener(): void {
         type: payload.type,
         title: payload.title,
         message: payload.message,
+        rateLimitKey: payload.rateLimitKey,
         action,
       });
     });

@@ -1,17 +1,48 @@
-import { Mic } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { useEffect, useRef } from "react";
+import { Mic, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
 import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+
+// Flywheel — matches VoiceInputButton so the toolbar and panel-header
+// indicators behave identically.
+const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s
+const ACTIVE_SPEED = 288; // deg/sec — 1 revolution per 1.25s
+const TAU_ATTACK = 0.22;
+const TAU_RELEASE = 0.5;
+const AUDIO_SMOOTH = 0.15;
+const BASE_THICKNESS = 2; // px
 
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+}
+
+function VoiceRecordingPlaceholder() {
+  // Reserves the slot footprint so right-aligned toolbar items don't shift
+  // when a session starts/stops. Matches DevServerPlaceholder's pattern.
+  // No data-toolbar-item — the placeholder is non-interactive and must not
+  // appear in the toolbar's roving tabindex (Toolbar.getToolbarItems filters
+  // by offsetParent, which opacity-0 does NOT null out).
+  return (
+    <div
+      className="toolbar-icon-button relative mr-0.5 h-9 w-9 opacity-0 pointer-events-none"
+      aria-hidden="true"
+    />
+  );
 }
 
 export function VoiceRecordingToolbarButton({
@@ -25,79 +56,226 @@ export function VoiceRecordingToolbarButton({
   const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
   const shortcut = useKeybindingDisplay("voiceInput.toggle");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
+  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
-  if (
-    !activeTarget ||
-    (status !== "connecting" && status !== "recording" && status !== "finishing")
-  ) {
-    return null;
+  const isConnecting = status === "connecting";
+  const isRecording = status === "recording";
+  const isFinishing = status === "finishing";
+  const isActive = Boolean(activeTarget) && (isConnecting || isRecording || isFinishing);
+
+  // Doherty gate — under 400ms of "connecting" should never paint the orbit;
+  // it would flash before the recording state arrives.
+  const showConnecting = useDohertyGate(isConnecting);
+  // Gate the orbit on isActive too — protects against a transient teardown
+  // race where status briefly stays "recording"/"finishing" while
+  // activeTarget has already been cleared, which would otherwise leave the
+  // RAF loop spinning on null refs.
+  const showOrbit = isActive && (isRecording || isFinishing || showConnecting);
+
+  // Mutable bridge: audioLevel updates ~60Hz; we read it inside the RAF tick
+  // rather than re-rendering on every change. Pattern lifted from
+  // VoiceInputButton.
+  const audioLevelRef = useRef(0);
+  useEffect(() => {
+    audioLevelRef.current = audioLevel;
+  }, [audioLevel]);
+
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<HTMLSpanElement>(null);
+  const dotCoreRef = useRef<HTMLSpanElement>(null);
+  const dotHaloRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const rafRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!showOrbit) return;
+
+    let lastTime = performance.now();
+    let angle = 0;
+    let v1 = IDLE_SPEED;
+    let velocity = IDLE_SPEED;
+    let smoothLevel = 0;
+
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      // Force level to 0 during finishing so the ring decelerates gracefully.
+      const rawLevel = isFinishing ? 0 : audioLevelRef.current;
+      smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
+      const level = Math.pow(smoothLevel, 1.5);
+
+      // Double-smoothed flywheel
+      const targetVelocity = IDLE_SPEED + level * (ACTIVE_SPEED - IDLE_SPEED);
+      const tau = targetVelocity > velocity ? TAU_ATTACK : TAU_RELEASE;
+      const alpha = 1 - Math.exp(-dt / tau);
+      v1 += (targetVelocity - v1) * alpha;
+      velocity += (v1 - velocity) * alpha;
+      angle = (angle + velocity * dt) % 360;
+
+      const opacity = (0.45 + level * 0.55).toFixed(3);
+      const opacityNum = Number(opacity);
+
+      const wrapper = wrapperRef.current;
+      if (wrapper) {
+        wrapper.style.transform = `rotate(${angle}deg) translateZ(0)`;
+      }
+
+      const ring = ringRef.current;
+      if (ring) {
+        ring.style.background = [
+          `conic-gradient(from 0deg,`,
+          `transparent 200deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
+          `rgb(from var(--theme-accent-primary) r g b / ${opacity}) 355deg,`,
+          `transparent 360deg)`,
+        ].join(" ");
+      }
+
+      const core = dotCoreRef.current;
+      if (core) {
+        core.style.opacity = String(0.82 + level * 0.18);
+      }
+
+      const halo = dotHaloRef.current;
+      if (halo) {
+        const haloAlpha = (0.18 + level * 0.22).toFixed(3);
+        const haloBlur = 6 + level * 6;
+        halo.style.boxShadow = `0 0 ${haloBlur}px rgb(from var(--theme-accent-primary) r g b / ${haloAlpha})`;
+        halo.style.opacity = String(0.5 + level * 0.5);
+      }
+
+      const track = trackRef.current;
+      if (track) {
+        track.style.opacity = String(0.08 + level * 0.04);
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [showOrbit, isFinishing]);
+
+  if (!isActive || !showOrbit) {
+    return <VoiceRecordingPlaceholder />;
   }
 
-  const isRecording = status === "recording";
-
-  const contextLabel = [activeTarget.projectName, activeTarget.worktreeLabel]
+  const contextLabel = [activeTarget?.projectName, activeTarget?.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
-  const tooltipTitle =
-    status === "connecting"
-      ? "Preparing dictation..."
-      : status === "finishing"
-        ? "Finishing transcription..."
-        : contextLabel
-          ? `Recording: ${contextLabel}`
-          : "Recording in another panel";
+  const tooltipTitle = isConnecting
+    ? "Preparing dictation..."
+    : isFinishing
+      ? "Finishing transcription..."
+      : contextLabel
+        ? `Recording: ${contextLabel}`
+        : "Recording in another panel";
   const tooltipExtra = [
-    status === "recording" ? formatDuration(elapsedSeconds) : null,
+    isRecording ? formatDuration(elapsedSeconds) : null,
     shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel",
   ]
     .filter(Boolean)
-    .join(" \u00B7 ");
+    .join(" · ");
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={() => {
-            void voiceRecordingService.focusActiveTarget();
-          }}
-          className={cn(
-            "toolbar-icon-button relative mr-0.5",
-            isRecording
-              ? "text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-              : status === "connecting"
-                ? "text-daintree-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-                : "text-daintree-accent hover:text-daintree-accent"
-          )}
-          aria-label={tooltipTitle}
-          aria-keyshortcuts={ariaShortcut}
-        >
-          {status === "finishing" ? (
-            <Spinner size="md" />
-          ) : (
-            <div className="relative">
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={() => {
+                void voiceRecordingService.focusActiveTarget();
+              }}
+              className={cn(
+                "toolbar-icon-button relative mr-0.5 text-daintree-text",
+                "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+              )}
+              aria-label={tooltipTitle}
+              aria-keyshortcuts={ariaShortcut}
+            >
               <Mic className="h-4 w-4" />
+              {/* Orbit overlay — absolute inset on the relative Button. No
+                  contain:strict at this scale: the toolbar button is a flex
+                  child and clipping the orbit would crop the ring. */}
               <span
-                className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full transition-colors"
+                ref={trackRef}
+                aria-hidden="true"
+                className="absolute inset-1 rounded-full pointer-events-none"
                 style={{
-                  backgroundColor:
-                    status === "connecting"
-                      ? "rgb(from var(--theme-accent-primary) r g b / 0.4)"
-                      : `rgb(from var(--theme-accent-primary) r g b / ${0.3 + audioLevel * 0.7})`,
-                  transitionDuration: "80ms",
+                  opacity: 0.08,
+                  background: `var(--theme-accent-primary)`,
+                  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                  maskComposite: "exclude",
+                  WebkitMaskComposite: "xor",
+                  padding: `${BASE_THICKNESS}px`,
+                  transition: "opacity 80ms ease-out",
                 }}
               />
-            </div>
-          )}
-          <ShortcutRevealChip actionId="voiceInput.toggle" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-center">
-        <div className="font-medium">{tooltipTitle}</div>
-        {tooltipExtra && <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>}
-      </TooltipContent>
-    </Tooltip>
+              <div
+                ref={wrapperRef}
+                aria-hidden="true"
+                className="absolute inset-1 pointer-events-none"
+                style={{ willChange: "transform" }}
+              >
+                <span
+                  ref={ringRef}
+                  className="absolute inset-0 rounded-full"
+                  style={{
+                    padding: `${BASE_THICKNESS}px`,
+                    mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                    WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                    maskComposite: "exclude",
+                    WebkitMaskComposite: "xor",
+                  }}
+                />
+                <span
+                  ref={dotHaloRef}
+                  className="absolute rounded-full bg-daintree-accent/30"
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    top: 0,
+                    left: "50%",
+                    transform: "translate(-50%, -35%)",
+                  }}
+                />
+                <span
+                  ref={dotCoreRef}
+                  className="absolute rounded-full bg-daintree-accent"
+                  style={{
+                    width: "3.5px",
+                    height: "3.5px",
+                    top: 0,
+                    left: "50%",
+                    transform: "translate(-50%, -15%)",
+                  }}
+                />
+              </div>
+              <ShortcutRevealChip actionId="voiceInput.toggle" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-center">
+            <div className="font-medium">{tooltipTitle}</div>
+            {tooltipExtra && (
+              <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>
+            )}
+          </TooltipContent>
+        </Tooltip>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        <ContextMenuItem onSelect={() => toggleButtonVisibility("voice-recording", "right")}>
+          <Unplug className="mr-2 h-3.5 w-3.5" />
+          Unpin from Toolbar
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

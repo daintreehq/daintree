@@ -20,6 +20,7 @@ import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -43,6 +44,7 @@ export interface BasePanelProps {
   onTitleChange?: (newTitle: string) => void;
   onMinimize?: () => void;
   onRestore?: () => void;
+  showRestoreControl?: boolean;
 }
 
 export interface ContentPanelProps extends BasePanelProps {
@@ -112,6 +114,11 @@ export interface ContentPanelProps extends BasePanelProps {
   // looking up at the fleet ribbon.
   isFleetFollower?: boolean;
 
+  // True when this pane's PTY is hibernated — the renderer is released but
+  // the process is preserved. Drives the panel-state-hibernated border cue
+  // and the Moon icon in the header.
+  isHibernated?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -138,6 +145,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     onTitleChange,
     onMinimize,
     onRestore,
+    showRestoreControl,
     children,
     headerContent,
     headerActions,
@@ -173,6 +181,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
+    isHibernated = false,
     tabs,
     groupId,
     onTabClick,
@@ -193,6 +202,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // pane's title bar lifts to a neutral surface tint (not accent) so the
   // preview is unmistakable but doesn't squat on the focus anchor color.
   const isFleetPreviewed = useFleetArmingStore((s) => s.previewArmedIds.has(id));
+
+  // Inverse of isFleetPreviewed: when a preset hover is *active* and this
+  // pane is NOT in the would-be-armed set, dim it so the matched panes
+  // stand out without competing visual chrome on the rest of the grid.
+  // Gated on PTY-backed kinds so browser, dev-preview, and other non-fleet
+  // panels (which are never in previewArmedIds) stay at full opacity —
+  // dimming them would imply they could have been armed.
+  const isPtyKind = panelKindHasPty(kind);
+  const isFleetDimmed = useFleetArmingStore(
+    (s) => isPtyKind && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
+  );
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
@@ -299,6 +319,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           queueCount={queueCount}
           flowStatus={flowStatus}
           completedWithNoChanges={completedWithNoChanges}
+          isHibernated={isHibernated}
         />
       );
     }
@@ -316,6 +337,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     queueCount,
     flowStatus,
     completedWithNoChanges,
+    isHibernated,
   ]);
 
   const handleTitleDoubleClick = useCallback(
@@ -403,6 +425,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-runtime-kind={terminalChrome.runtimeKind}
         data-runtime-icon-id={terminalChrome.iconId || undefined}
         data-selected={isSelected || undefined}
+        data-hibernated={isHibernated || undefined}
+        data-fleet-dimmed={isFleetDimmed || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -424,9 +448,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                 ? "panel-state-waiting"
                 : showGridAttention && showGridAgentHighlights && isWorkingState
                   ? "panel-state-working"
-                  : "border-overlay hover:border-tint/[0.08]"),
+                  : showGridAttention && isHibernated
+                    ? "panel-state-hibernated"
+                    : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          isFleetDimmed && "fleet-pane-dimmed",
           className
         )}
         onClick={handleClick}
@@ -464,6 +491,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           onTitleChange={onTitleChange}
           onMinimize={onMinimize}
           onRestore={onRestore}
+          showRestoreControl={showRestoreControl}
           onRestart={onRestart}
           isPinged={isPinged}
           wasJustSelected={wasJustSelected}

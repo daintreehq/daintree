@@ -23,8 +23,12 @@ export const CRASH_CRITICAL_FIELDS = new Set([
 ]);
 
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
-import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
+import {
+  isGpuDisabledByFlag,
+  isGpuAngleFallbackApplied,
+} from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { typedHandle, typedHandleWithContext } from "../../utils.js";
@@ -33,13 +37,35 @@ import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleAppHydrate = async () => {
-    const currentProject = projectStore.getCurrentProject();
+  const resolveProjectForHydration = (ctx?: IpcContext) => {
+    if (!ctx) {
+      return projectStore.getCurrentProject();
+    }
+
+    const pvm =
+      (ctx.senderWindow &&
+        deps?.windowRegistry?.getByWindowId(ctx.senderWindow.id)?.services?.projectViewManager) ??
+      deps?.projectViewManager;
+
+    if (pvm) {
+      const viewProjectId = pvm.getProjectIdForWebContents(ctx.webContentsId);
+      return viewProjectId ? projectStore.getProjectById(viewProjectId) : null;
+    }
+
+    if (ctx.projectId) {
+      return projectStore.getProjectById(ctx.projectId);
+    }
+
+    return projectStore.getCurrentProject();
+  };
+
+  const handleAppHydrate = async (ctx?: IpcContext) => {
+    const currentProject = resolveProjectForHydration(ctx);
     const globalAppState = store.get("appState");
     const projectId = currentProject?.id;
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
@@ -64,6 +90,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           crashCount: cacheGuard.getCrashCount(),
           lastCrashAt: cacheGuard.getLastCrashTimestamp(),
           settingsRecovery: consumePendingSettingsRecovery(),
+          // Crash-loop quarantine notifications are gated on safe mode; the
+          // fast path runs only when safe mode is inactive, so clear the field.
+          crashLoopStateRecovery: null,
         };
       }
     }
@@ -234,19 +263,69 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       terminalsSource = "global-fallback";
     }
 
-    // In safe mode, skip terminal restoration to break crash loops.
-    // Capture the count of panels we're about to drop so the renderer
-    // banner can tell users how much was deferred.
+    // In safe mode, filter out panels the suspect ledger has quarantined
+    // (panels flagged `isSuspect` on enough consecutive crashed boots to
+    // cross the threshold) — stable panels survive the safe-mode boot. If
+    // every saved panel is quarantined we fall back to the original
+    // all-or-nothing wipe so a chronic crash loop where everything is suspect
+    // still surfaces an empty workspace rather than restoring suspects in a
+    // partial way. `quarantinedPanels` is surfaced to the renderer so
+    // `SafeModeBanner` can list them with a "Restore panel" affordance.
     const guard = getCrashLoopGuard();
+    const ledger = getPanelSuspectLedger();
     const inSafeMode = guard.isSafeMode();
     let skippedPanelCount = 0;
+    let quarantinedPanels: import("../../../../shared/types/ipc/crashRecovery.js").QuarantinedPanelSummary[] =
+      [];
     if (inSafeMode) {
-      skippedPanelCount = terminalsToUse.length;
-      terminalsToUse = [];
-      terminalsSource = "safe-mode";
-      console.log(
-        `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
-      );
+      const quarantinedIds = ledger.getQuarantinedPanelIds();
+      const ledgerEmpty = quarantinedIds.size === 0;
+      const original = terminalsToUse;
+      const survivors = original.filter((t) => !quarantinedIds.has(t.id));
+      const skippedToQuarantine = original.length - survivors.length;
+      if (ledgerEmpty) {
+        // Legacy fallback: the ledger has no per-panel quarantine data for
+        // this crash-loop run, so the system can't isolate which panel(s)
+        // caused it. Fall back to the original all-or-nothing wipe so safe
+        // mode still breaks the loop. Hits on first crash loop after upgrade
+        // (or after the ledger was cleared by user action).
+        skippedPanelCount = original.length;
+        terminalsToUse = [];
+        terminalsSource = "safe-mode";
+        console.log(
+          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration (ledger empty)`
+        );
+      } else if (original.length > 0 && survivors.length === 0) {
+        // Every saved panel for the current project is in the quarantine set
+        // — whole-session safe mode escalation. This is the per-project
+        // analogue of the legacy wipe.
+        skippedPanelCount = original.length;
+        terminalsToUse = [];
+        terminalsSource = "safe-mode";
+        console.log(
+          `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration (all quarantined)`
+        );
+      } else if (skippedToQuarantine > 0) {
+        // Partial quarantine — restore the stable panels, drop the suspects.
+        terminalsToUse = survivors;
+        skippedPanelCount = skippedToQuarantine;
+        terminalsSource = "safe-mode-quarantine";
+        console.log(
+          `[AppHydrate] Safe mode active — quarantining ${skippedToQuarantine} suspect panel(s), restoring ${survivors.length} stable panel(s)`
+        );
+      } else {
+        // Safe mode is active but none of THIS project's saved panels appear
+        // in the quarantine set (e.g., the user crashed on a different
+        // project and switched here). Restore normally — the per-panel
+        // ledger isolates the failure to its real cause. Quarantined panels
+        // from other projects are still surfaced via `quarantinedPanels` so
+        // the banner popover can list them.
+        skippedPanelCount = 0;
+        console.log(
+          `[AppHydrate] Safe mode active — no panels quarantined for this project, restoring ${original.length} panel(s)`
+        );
+      }
+      quarantinedPanels = ledger.getQuarantinedPanels();
     }
 
     // Apply one-shot crash recovery panel filter if set
@@ -291,19 +370,55 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+      gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
       safeMode: inSafeMode,
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
       skippedPanelCount,
+      quarantinedPanels,
       crashCount: guard.getCrashCount(),
       lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
         : null,
+      // Surface the crash-loop quarantine only when safe mode is also active —
+      // a silent reset on the happy path would be more noise than signal.
+      crashLoopStateRecovery:
+        inSafeMode && guard.getQuarantinedStatePath()
+          ? { quarantinedPath: guard.getQuarantinedStatePath()! }
+          : null,
     };
   };
-  handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
+  handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
+
+  // Batched cold-start boot payload. Collapses what was three separate renderer
+  // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
+  // `app:hydrate`) into one. The destructive one-shot consumers
+  // (`consumePanelFilter`, `consumePendingSettingsRecovery`) and the prefetch
+  // fast path remain inside `handleAppHydrate` — boot just appends the crash
+  // gate fields onto the same result.
+  const handleAppBoot = async (ctx: IpcContext) => {
+    const hydrate = await handleAppHydrate(ctx);
+    const crashService = getCrashRecoveryService();
+    const guard = getCrashLoopGuard();
+    // Mirror crash-recovery:get-pending: suppress in safe mode and inject the
+    // live crash count so the renderer's auto-restore heuristic matches the
+    // standalone path.
+    let crashPending: import("../../../../shared/types/ipc/crashRecovery.js").PendingCrash | null;
+    if (guard.isSafeMode()) {
+      crashPending = null;
+    } else {
+      const pending = crashService.getPendingCrash();
+      crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
+    }
+    return {
+      ...hydrate,
+      crashPending,
+      crashConfig: crashService.getConfig(),
+    };
+  };
+  handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {
     return store.get("appState") as import("../../../../shared/types/ipc/app.js").AppState;

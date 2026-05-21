@@ -16,7 +16,7 @@ import type { ReactNode } from "react";
 import { fireEvent } from "@testing-library/react";
 import type { GitHubIssue, GitHubPR, GitHubListResponse } from "@shared/types/github";
 import { buildCacheKey, getCache, setCache, _resetForTests } from "@/lib/githubResourceCache";
-import { useGitHubFilterStore } from "@/store/githubFilterStore";
+import { useGitHubFilterStore } from "@github-renderer/stores/githubFilterStore";
 
 const mockListIssues = vi.fn<(args: unknown) => Promise<GitHubListResponse<GitHubIssue>>>();
 const mockListPRs = vi.fn<(args: unknown) => Promise<GitHubListResponse<GitHubPR>>>();
@@ -70,7 +70,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 let mockGitHubConfig: { hasToken: boolean } | null = { hasToken: true };
-vi.mock("@/store/githubConfigStore", () => {
+vi.mock("@github-renderer/stores/githubConfigStore", () => {
   const useGitHubConfigStore = () => mockGitHubConfig;
   (useGitHubConfigStore as unknown as { getState: () => unknown }).getState = () => ({
     config: mockGitHubConfig,
@@ -89,7 +89,7 @@ vi.mock("@/components/ui/fixed-dropdown", () => ({
   FixedDropdown: () => null,
 }));
 
-vi.mock("@/components/GitHub/GitHubDropdownSkeletons", () => ({
+vi.mock("@github-renderer/components/GitHubDropdownSkeletons", () => ({
   GitHubResourceListSkeleton: () => null,
   CommitListSkeleton: () => null,
 }));
@@ -98,11 +98,11 @@ vi.mock("../GitHubStatusIndicator", () => ({
   GitHubStatusIndicator: () => null,
 }));
 
-vi.mock("@/components/GitHub/GitHubResourceList", () => ({
+vi.mock("@github-renderer/components/GitHubResourceList", () => ({
   GitHubResourceList: () => null,
 }));
 
-vi.mock("@/components/GitHub/CommitList", () => ({
+vi.mock("@github-renderer/components/CommitList", () => ({
   CommitList: () => null,
 }));
 

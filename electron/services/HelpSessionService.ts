@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
 import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
@@ -52,6 +53,15 @@ interface ProvisionInput {
   agentId: string;
   windowId: number;
   projectViewWebContentsId: number;
+  /**
+   * Snapshot of the renderer's `ActionContext` captured synchronously when
+   * the user launched the assistant, before any `await`. Bound to the MCP
+   * session at handshake and replayed as `contextOverride` on every tool
+   * dispatch so a focus shift during the model's turn can't retarget the
+   * action onto the wrong worktree/terminal (#8317). Optional — older
+   * renderers / test fixtures omit it and fall back to live context.
+   */
+  actionContext?: ActionContext;
 }
 
 export interface ProvisionResult {
@@ -82,6 +92,13 @@ interface HelpSessionRecord {
   bypassPermissions: boolean;
   createdAt: number;
   revoked: boolean;
+  /**
+   * Renderer `ActionContext` snapshot bound at provision time. Returned by
+   * `getActionContextForToken` so the MCP handshake can pin every tool call
+   * to the worktree/terminal the user had focused when they launched the
+   * assistant (#8317). Undefined when the renderer didn't supply one.
+   */
+  actionContext?: ActionContext;
   /** Computed at provision for codex sessions; consumed by lifecycle.ts. */
   codexLaunchArgs?: string[];
   /** Computed at provision for gemini sessions; consumed by lifecycle.ts. */
@@ -316,6 +333,22 @@ export class HelpSessionService {
   }
 
   /**
+   * Looks up the renderer `ActionContext` snapshot bound to a help-session
+   * bearer at provision time. The MCP server uses this at handshake to pin
+   * every tool dispatch to the worktree/terminal the user had focused when
+   * the assistant launched, so a focus shift during the model's turn can't
+   * silently retarget the action (#8317). Returns null for unknown, revoked,
+   * or context-less tokens — the dispatch then falls back to live context,
+   * matching pre-#8317 behaviour.
+   */
+  getActionContextForToken(token: string): ActionContext | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    return record.actionContext ?? null;
+  }
+
+  /**
    * Inverse of `terminalBySessionId` for the assistant-turn audit. Returns
    * the help-session id currently bound to a given terminal id, or null
    * when the terminal is not (or no longer) a help-session terminal. Linear
@@ -532,6 +565,7 @@ export class HelpSessionService {
       bypassPermissions: settings.bypassPermissions,
       createdAt: now,
       revoked: false,
+      actionContext: input.actionContext,
       codexLaunchArgs,
       geminiLaunchArgs,
       copilotLaunchArgs,
@@ -1109,6 +1143,9 @@ export class HelpSessionService {
     mcpServerService.setHelpSessionWebContentsResolver((token) =>
       this.getWebContentsIdForToken(token)
     );
+    mcpServerService.setHelpSessionActionContextResolver((token) =>
+      this.getActionContextForToken(token)
+    );
     mcpServerService.setSessionIdResolver((terminalId) => this.getSessionIdForTerminal(terminalId));
     if (!mcpServerService.isEnabled()) {
       // setEnabled() will only call start() internally if it has its own
@@ -1323,6 +1360,11 @@ export class HelpSessionService {
     const merged = deepClonePlainJson(baseline);
     if (!merged.permissions) merged.permissions = {};
     if (!Array.isArray(merged.permissions.allow)) merged.permissions.allow = [];
+    // A malformed bundled file could pass the object guard in
+    // readBundledSettings with a non-array deny (e.g. the bare string
+    // "Bash(**)"). Claude Code's handling of a non-array deny is undefined,
+    // so normalize it here the same way we normalize allow.
+    if (!Array.isArray(merged.permissions.deny)) merged.permissions.deny = [];
 
     if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
@@ -1359,8 +1401,35 @@ export class HelpSessionService {
     }
     return {
       permissions: {
-        allow: ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "WebFetch"],
-        deny: ["Write(**)", "Edit(**)", "MultiEdit(**)", "Bash(**)"],
+        allow: [
+          "Read(**)",
+          "Glob(**)",
+          "Grep(**)",
+          "LS(**)",
+          "WebFetch",
+          "mcp__daintree-docs__*",
+          "Bash(gh *)",
+          "Bash(glab *)",
+          "Bash(tea *)",
+        ],
+        deny: [
+          "Write(**)",
+          "Edit(**)",
+          "MultiEdit(**)",
+          "Bash(gh issue create*)",
+          "Bash(gh pr create*)",
+          "Bash(gh pr merge*)",
+          "Bash(gh repo create*)",
+          "Bash(gh repo delete*)",
+          "Bash(glab issue create*)",
+          "Bash(glab mr create*)",
+          "Bash(glab mr merge*)",
+          "Bash(tea issue create*)",
+          "Bash(tea issues create*)",
+          "Bash(tea pr create*)",
+          "Bash(tea pulls create*)",
+          "Bash(tea pulls merge*)",
+        ],
       },
     };
   }

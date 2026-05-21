@@ -111,28 +111,6 @@ export const config: AgentConfig = {
     promptConfidence: 0.85,
     debounceMs: 6000,
   },
-  routing: {
-    capabilities: [
-      "javascript",
-      "typescript",
-      "react",
-      "node",
-      "testing",
-      "frontend",
-      "css",
-      "html",
-    ],
-    domains: {
-      frontend: 0.9,
-      backend: 0.7,
-      testing: 0.85,
-      refactoring: 0.8,
-      debugging: 0.75,
-      architecture: 0.65,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["resume", sessionId],

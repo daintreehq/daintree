@@ -62,6 +62,17 @@ test.describe.serial("Core: Project Pulse", () => {
     await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_MEDIUM });
   });
 
+  test("last-updated label is visible and triggers a refresh on click", async () => {
+    const { window } = ctx;
+    const lastUpdated = window.locator(SEL.pulse.lastUpdated);
+    await expect(lastUpdated).toBeVisible({ timeout: T_MEDIUM });
+    await expect(lastUpdated).toContainText(/Updated /, { timeout: T_SHORT });
+    await lastUpdated.click();
+    // Heatmap should remain visible after the click-driven refresh completes.
+    await expect(lastUpdated).toBeEnabled({ timeout: T_LONG });
+    await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_MEDIUM });
+  });
+
   test("settings toggle hides pulse card", async () => {
     const { window } = ctx;
 

@@ -1,6 +1,24 @@
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { usePortalStore } from "@/store/portalStore";
+import {
+  usePortalPendingCloseStore,
+  type PortalPendingCloseKind,
+} from "@/store/portalPendingCloseStore";
 import { logError } from "@/utils/logger";
+
+/** True when dispatch args carry an explicit `confirmed: true` flag. */
+export const parseConfirmed = (args: unknown): boolean => {
+  if (!args || typeof args !== "object") return false;
+  return (args as { confirmed?: unknown }).confirmed === true;
+};
+
+/** Clear a stale pending-close request once its action proceeds. */
+export const clearPortalPendingIf = (kind: PortalPendingCloseKind): void => {
+  const pending = usePortalPendingCloseStore.getState().pending;
+  if (pending && pending.kind === kind) {
+    usePortalPendingCloseStore.getState().clear();
+  }
+};
 
 export const getPortalBounds = () => getPortalPlaceholderBounds();
 

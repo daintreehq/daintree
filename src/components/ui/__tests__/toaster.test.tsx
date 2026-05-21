@@ -1052,6 +1052,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
   it("error toast survives past the old 3s fallback", async () => {
     render(<Toaster />);
     await act(async () => {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({ type: "error", message: "Something failed" });
       vi.advanceTimersByTime(16);
     });
@@ -1065,6 +1066,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
   it("error toast dismisses around the 12s severity default", async () => {
     render(<Toaster />);
     await act(async () => {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({ type: "error", message: "Failed once" });
       vi.advanceTimersByTime(16);
     });
@@ -1106,6 +1108,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
     // Documents the renderer's guard for callers that bypass notify().
     render(<Toaster />);
     await act(async () => {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       useNotificationStore.getState().addNotification({
         type: "error",
         priority: "high",

@@ -23,10 +23,6 @@ const electronMock = vi.hoisted(() => ({
   },
 }));
 
-const fixPathMock = vi.hoisted(() => ({
-  default: vi.fn(),
-}));
-
 const osMock = vi.hoisted(() => ({
   totalmem: vi.fn<() => number>(),
 }));
@@ -55,8 +51,6 @@ vi.mock("fs", () => ({
 }));
 
 vi.mock("electron", () => electronMock);
-
-vi.mock("fix-path", () => fixPathMock);
 
 vi.mock("node:v8", () => ({
   default: { setFlagsFromString: vi.fn() },
@@ -96,11 +90,13 @@ describe("V8 flag setup", () => {
     vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
   });
 
   it("sets --expose_gc and does not set --optimize_for_size", async () => {
@@ -111,6 +107,46 @@ describe("V8 flag setup", () => {
     const nodeV8 = (await import("node:v8")).default;
     expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--expose_gc");
     expect(nodeV8.setFlagsFromString).not.toHaveBeenCalledWith("--optimize_for_size");
+  });
+});
+
+describe("development userData path", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+    delete process.env.DAINTREE_DEV_USER_DATA_DIR;
+  });
+
+  it("uses the isolated dev userData directory when provided", async () => {
+    process.env.DAINTREE_DEV_USER_DATA_DIR = "/tmp/daintree-dev-fresh-test";
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(electronMock.app.setPath).toHaveBeenCalledWith(
+      "userData",
+      "/tmp/daintree-dev-fresh-test"
+    );
+  });
+
+  it("ignores a relative dev userData override", async () => {
+    process.env.DAINTREE_DEV_USER_DATA_DIR = "relative-profile";
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(electronMock.app.setPath).toHaveBeenCalledWith(
+      "userData",
+      path.join("/tmp/test-appdata", "daintree-dev")
+    );
   });
 });
 
@@ -473,6 +509,106 @@ describe("GPU memory flags", () => {
   });
 });
 
+describe("WebGL context cap", () => {
+  const GIB = 1024 ** 3;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("sets max-active-webgl-contexts to 24 on a 4 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(4 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
+  });
+
+  it("sets max-active-webgl-contexts to 24 at the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
+  });
+
+  it("sets max-active-webgl-contexts to 28 just above the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
+
+  it("sets max-active-webgl-contexts to 28 at the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
+
+  it("sets max-active-webgl-contexts to 32 just above the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
+  });
+
+  it("sets max-active-webgl-contexts to 32 on a 32 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(32 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
+  });
+
+  it("registers max-active-webgl-contexts exactly once", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const calls = vi
+      .mocked(app.commandLine.appendSwitch)
+      .mock.calls.filter(([key]) => key === "max-active-webgl-contexts");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("registers max-active-webgl-contexts on Linux too", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
+  });
+});
+
 describe("Chromium feature flags", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -763,35 +899,99 @@ describe("reset-data", () => {
   });
 });
 
-describe("fixPath packaging guard", () => {
+describe("kickOffEarlyPathRefresh", () => {
+  let shellEnvCallCount = 0;
+  let shellEnvMode: "path" | "throw" | "empty" = "path";
+  let savedPath: string | undefined;
+
   beforeEach(() => {
     vi.resetModules();
     vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
+    fsMock.existsSync.mockReturnValue(false);
+    shellEnvCallCount = 0;
+    shellEnvMode = "path";
+    savedPath = process.env.PATH;
+    process.env.PATH = "/old/path";
+    vi.doMock("shell-env", () => ({
+      shellEnv: vi.fn(async () => {
+        shellEnvCallCount += 1;
+        if (shellEnvMode === "throw") {
+          throw new Error("broken .zshrc");
+        }
+        if (shellEnvMode === "empty") {
+          return {};
+        }
+        return { PATH: "/from/shell-env" };
+      }),
+    }));
   });
 
   afterEach(() => {
+    process.env.PATH = savedPath;
     electronMock.app.isPackaged = false;
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
+    vi.doUnmock("shell-env");
   });
 
-  it("does not call fixPath in dev mode (isPackaged=false)", async () => {
-    electronMock.app.isPackaged = false;
-    fsMock.existsSync.mockReturnValue(false);
-
-    await import("../environment.js");
-
-    expect(fixPathMock.default).not.toHaveBeenCalled();
+  it("returns null from getEarlyPathRefreshPromise before kick-off", async () => {
+    const env = await import("../environment.js");
+    expect(env.getEarlyPathRefreshPromise()).toBeNull();
   });
 
-  it("calls fixPath in packaged mode (isPackaged=true)", async () => {
-    electronMock.app.isPackaged = true;
-    fsMock.existsSync.mockReturnValue(false);
+  it("kick-off runs refreshPath and updates PATH", async () => {
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    expect(shellEnvCallCount).toBe(1);
+    expect(process.env.PATH).toContain("/from/shell-env");
+  });
 
-    await import("../environment.js");
+  it("kick-off is idempotent — repeat calls share the same promise", async () => {
+    const env = await import("../environment.js");
+    const p1 = env.kickOffEarlyPathRefresh();
+    const p2 = env.kickOffEarlyPathRefresh();
+    expect(p1).toBe(p2);
+    await Promise.all([p1, p2]);
+    // shellEnv must only be invoked once even with two concurrent kick-offs.
+    expect(shellEnvCallCount).toBe(1);
+  });
 
-    expect(fixPathMock.default).toHaveBeenCalledOnce();
+  it("getEarlyPathRefreshPromise returns a settled promise after kick-off", async () => {
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    const after = env.getEarlyPathRefreshPromise();
+    expect(after).not.toBeNull();
+    // Awaiting a settled promise is a no-op — must not re-run shell-env.
+    await after;
+    expect(shellEnvCallCount).toBe(1);
+  });
+
+  it("concurrent refreshPath callers share one in-flight shell-env probe", async () => {
+    const env = await import("../environment.js");
+    await Promise.all([env.refreshPath(), env.refreshPath(), env.refreshPath()]);
+    expect(shellEnvCallCount).toBe(1);
+  });
+
+  it("kick-off swallows shell-env rejection and leaves PATH unchanged", async () => {
+    shellEnvMode = "throw";
+    process.env.PATH = "/old/path";
+    const env = await import("../environment.js");
+    await expect(env.kickOffEarlyPathRefresh()).resolves.toBeUndefined();
+    const settled = env.getEarlyPathRefreshPromise();
+    expect(settled).not.toBeNull();
+    // Awaiting the settled promise must also not reject — the PtyClient gate
+    // depends on this guarantee or the first PTY spawn would abort.
+    await expect(settled).resolves.toBeUndefined();
+    expect(process.env.PATH).toBe("/old/path");
+  });
+
+  it("kick-off preserves PATH when shell-env returns no PATH key", async () => {
+    shellEnvMode = "empty";
+    process.env.PATH = "/old/path";
+    const env = await import("../environment.js");
+    await env.kickOffEarlyPathRefresh();
+    expect(process.env.PATH).toBe("/old/path");
   });
 });

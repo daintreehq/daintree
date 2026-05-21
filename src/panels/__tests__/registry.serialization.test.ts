@@ -105,6 +105,7 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
           browserUrl: "http://localhost:5173",
           browserZoom: 1.0,
           devPreviewConsoleOpen: true,
+          devPreviewConsoleTab: "console",
           createdAt: 100,
           exitBehavior: "keep",
         })
@@ -115,6 +116,7 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         browserUrl: "http://localhost:5173",
         browserZoom: 1.0,
         devPreviewConsoleOpen: true,
+        devPreviewConsoleTab: "console",
         createdAt: 100,
         exitBehavior: "keep",
       });

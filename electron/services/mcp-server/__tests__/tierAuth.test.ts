@@ -19,7 +19,9 @@ import {
   parseToolArguments,
   precomputeApiKeyBearerHash,
   resolveTokenTier,
+  shouldExposeTool,
 } from "../tierAuth.js";
+import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 beforeEach(() => {
   mockPaneConfigService.isValidPaneToken.mockReset();
@@ -223,5 +225,114 @@ describe("parseToolArguments", () => {
 
   it("coerces booleans to empty args", () => {
     expect(parseToolArguments(true)).toEqual({ args: {} });
+  });
+});
+
+import { deriveBand, BAND_OVERRIDES } from "../../../../shared/utils/actionRiskBand.js";
+
+describe("deriveBand", () => {
+  it("returns reversible for safe + non-open-world category", () => {
+    expect(deriveBand({ danger: "safe", category: "git" })).toBe("reversible");
+  });
+
+  it("returns external-effect for safe + open-world category", () => {
+    expect(deriveBand({ danger: "safe", category: "github" })).toBe("external-effect");
+  });
+
+  it("returns destructive-local for confirm + non-open-world category", () => {
+    expect(deriveBand({ danger: "confirm", category: "worktree" })).toBe("destructive-local");
+  });
+
+  it("returns destructive-network for confirm + open-world category", () => {
+    expect(deriveBand({ danger: "confirm", category: "system" })).toBe("destructive-network");
+  });
+
+  it("applies explicit overrides from BAND_OVERRIDES", () => {
+    expect(deriveBand({ id: "git.push", danger: "confirm", category: "git" })).toBe(
+      "external-effect"
+    );
+    expect(
+      deriveBand({ id: "copyTree.generateAndCopyFile", danger: "safe", category: "copyTree" })
+    ).toBe("destructive-local");
+  });
+
+  it("returns reversible for restricted danger (degenerate input)", () => {
+    expect(deriveBand({ danger: "restricted", category: "git" })).toBe("reversible");
+  });
+
+  it("returns external-effect for restricted + open-world category", () => {
+    expect(deriveBand({ danger: "restricted", category: "github" })).toBe("external-effect");
+  });
+});
+
+describe("BAND_OVERRIDES invariant", () => {
+  it("every override key maps to a non-reversible band", () => {
+    for (const [id, band] of Object.entries(BAND_OVERRIDES)) {
+      expect(band, `BAND_OVERRIDES["${id}"] must not be "reversible"`).not.toBe("reversible");
+    }
+  });
+
+  it("every override key is a non-empty string", () => {
+    for (const id of Object.keys(BAND_OVERRIDES)) {
+      expect(id).toBeTruthy();
+    }
+  });
+});
+
+function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+  return {
+    id: "actions.list",
+    name: "actions.list",
+    title: "Test",
+    description: "Test action",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    enabled: true,
+    requiresArgs: false,
+    ...overrides,
+  };
+}
+
+describe("shouldExposeTool", () => {
+  it("exposes core entries when tier-permitted", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+  });
+
+  it("excludes discoverable entries from tools/list", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "discoverable" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("excludes hidden entries from tools/list", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "hidden" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("exposes unclassified entries (no mcpVisibility) for back-compat", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+  });
+
+  it("still excludes core entries outside the tier allowlist (tier is the authority gate)", () => {
+    const entry = makeEntry({ id: "git.push", mcpVisibility: "core" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+    expect(shouldExposeTool(entry, "system", false)).toBe(true);
+  });
+
+  it("still excludes restricted-danger tools regardless of visibility", () => {
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core", danger: "restricted" });
+    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+  });
+
+  it("does not expose discoverable entries in external tier even with fullToolSurface (visibility gate precedes fullToolSurface)", () => {
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "discoverable" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(false);
+  });
+
+  it("still excludes hidden entries even with fullToolSurface", () => {
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import Fuse from "fuse.js";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -16,7 +17,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore, type FleetPickerOwner } from "@/store/fleetPickerSessionStore";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
 
 // Fallback empty worktree store for hosts that mount the picker without a
@@ -90,9 +90,6 @@ export interface UseFleetPickerResult {
   // Query state
   query: string;
   setQuery: (q: string) => void;
-  isRegexMode: boolean;
-  toggleRegexMode: () => void;
-  regexError: string | null;
 
   // Selection
   selectedIds: ReadonlySet<string>;
@@ -126,11 +123,20 @@ export interface UseFleetPickerResult {
   registerRow: (id: string) => (el: HTMLLabelElement | null) => void;
 }
 
+interface FuseItem {
+  id: string;
+  title: string;
+  groupName: string;
+  branch: string;
+  path: string;
+}
+
 /**
- * Layer-agnostic picker state hook for the fleet picker. Owns query/regex
- * state, debounced semantic-buffer search with stale-response guarding,
- * selection set with range/invert/select-all keyboard handlers, and a
- * mode-driven commit contract.
+ * Layer-agnostic picker state hook for the fleet picker. Owns query state,
+ * debounced semantic-buffer search with stale-response guarding, fuzzy
+ * matching across title/branch/path/group, selection set with
+ * range/invert/select-all keyboard handlers, and a mode-driven commit
+ * contract.
  *
  * Pre-selection rules:
  * - `cold-start`: preselect terminals belonging to the active worktree.
@@ -151,6 +157,13 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   );
   // Tolerate hosts that mount the picker without a worktree-store provider —
   // names are display-only and `groupedVisible` falls back to the worktreeId.
+  // `path` and `branch` widen the fuzzy haystack so the picker matches on
+  // worktree path and branch in addition to terminal title and group name.
+  //
+  // Three flat `Record<string, string>` selectors instead of one nested
+  // selector: `useShallow` compares only one level deep, so returning nested
+  // objects (`{ name, path, branch }`) would create new inner refs on every
+  // render and trigger an infinite re-render loop.
   const worktreeStore = use(WorktreeStoreContext) ?? fallbackWorktreeStore;
   const worktreeNames = useStore(
     worktreeStore,
@@ -162,13 +175,31 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       return out;
     })
   );
+  const worktreePaths = useStore(
+    worktreeStore,
+    useShallow((s) => {
+      const out: Record<string, string> = {};
+      s.worktrees.forEach((wt, id) => {
+        out[id] = wt.path;
+      });
+      return out;
+    })
+  );
+  const worktreeBranches = useStore(
+    worktreeStore,
+    useShallow((s) => {
+      const out: Record<string, string> = {};
+      s.worktrees.forEach((wt, id) => {
+        out[id] = wt.branch ?? "";
+      });
+      return out;
+    })
+  );
 
   const [acquired, setAcquired] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
-  const [isRegexMode, setIsRegexMode] = useState(false);
   const [snippetMap, setSnippetMap] = useState<Map<string, SemanticSearchMatch>>(() => new Map());
-  const [regexError, setRegexError] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const deferredQuery = useDeferredValue(query);
   const rangeAnchorRef = useRef<string | null>(null);
@@ -200,9 +231,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       return;
     }
     setQuery("");
-    setIsRegexMode(false);
     setSnippetMap(new Map());
-    setRegexError(null);
     rangeAnchorRef.current = null;
 
     if (mode === "cold-start") {
@@ -247,23 +276,8 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     const trimmed = deferredQuery.trim();
     if (trimmed === "") {
       setSnippetMap(new Map());
-      setRegexError(null);
       currentRequestRef.current = ++nextSearchRequestId;
       return;
-    }
-
-    if (isRegexMode) {
-      try {
-        new RegExp(trimmed);
-        setRegexError(null);
-      } catch (err) {
-        setRegexError(formatErrorMessage(err, "Invalid regular expression"));
-        setSnippetMap(new Map());
-        currentRequestRef.current = ++nextSearchRequestId;
-        return;
-      }
-    } else {
-      setRegexError(null);
     }
 
     const issueId = ++nextSearchRequestId;
@@ -271,7 +285,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
 
     const timer = window.setTimeout(() => {
       window.electron.terminal
-        .searchSemanticBuffers(trimmed, isRegexMode)
+        .searchSemanticBuffers(trimmed, false)
         .then((matches) => {
           if (currentRequestRef.current !== issueId) return;
           const next = new Map<string, SemanticSearchMatch>();
@@ -285,7 +299,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     }, SEMANTIC_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [deferredQuery, isRegexMode, isOpen, acquired]);
+  }, [deferredQuery, isOpen, acquired]);
 
   const eligibleTerminals = useMemo<PickerTerminal[]>(() => {
     const out: PickerTerminal[] = [];
@@ -312,21 +326,59 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     return s;
   }, [eligibleTerminals]);
 
+  // Stable identity-and-source key for the Fuse memo. Each eligible terminal
+  // contributes its search-relevant projection — id, title, worktreeId — as
+  // three NUL-separated fields (NUL is illegal in panel/worktree ids and in
+  // OSC-derived titles, so it can't collide). The string is value-equal
+  // whenever only a search-irrelevant field changed (e.g. agentState), so the
+  // Fuse memo keyed on it skips rebuilding the index, while a title change via
+  // OSC or a change to the eligible set still invalidates it. The Fuse memo
+  // reconstructs its items from this key, so it never reads the unstable
+  // `eligibleTerminals` reference directly and its dependency array stays
+  // exhaustive. See past lesson on useProjectSwitcherPalette (#4747).
+  const fuseSourceKey = useMemo(
+    () => eligibleTerminals.flatMap((t) => [t.id, t.title, t.worktreeId]).join("\x00"),
+    [eligibleTerminals]
+  );
+
+  const fuse = useMemo(() => {
+    const fields = fuseSourceKey === "" ? [] : fuseSourceKey.split("\x00");
+    const items: FuseItem[] = [];
+    for (let i = 0; i + 2 < fields.length; i += 3) {
+      const worktreeId = fields[i + 2]!;
+      const groupName =
+        worktreeId === FALLBACK_GROUP_ID ? FALLBACK_GROUP_NAME : (worktreeNames[worktreeId] ?? "");
+      items.push({
+        id: fields[i]!,
+        title: fields[i + 1]!,
+        groupName,
+        branch: worktreeBranches[worktreeId] ?? "",
+        path: worktreePaths[worktreeId] ?? "",
+      });
+    }
+    return new Fuse(items, {
+      keys: [
+        { name: "title", weight: 1.0 },
+        { name: "branch", weight: 0.7 },
+        { name: "path", weight: 0.5 },
+        { name: "groupName", weight: 0.5 },
+      ],
+      threshold: 0.3,
+      ignoreLocation: true,
+      minMatchCharLength: 2,
+    });
+  }, [fuseSourceKey, worktreeNames, worktreeBranches, worktreePaths]);
+
   const visibleTerminals = useMemo<PickerTerminal[]>(() => {
     const trimmed = deferredQuery.trim();
-    const needle = isRegexMode ? "" : trimmed.toLowerCase();
-    return eligibleTerminals.filter((t) => {
-      if (trimmed === "") return true;
-      if (snippetMap.has(t.id)) return true;
-      if (isRegexMode) return false;
-      const groupName =
-        t.worktreeId === FALLBACK_GROUP_ID
-          ? FALLBACK_GROUP_NAME
-          : (worktreeNames[t.worktreeId] ?? "");
-      const haystack = `${t.title.toLowerCase()} ${groupName.toLowerCase()}`;
-      return haystack.includes(needle);
-    });
-  }, [eligibleTerminals, deferredQuery, worktreeNames, snippetMap, isRegexMode]);
+    if (trimmed === "") return eligibleTerminals;
+    // Semantic-buffer matches always pass through — they signal terminals
+    // whose scrollback contains the query, which the metadata-only Fuse
+    // index can't see.
+    const fuzzyIds = new Set<string>();
+    for (const result of fuse.search(trimmed)) fuzzyIds.add(result.item.id);
+    return eligibleTerminals.filter((t) => snippetMap.has(t.id) || fuzzyIds.has(t.id));
+  }, [eligibleTerminals, deferredQuery, snippetMap, fuse]);
 
   const visibleIds = useMemo(() => visibleTerminals.map((t) => t.id), [visibleTerminals]);
 
@@ -394,7 +446,6 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const driftCount = selectedIds.size - confirmedIds.length;
 
   const clearSearch = useCallback(() => setQuery(""), []);
-  const toggleRegexMode = useCallback(() => setIsRegexMode((v) => !v), []);
 
   const handleToggleId = useCallback(
     (id: string, event?: React.MouseEvent) => {
@@ -533,9 +584,6 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     acquired,
     query,
     setQuery,
-    isRegexMode,
-    toggleRegexMode,
-    regexError,
     selectedIds,
     setSelectedIds,
     focusedId,

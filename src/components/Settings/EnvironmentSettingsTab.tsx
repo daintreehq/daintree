@@ -81,6 +81,7 @@ export function EnvironmentSettingsTab() {
         logError("Failed to load global env vars", err);
         if (!notifiedFailureRef.current) {
           notifiedFailureRef.current = true;
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Couldn't load environment variables",

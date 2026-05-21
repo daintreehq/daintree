@@ -2,10 +2,46 @@ import { terminalClient } from "@/clients";
 import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
+import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
+
+function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
+  const timestamp = Date.now();
+  if (error instanceof Error) {
+    if (error.message === "Write timeout") {
+      return { type: "timeout", message: error.message, timestamp };
+    }
+    // xterm.js parser throws plain Error with messages starting with "Parser"
+    // or containing "parse"; fall through to generic "error" otherwise. Keep
+    // the message verbatim so the banner shows the underlying cause.
+    if (/pars/i.test(error.message)) {
+      return { type: "parse", message: error.message, timestamp };
+    }
+    return { type: "error", message: error.message, timestamp };
+  }
+  return { type: "error", message: String(error), timestamp };
+}
 
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   writeData: (id: string, data: string | Uint8Array) => void;
+}
+
+// Slice a chunk without splitting a UTF-16 surrogate pair. xterm 6's parser
+// already buffers partial ANSI/UTF-8 state across writes, so the only
+// boundary we must protect is the JS string surrogate pair.
+export function safeChunkSlice(serializedState: string, offset: number, chunkSize: number): string {
+  const total = serializedState.length;
+  let end = Math.min(offset + chunkSize, total);
+  if (end < total) {
+    const lastCode = serializedState.charCodeAt(end - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      end -= 1;
+    }
+  }
+  if (end <= offset) {
+    end = Math.min(offset + 1, total);
+  }
+  return serializedState.substring(offset, end);
 }
 
 export class TerminalRestoreController {
@@ -30,6 +66,7 @@ export class TerminalRestoreController {
 
       const restoreGeneration = ++managed.restoreGeneration;
       managed.isSerializedRestoreInProgress = true;
+      managed.lastScrollbackRestoreError = undefined;
 
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -56,6 +93,7 @@ export class TerminalRestoreController {
       return true;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
+      managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
       return false;
     }
@@ -70,6 +108,7 @@ export class TerminalRestoreController {
 
     const restoreGeneration = ++managed.restoreGeneration;
     managed.isSerializedRestoreInProgress = true;
+    managed.lastScrollbackRestoreError = undefined;
 
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack
@@ -97,9 +136,12 @@ export class TerminalRestoreController {
             return false;
           }
 
-          const chunkSize = Math.min(INCREMENTAL_RESTORE_CONFIG.chunkBytes, total - offset);
-          const chunk = serializedState.substring(offset, offset + chunkSize);
-          offset += chunkSize;
+          const chunk = safeChunkSlice(
+            serializedState,
+            offset,
+            INCREMENTAL_RESTORE_CONFIG.chunkBytes
+          );
+          offset += chunk.length;
 
           let timeoutHandle!: ReturnType<typeof setTimeout>;
           try {
@@ -126,6 +168,11 @@ export class TerminalRestoreController {
 
         return true;
       } catch (error) {
+        // Real failure during chunked replay (write timeout, xterm parse
+        // error). Stash the classified error on `managed` so the scheduler
+        // can surface it to the panel store; the stale-generation early
+        // returns above bypass this catch and remain silent. See #8535.
+        managed.lastScrollbackRestoreError = classifyRestoreError(error);
         logError(`Incremental restore failed for ${id}`, error);
         return false;
       } finally {
@@ -151,6 +198,11 @@ export class TerminalRestoreController {
     };
 
     const writePromise = managed.writeChain.then(task).catch((err) => {
+      // Fires when writeChain itself was already poisoned (a prior link
+      // rejected). `task` never ran, so its own catch never set the error
+      // channel — surface it here so the scheduler still sees a real
+      // failure instead of silently marking the restore "done".
+      managed.lastScrollbackRestoreError = classifyRestoreError(err);
       logError(`Write chain error for ${id}`, err);
       return false;
     });
@@ -182,6 +234,7 @@ export class TerminalRestoreController {
 
     const restoreGeneration = managed.restoreGeneration;
     managed.isSerializedRestoreInProgress = true;
+    managed.lastScrollbackRestoreError = undefined;
 
     try {
       const serializedState = await terminalClient.getSerializedState(id);
@@ -201,6 +254,7 @@ export class TerminalRestoreController {
       return result;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
+      managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to fetch state for terminal ${id}`, error);
       return false;
     }
@@ -220,8 +274,16 @@ export class TerminalRestoreController {
   }
 
   private yieldToUI(): Promise<void> {
-    if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
-      return scheduler.postTask(() => {}, { priority: "background" });
+    if (typeof scheduler !== "undefined" && scheduler !== null) {
+      // Prefer scheduler.yield() — its continuation runs ahead of newly-queued
+      // same-priority tasks, giving a tighter inter-chunk budget than postTask,
+      // which would queue behind any background work already in flight.
+      if (typeof scheduler.yield === "function") {
+        return scheduler.yield();
+      }
+      if (typeof scheduler.postTask === "function") {
+        return scheduler.postTask(() => {}, { priority: "background" });
+      }
     }
     return new Promise((resolve) => setTimeout(resolve, INCREMENTAL_RESTORE_CONFIG.timeBudgetMs));
   }

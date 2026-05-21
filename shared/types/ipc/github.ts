@@ -33,6 +33,19 @@ export interface GitHubRateLimitPayload {
   resetAt?: number;
   /** `x-ratelimit-resource` bucket name when the block is per-resource primary */
   resource?: string;
+  /**
+   * Points left in the current GraphQL budget window, from the last observed
+   * `rateLimit` node. Absent until a budget-carrying response is seen.
+   */
+  remaining?: number;
+  /** Total points in the GraphQL budget window (5000 for authenticated users). */
+  limit?: number;
+  /**
+   * Background-poll cadence multiplier derived from the remaining budget. `1`
+   * at full speed; values above `1` stretch background fetch intervals so
+   * multiple instances drawing on the same token budget back off in step.
+   */
+  throttleMultiplier?: number;
 }
 
 /** A single rate-limit bucket as reported by `/rate_limit` */

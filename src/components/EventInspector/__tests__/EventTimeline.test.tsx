@@ -26,9 +26,9 @@ describe("EventTimeline accessibility", () => {
     {
       id: "2",
       timestamp: Date.now() + 1000,
-      type: "task:test",
-      category: "task" as const,
-      payload: { taskId: "abc123" },
+      type: "agent:test-2",
+      category: "agent" as const,
+      payload: { agentId: "abc123" },
       source: "main",
     },
   ];

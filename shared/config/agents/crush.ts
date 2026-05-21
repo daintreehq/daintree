@@ -111,27 +111,6 @@ export const config: AgentConfig = {
     promptConfidence: 0.85,
     debounceMs: 6000,
   },
-  routing: {
-    capabilities: [
-      "javascript",
-      "typescript",
-      "python",
-      "go",
-      "rust",
-      "multi-provider",
-      "general-purpose",
-    ],
-    domains: {
-      frontend: 0.75,
-      backend: 0.75,
-      testing: 0.7,
-      refactoring: 0.7,
-      debugging: 0.7,
-      architecture: 0.7,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   // Crush has no `/quit` command and Ctrl+C triggers a confirmation dialog,
   // so we omit `resume` and let the PTY host kill the process on shutdown.
   // The `--continue` flag is not part of Crush's stable CLI surface; if/when

@@ -581,6 +581,363 @@ describe("ConfirmDialog — typed-name gate", () => {
   });
 });
 
+describe("ConfirmDialog — initialFocus prop forwarding", () => {
+  beforeEach(() => {
+    __devWarnedKeys.clear();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllEnvs();
+  });
+
+  async function flushRaf() {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+
+  it("defaults destructive variant to Cancel focus", async () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+    await flushRaf();
+
+    expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+  });
+
+  it('forwards initialFocus="confirm" to focus the Confirm button on destructive variant', async () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+        initialFocus="confirm"
+      />
+    );
+    await flushRaf();
+
+    expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("confirm");
+  });
+});
+
+describe("ConfirmDialog — are-you-sure title guard", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __devWarnedKeys.clear();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    errorSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it('warns when title is a string starting with "Are you sure"', () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Are you sure you want to delete?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("Are you sure"))).toBe(true);
+    expect(messages.some((m: string) => m.includes("[ConfirmDialog]"))).toBe(true);
+  });
+
+  it("matches case-insensitively and tolerates surrounding whitespace", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="  ARE YOU SURE???"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("Are you sure"))).toBe(true);
+  });
+
+  it("is silent for non-matching titles", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'my-repo'?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("Are you sure"))).toBe(false);
+  });
+
+  it("is silent when title is a non-string ReactNode", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title={<span>Are you sure?</span>}
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("Are you sure"))).toBe(false);
+  });
+
+  it("logs only once across multiple renders", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Are you sure you want to delete?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Are you sure you want to delete something else?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    const matchCount = messages.filter((m: string) => m.includes("Are you sure")).length;
+    expect(matchCount).toBe(1);
+  });
+
+  it("is silent in production builds", () => {
+    vi.stubEnv("DEV", false);
+
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Are you sure?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ConfirmDialog — cannot-be-undone body guard", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __devWarnedKeys.clear();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    errorSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it('warns when description contains "cannot be undone"', () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="This cannot be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(true);
+  });
+
+  it("warns on the curly-quote contraction can’t be undone", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description={"This can’t be undone."}
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(true);
+  });
+
+  it('is silent for apostrophe-less "cant be undone" (typo)', () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="This cant be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(false);
+  });
+
+  it('warns on the contraction "can\'t be undone"', () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="This can't be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(true);
+  });
+
+  it('warns when children contain a string body with "cannot be undone"', () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      >
+        {"This action cannot be undone."}
+      </ConfirmDialog>
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(true);
+  });
+
+  it("is silent for non-matching body copy", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="The worktree at /tmp/foo and its branch foo-branch will be removed."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(false);
+  });
+
+  it("is silent when description is a non-string ReactNode containing the phrase", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description={<span>This cannot be undone.</span>}
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    expect(messages.some((m: string) => m.includes("cannot be undone"))).toBe(false);
+  });
+
+  it("logs only once across multiple renders", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="This cannot be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'bar'?"
+        description="This cannot be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    const messages = errorSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? ""));
+    const matchCount = messages.filter((m: string) => m.includes("cannot be undone")).length;
+    expect(matchCount).toBe(1);
+  });
+
+  it("is silent in production builds", () => {
+    vi.stubEnv("DEV", false);
+
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete 'foo'?"
+        description="This cannot be undone."
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("TypedNameConfirmInput preamble prop", () => {
   it("renders the preamble before the canonical instruction when no override is provided", () => {
     render(
@@ -636,5 +993,34 @@ describe("TypedNameConfirmInput preamble prop", () => {
 
     expect(screen.queryByText("Preamble text.")).toBeNull();
     expect(screen.getByText("Custom instructions only.")).toBeDefined();
+  });
+
+  it('always sets aria-required="true"', () => {
+    render(<TypedNameConfirmInput target="my-thing" value="" onChange={() => {}} />);
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    expect(input.getAttribute("aria-required")).toBe("true");
+  });
+
+  it("does not signal aria-invalid for a pristine empty value", () => {
+    render(<TypedNameConfirmInput target="my-thing" value="" onChange={() => {}} />);
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    // React omits aria-invalid={false}, so the attribute should be absent or "false"
+    expect(input.getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it('sets aria-invalid="true" once the user has typed something that does not match', () => {
+    render(<TypedNameConfirmInput target="my-thing" value="my-thi" onChange={() => {}} />);
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("does not signal aria-invalid once the typed value matches the target", () => {
+    render(<TypedNameConfirmInput target="my-thing" value="my-thing" onChange={() => {}} />);
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    expect(input.getAttribute("aria-invalid")).not.toBe("true");
   });
 });

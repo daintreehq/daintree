@@ -10,6 +10,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { startRendererSpan } from "@/utils/performance";
 
 export type { ActionCallbacks };
 
@@ -65,9 +66,16 @@ export function useActionRegistry(options: ActionCallbacks): void {
 
     const actionFactories = createActionDefinitions(callbackProxy);
 
-    for (const createAction of actionFactories.values()) {
-      const action = createAction();
-      actionService.register(action);
+    const endSpan = startRendererSpan("action_registry:register", {
+      actionCount: actionFactories.size,
+    });
+    try {
+      for (const createAction of actionFactories.values()) {
+        const action = createAction();
+        actionService.register(action);
+      }
+    } finally {
+      endSpan();
     }
 
     actionService.setContextProvider((): ActionContext => {
@@ -106,7 +114,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
     if (validatedRef.current) return;
     validatedRef.current = true;
     safeFireAndForget(
-      window.electron.plugin.validateActionIds(actionService.list().map((entry) => entry.id)),
+      window.electron.plugin.validateActionIds(Array.from(actionService.listIds())),
       { context: "Validating plugin action IDs" }
     );
   }, []);

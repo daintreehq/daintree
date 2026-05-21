@@ -80,6 +80,11 @@ const mocks = vi.hoisted(() => {
     getIssueUrl: vi.fn(),
   };
 
+  const forgeClient = {
+    openIssue: vi.fn(),
+    getIssueUrl: vi.fn(),
+  };
+
   const actionService = {
     dispatch: vi.fn(),
   };
@@ -183,6 +188,7 @@ const mocks = vi.hoisted(() => {
     worktreeClient,
     copyTreeClient,
     githubClient,
+    forgeClient,
     actionService,
     terminalInstanceService,
     portal,
@@ -203,6 +209,7 @@ vi.mock("@/clients", () => ({
   worktreeClient: mocks.worktreeClient,
   copyTreeClient: mocks.copyTreeClient,
   githubClient: mocks.githubClient,
+  forgeClient: mocks.forgeClient,
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
   },
@@ -347,7 +354,13 @@ beforeEach(() => {
     pendingWorktreeId: null,
     expandedWorktrees: new Set<string>(),
     expandedTerminals: new Set<string>(),
-    createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+    createDialog: {
+      isOpen: false,
+      initialIssue: null,
+      initialPR: null,
+      initialRecipeId: null,
+      initialBranchInput: null,
+    },
     crossDiffDialog: { isOpen: false, initialWorktreeId: null },
     _policyGeneration: 0,
     lastFocusedTerminalByWorktree: new Map<string, string>(),
@@ -366,7 +379,7 @@ beforeEach(() => {
     groupByType: false,
     statusFilters: new Set(),
     typeFilters: new Set(),
-    githubFilters: new Set(),
+    prIssueFilters: new Set(),
     sessionFilters: new Set(),
     activityFilters: new Set(),
     alwaysShowActive: true,
@@ -1076,11 +1089,11 @@ describe("worktree action hardening", () => {
         ],
       ]),
     } as never);
-    mocks.githubClient.getIssueUrl.mockResolvedValueOnce(null);
+    mocks.forgeClient.getIssueUrl.mockResolvedValueOnce(null);
 
     await openIssueInPortal.run(undefined, { activeWorktreeId: "wt-3" } as never);
 
-    expect(mocks.githubClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
+    expect(mocks.forgeClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 

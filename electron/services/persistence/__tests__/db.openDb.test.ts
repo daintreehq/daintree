@@ -46,11 +46,10 @@ describe("openDb (integration)", () => {
         .all() as { name: string }[];
       const names = tableNames.map((t) => t.name);
       expect(names).toContain("projects");
-      expect(names).toContain("tasks");
       expect(names).toContain("app_state");
       expect(names).toContain("__drizzle_migrations");
-
       expect(names).toContain("scratches");
+      expect(names).not.toContain("tasks");
 
       const migrations = sqlite.prepare("SELECT id, hash FROM __drizzle_migrations").all() as {
         id: number;

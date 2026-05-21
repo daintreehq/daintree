@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { worktreeClient } from "@/clients";
 
 export function registerWorktreeServiceActions(
@@ -49,6 +50,8 @@ export function registerWorktreeServiceActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Restarts the workspace host process. A hard restart drops in-flight watchers and may cause brief unavailability.",
     keywords: ["workspace", "backend", "recover", "host"],
     isEnabled: () => {
       const store = getCurrentViewStoreOrNull();
@@ -62,6 +65,34 @@ export function registerWorktreeServiceActions(
     },
     run: async () => {
       await worktreeClient.restartService();
+    },
+  }));
+
+  actions.set("worktree.retryProjectLoad", () => ({
+    id: "worktree.retryProjectLoad",
+    title: "Retry loading worktrees",
+    description: "Retry loading worktrees after a project switch failed to load them",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["reload", "recover", "switch", "worktree"],
+    isEnabled: () => useProjectStore.getState().worktreeLoadError !== null,
+    disabledReason: () =>
+      useProjectStore.getState().worktreeLoadError === null
+        ? "No worktree load failure to retry"
+        : undefined,
+    run: async () => {
+      const retriedError = useProjectStore.getState().worktreeLoadError;
+      await worktreeClient.retryProjectLoad();
+      // Clear only if the banner still shows the same failure we retried — a
+      // concurrent switch may have set a *new* worktreeLoadError mid-flight,
+      // and that one must not be wiped by this success. A failure rejects above
+      // and leaves the banner untouched.
+      if (useProjectStore.getState().worktreeLoadError === retriedError) {
+        useProjectStore.getState().setWorktreeLoadError(null);
+      }
     },
   }));
 

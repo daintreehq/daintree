@@ -122,7 +122,10 @@ export function EnvironmentVariablesEditor({
   };
 
   const handleSave = async () => {
-    if (!validate()) return;
+    if (!validate()) {
+      setSaveError("Fix the errors above before saving");
+      return;
+    }
     setIsSaving(true);
     setSaveError(null);
 
@@ -201,35 +204,31 @@ export function EnvironmentVariablesEditor({
         </>
       )}
 
-      <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-        <Key className="h-4 w-4" />
-        Environment Variables
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-daintree-text/80 flex items-center gap-2">
+          <Key className="h-4 w-4" />
+          Environment Variables
+        </h3>
+        {showSaveControls &&
+          settings?.insecureEnvironmentVariables &&
+          settings.insecureEnvironmentVariables.length > 0 && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {settings.insecureEnvironmentVariables.length === 1
+                ? "Move 1 value out of shared settings"
+                : `Move ${settings.insecureEnvironmentVariables.length} values out of shared settings`}
+            </button>
+          )}
+      </div>
       <p className="text-xs text-daintree-text/60 mb-4">
         Project-specific variables injected into new terminals. Names containing KEY, SECRET, TOKEN,
-        or PASSWORD are securely stored <Lock className="inline h-3 w-3" />.
+        or PASSWORD are kept out of the shared settings file{" "}
+        <Lock className="inline h-3 w-3" aria-hidden="true" />.
       </p>
-
-      {settings?.insecureEnvironmentVariables &&
-        settings.insecureEnvironmentVariables.length > 0 && (
-          <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
-            <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
-            <div className="flex-1 text-xs">
-              <p className="text-status-warning font-semibold mb-1">
-                Insecure sensitive variables detected
-              </p>
-              <p className="text-status-warning/80 mb-2">
-                The following keys are already stored in plaintext:{" "}
-                <span className="font-mono">
-                  {settings.insecureEnvironmentVariables.join(", ")}
-                </span>
-              </p>
-              <p className="text-status-warning/80">
-                Saving moves them into secure storage automatically.
-              </p>
-            </div>
-          </div>
-        )}
 
       <div className="space-y-2">
         {rows.length === 0 ? (
@@ -255,13 +254,13 @@ export function EnvironmentVariablesEditor({
                   {isSecured && (
                     <Lock
                       className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
-                      aria-label="Stored securely"
+                      aria-label="Kept out of shared settings"
                     />
                   )}
                   {isInsecure && (
                     <ShieldAlert
                       className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
-                      aria-label="Stored in plaintext"
+                      aria-label="Stored in the shared settings file"
                     />
                   )}
                   <input

@@ -3,7 +3,6 @@
  *
  * Subscribes to agent state changes and tracks:
  * - Availability status (idle/waiting vs working)
- * - Concurrent task count per agent
  * - Real-time state updates
  */
 
@@ -14,7 +13,6 @@ export interface AgentAvailabilityInfo {
   agentId: string;
   available: boolean;
   state: AgentState;
-  concurrentTasks: number;
   lastStateChange: number;
 }
 
@@ -29,9 +27,7 @@ function isAvailableState(state: AgentState): boolean {
 export class AgentAvailabilityStore {
   private agentStates: Map<string, AgentState> = new Map();
   private waitingReasons: Map<string, WaitingReason> = new Map();
-  private concurrentTasks: Map<string, number> = new Map();
   private lastStateChange: Map<string, number> = new Map();
-  private taskToAgent: Map<string, string> = new Map();
   private terminalToAgent: Map<string, string> = new Map();
   private agentToTerminal: Map<string, string> = new Map();
   private trashedTerminals: Set<string> = new Set();
@@ -79,45 +75,6 @@ export class AgentAvailabilityStore {
         }
       })
     );
-
-    this.unsubscribers.push(
-      events.on("task:assigned", (payload) => {
-        this.incrementConcurrentTasks(payload.agentId);
-        this.taskToAgent.set(payload.taskId, payload.agentId);
-      })
-    );
-
-    this.unsubscribers.push(
-      events.on("task:completed", (payload) => {
-        const agentId = payload.agentId || this.taskToAgent.get(payload.taskId);
-        if (agentId) {
-          this.decrementConcurrentTasks(agentId);
-          this.taskToAgent.delete(payload.taskId);
-        }
-      })
-    );
-
-    this.unsubscribers.push(
-      events.on("task:failed", (payload) => {
-        const agentId = payload.agentId || this.taskToAgent.get(payload.taskId);
-        if (agentId) {
-          this.decrementConcurrentTasks(agentId);
-          this.taskToAgent.delete(payload.taskId);
-        }
-      })
-    );
-
-    this.unsubscribers.push(
-      events.on("task:state-changed", (payload) => {
-        if (payload.state === "cancelled") {
-          const agentId = this.taskToAgent.get(payload.taskId);
-          if (agentId) {
-            this.decrementConcurrentTasks(agentId);
-            this.taskToAgent.delete(payload.taskId);
-          }
-        }
-      })
-    );
   }
 
   private updateAvailability(payload: {
@@ -135,16 +92,6 @@ export class AgentAvailabilityStore {
     } else {
       this.waitingReasons.delete(payload.agentId);
     }
-  }
-
-  private incrementConcurrentTasks(agentId: string): void {
-    const current = this.concurrentTasks.get(agentId) ?? 0;
-    this.concurrentTasks.set(agentId, current + 1);
-  }
-
-  private decrementConcurrentTasks(agentId: string): void {
-    const current = this.concurrentTasks.get(agentId) ?? 0;
-    this.concurrentTasks.set(agentId, Math.max(0, current - 1));
   }
 
   /**
@@ -191,13 +138,6 @@ export class AgentAvailabilityStore {
   }
 
   /**
-   * Get the number of concurrent tasks assigned to an agent.
-   */
-  getConcurrentTaskCount(agentId: string): number {
-    return this.concurrentTasks.get(agentId) ?? 0;
-  }
-
-  /**
    * Get all agents with their availability status.
    */
   getAgentsByAvailability(): AgentAvailabilityInfo[] {
@@ -210,7 +150,6 @@ export class AgentAvailabilityStore {
         agentId,
         available: isAvailableState(state),
         state,
-        concurrentTasks: this.getConcurrentTaskCount(agentId),
         lastStateChange: this.lastStateChange.get(agentId) ?? 0,
       });
     }
@@ -232,7 +171,6 @@ export class AgentAvailabilityStore {
   registerAgent(agentId: string, initialState: AgentState = "idle"): void {
     if (!this.agentStates.has(agentId)) {
       this.agentStates.set(agentId, initialState);
-      this.concurrentTasks.set(agentId, 0);
       this.lastStateChange.set(agentId, Date.now());
     }
   }
@@ -273,7 +211,6 @@ export class AgentAvailabilityStore {
   unregisterAgent(agentId: string): void {
     this.agentStates.delete(agentId);
     this.waitingReasons.delete(agentId);
-    this.concurrentTasks.delete(agentId);
     this.lastStateChange.delete(agentId);
     const terminalId = this.agentToTerminal.get(agentId);
     if (terminalId) {
@@ -292,9 +229,7 @@ export class AgentAvailabilityStore {
   clear(): void {
     this.agentStates.clear();
     this.waitingReasons.clear();
-    this.concurrentTasks.clear();
     this.lastStateChange.clear();
-    this.taskToAgent.clear();
     this.terminalToAgent.clear();
     this.agentToTerminal.clear();
     this.trashedTerminals.clear();

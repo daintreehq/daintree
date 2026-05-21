@@ -169,6 +169,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         )
         .then((result) => {
           if (!result.ok && result.error.code !== "DISABLED") {
+            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
             notify({
               type: "error",
               title: `Couldn't run '${item.title}'`,
@@ -177,6 +178,7 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         })
         .catch(() => {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: `Couldn't run '${item.title}'`,

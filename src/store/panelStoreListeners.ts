@@ -1,11 +1,13 @@
-import { DisposableStore } from "@/utils/disposable";
+import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { clearAllRestartGuards } from "./restartExitSuppression";
+import { cancelPanelStatusBuffer } from "./panelStatusBuffer";
 import { setupIdentityListeners } from "./listeners/panel/identity";
 import { setupLifecycleListeners } from "./listeners/panel/lifecycle";
 import { setupActivityListeners } from "./listeners/panel/activity";
 import { setupBackendHealthListeners } from "./listeners/panel/backendHealth";
 import { setupResourceListeners } from "./listeners/panel/resource";
 import { setupFdLeakWarningListeners } from "./listeners/panel/fdLeakWarning";
+import { setupWatchdogHealthListeners } from "./listeners/panel/watchdogHealth";
 
 let store: DisposableStore | null = null;
 
@@ -26,12 +28,18 @@ export function setupTerminalStoreListeners() {
   const disposables = new DisposableStore();
   store = disposables;
 
+  // Owns the shared RAF buffer's teardown. Sub-listeners (activity, lifecycle
+  // onStatus) only enqueue patches; the buffer is a module-level singleton
+  // and must outlive any single sub-store, so cancellation lives here.
+  disposables.add(toDisposable(cancelPanelStatusBuffer));
+
   disposables.add(setupIdentityListeners());
   disposables.add(setupLifecycleListeners());
   disposables.add(setupActivityListeners());
   disposables.add(setupBackendHealthListeners());
   disposables.add(setupResourceListeners());
   disposables.add(setupFdLeakWarningListeners());
+  disposables.add(setupWatchdogHealthListeners());
 
   return cleanupTerminalStoreListeners;
 }

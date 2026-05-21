@@ -24,6 +24,7 @@ import { useHibernationNotifications } from "./hooks/useHibernationNotifications
 import { useIdleTerminalNotifications } from "./hooks/useIdleTerminalNotifications";
 import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useGitHubTokenHealth } from "./hooks/useGitHubTokenHealth";
+import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
@@ -42,25 +43,20 @@ import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
+import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
-import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
-import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
-import { CloudSyncBanner } from "./components/Recovery/CloudSyncBanner";
-import { GitHubTokenBanner } from "./components/Recovery/GitHubTokenBanner";
-import { HostCrashBanner } from "./components/Recovery/HostCrashBanner";
-import { RestoreConfirmationBanner } from "./components/Recovery/RestoreConfirmationBanner";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
   useShortcutHints,
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
-  useSystemWakeHandler,
   useCloudSyncWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useOrchestrationMilestones,
   useAgentWaitingNudge,
+  useFocusOnActivateIntent,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -242,11 +238,65 @@ const LazyMcpConfirmDialog = lazy(() =>
   preloadMcpConfirmDialog().then((m) => ({ default: m.McpConfirmDialog }))
 );
 
+function preloadPluginConfirmDialog() {
+  return import("./components/Plugin/PluginConfirmDialog");
+}
+const LazyPluginConfirmDialog = lazy(() =>
+  preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
+);
+
 function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
 }
 const LazyPanelLimitConfirmDialog = lazy(() =>
   preloadPanelLimitConfirmDialog().then((m) => ({ default: m.PanelLimitConfirmDialog }))
+);
+
+function preloadGitPushConfirmDialog() {
+  return import("./components/Git/GitPushConfirmDialog");
+}
+const LazyGitPushConfirmDialog = lazy(() =>
+  preloadGitPushConfirmDialog().then((m) => ({ default: m.GitPushConfirmDialog }))
+);
+
+function preloadGitPullRebaseConfirmDialog() {
+  return import("./components/Git/GitPullRebaseConfirmDialog");
+}
+const LazyGitPullRebaseConfirmDialog = lazy(() =>
+  preloadGitPullRebaseConfirmDialog().then((m) => ({
+    default: m.GitPullRebaseConfirmDialog,
+  }))
+);
+
+function preloadCrashRecoveryDialog() {
+  return import("./components/Recovery/CrashRecoveryDialog");
+}
+const LazyCrashRecoveryDialog = lazy(() =>
+  preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
+);
+
+function preloadRecoveryBannerCoordinator() {
+  return import("./components/Recovery/RecoveryBannerCoordinator");
+}
+const LazyRecoveryBannerCoordinator = lazy(() =>
+  preloadRecoveryBannerCoordinator().then((m) => ({ default: m.RecoveryBannerCoordinator }))
+);
+// Fetch eagerly: `safeMode` is set synchronously during hydration, so the
+// first post-hydration render can suspend before the idle preload fires.
+void preloadRecoveryBannerCoordinator();
+
+function preloadGitHubTokenBanner() {
+  return import("./components/Recovery/GitHubTokenBanner");
+}
+const LazyGitHubTokenBanner = lazy(() =>
+  preloadGitHubTokenBanner().then((m) => ({ default: m.GitHubTokenBanner }))
+);
+
+function preloadCloudSyncBanner() {
+  return import("./components/Recovery/CloudSyncBanner");
+}
+const LazyCloudSyncBanner = lazy(() =>
+  preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
 );
 
 import { Toaster } from "./components/ui/toaster";
@@ -263,11 +313,10 @@ import {
   useNotificationSettingsStore,
   usePreferencesStore,
 } from "./store";
-import { useGitHubConfigStore } from "./store/githubConfigStore";
+import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
-import { useSafeModeStore } from "./store/safeModeStore";
 import type { BuiltInPanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
@@ -283,6 +332,7 @@ function App() {
   useIdleTerminalNotifications();
   useDiskSpaceWarnings();
   useGitHubTokenHealth();
+  useGitHubRateLimit();
   useUnloadCleanup();
   useResourceProfile();
 
@@ -347,7 +397,7 @@ function App() {
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
-  const { worktrees, worktreeMap } = useWorktrees();
+  const { worktrees, worktreeMap, isLoading } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ worktreeMap });
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
@@ -409,17 +459,29 @@ function App() {
 
   usePerformanceMonitors();
 
+  // Batched cold-start payload — replaces the legacy fan-out of
+  // crash-recovery:get-pending + crash-recovery:get-config + app:hydrate +
+  // terminal-config:get into a single IPC round-trip (#8620).
+  const boot = useAppBoot();
+
   // Crash recovery gate — must resolve before hydration runs
   const {
     state: crashState,
     resolve: resolveCrash,
     updateConfig: updateCrashConfig,
-  } = useCrashRecoveryGate();
+  } = useCrashRecoveryGate(boot);
 
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
+  // When crash recovery was pending at boot, the resolve path (`restoreBackup`
+  // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
+  // `boot.result` was captured. Passing the stale prefetched payload would
+  // hydrate from the pre-resolution terminal list and skip the one-shot
+  // `consumePanelFilter` the restore path queued. Force the live IPC path in
+  // that case so hydration reads the post-resolution store.
+  const hadPendingCrash = boot.result?.crashPending != null;
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(crashResolved);
+  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : boot.result);
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
@@ -441,6 +503,12 @@ function App() {
     });
     return () => cancelAnimationFrame(id);
   }, []);
+  // Cross-project focus intent receiver. Subscribes unconditionally so the
+  // listener is registered before `notifyViewPainted` fires, then defers the
+  // local `agent.focusNextWaiting` dispatch until hydration completes (the
+  // paint signal arrives before panel state is loaded — a direct dispatch
+  // would silently no-op against an empty panelStore).
+  useFocusOnActivateIntent(isStateLoaded);
   // The skeleton is z-index 9999 and intercepts pointer events. The crash
   // recovery dialog is rendered before hydration completes, so without this
   // the dialog would be visible but unclickable until hydration finishes
@@ -479,8 +547,18 @@ function App() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
+      void preloadRecoveryBannerCoordinator();
+      void preloadGitHubTokenBanner();
+      void preloadCloudSyncBanner();
+      import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
+      // Warm chunks split out of the eager closure (#8626). These are reached
+      // through lazy boundaries in `panels/registry.tsx` (TerminalPane) and
+      // `Worktree/FileDiffModal.tsx` (FileViewerModal/DiffViewer), so they
+      // need an explicit post-paint prefetch to stay snappy on first use.
+      import("@/components/Terminal/TerminalPane").catch(() => {});
+      import("@/components/FileViewer/FileViewerModal").catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
@@ -576,14 +654,7 @@ function App() {
   usePluginActions();
   usePluginPanelKinds();
 
-  useMenuActions({
-    onOpenSettings: handleSettings,
-    onOpenSettingsTab: handleOpenSettingsTab,
-    onToggleSidebar: handleToggleSidebar,
-    onLaunchAgent: handleLaunchAgent,
-    defaultCwd: defaultTerminalCwd,
-    activeWorktreeId: activeWorktree?.id,
-  });
+  useMenuActions();
 
   // Global keybinding handler - provides chord support and priority resolution
   // All keybindings dispatch through ActionService via this centralized handler
@@ -591,9 +662,8 @@ function App() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  usePanelStoreBootstrap();
+  usePanelStoreBootstrap(boot.result?.terminalConfig ?? null);
   useSemanticWorkerLifecycle();
-  useSystemWakeHandler();
   useCloudSyncWarning(homeDir);
   useAccessibilityAnnouncements();
 
@@ -603,7 +673,6 @@ function App() {
 
   useFileDropGuard();
 
-  const isSafeMode = useSafeModeStore((s) => s.safeMode);
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
 
   if (!isElectronAvailable()) {
@@ -619,12 +688,14 @@ function App() {
   if (crashState.status === "pending") {
     return (
       <div className="h-screen w-screen bg-daintree-bg">
-        <CrashRecoveryDialog
-          crash={crashState.crash}
-          config={crashState.config}
-          onResolve={resolveCrash}
-          onUpdateConfig={updateCrashConfig}
-        />
+        <Suspense fallback={null}>
+          <LazyCrashRecoveryDialog
+            crash={crashState.crash}
+            config={crashState.config}
+            onResolve={resolveCrash}
+            onUpdateConfig={updateCrashConfig}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -671,11 +742,15 @@ function App() {
             disableHoverableContent
           >
             <E2EFaultInjector />
-            {isSafeMode && <SafeModeBanner />}
-            <RestoreConfirmationBanner />
-            <GitHubTokenBanner />
-            <CloudSyncBanner />
-            <HostCrashBanner />
+            <Suspense fallback={null}>
+              <LazyRecoveryBannerCoordinator />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyGitHubTokenBanner />
+            </Suspense>
+            <Suspense fallback={null}>
+              <LazyCloudSyncBanner />
+            </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
@@ -945,6 +1020,13 @@ function App() {
                     onCloseProject={(projectId) =>
                       void projectSwitcherPalette.removeProject(projectId)
                     }
+                    onLocateProject={(projectId) =>
+                      void projectSwitcherPalette.locateProject(projectId)
+                    }
+                    onTogglePinProject={(projectId) =>
+                      void projectSwitcherPalette.togglePinProject(projectId)
+                    }
+                    onCopyPath={projectSwitcherPalette.copyPath}
                     removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
                     onRemoveConfirmClose={() =>
                       projectSwitcherPalette.setRemoveConfirmProject(null)
@@ -1061,6 +1143,7 @@ function App() {
                     isOpen={isWorktreeOverviewOpen}
                     onClose={closeWorktreeOverview}
                     worktrees={worktrees}
+                    isLoading={isLoading}
                     activeWorktreeId={activeWorktreeId}
                     focusedWorktreeId={focusedWorktreeId}
                     onSelectWorktree={selectWorktree}
@@ -1148,6 +1231,17 @@ function App() {
             {isStateLoaded && (
               <ErrorBoundary
                 variant="component"
+                componentName="PluginConfirmDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyPluginConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
                 componentName="FileViewerModalHost"
                 resetKeys={[Number(isStateLoaded)]}
               >
@@ -1214,6 +1308,30 @@ function App() {
               >
                 <Suspense fallback={null}>
                   <LazyPanelLimitConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="GitPushConfirmDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyGitPushConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="GitPullRebaseConfirmDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyGitPullRebaseConfirmDialog />
                 </Suspense>
               </ErrorBoundary>
             )}

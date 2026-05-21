@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
+import { PersistedStoreInfoSchema } from "./schemas";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -10,20 +11,6 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
 
-interface PersistedStoreInfo {
-  storeId: string;
-  storageKey: string;
-  declaredVersion: number | null;
-  persistedBlobVersion: number | null;
-  hasMigrate: boolean;
-  hasMerge: boolean;
-  hasPartialize: boolean;
-  persistedStateType: string;
-  hasPersistedValue: boolean;
-  sizeBytes: number;
-  parseStatus: "ok" | "missing" | "corrupt";
-}
-
 export function registerIntrospectionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -32,11 +19,12 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List available actions. Filter by category or search. Includes metadata like danger level and enabled state.",
+      "List the full action manifest, each entry including inputSchema/outputSchema. Args (all optional): `category` filters by domain (e.g. terminal, git, github); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions. Returns { actions } — an array of manifest entries. Never errors; empty filters return everything. Do NOT use this for discovery — it returns every schema and is expensive; call `actions.search` first, then `actions.getSchema` for the one you need.",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z
       .object({
         category: z
@@ -50,6 +38,7 @@ export function registerIntrospectionActions(
           .describe("Only return enabled actions (default: false)"),
       })
       .optional(),
+    resultSchema: z.object({ actions: z.array(z.unknown()) }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { category, search, enabledOnly } =
         (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
@@ -71,7 +60,7 @@ export function registerIntrospectionActions(
         manifest = manifest.filter((a) => a.enabled);
       }
 
-      return manifest;
+      return { actions: manifest };
     },
   }));
 
@@ -79,11 +68,30 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Get the current UI context: focused terminal, active worktree, current project, and portal state",
+      "Snapshot the current UI context the assistant operates in. Takes no args. Returns the active project (id/name/path), active and focused worktree (id/name/path/branch/isMain), focused terminal (id/kind/title), portal open state and active tab, plus terminalCount and worktreeCount. Fields are omitted when nothing is focused/active. Never errors. Call this first to resolve the implicit 'current' worktree or terminal before actions that take an explicit id.",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
+    resultSchema: z.object({
+      projectId: z.string().optional(),
+      projectName: z.string().optional(),
+      projectPath: z.string().optional(),
+      activeWorktreeId: z.string().optional(),
+      activeWorktreeName: z.string().optional(),
+      activeWorktreePath: z.string().optional(),
+      activeWorktreeBranch: z.string().optional(),
+      activeWorktreeIsMain: z.boolean().optional(),
+      focusedWorktreeId: z.string().optional(),
+      focusedTerminalId: z.string().optional(),
+      focusedTerminalKind: z.string().optional(),
+      focusedTerminalTitle: z.string().optional(),
+      portalOpen: z.boolean(),
+      portalActiveTabId: z.string().nullable(),
+      terminalCount: z.number(),
+      worktreeCount: z.number(),
+    }),
     run: async () => {
       const project = useProjectStore.getState().currentProject;
       const terminalState = usePanelStore.getState();
@@ -133,9 +141,14 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "discoverable",
+    resultSchema: z.object({
+      storeCount: z.number(),
+      stores: z.array(PersistedStoreInfoSchema),
+    }),
     run: async () => {
       const registrations = listPersistedStores();
-      const stores: PersistedStoreInfo[] = registrations.map((reg) => {
+      const stores: z.infer<typeof PersistedStoreInfoSchema>[] = registrations.map((reg) => {
         const options = reg.store.persist.getOptions();
         const storageKey = typeof options.name === "string" ? options.name : "";
         const declaredVersion = typeof options.version === "number" ? options.version : null;
@@ -174,6 +187,163 @@ export function registerIntrospectionActions(
       });
 
       return { storeCount: stores.length, stores };
+    },
+  }));
+
+  actions.set("actions.search", () => ({
+    id: "actions.search",
+    title: "Search Actions",
+    description:
+      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for discovery, then `actions.getSchema` for the chosen action's full schema. Do NOT use `actions.list` for discovery — it returns every schema and is far heavier.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    argsSchema: z.object({
+      query: z
+        .string()
+        .min(1)
+        .refine((s) => s.trim().length > 0, "must contain non-whitespace text")
+        .describe("Natural-language query or keywords to search for"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .default(20)
+        .describe("Max results (1-100, default 20)"),
+    }),
+    examples: [
+      {
+        args: { query: "terminal output" },
+        description: "Find actions related to reading terminal output",
+      },
+      {
+        args: { query: "list worktrees", limit: 5 },
+        description: "Find the top 5 worktree-listing actions",
+      },
+    ],
+    resultSchema: z.object({
+      totalMatches: z.number().int().nonnegative(),
+      results: z.array(z.unknown()),
+    }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { query, limit = 20 } = args as { query: string; limit?: number };
+      const manifest = actionService.list(ctx);
+
+      const q = query.toLowerCase();
+      const qTerms = q.split(/\s+/).filter((t) => t.length > 0);
+
+      interface ScoredEntry {
+        entry: Omit<ActionManifestEntry, "inputSchema" | "outputSchema">;
+        score: number;
+      }
+
+      const scored: ScoredEntry[] = [];
+
+      for (const entry of manifest) {
+        if (entry.mcpVisibility === "hidden") continue;
+
+        const id = (entry.id ?? "").toLowerCase();
+        const title = (entry.title ?? "").toLowerCase();
+        const description = (entry.description ?? "").toLowerCase();
+        const category = (entry.category ?? "").toLowerCase();
+        const keywords = (entry.keywords ?? []).join(" ").toLowerCase();
+
+        let score = 0;
+
+        for (const term of qTerms) {
+          if (id === term) {
+            score += 50;
+          } else if (id.includes(term)) {
+            score += 25;
+          }
+          if (title.includes(term)) {
+            score += 15;
+          }
+          if (keywords.includes(term)) {
+            score += 8;
+          }
+          if (description.includes(term)) {
+            score += 4;
+          }
+          if (category.includes(term)) {
+            score += 2;
+          }
+        }
+
+        if (score > 0) {
+          const { inputSchema: _, outputSchema: __, ...lightweight } = entry;
+          scored.push({ entry: lightweight, score });
+        }
+      }
+
+      scored.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
+
+      const results = scored.slice(0, Math.min(limit, 100)).map((s) => s.entry);
+
+      return { totalMatches: scored.length, results };
+    },
+  }));
+
+  actions.set("actions.getSchema", () => ({
+    id: "actions.getSchema",
+    title: "Get Action Schema",
+    description:
+      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown or hidden. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    argsSchema: z.object({
+      actionId: z
+        .string()
+        .min(1)
+        .describe(
+          "Action id returned by `actions.search` (the `id` field), e.g. 'terminal.getStatus'."
+        ),
+    }),
+    examples: [
+      {
+        args: { actionId: "terminal.getStatus" },
+        description: "Inspect the input/output schema for terminal.getStatus",
+      },
+    ],
+    resultSchema: z.union([
+      z.object({ ok: z.literal(true), entry: z.unknown() }),
+      z.object({
+        ok: z.literal(false),
+        error: z.object({ code: z.string(), message: z.string() }),
+      }),
+    ]),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { actionId } = args as { actionId: string };
+      const entry = actionService.get(actionId, ctx);
+
+      if (!entry) {
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
+          },
+        };
+      }
+
+      if (entry.mcpVisibility === "hidden") {
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
+          },
+        };
+      }
+
+      return { ok: true, entry };
     },
   }));
 }

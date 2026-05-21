@@ -533,6 +533,305 @@ describe("RunCommandDetector", () => {
     });
   });
 
+  describe("Procfile detection", () => {
+    it("detects web process", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Procfile"),
+        "web: npm run dev\nworker: npm run worker\n",
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands).toEqual([
+        expect.objectContaining({
+          id: "procfile-web",
+          name: "web",
+          command: "npm run dev",
+          icon: "terminal",
+        }),
+        expect.objectContaining({
+          id: "procfile-worker",
+          name: "worker",
+          command: "npm run worker",
+          icon: "terminal",
+        }),
+      ]);
+    });
+
+    it("skips comment lines", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Procfile"),
+        "# This is a comment\nweb: npm run dev\n# Another comment\n",
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands.map((cmd) => cmd.id)).toEqual(["procfile-web"]);
+    });
+
+    it("skips blank lines", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Procfile"),
+        "\n\nweb: npm run dev\n\nrelease: npm run migrate\n",
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands.map((cmd) => cmd.id)).toEqual(["procfile-web", "procfile-release"]);
+    });
+
+    it("deduplicates duplicate process names", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Procfile"),
+        "web: npm run dev\nweb: npm run start\n",
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands).toHaveLength(1);
+      expect(procCommands[0]?.command).toBe("npm run dev");
+    });
+
+    it("skips lines without colon separator", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Procfile"),
+        "web: npm run dev\ninvalid line\nworker: npm run worker\n",
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands.map((cmd) => cmd.id)).toEqual(["procfile-web", "procfile-worker"]);
+    });
+
+    it("skips empty command body", async () => {
+      await fs.writeFile(path.join(tempDir, "Procfile"), "web:\nworker: npm run worker\n", "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+
+      expect(procCommands.map((cmd) => cmd.id)).toEqual(["procfile-worker"]);
+    });
+
+    it("returns empty when no Procfile exists", async () => {
+      const commands = await detector.detect(tempDir);
+      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
+      expect(procCommands).toEqual([]);
+    });
+  });
+
+  describe("mise.toml detection", () => {
+    it("detects tasks with string run", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        [
+          "[tasks.build]",
+          'run = "npm run build"',
+          'description = "Build the project"',
+          "",
+          "[tasks.test]",
+          'run = "npm test"',
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands).toEqual([
+        expect.objectContaining({
+          id: "mise-build",
+          name: "build",
+          command: "mise run build",
+          description: "Build the project",
+        }),
+        expect.objectContaining({
+          id: "mise-test",
+          name: "test",
+          command: "mise run test",
+        }),
+      ]);
+    });
+
+    it("detects task with array run", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        [
+          "[tasks.dev]",
+          'run = ["npm run dev", "npm run css"]',
+          'description = "Start dev servers"',
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands).toEqual([
+        expect.objectContaining({
+          id: "mise-dev",
+          command: "mise run dev",
+          description: "Start dev servers",
+        }),
+      ]);
+    });
+
+    it("detects string shorthand task", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        'tasks.build = "npm run build"\n',
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands).toEqual([
+        expect.objectContaining({
+          id: "mise-build",
+          command: "mise run build",
+          description: "npm run build",
+        }),
+      ]);
+    });
+
+    it("skips hidden tasks", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        [
+          "[tasks.setup]",
+          'run = "npm install"',
+          "hide = true",
+          "",
+          "[tasks.build]",
+          'run = "npm run build"',
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
+    });
+
+    it("skips _-prefixed tasks", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        [
+          "[tasks._internal]",
+          'run = "echo internal"',
+          "",
+          "[tasks.build]",
+          'run = "npm run build"',
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
+    });
+
+    it("skips tasks without run field", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        [
+          "[tasks.incomplete]",
+          'description = "Missing run"',
+          "",
+          "[tasks.build]",
+          'run = "npm run build"',
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
+    });
+
+    it("returns empty when no mise.toml exists", async () => {
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+      expect(miseCommands).toEqual([]);
+    });
+
+    it("returns empty when mise.toml has no [tasks]", async () => {
+      await fs.writeFile(path.join(tempDir, "mise.toml"), '[tools]\nnode = "22"\n', "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+      expect(miseCommands).toEqual([]);
+    });
+
+    it("returns empty for malformed TOML", async () => {
+      await fs.writeFile(path.join(tempDir, "mise.toml"), "[[invalid toml [}", "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands).toEqual([]);
+    });
+
+    it("detects task with quoted name containing special chars", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        ['[tasks."dev:app"]', 'run = "npm run dev"', 'description = "Dev server"'].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands).toEqual([
+        expect.objectContaining({
+          id: "mise-dev:app",
+          name: "dev:app",
+          command: "mise run dev:app",
+          description: "Dev server",
+        }),
+      ]);
+    });
+
+    it("skips task with empty array run", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        ["[tasks.empty]", "run = []", "", "[tasks.build]", 'run = "npm run build"'].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
+    });
+
+    it("skips task with non-string array run elements", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "mise.toml"),
+        ["[tasks.bad]", "run = [1, 2]", "", "[tasks.build]", 'run = "npm run build"'].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
+
+      expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
+    });
+  });
+
   describe("devcontainer detection", () => {
     it("detects string postStartCommand", async () => {
       const devcontainerDir = path.join(tempDir, ".devcontainer");

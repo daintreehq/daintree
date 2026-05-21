@@ -68,10 +68,22 @@ export type PtyHostRequest =
   | { type: "broadcast-write"; ids: string[]; data: string }
   | { type: "submit"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
-  | { type: "kill"; id: string; reason?: string }
+  | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
-  | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
+  | {
+      type: "set-activity-tier";
+      id: string;
+      tier: PtyHostActivityTier;
+      /**
+       * Optional renderer-side cadence hint. Lets the PTY-host scheduler use a
+       * polling interval other than the binary tier default (active=50ms,
+       * background=500ms) without widening the {@link PtyHostActivityTier}
+       * union. Issue #8596 introduces 200ms for VISIBLE-unfocused panes; the
+       * PTY host falls back to the tier default when this field is omitted.
+       */
+      pollingIntervalMs?: number;
+    }
   | { type: "wake-terminal"; id: string; requestId: string }
   | {
       type: "set-active-project";

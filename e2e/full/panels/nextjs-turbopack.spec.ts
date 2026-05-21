@@ -144,10 +144,10 @@ server.listen(0, '127.0.0.1', () => {
 
     // --- Verify --turbopack was injected ---
 
-    const consoleToggle = window.locator('[aria-label="Show Terminal"]').first();
+    const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
     if (await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false)) {
       await consoleToggle.click();
-      await expect(window.locator('[aria-label="Hide Terminal"]')).toBeVisible({
+      await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
         timeout: T_SHORT,
       });
 
@@ -169,7 +169,7 @@ server.listen(0, '127.0.0.1', () => {
         )
         .toContain("--turbopack");
 
-      await window.locator('[aria-label="Hide Terminal"]').click();
+      await consoleToggle.click();
     }
 
     // --- Verify webview renders styled content ---

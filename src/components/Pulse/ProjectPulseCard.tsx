@@ -25,7 +25,14 @@ import { Activity } from "@/components/icons";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
+import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+
+// Collapses paired window.focus + visibilitychange events that fire together
+// on restore-from-minimize. Short enough that legitimate user actions
+// (refocus after a few seconds away) still trigger a probe.
+const FOCUS_REFRESH_DEDUPE_MS = 500;
 
 interface ProjectPulseCardProps {
   worktreeId: string;
@@ -340,6 +347,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const [refreshAnnouncement, setRefreshAnnouncement] = useState("");
   const wasLoadingRef = useRef(false);
   const hasEverLoadedRef = useRef(false);
+  const lastFocusProbeRef = useRef(0);
+  const minuteTick = useGlobalMinuteTicker();
   useEffect(() => {
     const hadPulse = !!pulse;
     if (isLoading && hadPulse) {
@@ -364,6 +373,26 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       fetchPulse(worktreeId);
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
+
+  // Re-fetch when the window regains focus or the tab becomes visible. The
+  // service runs a HEAD-SHA probe under the 60s TTL, so non-forced requests
+  // stay cheap when nothing changed. Both events fire together on
+  // restore-from-minimize — the cooldown ref collapses them into one call.
+  useEffect(() => {
+    const handleFocusOrVisible = () => {
+      if (document.hidden) return;
+      const now = Date.now();
+      if (now - lastFocusProbeRef.current < FOCUS_REFRESH_DEDUPE_MS) return;
+      lastFocusProbeRef.current = now;
+      void fetchPulse(worktreeId);
+    };
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+    return () => {
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
+    };
+  }, [worktreeId, fetchPulse]);
 
   const handleRefresh = useCallback(() => {
     fetchPulse(worktreeId, true);
@@ -474,6 +503,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return null;
   }
 
+  // minuteTick is read so the freshness label re-renders on each 30s tick.
+  // useGlobalMinuteTicker pauses while hidden and emits on visibility restore.
+  void minuteTick;
+  const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
+
   return (
     <div
       className={cn(
@@ -563,6 +597,16 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <div className="border-t border-daintree-border pt-3">
           <PulseSummary pulse={pulse} />
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="pulse-control mt-2 inline-flex items-center text-[11px] text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
+            aria-label={`Refresh — last updated ${updatedLabel}`}
+            data-testid="pulse-last-updated"
+          >
+            <span>Updated {updatedLabel}</span>
+          </button>
         </div>
       </div>
     </div>

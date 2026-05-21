@@ -47,14 +47,24 @@ export const UI_PALETTE_EXIT_DURATION = DURATION_100;
 /** UX anti-flicker gate: sub-400ms work should show nothing (Doherty threshold).
  *  Used by palette loading bar and stale-result dimming to prevent flashes on
  *  fast renders. Not an animation token — a perceptual floor.
- *  Keep in sync with .palette-results-stale transition-delay in src/index.css. */
+ *  CSS counterpart: `--anti-flicker-delay` in src/index.css `:root`. The
+ *  drift-contract test in animationUtils.test.ts enforces parity. */
 export const UI_DOHERTY_THRESHOLD = 400;
 
 /** UX anti-flicker gate for skeleton components using the `immediate` prop.
  *  Sub-200ms work should show no pulse — warm-cache Suspense falls through this.
- *  Keep in sync with the `useDeferredLoading` default delay (200ms).
+ *  Consumed by `useSkeletonGate` in `src/hooks/useDeferredLoading.ts`.
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
+
+/** Feedback-hint window for direct user actions (e.g. `Button`'s `loading`
+ *  state). Distinct in role from the skeleton/Doherty gates: those *delay*
+ *  showing a placeholder to avoid flicker on background work, whereas a
+ *  user-initiated action gets *immediate* feedback. This documents the timing
+ *  tier for the opacity/transition feel of in-progress affordances; it is not
+ *  used as a visibility gate. Shares the 200ms value with the skeleton gate by
+ *  coincidence, not by coupling. */
+export const UI_FEEDBACK_HINT_MS = 200;
 
 /** How long an action success-label swap dwells visible before the toast
  *  auto-dismisses. Covers saccade (~200ms), lexical recognition (~300ms), and
@@ -69,7 +79,7 @@ export const UI_ACTION_SUCCESS_DWELL_MS = 2000;
 export const UI_TRANSIENT_HINT_DWELL_MS = 1_000;
 
 export const UI_TOOLTIP_DELAY_DURATION = 500;
-export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_150;
+export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 
 export const UI_ENTER_EASING = EASE_SPRING_CRITICAL;
 export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";

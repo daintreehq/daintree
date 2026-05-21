@@ -75,21 +75,21 @@ describe("AgentSettings subtab derivation logic", () => {
 
 describe("SettingsDialog subtab state", () => {
   it("Partial<Record<SettingsTab, string>> allows per-tab memory", () => {
-    type SettingsTab = "general" | "agents" | "github";
+    type SettingsTab = "general" | "agents" | "code-forge";
     const state: Partial<Record<SettingsTab, string>> = {};
 
     // Navigating to agents tab sets subtab for agents only
     const updated: Partial<Record<SettingsTab, string>> = { ...state, agents: "gemini" };
     expect(updated.agents).toBe("gemini");
-    expect(updated.github).toBeUndefined();
+    expect(updated["code-forge"]).toBeUndefined();
 
-    // Switching to github tab does not clear agents subtab
-    const afterGitHub = { ...updated };
-    expect(afterGitHub.agents).toBe("gemini");
+    // Switching to code-forge tab does not clear agents subtab
+    const afterForge = { ...updated };
+    expect(afterForge.agents).toBe("gemini");
   });
 
   it("undefined subtab in nav target does not override stored subtab", () => {
-    type SettingsTab = "general" | "agents" | "github";
+    type SettingsTab = "general" | "agents" | "code-forge";
     let activeSubtabs: Partial<Record<SettingsTab, string>> = { agents: "codex" };
 
     // Simulating handleResultClick without subtab (no subtab in search result)
@@ -102,7 +102,7 @@ describe("SettingsDialog subtab state", () => {
   });
 
   it("explicit subtab in nav target updates stored subtab", () => {
-    type SettingsTab = "general" | "agents" | "github";
+    type SettingsTab = "general" | "agents" | "code-forge";
     let activeSubtabs: Partial<Record<SettingsTab, string>> = { agents: "codex" };
 
     const target = { tab: "agents" as SettingsTab, sectionId: "agents-enable", subtab: "gemini" };
@@ -113,7 +113,7 @@ describe("SettingsDialog subtab state", () => {
   });
 
   it('navigating to agents-default-agent search result sets subtab to "general"', () => {
-    type SettingsTab = "general" | "agents" | "github";
+    type SettingsTab = "general" | "agents" | "code-forge";
     let activeSubtabs: Partial<Record<SettingsTab, string>> = {};
 
     const target = {

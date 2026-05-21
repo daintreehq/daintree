@@ -331,11 +331,27 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    actionId: "agent.browser",
+    combo: "Cmd+Alt+B",
+    scope: "global",
+    priority: 0,
+    description: "Launch browser panel in current worktree",
+    category: "Agents",
+  },
+  {
     actionId: "agent.focusNextWaiting",
     combo: "Cmd+Alt+/",
     scope: "global",
     priority: 0,
     description: "Jump to next waiting agent",
+    category: "Agents",
+  },
+  {
+    actionId: "agent.focusNextWaitingGlobal",
+    combo: "Cmd+Shift+Alt+/",
+    scope: "global",
+    priority: 0,
+    description: "Jump to next waiting agent across all projects",
     category: "Agents",
   },
   {
@@ -661,6 +677,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    actionId: "nav.toggleFocusMode",
+    combo: "Cmd+K Z",
+    scope: "global",
+    priority: 0,
+    description: "Toggle focus mode (hide sidebar and assistant)",
+    category: "Navigation",
+  },
+  {
     actionId: "worktree.switch1",
     combo: "Cmd+Alt+1",
     scope: "global",
@@ -789,11 +813,11 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
-    actionId: "project.mruCycleOlder",
+    actionId: "project.mruCycleNewer",
     combo: "Cmd+Shift+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch project forward",
+    description: "Switch project backward",
     category: "Project",
   },
   {

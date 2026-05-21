@@ -1,6 +1,5 @@
 import type { ProjectSettings } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
-import type { EditorConfig } from "../../shared/types/editor.js";
 import type Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs/promises";
@@ -10,12 +9,9 @@ import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath, UTF8_BOM } from "./projectStorePaths.js";
-import {
-  parseFleetSavedScopes,
-  parseNotificationOverrides,
-  parseTerminalSettings,
-} from "./projectSettingsParsers.js";
+import { decode, encodeEnvelope } from "./projectSettingsCodec.js";
 import { Cache } from "../utils/cache.js";
+import { CHANNELS } from "../ipc/channels.js";
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
@@ -68,191 +64,17 @@ export class ProjectSettingsManager {
       return { runCommands: [] };
     }
 
+    let parsed: unknown;
     try {
       const content = await fs.readFile(filePath, "utf-8");
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
-      const parsed = JSON.parse(stripped);
-
-      let sanitizedIconSvg: string | undefined;
-      if (typeof parsed.projectIconSvg === "string" && parsed.projectIconSvg.trim()) {
-        const sanitizeResult = sanitizeSvg(parsed.projectIconSvg);
-        if (sanitizeResult.ok) {
-          sanitizedIconSvg = sanitizeResult.svg;
-          if (sanitizeResult.modified) {
-            console.warn(
-              `[ProjectSettingsManager] Sanitized potentially unsafe SVG content for project ${projectId}`
-            );
-          }
-        } else {
-          console.warn(
-            `[ProjectSettingsManager] Invalid SVG in settings for project ${projectId}: ${sanitizeResult.error}`
-          );
-        }
-      }
-
-      let sanitizedCommandOverrides: typeof parsed.commandOverrides = undefined;
-      if (Array.isArray(parsed.commandOverrides)) {
-        sanitizedCommandOverrides = parsed.commandOverrides
-          .filter((override: unknown) => {
-            if (!override || typeof override !== "object") return false;
-            const o = override as Record<string, unknown>;
-            if (typeof o.commandId !== "string") return false;
-            if (
-              o.defaults !== undefined &&
-              (o.defaults === null || typeof o.defaults !== "object" || Array.isArray(o.defaults))
-            )
-              return false;
-            if (o.disabled !== undefined && typeof o.disabled !== "boolean") return false;
-            if (o.prompt !== undefined && (typeof o.prompt !== "string" || o.prompt.trim() === ""))
-              return false;
-            return true;
-          })
-          .map((override: unknown) => {
-            const o = override as Record<string, unknown>;
-            return {
-              commandId: o.commandId as string,
-              defaults: o.defaults as Record<string, unknown> | undefined,
-              disabled: o.disabled as boolean | undefined,
-              prompt: o.prompt as string | undefined,
-            };
-          });
-      }
-
-      const secureEnvVarKeys = Array.isArray(parsed.secureEnvironmentVariables)
-        ? parsed.secureEnvironmentVariables.filter((k: unknown) => typeof k === "string")
-        : [];
-
-      const resolvedEnvVars: Record<string, string> = {};
-      const insecureKeys: string[] = [];
-      const unresolvedKeys: string[] = [];
-
-      if (parsed.environmentVariables && typeof parsed.environmentVariables === "object") {
-        for (const [key, value] of Object.entries(parsed.environmentVariables)) {
-          if (typeof key === "string" && typeof value === "string") {
-            if (isSensitiveEnvKey(key)) {
-              insecureKeys.push(key);
-              resolvedEnvVars[key] = value;
-            } else {
-              resolvedEnvVars[key] = value;
-            }
-          }
-        }
-      }
-
-      for (const key of secureEnvVarKeys) {
-        const secureValue = projectEnvSecureStorage.get(projectId, key);
-        if (secureValue !== undefined) {
-          resolvedEnvVars[key] = secureValue;
-        } else {
-          unresolvedKeys.push(key);
-        }
-      }
-
-      const settings: ProjectSettings = {
-        runCommands: Array.isArray(parsed.runCommands) ? parsed.runCommands : [],
-        environmentVariables: resolvedEnvVars,
-        secureEnvironmentVariables: secureEnvVarKeys,
-        insecureEnvironmentVariables: insecureKeys.length > 0 ? insecureKeys : undefined,
-        unresolvedSecureEnvironmentVariables:
-          unresolvedKeys.length > 0 ? unresolvedKeys : undefined,
-        excludedPaths: parsed.excludedPaths,
-        projectIconSvg: sanitizedIconSvg,
-        defaultWorktreeRecipeId:
-          typeof parsed.defaultWorktreeRecipeId === "string"
-            ? parsed.defaultWorktreeRecipeId
-            : undefined,
-        devServerCommand:
-          typeof parsed.devServerCommand === "string" ? parsed.devServerCommand : undefined,
-        devServerDismissed:
-          typeof parsed.devServerDismissed === "boolean" ? parsed.devServerDismissed : undefined,
-        devServerAutoDetected:
-          typeof parsed.devServerAutoDetected === "boolean"
-            ? parsed.devServerAutoDetected
-            : undefined,
-        cloudSyncWarningDismissed:
-          typeof parsed.cloudSyncWarningDismissed === "boolean"
-            ? parsed.cloudSyncWarningDismissed
-            : undefined,
-        devServerLoadTimeout:
-          typeof parsed.devServerLoadTimeout === "number" &&
-          Number.isFinite(parsed.devServerLoadTimeout) &&
-          parsed.devServerLoadTimeout >= 1 &&
-          parsed.devServerLoadTimeout <= 120
-            ? parsed.devServerLoadTimeout
-            : undefined,
-        turbopackEnabled:
-          typeof parsed.turbopackEnabled === "boolean" ? parsed.turbopackEnabled : undefined,
-        copyTreeSettings:
-          parsed.copyTreeSettings && typeof parsed.copyTreeSettings === "object"
-            ? parsed.copyTreeSettings
-            : undefined,
-        commandOverrides:
-          sanitizedCommandOverrides && sanitizedCommandOverrides.length > 0
-            ? sanitizedCommandOverrides
-            : undefined,
-        preferredEditor:
-          parsed.preferredEditor &&
-          typeof parsed.preferredEditor === "object" &&
-          typeof (parsed.preferredEditor as Record<string, unknown>).id === "string"
-            ? (parsed.preferredEditor as EditorConfig)
-            : undefined,
-        branchPrefixMode:
-          parsed.branchPrefixMode === "none" ||
-          parsed.branchPrefixMode === "username" ||
-          parsed.branchPrefixMode === "custom"
-            ? parsed.branchPrefixMode
-            : undefined,
-        branchPrefixCustom:
-          typeof parsed.branchPrefixCustom === "string" ? parsed.branchPrefixCustom : undefined,
-        worktreePathPattern:
-          typeof parsed.worktreePathPattern === "string" && parsed.worktreePathPattern.trim()
-            ? parsed.worktreePathPattern.trim()
-            : undefined,
-        terminalSettings: parseTerminalSettings(parsed.terminalSettings),
-        notificationOverrides: parseNotificationOverrides(parsed.notificationOverrides),
-        fleetSavedScopes: parseFleetSavedScopes(parsed.fleetSavedScopes),
-        resourceEnvironments:
-          parsed.resourceEnvironments &&
-          typeof parsed.resourceEnvironments === "object" &&
-          !Array.isArray(parsed.resourceEnvironments)
-            ? parsed.resourceEnvironments
-            : undefined,
-        activeResourceEnvironment:
-          typeof parsed.activeResourceEnvironment === "string"
-            ? parsed.activeResourceEnvironment
-            : undefined,
-        defaultWorktreeMode:
-          typeof parsed.defaultWorktreeMode === "string" ? parsed.defaultWorktreeMode : undefined,
-        daintreeMcpTier:
-          parsed.daintreeMcpTier === "off" ||
-          parsed.daintreeMcpTier === "workbench" ||
-          parsed.daintreeMcpTier === "action" ||
-          parsed.daintreeMcpTier === "system"
-            ? parsed.daintreeMcpTier
-            : undefined,
-        exposeDaintreeMcpToAgents:
-          typeof parsed.exposeDaintreeMcpToAgents === "boolean"
-            ? parsed.exposeDaintreeMcpToAgents
-            : undefined,
-      };
-
-      this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
-      this.settingsCache.set(projectId, settings);
-
-      return settings;
+      parsed = JSON.parse(stripped);
     } catch (error) {
       this.notificationOverridesCache.delete(projectId);
       if (error instanceof SyntaxError) {
         console.error(`[ProjectSettingsManager] Failed to parse settings for ${projectId}:`, error);
-        try {
-          const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
-          await resilientRename(filePath, quarantinePath);
-          console.warn(
-            `[ProjectSettingsManager] Corrupted settings file moved to ${quarantinePath}`
-          );
-        } catch {
-          // Ignore rename failures — quarantine is best-effort
-        }
+        const quarantinedPath = await this.quarantine(filePath, "corrupted");
+        void this.broadcastCorruption(quarantinedPath);
       } else {
         const code =
           error && typeof error === "object" && "code" in error
@@ -266,6 +88,126 @@ export class ProjectSettingsManager {
         }
       }
       return { runCommands: [] };
+    }
+
+    const decoded = decode(parsed);
+    if (!decoded.ok) {
+      this.notificationOverridesCache.delete(projectId);
+      console.warn(
+        `[ProjectSettingsManager] settings.json for ${projectId} was written by a newer app (v${decoded.onDiskVersion} > current); quarantining`
+      );
+      const quarantinedPath = await this.quarantine(filePath, `future-v${decoded.onDiskVersion}`);
+      void this.broadcastCorruption(quarantinedPath, "future-version");
+      return { runCommands: [] };
+    }
+
+    let settings = decoded.settings;
+
+    // Side-effect post-processing: SVG sanitization happens after pure decode so
+    // the codec stays free of I/O and can be exercised from unit tests.
+    if (typeof settings.projectIconSvg === "string" && settings.projectIconSvg.trim()) {
+      const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
+      if (sanitizeResult.ok) {
+        if (sanitizeResult.modified) {
+          console.warn(
+            `[ProjectSettingsManager] Sanitized potentially unsafe SVG content for project ${projectId}`
+          );
+        }
+        settings = { ...settings, projectIconSvg: sanitizeResult.svg };
+      } else {
+        console.warn(
+          `[ProjectSettingsManager] Invalid SVG in settings for project ${projectId}: ${sanitizeResult.error}`
+        );
+        settings = { ...settings, projectIconSvg: undefined };
+      }
+    }
+
+    // Secure env resolution: merge plaintext env vars with the decrypted values
+    // from secure storage. Sensitive keys present in plaintext are flagged for
+    // migration so the renderer can surface a "move to secure storage" prompt.
+    const secureEnvVarKeys = settings.secureEnvironmentVariables ?? [];
+    const resolvedEnvVars: Record<string, string> = {};
+    const insecureKeys: string[] = [];
+    const unresolvedKeys: string[] = [];
+
+    if (settings.environmentVariables) {
+      for (const [key, value] of Object.entries(settings.environmentVariables)) {
+        if (typeof key === "string" && typeof value === "string") {
+          resolvedEnvVars[key] = value;
+          if (isSensitiveEnvKey(key)) insecureKeys.push(key);
+        }
+      }
+    }
+
+    for (const key of secureEnvVarKeys) {
+      const secureValue = projectEnvSecureStorage.get(projectId, key);
+      if (secureValue !== undefined) {
+        resolvedEnvVars[key] = secureValue;
+      } else {
+        unresolvedKeys.push(key);
+      }
+    }
+
+    settings = {
+      ...settings,
+      environmentVariables: resolvedEnvVars,
+      secureEnvironmentVariables: secureEnvVarKeys,
+      insecureEnvironmentVariables: insecureKeys.length > 0 ? insecureKeys : undefined,
+      unresolvedSecureEnvironmentVariables: unresolvedKeys.length > 0 ? unresolvedKeys : undefined,
+    };
+
+    this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+    this.settingsCache.set(projectId, settings);
+
+    return settings;
+  }
+
+  /**
+   * Best-effort quarantine. Returns the destination path on success and
+   * `null` if the rename failed — quarantine is a safety net, not a hard
+   * dependency for surfacing corruption to the renderer. Suffix collisions
+   * (e.g. when an earlier future-version quarantine already exists) get a
+   * timestamp tail so we never clobber a previous artifact.
+   */
+  private async quarantine(filePath: string, suffix: string): Promise<string | null> {
+    try {
+      const base =
+        suffix === "corrupted" ? `${filePath}.corrupted.${Date.now()}` : `${filePath}.${suffix}`;
+      const quarantinePath = existsSync(base) ? `${base}.${Date.now()}` : base;
+      await resilientRename(filePath, quarantinePath);
+      console.warn(`[ProjectSettingsManager] Quarantined settings file to ${quarantinePath}`);
+      return quarantinePath;
+    } catch {
+      return null;
+    }
+  }
+
+  private async broadcastCorruption(
+    quarantinedPath: string | null,
+    kind?: "future-version"
+  ): Promise<void> {
+    try {
+      // Lazy import keeps the workspace-host bundle clean of `BrowserWindow`.
+      // `ipc/utils` transitively pulls in `webContentsRegistry`, which calls
+      // `BrowserWindow.getAllWindows()` — a main-process-only API. The
+      // workspace-host UtilityProcess hits this path via `forgeProviderResolver
+      // → ProjectStore → ProjectSettingsManager`; from there, settings
+      // corruption silently no-ops (the failed import is caught below), and
+      // the main process surfaces the toast on its next read.
+      const { broadcastToRenderer } = await import("../ipc/utils.js");
+      const message = quarantinedPath
+        ? `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`
+        : "Project settings couldn't be read. Defaults are in effect until you reload the project.";
+      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        type: "error",
+        title: kind === "future-version" ? "Settings file too new" : "Project settings corrupted",
+        message:
+          kind === "future-version"
+            ? `${quarantinedPath ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. ` : ""}Defaults are in effect until you reload with a newer build.`
+            : message,
+      });
+    } catch (err) {
+      console.warn("[ProjectSettingsManager] Failed to broadcast corruption toast:", err);
     }
   }
 
@@ -318,13 +260,17 @@ export class ProjectSettingsManager {
       }
     }
 
-    let sanitizedSettings = {
+    // Build the runtime-canonical settings object, then run it through the
+    // codec's encoder which strips transient fields and prepends the version
+    // envelope. The save-path's SVG sanitization + command-overrides
+    // filtering happen here (boundary checks before persistence); shape and
+    // version concerns are owned by the codec.
+    let runtimeSettings: ProjectSettings = {
       ...settings,
       environmentVariables: nonSensitiveEnvVars,
       secureEnvironmentVariables: secureEnvVarKeys.length > 0 ? secureEnvVarKeys : undefined,
       insecureEnvironmentVariables: undefined,
       unresolvedSecureEnvironmentVariables: undefined,
-      agentInstructions: undefined,
       devServerDismissed:
         typeof settings.devServerDismissed === "boolean" ? settings.devServerDismissed : undefined,
       devServerAutoDetected:
@@ -344,16 +290,14 @@ export class ProjectSettingsManager {
           : undefined,
       turbopackEnabled:
         typeof settings.turbopackEnabled === "boolean" ? settings.turbopackEnabled : undefined,
-      terminalSettings: parseTerminalSettings(settings.terminalSettings),
-      notificationOverrides: parseNotificationOverrides(settings.notificationOverrides),
     };
 
-    this.notificationOverridesCache.set(projectId, sanitizedSettings.notificationOverrides);
+    this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
 
     if (settings.projectIconSvg) {
       const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
       if (sanitizeResult.ok) {
-        sanitizedSettings = { ...sanitizedSettings, projectIconSvg: sanitizeResult.svg };
+        runtimeSettings = { ...runtimeSettings, projectIconSvg: sanitizeResult.svg };
         if (sanitizeResult.modified) {
           console.warn(
             `[ProjectSettingsManager] Sanitized potentially unsafe SVG content before saving for project ${projectId}`
@@ -363,7 +307,7 @@ export class ProjectSettingsManager {
         console.warn(
           `[ProjectSettingsManager] Rejecting invalid SVG for project ${projectId}: ${sanitizeResult.error}`
         );
-        sanitizedSettings = { ...sanitizedSettings, projectIconSvg: undefined };
+        runtimeSettings = { ...runtimeSettings, projectIconSvg: undefined };
       }
     }
 
@@ -372,10 +316,7 @@ export class ProjectSettingsManager {
         console.warn(
           `[ProjectSettingsManager] Coercing non-array commandOverrides to undefined in project ${projectId}`
         );
-        sanitizedSettings = {
-          ...sanitizedSettings,
-          commandOverrides: undefined,
-        };
+        runtimeSettings = { ...runtimeSettings, commandOverrides: undefined };
       } else {
         const validOverrides = settings.commandOverrides.filter((override) => {
           if (!override || typeof override !== "object") return false;
@@ -404,23 +345,21 @@ export class ProjectSettingsManager {
           }
           return true;
         });
-        sanitizedSettings = {
-          ...sanitizedSettings,
+        runtimeSettings = {
+          ...runtimeSettings,
           commandOverrides: validOverrides.length > 0 ? validOverrides : undefined,
         };
       }
     }
 
+    const envelope = encodeEnvelope(runtimeSettings);
+    const jsonString = JSON.stringify(envelope, null, 2);
+
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientAtomicWriteFile(
-        filePath,
-        JSON.stringify(sanitizedSettings, null, 2),
-        "utf-8",
-        { mode: 0o600 }
-      );
+      await resilientAtomicWriteFile(filePath, jsonString, "utf-8", { mode: 0o600 });
     };
 
     try {

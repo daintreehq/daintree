@@ -7,6 +7,7 @@ import type {
   ActionDispatchResult,
   ActionDispatchOptions,
   ActionSource,
+  ActionDanger,
   ActionError,
 } from "../../shared/types/actions.js";
 import type { AnyActionDefinition } from "./actions/actionTypes";
@@ -15,6 +16,8 @@ import { notify } from "@/lib/notify";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -42,6 +45,37 @@ export function validateDefinitionInvariants(definition: AnyActionDefinition): s
     );
   }
 
+  if ((definition.description?.length ?? 0) < 80) {
+    violations.push(
+      `Action "${definition.id}" description is ${definition.description?.length ?? 0} chars ` +
+        `(minimum 80). Descriptions are the primary MCP tool docs — short descriptions ` +
+        `degrade model routing accuracy.`
+    );
+  }
+
+  if (definition.danger !== "safe" && !definition.dangerRationale?.trim()) {
+    violations.push(
+      `Action "${definition.id}" has danger="${definition.danger}" but no dangerRationale. ` +
+        `Rationale surfaces in elicitation confirmations so users see why the action is gated.`
+    );
+  }
+
+  const requiresArgs = definition.argsSchema
+    ? !definition.argsSchema.safeParse(undefined).success &&
+      !definition.argsSchema.safeParse({}).success
+    : rawSchemaRequiresArgs(definition.rawInputSchema);
+
+  if (
+    requiresArgs &&
+    (WORKBENCH_TIER_TOOLS as readonly string[]).includes(definition.id) &&
+    (!definition.examples || definition.examples.length === 0)
+  ) {
+    violations.push(
+      `Action "${definition.id}" is a workbench-tier arg-requiring action with no examples. ` +
+        `Examples improve MCP model accuracy by showing concrete arg shapes.`
+    );
+  }
+
   return violations;
 }
 
@@ -64,10 +98,13 @@ function isElectronApiAvailable(): boolean {
 /**
  * Converts a zod schema to JSON Schema format using Zod v4's native toJSONSchema.
  */
-function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | undefined {
+function zodSchemaToJsonSchema(
+  schema: z.ZodType,
+  io: "input" | "output" = "input"
+): Record<string, unknown> | undefined {
   try {
     return z.toJSONSchema(schema, {
-      io: "input",
+      io,
       unrepresentable: "any",
       reused: "inline",
       cycles: "ref",
@@ -126,34 +163,47 @@ export interface LastDispatchedAction {
 }
 
 /**
- * Cached fields from {@link ActionService.toManifestEntry} that depend solely
- * on the action definition (not on the runtime context). Computed once at
- * `register()` time and reused on every `list()` / `get()` call.
+ * Cached JSON Schemas derived from an action definition. Computed lazily on the
+ * first {@link ActionService.toManifestEntry} call that needs them, because
+ * `z.toJSONSchema()` is sync-CPU and ~308 built-in actions otherwise compile
+ * during cold start before any consumer needs the manifest (issue #8614).
  */
-type CachedManifestPartials = {
+type CachedSchemas = {
   inputSchema: Record<string, unknown> | undefined;
   outputSchema: Record<string, unknown> | undefined;
-  requiresArgs: boolean;
 };
 
-function computeManifestPartials(definition: AnyActionDefinition): CachedManifestPartials {
+function computeRequiresArgs(definition: AnyActionDefinition): boolean {
+  return definition.argsSchema
+    ? !definition.argsSchema.safeParse(undefined).success &&
+        !definition.argsSchema.safeParse({}).success
+    : rawSchemaRequiresArgs(definition.rawInputSchema);
+}
+
+function computeSchemas(definition: AnyActionDefinition): CachedSchemas {
   return {
     inputSchema: definition.argsSchema
       ? zodSchemaToJsonSchema(definition.argsSchema)
       : definition.rawInputSchema,
-    outputSchema: definition.resultSchema
-      ? zodSchemaToJsonSchema(definition.resultSchema)
-      : definition.rawOutputSchema,
-    requiresArgs: definition.argsSchema
-      ? !definition.argsSchema.safeParse(undefined).success &&
-        !definition.argsSchema.safeParse({}).success
-      : rawSchemaRequiresArgs(definition.rawInputSchema),
+    outputSchema:
+      definition.mcpOutputSchema && definition.resultSchema
+        ? zodSchemaToJsonSchema(definition.resultSchema, "output")
+        : definition.mcpOutputSchema
+          ? definition.rawOutputSchema
+          : undefined,
   };
 }
 
 export class ActionService {
   private registry = new Map<ActionId, AnyActionDefinition>();
-  private manifestPartialCache = new Map<ActionId, CachedManifestPartials>();
+  private requiresArgsCache = new Map<ActionId, boolean>();
+  /**
+   * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
+   * a given id; `.has(id)` distinguishes "not computed yet" from "computed but
+   * the schema is intentionally undefined" (the input/output fields can both
+   * be undefined for actions without schemas).
+   */
+  private schemaCache = new Map<ActionId, CachedSchemas>();
   private contextProvider: (() => ActionContext) | null = null;
   /**
    * Last eligible {actionId, args} captured after a successful dispatch from a
@@ -173,12 +223,15 @@ export class ActionService {
     // a warning before the throw would be spurious noise.
     validateActionDefinition(definition);
     const typed = definition as AnyActionDefinition;
-    // Compute partials before mutating the registry: if a custom validator
-    // inside computeManifestPartials throws, we don't want has() to start
-    // returning true for a half-registered action.
-    const partials = computeManifestPartials(typed);
+    // Compute requiresArgs before mutating the registry: if argsSchema.safeParse
+    // throws, we don't want has() to start returning true for a half-registered
+    // action. JSON-schema compilation is intentionally deferred to first
+    // toManifestEntry() call (issue #8614) — bulk-compiling 308 schemas at
+    // startup would block ~150-300ms of frame budget for data no consumer
+    // needs until the action palette or MCP manifest is first opened.
+    const requiresArgs = computeRequiresArgs(typed);
     this.registry.set(definition.id, typed);
-    this.manifestPartialCache.set(definition.id, partials);
+    this.requiresArgsCache.set(definition.id, requiresArgs);
   }
 
   /** Whether an action id is present in the registry. */
@@ -189,7 +242,17 @@ export class ActionService {
   /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
   unregister(id: ActionId): void {
     this.registry.delete(id);
-    this.manifestPartialCache.delete(id);
+    this.requiresArgsCache.delete(id);
+    this.schemaCache.delete(id);
+  }
+
+  /**
+   * Iterate registered action ids without materializing manifest entries. Avoids
+   * the JSON-schema compilation that `list()` triggers — use this when only
+   * ids are needed (e.g. plugin id validation at startup).
+   */
+  listIds(): IterableIterator<ActionId> {
+    return this.registry.keys();
   }
 
   setContextProvider(provider: (() => ActionContext) | null): void {
@@ -222,6 +285,22 @@ export class ActionService {
 
     const context = options?.contextOverride ?? this.getActionContext();
 
+    if (options?.contextOverride) {
+      const liveContext = this.getActionContext();
+      if (
+        liveContext.projectId &&
+        options.contextOverride.projectId &&
+        liveContext.projectId !== options.contextOverride.projectId
+      ) {
+        const error: ActionError = {
+          code: "BINDING_STALE",
+          message:
+            "The session context no longer matches live state — this session was bound to a project that is no longer active. Do not retry.",
+        };
+        return { ok: false, error };
+      }
+    }
+
     let validatedArgs = args;
     if (definition.argsSchema) {
       const validation = definition.argsSchema.safeParse(args);
@@ -229,7 +308,7 @@ export class ActionService {
         const error: ActionError = {
           code: "VALIDATION_ERROR",
           message: `Invalid arguments for action "${actionId}"`,
-          details: validation.error.format(),
+          details: z.prettifyError(validation.error),
         };
         return { ok: false, error };
       }
@@ -292,7 +371,12 @@ export class ActionService {
     const monotonicStartMs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
     try {
-      const result = await definition.run(validatedArgs, context);
+      // Derive (don't mutate — `context` may be a shared object from the
+      // context provider) a run-scoped context carrying the dispatch source
+      // so source-aware definitions (plugin synthetic actions) can avoid
+      // double-confirming an agent dispatch the MCP bridge already gated.
+      const runContext: ActionContext = { ...context, dispatchSource: source };
+      const result = await definition.run(validatedArgs, runContext);
       const durationMs =
         (typeof performance !== "undefined" ? performance.now() : Date.now()) - monotonicStartMs;
       if (
@@ -313,7 +397,9 @@ export class ActionService {
         timestamp: wallClockStartMs,
         category: definition.category,
         durationMs,
+        danger: definition.danger,
         safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
+        confirmed: options?.confirmed,
       });
       this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
@@ -365,14 +451,22 @@ export class ActionService {
       }
     }
 
-    // Defensive: register() populates the cache, so a miss should only happen
-    // if a test bypasses register() and writes to the registry directly.
-    // Compute on the fly rather than throwing, matching getActionContext()'s
-    // graceful-degradation pattern.
-    let cached = this.manifestPartialCache.get(definition.id);
-    if (!cached) {
-      cached = computeManifestPartials(definition);
-      this.manifestPartialCache.set(definition.id, cached);
+    // requiresArgs is populated by register(); the defensive fallback covers
+    // tests that bypass register() and write to the registry directly,
+    // matching getActionContext()'s graceful-degradation pattern.
+    let requiresArgs = this.requiresArgsCache.get(definition.id);
+    if (requiresArgs === undefined) {
+      requiresArgs = computeRequiresArgs(definition);
+      this.requiresArgsCache.set(definition.id, requiresArgs);
+    }
+
+    // JSON schemas are deferred from register-time to first-use (issue #8614).
+    // Use .has() rather than truthy-check so an action whose schemas are both
+    // intentionally undefined isn't recomputed on every call.
+    let schemas = this.schemaCache.get(definition.id);
+    if (!this.schemaCache.has(definition.id)) {
+      schemas = computeSchemas(definition);
+      this.schemaCache.set(definition.id, schemas);
     }
 
     // Shallow-copy the cached schemas so that if a downstream consumer
@@ -387,14 +481,22 @@ export class ActionService {
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,
-      inputSchema: cached.inputSchema ? { ...cached.inputSchema } : undefined,
-      outputSchema: cached.outputSchema ? { ...cached.outputSchema } : undefined,
+      band: deriveBand({
+        id: definition.id,
+        danger: definition.danger,
+        category: definition.category,
+      }),
+      inputSchema: schemas?.inputSchema ? { ...schemas.inputSchema } : undefined,
+      outputSchema: schemas?.outputSchema ? { ...schemas.outputSchema } : undefined,
       enabled,
       disabledReason,
-      requiresArgs: cached.requiresArgs,
+      requiresArgs,
       keywords: definition.keywords?.slice(),
       ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
+      ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
+      ...(definition.examples ? { examples: [...definition.examples] } : {}),
+      ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
     };
   }
 
@@ -498,7 +600,9 @@ export class ActionService {
     timestamp: number;
     category: string;
     durationMs: number;
+    danger: ActionDanger;
     safeArgs?: Record<string, unknown>;
+    confirmed?: boolean;
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
 
@@ -511,7 +615,9 @@ export class ActionService {
         timestamp: payload.timestamp,
         category: payload.category,
         durationMs: payload.durationMs,
+        danger: payload.danger,
         ...(payload.safeArgs ? { safeArgs: payload.safeArgs } : {}),
+        ...(payload.confirmed !== undefined ? { confirmed: payload.confirmed } : {}),
       });
     } catch (err) {
       logWarn("Failed to emit action:dispatched event", {

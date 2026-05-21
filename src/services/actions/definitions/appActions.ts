@@ -194,23 +194,14 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         await appThemeClient.setColorScheme(target.id);
       } catch (error) {
         logError("Failed to persist theme toggle", error);
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           priority: "high",
           message: `Couldn't save theme preference — '${target.name}' is applied but the choice will be lost on restart.`,
           duration: 3000,
         });
-        return;
       }
-      notify({
-        type: "info",
-        priority: "high",
-        message: `Theme: ${target.name}`,
-        duration: 2000,
-        // Confirmation of a user-triggered toggle — the user already knows; no
-        // need to bump the unread badge in the notification center.
-        countable: false,
-      });
     },
   }));
 

@@ -13,7 +13,11 @@ import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { resolveBrandChip } from "@/lib/brandIcon";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { getInstallBlocksForCurrentOS, isBlockExecutable } from "@/lib/agentInstall";
+import {
+  extractInspectUrl,
+  getInstallBlocksForCurrentOS,
+  isBlockExecutable,
+} from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
@@ -327,7 +331,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                     Run this command in your terminal. It will be detected automatically.
                   </div>
                   {currentBlock.commands.map((cmd) => (
-                    <CopyableCommand key={cmd} command={cmd} />
+                    <CopyableCommand key={cmd} command={cmd} inspectUrl={extractInspectUrl(cmd)} />
                   ))}
                 </div>
               )}
@@ -363,7 +367,11 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                     <div className="space-y-1">
                       <div className="text-[11px] text-daintree-text/40">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (
-                        <CopyableCommand key={cmd} command={cmd} />
+                        <CopyableCommand
+                          key={cmd}
+                          command={cmd}
+                          inspectUrl={extractInspectUrl(cmd)}
+                        />
                       ))}
                     </div>
                   )}

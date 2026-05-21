@@ -1,6 +1,7 @@
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
+import { isClientGitError } from "@/utils/clientGitError";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -14,7 +15,13 @@ export interface PushErrorState {
 }
 
 export type PushBannerCta =
-  | { kind: "settings-github"; label: string }
+  /**
+   * Routes to the active forge provider's settings subtab. `providerId` is the
+   * resolved provider's `contribution.id` (the Code-forge settings subtab key),
+   * supplied at render time by {@link getPushBannerConfig} — the static config
+   * table can't know the runtime-resolved provider.
+   */
+  | { kind: "settings-forge"; label: string; providerId: string }
   | { kind: "retry"; label: string }
   | { kind: "pull-rebase"; label: string }
   | { kind: "force-push"; label: string };
@@ -53,7 +60,9 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
   "auth-failed": {
     message: getGitRecoveryHint("auth-failed") ?? "Authentication failed.",
     detailPolicy: "hide",
-    cta: { kind: "settings-github", label: "Open GitHub settings" },
+    // The settings CTA is stamped at render time by getPushBannerConfig once
+    // the active forge provider resolves — no CTA when it can't, since there's
+    // no provider-agnostic settings route to send the user to.
   },
   "network-unavailable": {
     message: getGitRecoveryHint("network-unavailable") ?? "Could not reach the remote.",
@@ -132,16 +141,21 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
 /**
  * Pulls the divergence-recovery fields off a thrown value. `GitOperationError`
  * promotes `gitReason`/`leaseSha`/`branchName` to top-level fields on the
- * serialized error envelope (`SerializedError`), and the preload's
- * `_unwrappingInvoke` reattaches them onto the reconstructed Error before it
- * reaches the renderer. Each field is runtime-checked before use.
+ * serialized error envelope (`SerializedError`), but Electron's contextBridge
+ * strips own Error properties when the preload's reconstructed error crosses
+ * the preload→renderer realm. The preload encodes the discriminant fields
+ * into a `[GitError|<reason>|<leaseSha>|<branchName>]` message prefix;
+ * {@link isClientGitError} decodes it and side-effects the fields back onto
+ * the error. Same-realm throws (renderer tests, no contextBridge crossing)
+ * fall through to the duck-typed reads below.
  */
 export function readGitErrorFields(err: unknown): {
   gitReason?: GitOperationReason;
   leaseSha?: string;
   branchName?: string;
 } {
-  if (typeof err !== "object" || err === null) return {};
+  if (!(err instanceof Error)) return {};
+  isClientGitError(err);
   const gitReason = Reflect.get(err, "gitReason");
   const leaseSha = Reflect.get(err, "leaseSha");
   const branchName = Reflect.get(err, "branchName");
@@ -155,8 +169,30 @@ export function readGitErrorFields(err: unknown): {
   };
 }
 
-export function getPushBannerConfig(state: PushErrorState, behindCount?: number): PushBannerConfig {
+export function getPushBannerConfig(
+  state: PushErrorState,
+  behindCount?: number,
+  /**
+   * Resolved forge provider's `contribution.id`. When present, `auth-failed`
+   * gains a "Open forge settings" CTA routed to that provider's settings
+   * subtab. When absent (no provider resolvable), the banner shows the message
+   * with no settings CTA — there's no provider-agnostic route to offer.
+   */
+  forgeProviderId?: string | null
+): PushBannerConfig {
   const base = PUSH_BANNER_CONFIGS[state.reason];
+  if (state.reason === "auth-failed") {
+    return forgeProviderId
+      ? {
+          ...base,
+          cta: {
+            kind: "settings-forge",
+            label: "Open forge settings",
+            providerId: forgeProviderId,
+          },
+        }
+      : base;
+  }
   // `push-rejected-outdated` is the only reason whose copy and CTAs depend on
   // runtime state (behindCount + whether we captured a lease SHA). Override the
   // table entry with a dynamic message and an optional force-push secondary
@@ -179,17 +215,6 @@ export function getPushBannerConfig(state: PushErrorState, behindCount?: number)
     };
   }
   return base;
-}
-
-/**
- * Extracts a `GH###` code (e.g. `GH006`, `GH013`) from raw stderr — these are
- * GitHub's stable, googleable identifiers for protected-branch and ruleset
- * rejections. Surfacing them above the collapsed details gives users a search
- * key without making them open the raw output.
- */
-export function extractGitHubErrorCode(rawMessage: string): string | undefined {
-  const match = /\bGH\d{3,}\b/.exec(rawMessage);
-  return match ? match[0] : undefined;
 }
 
 const BASE_BRANCH_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {

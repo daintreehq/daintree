@@ -13,6 +13,8 @@ const {
   debounceCancelSpy,
   compareWorktreesMock,
   openPRMock,
+  openExternalMock,
+  classifyPushErrorMock,
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   scanConflictMarkersMock,
@@ -38,6 +40,16 @@ const {
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
   openPRMock: vi.fn().mockResolvedValue(undefined),
+  openExternalMock: vi.fn().mockResolvedValue(undefined),
+  // Mirrors the real GitHub forge provider: extracts a GH### code from stderr
+  // and reports the resolved provider id used to route the settings CTA.
+  classifyPushErrorMock: vi.fn(async (_cwd: string, stderr: string) => {
+    const match = /\bGH\d{3,}\b/.exec(String(stderr));
+    return {
+      providerId: "github",
+      classification: match ? { code: match[0] } : null,
+    };
+  }),
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   scanConflictMarkersMock: vi.fn().mockResolvedValue([]),
@@ -113,6 +125,14 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 vi.mock("@/clients/githubClient", () => ({
   githubClient: { openPR: openPRMock },
+}));
+
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { openExternal: openExternalMock },
+}));
+
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: { classifyPushError: classifyPushErrorMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -296,6 +316,30 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
     lastActivityTimestamp: null,
   }) as unknown as WorktreeState;
 
+/**
+ * `checkoutOursTheirs` now gates on a per-file `ConfirmDialog` (#8242). The
+ * row button only opens the dialog; clicking its `Take ours` / `Take theirs`
+ * confirm button is what reaches the IPC.
+ */
+async function confirmCheckout(side: "ours" | "theirs"): Promise<void> {
+  const dialog = await screen.findByRole("alertdialog");
+  const confirmBtn = within(dialog).getByRole("button", {
+    name: side === "ours" ? "Take ours" : "Take theirs",
+  });
+  fireEvent.click(confirmBtn);
+}
+
+/**
+ * `pullRebase` now gates on a `ConfirmDialog` showing the divergence preview
+ * (#8242). The push-error CTA only opens the dialog; clicking its
+ * `Pull and rebase` confirm button is what reaches the IPC.
+ */
+async function confirmPullRebase(): Promise<void> {
+  const dialog = await screen.findByRole("alertdialog");
+  const confirmBtn = within(dialog).getByRole("button", { name: "Pull and rebase" });
+  fireEvent.click(confirmBtn);
+}
+
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
   const mockUnsubscribe = vi.fn();
@@ -356,6 +400,11 @@ describe("ReviewHub", () => {
     listRemoteCommitsMock.mockReset().mockResolvedValue([]);
     listCommitsMock.mockReset().mockResolvedValue({ items: [], hasMore: false, total: 0 });
     actionDispatchMock.mockReset().mockResolvedValue({ ok: true });
+    openExternalMock.mockReset().mockResolvedValue(undefined);
+    classifyPushErrorMock.mockReset().mockImplementation(async (_cwd: string, stderr: string) => {
+      const match = /\bGH\d{3,}\b/.exec(String(stderr));
+      return { providerId: "github", classification: match ? { code: match[0] } : null };
+    });
 
     Object.defineProperty(window, "electron", {
       value: {
@@ -950,7 +999,50 @@ describe("ReviewHub", () => {
       prCiStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
     }) {
       const existing = worktreeStoreData.current.get("main-wt")!;
-      worktreeStoreData.current.set("main-wt", { ...existing, ...prData });
+      const mappedState =
+        prData.prState === "closed"
+          ? ("closed" as const)
+          : prData.prState === "merged"
+            ? ("merged" as const)
+            : ("open" as const);
+      const ciState =
+        prData.prCiStatus === "SUCCESS"
+          ? ("success" as const)
+          : prData.prCiStatus === "FAILURE" || prData.prCiStatus === "ERROR"
+            ? ("failure" as const)
+            : prData.prCiStatus === "PENDING" || prData.prCiStatus === "EXPECTED"
+              ? ("pending" as const)
+              : undefined;
+      worktreeStoreData.current.set("main-wt", {
+        ...existing,
+        ...prData,
+        linked: {
+          providerId: "github",
+          pr: {
+            ref: {
+              providerId: "github",
+              owner: "test",
+              repo: "test",
+              number: prData.prNumber,
+              rawData: {},
+            },
+            state: mappedState,
+            url: prData.prUrl,
+            ...(ciState
+              ? {
+                  ciStatus: {
+                    state: ciState,
+                    total: 0,
+                    passed: 0,
+                    failed: 0,
+                    pending: 0,
+                    rawData: null,
+                  },
+                }
+              : {}),
+          },
+        },
+      });
     }
 
     it("shows PR badge with number and state when worktree has a PR", async () => {
@@ -984,11 +1076,14 @@ describe("ReviewHub", () => {
 
       // Clicking the pill text does not open the PR
       fireEvent.click(screen.getByText("#42"));
-      expect(openPRMock).not.toHaveBeenCalled();
+      expect(openExternalMock).not.toHaveBeenCalled();
 
-      // Clicking the external-link button opens the PR
+      // Clicking the external-link button opens the PR via the generic
+      // system opener (no GitHub-specific IPC).
       fireEvent.click(screen.getByRole("button", { name: /view pull request #42/i }));
-      expect(openPRMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+      expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+      // The GitHub-specific IPC must not be used (works for any forge now).
+      expect(openPRMock).not.toHaveBeenCalled();
     });
 
     it("shows 'No PR' when branch has remote but no PR", async () => {
@@ -1275,6 +1370,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
       fireEvent.click(takeOurs);
+      await confirmCheckout("ours");
 
       await waitFor(() => {
         expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "ours");
@@ -1289,10 +1385,24 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeTheirs = screen.getByRole("button", { name: /Take theirs for src\/app\.ts/i });
       fireEvent.click(takeTheirs);
+      await confirmCheckout("theirs");
 
       await waitFor(() => {
         expect(checkoutOursTheirsMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts", "theirs");
       });
+    });
+
+    it("does not call checkoutOursTheirs until the confirm dialog is accepted (#8242)", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      fireEvent.click(screen.getByRole("button", { name: /Take ours for src\/app\.ts/i }));
+
+      // Dialog is open but unconfirmed — the IPC must not have fired.
+      await screen.findByRole("alertdialog");
+      expect(checkoutOursTheirsMock).not.toHaveBeenCalled();
     });
 
     it("renders the Abort action inside the operation chrome, not the footer", async () => {
@@ -1380,6 +1490,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
       fireEvent.click(takeOurs);
+      await confirmCheckout("ours");
 
       await waitFor(() => {
         // The row reappears after rollback — the Take ours button is still rendered.
@@ -1408,6 +1519,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
       fireEvent.click(takeOurs);
+      await confirmCheckout("ours");
 
       // After the click, the optimistic row disappears for `src/app.ts` —
       // only `src/other.ts` remains conflicted. Continue must still be
@@ -1638,7 +1750,7 @@ describe("ReviewHub", () => {
       });
     }
 
-    it("shows auth-failed banner with Open GitHub settings CTA and dispatches settings tab", async () => {
+    it("shows auth-failed banner with Open forge settings CTA routed to the resolved provider", async () => {
       const rawError = "fatal: Authentication failed for 'https://github.com/foo/bar.git/'";
       pushMock.mockRejectedValue(
         Object.assign(new Error(rawError), {
@@ -1657,15 +1769,88 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
       expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();
 
-      const cta = screen.getByTestId("review-hub-push-error-cta");
-      expect(cta.textContent).toMatch(/Open GitHub settings/i);
+      // The settings CTA is stamped once the forge provider resolves (async).
+      const cta = await screen.findByTestId("review-hub-push-error-cta");
+      expect(cta.textContent).toMatch(/Open forge settings/i);
+      expect(classifyPushErrorMock).toHaveBeenCalledWith(
+        WORKTREE_PATH,
+        expect.stringContaining("Authentication failed")
+      );
       fireEvent.click(cta);
 
       expect(actionDispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
-        { tab: "github" },
+        { tab: "code-forge", subtab: "github" },
         { source: "user" }
       );
+    });
+
+    it("omits the settings CTA when push-error classification fails (no provider resolved)", async () => {
+      classifyPushErrorMock.mockRejectedValue(new Error("no forge provider"));
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await triggerCommitAndPush();
+
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).toBe("auth-failed");
+      // Message still shows, but there is no provider-agnostic settings route.
+      await waitFor(() => expect(classifyPushErrorMock).toHaveBeenCalled());
+      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
+    });
+
+    it("does not show a stale code when a retry surfaces a different error", async () => {
+      // First failure is network-unavailable (has a Retry CTA) and the stderr
+      // carries a GH code so the default regex mock surfaces it.
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com — GH999"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH999");
+
+      // Retry surfaces a code-less auth failure; hold the classification
+      // pending so we can observe the in-flight window.
+      let releaseSecond: (v: { providerId: string; classification: null }) => void = () => {};
+      classifyPushErrorMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSecond = resolve;
+          })
+      );
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("fatal: Authentication failed for 'https://example.com/'"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "auth-failed"
+        )
+      );
+      // While the second classification is pending, the stale GH999 must be gone.
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
+
+      await act(async () => {
+        releaseSecond({ providerId: "github", classification: null });
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
     });
 
     it("shows push-rejected-outdated banner with Pull-and-rebase primary CTA only when leaseSha is missing", async () => {
@@ -1729,12 +1914,39 @@ describe("ReviewHub", () => {
         fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
         await Promise.resolve();
       });
+      await act(async () => {
+        await confirmPullRebase();
+        await Promise.resolve();
+      });
 
       await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledWith(WORKTREE_PATH));
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
       // refresh() called: once on initial load + once after commit (in
       // handleCommitAndPush) + once after pull-rebase success.
       expect(getStagingStatusMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not call pullRebase until the confirm dialog is accepted (#8242)", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("! [rejected]"), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-outdated",
+          leaseSha: "abc123",
+          branchName: "feature/x",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+
+      // Dialog is open but unconfirmed — the rebase IPC must not have fired.
+      await screen.findByRole("alertdialog");
+      expect(pullRebaseMock).not.toHaveBeenCalled();
     });
 
     it("Pull-and-rebase failure surfaces conflict-unresolved through the banner", async () => {
@@ -1759,6 +1971,10 @@ describe("ReviewHub", () => {
 
       await act(async () => {
         fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await confirmPullRebase();
         await Promise.resolve();
       });
 
@@ -1842,7 +2058,8 @@ describe("ReviewHub", () => {
       expect(banner.getAttribute("data-reason")).toBe("push-rejected-policy");
       expect(banner.textContent).toMatch(/protected branch/i);
       expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
-      expect(screen.getByTestId("review-hub-push-error-code").textContent).toBe("GH006");
+      // The code is resolved async via the forge provider classification.
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH006");
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
 
       const toggle = screen.getByTestId("review-hub-push-error-toggle");
@@ -2079,7 +2296,7 @@ describe("ReviewHub", () => {
       await triggerCommitAndPush();
 
       await screen.findByTestId("review-hub-push-error");
-      expect(screen.getByTestId("review-hub-push-error-code").textContent).toBe("GH013");
+      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH013");
       // Code stays visible without expanding the toggle.
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
     });
@@ -2690,29 +2907,34 @@ describe("ReviewHub", () => {
       renderOpen();
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () =>
+        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
 
       // Position cursor at 0 (empty textarea)
-      focusTextareaAt(textarea, 0);
+      focusTextareaAt(getTextarea(), 0);
 
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
       expect(listCommitsMock).toHaveBeenCalledWith({
         cwd: WORKTREE_PATH,
         limit: 8,
       });
 
       // After fetch, the textarea should show the most recent commit message
-      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"));
+      await waitFor(() => expect(getTextarea().value).toBe("feat: most recent commit"));
 
       // ArrowUp again → next older commit (with body)
-      focusTextareaAt(textarea, 0);
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("fix: older commit\n\nDetailed body text."));
+      focusTextareaAt(getTextarea(), 0);
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
+      await waitFor(() =>
+        expect(getTextarea().value).toBe("fix: older commit\n\nDetailed body text.")
+      );
 
       // ArrowUp again → no more commits, stays at last
-      focusTextareaAt(textarea, 0);
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("fix: older commit\n\nDetailed body text."));
+      focusTextareaAt(getTextarea(), 0);
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
+      await waitFor(() =>
+        expect(getTextarea().value).toBe("fix: older commit\n\nDetailed body text.")
+      );
     });
 
     it("ArrowDown unwinds through history and restores original draft", async () => {

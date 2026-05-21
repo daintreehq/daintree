@@ -58,6 +58,7 @@ export function fireWatchNotification(
     message: `${label} finished its task`,
     duration: 5000,
     correlationId: panelId,
+    context: { eventKind: "completed", panelId },
     action: {
       label: "Go to terminal",
       successLabel: "Opened",

@@ -46,6 +46,7 @@ const base = {
   timestamp: 1_700_000_000_000,
   category: "test",
   durationMs: 5,
+  danger: "safe" as const,
 };
 
 describe("events IPC handler — action:dispatched", () => {
@@ -135,6 +136,19 @@ describe("events IPC handler — action:dispatched", () => {
     const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
     expect(normalized.category).toBe("");
     expect(normalized.durationMs).toBe(0);
+    expect(normalized.danger).toBe("safe");
+    cleanup();
+  });
+
+  it("defaults missing or invalid danger to safe", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      danger: "not-a-valid-danger",
+    });
+
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.danger).toBe("safe");
     cleanup();
   });
 
@@ -149,6 +163,45 @@ describe("events IPC handler — action:dispatched", () => {
     const { emit, cleanup } = setup();
     ipcMainMock._invoke("events:emit", "agent:killed", { id: "x" });
     expect(emit).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("preserves confirmed:true through normalization", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      confirmed: true,
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const normalized = emit.mock.calls[0]![1] as { confirmed?: boolean };
+    expect(normalized.confirmed).toBe(true);
+    cleanup();
+  });
+
+  it("preserves confirmed:false through normalization", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      confirmed: false,
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const normalized = emit.mock.calls[0]![1] as { confirmed?: boolean };
+    expect(normalized.confirmed).toBe(false);
+    cleanup();
+  });
+
+  it("strips non-boolean confirmed values", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      confirmed: "true",
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const normalized = emit.mock.calls[0]![1] as { confirmed?: unknown };
+    expect(normalized.confirmed).toBeUndefined();
     cleanup();
   });
 });

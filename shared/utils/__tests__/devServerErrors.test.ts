@@ -15,6 +15,7 @@ describe("devServerErrors", () => {
           type: "port-conflict",
           message: "Port 3000 is already in use. Stop the other server or use a different port.",
           port: "3000",
+          recommendedActionId: "devPreview.restartAndClearCache",
         });
       });
 
@@ -25,6 +26,7 @@ describe("devServerErrors", () => {
           type: "port-conflict",
           message: "Port 5173 is already in use. Stop the other server or use a different port.",
           port: "5173",
+          recommendedActionId: "devPreview.restartAndClearCache",
         });
       });
 
@@ -35,6 +37,7 @@ describe("devServerErrors", () => {
           type: "port-conflict",
           message: "Port 8080 is already in use. Stop the other server or use a different port.",
           port: "8080",
+          recommendedActionId: "devPreview.restartAndClearCache",
         });
       });
 
@@ -53,6 +56,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependency: vite",
           module: "vite",
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -63,6 +67,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependencies detected",
           module: undefined,
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -73,6 +78,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependencies detected",
           module: undefined,
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -83,6 +89,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependency: react",
           module: "react",
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -93,6 +100,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependencies detected",
           module: undefined,
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -103,6 +111,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependency: node-pty",
           module: "node-pty",
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
 
@@ -114,6 +123,7 @@ describe("devServerErrors", () => {
           type: "missing-dependencies",
           message: "Missing dependencies detected",
           module: undefined,
+          recommendedActionId: "devPreview.reinstallAndRestart",
         });
       });
     });
@@ -199,6 +209,25 @@ describe("devServerErrors", () => {
         message: "Unknown error",
       };
       expect(isRecoverableError(error)).toBe(false);
+    });
+  });
+
+  describe("recommendedActionId (#8276)", () => {
+    it("maps port-conflict to the cache-clear remedy", () => {
+      const error = detectDevServerError(
+        "Error: listen EADDRINUSE: address already in use :::3000"
+      );
+      expect(error?.recommendedActionId).toBe("devPreview.restartAndClearCache");
+    });
+
+    it("maps missing-dependencies to the reinstall remedy", () => {
+      const error = detectDevServerError("Error: Cannot find module 'vite'");
+      expect(error?.recommendedActionId).toBe("devPreview.reinstallAndRestart");
+    });
+
+    it("leaves permission errors without a recommended action", () => {
+      const error = detectDevServerError("Error: EACCES: permission denied, open '/etc/passwd'");
+      expect(error?.recommendedActionId).toBeUndefined();
     });
   });
 });

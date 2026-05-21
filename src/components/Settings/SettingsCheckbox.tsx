@@ -13,6 +13,7 @@ interface SettingsCheckboxProps {
   onChange: (value: boolean) => void;
   disabled?: boolean;
   error?: string;
+  touched?: boolean;
   scope?: "default" | "global" | "project";
 }
 
@@ -24,6 +25,7 @@ export function SettingsCheckbox({
   onChange,
   disabled,
   error,
+  touched = true,
   scope,
 }: SettingsCheckboxProps) {
   const generatedId = useId();
@@ -31,7 +33,7 @@ export function SettingsCheckbox({
   const descriptionId = useId();
   const errorId = useId();
 
-  const isError = error !== undefined && error !== "";
+  const isError = touched && error !== undefined && error !== "";
   const describedBy = [isError ? errorId : null, descriptionId].filter(Boolean).join(" ");
 
   const scopeBadge = scope ? (

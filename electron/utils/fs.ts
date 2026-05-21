@@ -47,13 +47,25 @@ function generateTempPath(filePath: string): string {
   return `${filePath}.${suffix}.tmp`;
 }
 
+function isUnsupportedDirectorySyncError(error: unknown): boolean {
+  const code =
+    error != null && typeof error === "object" && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
+  return code === "EPERM" || code === "EINVAL";
+}
+
 async function syncParentDirectory(filePath: string): Promise<void> {
   if (process.platform === "win32") return;
   const dirPath = dirname(filePath);
   let dirHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     dirHandle = await open(dirPath, "r");
-    await dirHandle.sync();
+    try {
+      await dirHandle.sync();
+    } catch (error) {
+      if (!isUnsupportedDirectorySyncError(error)) throw error;
+    }
   } finally {
     try {
       await dirHandle?.close();
@@ -69,7 +81,11 @@ function syncParentDirectorySync(filePath: string): void {
   let fd: number | undefined;
   try {
     fd = openSync(dirPath, "r");
-    fsyncSync(fd);
+    try {
+      fsyncSync(fd);
+    } catch (error) {
+      if (!isUnsupportedDirectorySyncError(error)) throw error;
+    }
   } finally {
     if (fd !== undefined) {
       try {

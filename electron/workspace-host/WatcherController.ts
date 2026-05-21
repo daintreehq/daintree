@@ -33,6 +33,13 @@ export interface WatcherControllerHost {
   onTriggerUpdate(): void;
   onInotifyLimitReached(worktreeId: string): void;
   onEmfileLimitReached(worktreeId: string): void;
+  /**
+   * Fired when a recursive watcher successfully re-arms after a prior
+   * degradation (ENOSPC/EMFILE or any runtime failure that forced the
+   * git-only fallback). Lets the host reset its one-shot degradation
+   * guards and clear the persistent degraded indicator.
+   */
+  onWatcherRecovered?(): void;
 }
 
 /**
@@ -53,6 +60,13 @@ export class WatcherController {
   private retryBudgetResetCount = 0;
   private downgradeTimer: NodeJS.Timeout | null = null;
   private disposed = false;
+  /**
+   * Set when the watcher drops to the git-only fallback after a recursive
+   * failure; cleared when the recursive arm is restored. Drives the
+   * `onWatcherRecovered` signal so recovery only fires after a genuine
+   * degradation — not on the normal "none" → "recursive" cold start.
+   */
+  private wasDegraded = false;
 
   constructor(private readonly host: WatcherControllerHost) {}
 
@@ -122,12 +136,23 @@ export class WatcherController {
     if (started) {
       this.gitWatcher.value = toDisposable(() => watcher.dispose());
       this.gitWatcherMode = mode;
+      if (mode === "recursive" && this.wasDegraded) {
+        // Recursive coverage restored after a degradation. Signal recovery
+        // exactly once per degradation episode so the host can reset its
+        // one-shot guards and clear the persistent degraded indicator.
+        this.wasDegraded = false;
+        this.host.onWatcherRecovered?.();
+      }
       // Retry budget is managed by stop(true) (reset) and scheduleRetry()
       // (increment). Resetting it here would defeat exhaustion — a failing
       // git-only fallback path would keep getting fresh budget every cycle.
     } else {
       watcher.dispose();
       if (mode === "recursive") {
+        // Recursive arm failed — mark degraded so the eventual successful
+        // re-arm signals recovery, even if the watcher returned false without
+        // routing through `onWatcherFailed`.
+        this.wasDegraded = true;
         // The recursive watcher fires `onWatcherFailed` synchronously on
         // startup ENOSPC/EMFILE before returning false, so handleWatcherFailed
         // may have already installed a git-only fallback by this point. Only
@@ -172,6 +197,11 @@ export class WatcherController {
       }
       this.watcherRetryCount = 0;
       this.retryBudgetResetCount = 0;
+      // A true shutdown / feature-disable ends the degradation episode, so a
+      // later re-arm is a fresh start, not a recovery. Benign rotations
+      // (stop(false) via update()) preserve the flag so a legitimate
+      // recovery still signals — mirrors the retry-budget lifecycle.
+      this.wasDegraded = false;
     }
     this.gitWatchRefreshPending = false;
   }
@@ -382,6 +412,11 @@ export class WatcherController {
    */
   private handleWatcherFailed(): void {
     if (this.disposed) return;
+    // Universal degradation point: GitFileWatcher fires onWatcherFailed for
+    // ENOSPC/EMFILE limits (in addition to the limit callbacks) and for any
+    // other runtime failure. Arm the recovery signal for the next successful
+    // recursive re-arm.
+    this.wasDegraded = true;
     this.gitWatcher.clear();
     this.gitWatcherMode = "none";
     this.start("git-only");

@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { CircleDot } from "lucide-react";
+import { CircleDot, Clock, CloudOff } from "lucide-react";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useGitHubTooltip";
 import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
 import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
-import { freshnessOpacityClass, freshnessSuffix } from "@/components/Layout/FreshnessUtils";
+import { freshnessClass, badgeFreshnessSuffix } from "@/components/Layout/FreshnessUtils";
 import { IssueTooltipContent, TooltipLoading, TokenMissingTooltip } from "./GitHubTooltipContent";
 
 interface IssueBadgeProps {
@@ -29,6 +30,12 @@ export function IssueBadge({
   underlineOnHover,
   rowLastUpdatedAt,
 }: IssueBadgeProps) {
+  // Detects the cold-title gap by comparing issueNumber to its previous-render
+  // value via a ref; the lag (ref written in effect, no re-render) is what
+  // keeps `isColdTitleGap` true across the 400ms suppression window. Replacing
+  // the ref with state breaks that lag and flashes the #NNN fallback.
+  "use no memo";
+
   const { data, loading, error, missingToken, fetchTooltip, reset } = useIssueTooltip(
     worktreePath,
     issueNumber
@@ -42,15 +49,35 @@ export function IssueBadge({
     onOpen,
   });
 
-  const { freshnessLevel, cacheLastUpdatedAt, now } = useGitHubBadgeFreshness(
-    "issue",
-    rowLastUpdatedAt
-  );
+  // Suppress the raw "#NNN" monospace fallback during the brief window where
+  // a *freshly-set* issue number has no title yet (the GitHub title fetch is
+  // in-flight, ~100–500ms). Per the Doherty Threshold, show nothing for the
+  // first 400ms rather than flashing the number, then fall through (#8079).
+  // Title preservation for *unchanged* issue numbers is handled upstream in
+  // the store, so this gate only fires on genuine issue-number transitions.
+  const prevIssueNumber = useRef<number | undefined>(undefined);
+  const isColdTitleGap = !issueTitle && issueNumber !== prevIssueNumber.current;
+  const showColdFallback = useDohertyGate(isColdTitleGap);
+  useEffect(() => {
+    prevIssueNumber.current = issueNumber;
+  }, [issueNumber]);
+
+  const { freshnessLevel, freshnessCause, cacheLastUpdatedAt, rateLimitResetAt, now } =
+    useGitHubBadgeFreshness("issue", rowLastUpdatedAt);
 
   const freshnessSuffixStr = useMemo(
-    () => freshnessSuffix(freshnessLevel, cacheLastUpdatedAt, now),
-    [freshnessLevel, cacheLastUpdatedAt, now]
+    () =>
+      badgeFreshnessSuffix(
+        freshnessCause,
+        rowLastUpdatedAt ?? cacheLastUpdatedAt,
+        now,
+        rateLimitResetAt
+      ),
+    [freshnessCause, rowLastUpdatedAt, cacheLastUpdatedAt, rateLimitResetAt, now]
   );
+
+  const showStaleGlyph = freshnessCause === "stale" && !missingToken;
+  const showPausedGlyph = freshnessCause === "rate-limit" && !missingToken;
 
   return (
     <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
@@ -61,7 +88,7 @@ export function IssueBadge({
           data-no-dnd
           className={cn(
             "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            freshnessOpacityClass(freshnessLevel),
+            freshnessClass(freshnessLevel),
             isHeadline ? "text-[13px]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}
@@ -77,7 +104,7 @@ export function IssueBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingToken ? "grayscale opacity-50" : "text-github-open"
+              missingToken ? "grayscale opacity-50" : "text-pr-open"
             )}
             aria-hidden="true"
           />
@@ -91,17 +118,28 @@ export function IssueBadge({
                   ? isActive
                     ? "text-text-primary font-medium"
                     : "text-text-secondary font-medium"
-                  : "text-text-primary/90"
+                  : "text-text-primary"
             )}
           >
-            {issueTitle || (
-              <span
-                className={cn("font-mono", missingToken ? "text-text-muted" : "text-github-open")}
-              >
-                #{issueNumber}
-              </span>
-            )}
+            {issueTitle ||
+              (isColdTitleGap && !showColdFallback ? null : (
+                <span
+                  className={cn("font-mono", missingToken ? "text-text-muted" : "text-pr-open")}
+                >
+                  #{issueNumber}
+                </span>
+              ))}
           </span>
+          {showStaleGlyph && (
+            <Clock
+              className="w-3 h-3 shrink-0 text-text-muted"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            />
+          )}
+          {showPausedGlyph && (
+            <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
+          )}
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">

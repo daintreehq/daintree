@@ -16,6 +16,11 @@ interface PendingTerminal {
   mode: FlushMode;
   immediateHandle: ReturnType<typeof setImmediate> | null;
   timeoutHandle: ReturnType<typeof setTimeout> | null;
+  // True only while every chunk pushed into this entry was delivered with
+  // `owned: true` — i.e. this batcher is the sole consumer of the chunk's
+  // backing ArrayBuffer and may transfer it without copying. Any non-owned
+  // write flips this false for the rest of the entry's life.
+  owned: boolean;
 }
 
 export interface PortBatcherFailedBatch {
@@ -33,7 +38,11 @@ export class PortBatcher {
 
   constructor(private readonly deps: PortBatcherDeps) {}
 
-  write(id: string, data: Uint8Array, byteCount: number): boolean {
+  // `owned` signals that the caller hands sole ownership of `data`'s backing
+  // ArrayBuffer to this batcher (no sibling batcher holds the same chunk), so a
+  // single-chunk flush can transfer it instead of copying. Defaults to false:
+  // the safe assumption is that the chunk is shared and must be copied at flush.
+  write(id: string, data: Uint8Array, byteCount: number, owned = false): boolean {
     if (this.disposed) return false;
 
     const terminalPending = this.pendingChunks.get(id)?.bytes ?? 0;
@@ -54,8 +63,11 @@ export class PortBatcher {
         mode: "idle",
         immediateHandle: null,
         timeoutHandle: null,
+        owned,
       };
       this.pendingChunks.set(id, entry);
+    } else {
+      entry.owned = entry.owned && owned;
     }
     entry.chunks.push(data);
     entry.bytes += byteCount;
@@ -97,10 +109,10 @@ export class PortBatcher {
 
     const entries = Array.from(snapshot.entries());
     for (let i = 0; i < entries.length; i++) {
-      const [id, { chunks, bytes }] = entries[i];
+      const [id, { chunks, bytes, owned }] = entries[i];
       let data: Uint8Array = new Uint8Array(0);
       try {
-        data = mergeChunks(chunks, bytes);
+        data = mergeChunks(chunks, bytes, owned);
         this.deps.postMessage(id, data, bytes);
         this.deps.portQueueManager.addBytes(id, bytes);
         this.deps.portQueueManager.applyBackpressure(
@@ -112,7 +124,7 @@ export class PortBatcher {
         for (const [failedId, pending] of entries.slice(i + 1)) {
           failedBatches.push({
             id: failedId,
-            data: mergeChunks(pending.chunks, pending.bytes),
+            data: mergeChunks(pending.chunks, pending.bytes, pending.owned),
             bytes: pending.bytes,
           });
         }
@@ -132,7 +144,7 @@ export class PortBatcher {
 
     let data: Uint8Array = new Uint8Array(0);
     try {
-      data = mergeChunks(entry.chunks, entry.bytes);
+      data = mergeChunks(entry.chunks, entry.bytes, entry.owned);
       this.deps.postMessage(id, data, entry.bytes);
       this.deps.portQueueManager.addBytes(id, entry.bytes);
       this.deps.portQueueManager.applyBackpressure(
@@ -170,7 +182,22 @@ export class PortBatcher {
 // `merged.buffer` in a postMessage transfer list — node-pty Buffers under 4KB
 // share an 8KB pool slab, and transferring a slab-backed buffer would detach
 // the slab and corrupt every other Buffer that aliases it (PR #4639).
-function mergeChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+//
+// Fast path: when `owned` is true the caller has guaranteed this is the only
+// batcher holding this chunk, so no sibling will read it after we transfer it.
+// A lone chunk that fully owns its ArrayBuffer (escaped the node-pty slab via
+// `new Uint8Array(...)` at the pty-host ingestion site, byteOffset 0, occupies
+// the whole buffer) is already a transfer-safe standalone buffer — return it
+// directly and skip the per-flush allocate-and-copy. This retires the dominant
+// single-chunk latency-mode allocation under agent-output floods (#8367) while
+// preserving the PR #4639 invariant: the buffer is still never a slab alias.
+function mergeChunks(chunks: Uint8Array[], totalBytes: number, owned: boolean): Uint8Array {
+  if (owned && chunks.length === 1) {
+    const chunk = chunks[0];
+    if (chunk.byteOffset === 0 && chunk.byteLength === chunk.buffer.byteLength) {
+      return chunk;
+    }
+  }
   const merged = new Uint8Array(totalBytes);
   let offset = 0;
   for (const chunk of chunks) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
+import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
 
 describe("isTokenRelatedError", () => {
   it("matches the documented token error strings", () => {
@@ -77,5 +77,50 @@ describe("isTransientNetworkError", () => {
   it("is case-sensitive (matches the canonical capitalization only)", () => {
     expect(isTransientNetworkError("cannot reach GitHub.")).toBe(false);
     expect(isTransientNetworkError("CANNOT REACH GITHUB.")).toBe(false);
+  });
+});
+
+describe("isRateLimitError", () => {
+  it("matches the primary rate-limit error from GitHubRateLimitError", () => {
+    expect(isRateLimitError("GitHub rate limit exceeded. Waiting for quota reset.")).toBe(true);
+  });
+
+  it("matches the secondary rate-limit error from GitHubRateLimitError", () => {
+    expect(isRateLimitError("GitHub secondary rate limit triggered. Pausing requests.")).toBe(true);
+  });
+
+  it("matches the duration-bearing variants from GitHubErrors.parseGitHubError", () => {
+    expect(isRateLimitError("GitHub rate limit exceeded. Resets in 2m 30s.")).toBe(true);
+    expect(isRateLimitError("GitHub secondary rate limit triggered. Resuming in 45s.")).toBe(true);
+  });
+
+  it("matches any string starting with either canonical prefix", () => {
+    expect(isRateLimitError("GitHub rate limit exceeded.")).toBe(true);
+    expect(isRateLimitError("GitHub secondary rate limit triggered.")).toBe(true);
+  });
+
+  it("returns false for token, transient, and unrelated errors", () => {
+    expect(isRateLimitError("GitHub token not configured. Set it in Settings.")).toBe(false);
+    expect(isRateLimitError("Invalid GitHub token. Please update in Settings.")).toBe(false);
+    expect(isRateLimitError("Cannot reach GitHub. Check your internet connection.")).toBe(false);
+    expect(isRateLimitError("GitHub is temporarily unavailable. Please retry.")).toBe(false);
+    expect(isRateLimitError("Repository not found or token lacks access.")).toBe(false);
+  });
+
+  it("returns false for the legacy non-prefixed rate-limit message", () => {
+    // `parseGitHubError` returns "GitHub rate limit exceeded. Try again in a few minutes."
+    // which already matches; this guard is for a hypothetical generic form.
+    expect(isRateLimitError("API rate limit exceeded")).toBe(false);
+  });
+
+  it("returns false for null/undefined/empty", () => {
+    expect(isRateLimitError(null)).toBe(false);
+    expect(isRateLimitError(undefined)).toBe(false);
+    expect(isRateLimitError("")).toBe(false);
+  });
+
+  it("is case-sensitive (matches the canonical capitalization only)", () => {
+    expect(isRateLimitError("github rate limit exceeded.")).toBe(false);
+    expect(isRateLimitError("GITHUB RATE LIMIT EXCEEDED.")).toBe(false);
   });
 });

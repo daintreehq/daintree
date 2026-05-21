@@ -6,6 +6,57 @@ import type { RecipeContext } from "@/utils/recipeVariables";
 export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
 
 /**
+ * Errno codes that mean the target PTY is permanently gone — the renderer
+ * should auto-disarm so the user isn't typing into a dead pane. Other
+ * failures still surface the failure chip but leave the arming alone.
+ *
+ * Shared by both fleet broadcast paths:
+ *   - Raw-input (`fleetRawInputBroadcast`) reads `result.error.code` from the
+ *     `broadcast-write-result` IPC payload.
+ *   - Structured-submit (`fleetExecution.buildResult` /
+ *     `broadcastFleetLiteralPaste`) extracts the code from the rejection's
+ *     stringified message — Electron's structured-clone serialization strips
+ *     `NodeJS.ErrnoException.code`, so `handleTerminalSubmit` embeds the code
+ *     as a leading `"CODE: …"` token in the thrown error's message.
+ */
+export const PERMANENT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "EPIPE",
+  "EIO",
+  "EBADF",
+  "ECONNRESET",
+  "ENOTCONN",
+  "ENXIO",
+  "EINVAL",
+]);
+
+/**
+ * Classify a stringified rejection reason from `terminalClient.submit` as a
+ * permanent (dead-PTY) failure or a transient one. Permanent failures
+ * auto-disarm the target; transient failures surface a retryable chip.
+ *
+ * Submit path note: classification leans on the errno token the IPC handler
+ * embeds in the message (`handleTerminalSubmit` prefixes its dead-PTY
+ * AppErrors with `"EBADF: …"` / `"EPIPE: …"` because Electron's
+ * structured-clone error serialization strips `.code`). An unknown reason
+ * is treated as **transient** — submit rejections can come from many
+ * sources (infra hiccup, IPC framework error) where the user's retry is
+ * the right recovery. Wrongly disarming on a transient infra blip would
+ * silently drop fleet membership, which is the worse failure mode here.
+ * Contrast with the raw-input path: a missing `.code` there means a
+ * single keystroke that's not meaningful to replay, so it disarms on
+ * unknown (see `applyFleetBroadcastResult`).
+ */
+export function classifyFleetRejectionReason(
+  reason: string | undefined
+): "permanent" | "transient" {
+  if (!reason) return "transient";
+  for (const code of PERMANENT_FAILURE_CODES) {
+    if (reason.includes(code)) return "permanent";
+  }
+  return "transient";
+}
+
+/**
  * Build a per-project fleet history key so broadcast history doesn't leak
  * across projects. Falls back to the global key when no project is active.
  */
@@ -36,13 +87,6 @@ export const FLEET_LARGE_PASTE_BYTE_THRESHOLD = 102_400;
 export const FLEET_LARGE_PASTE_BATCH_SIZE = 5;
 
 /**
- * Minimum armed-target count at which the in-flight progress counter renders
- * in the fleet ribbon. Below this threshold the per-pane red-dot failure
- * indicators suffice — small fleets stay uncluttered.
- */
-export const FLEET_PROGRESS_VISIBILITY_THRESHOLD = 10;
-
-/**
  * Conservative — flags commands that are usually destructive outside a sandbox.
  * Intentionally does NOT try to be a shell parser. False positives are fine
  * (an extra confirm). False negatives are the real cost.
@@ -54,6 +98,16 @@ export interface FleetBroadcastWarnings {
   multiline: boolean;
   overByteLimit: boolean;
   destructive: boolean;
+}
+
+/**
+ * Position and substring of the first destructive match in a payload, used
+ * by the confirm gate to point the user at the actual command instead of
+ * showing only a category label ("destructive command detected").
+ */
+export interface FleetBroadcastDestructiveMatch {
+  substring: string;
+  index: number;
 }
 
 export function getFleetBroadcastByteLength(text: string): number {
@@ -72,9 +126,41 @@ export function getFleetBroadcastWarnings(text: string): FleetBroadcastWarnings 
   };
 }
 
-export function needsFleetBroadcastConfirmation(text: string): boolean {
+/**
+ * `FLEET_DESTRUCTIVE_RE` has no `/g` or `/y` flag, so module-level `.exec()`
+ * is safe to call without resetting `lastIndex`. Returns `null` for safe
+ * text; the caller decides display truncation.
+ */
+export function getFleetBroadcastDestructiveMatch(
+  text: string
+): FleetBroadcastDestructiveMatch | null {
+  const match = FLEET_DESTRUCTIVE_RE.exec(text);
+  if (match === null) return null;
+  return { substring: match[0], index: match.index };
+}
+
+/**
+ * Confirmation gate. The optional `resolvedPayloads` argument lets the
+ * caller surface the *resolved fan-out* (after recipe-variable substitution)
+ * so a draft that's under-threshold but expands per-target to over-threshold
+ * still triggers confirm. Any single non-excluded resolved payload above
+ * the threshold is the meaningful danger signal — not the aggregate.
+ *
+ * Resolved payloads are passed as `string[]` (not `FleetTargetPreview[]`)
+ * to avoid a circular import with `fleetExecution.ts`.
+ */
+export function needsFleetBroadcastConfirmation(
+  text: string,
+  resolvedPayloads?: readonly string[]
+): boolean {
   const w = getFleetBroadcastWarnings(text);
-  return w.multiline || w.overByteLimit || w.destructive;
+  if (w.multiline || w.overByteLimit || w.destructive) return true;
+  if (!resolvedPayloads) return false;
+  for (const payload of resolvedPayloads) {
+    if (getFleetBroadcastByteLength(payload) > FLEET_CONFIRM_BYTE_THRESHOLD) return true;
+    if (FLEET_DESTRUCTIVE_RE.test(payload)) return true;
+  }
+  return false;
 }
 
 /**
@@ -110,7 +196,7 @@ export function buildFleetBroadcastRecipeContext(terminalId: string): RecipeCont
   if (!worktree) return null;
   return {
     issueNumber: worktree.issueNumber,
-    prNumber: worktree.prNumber,
+    prNumber: worktree.linked?.pr?.ref.number,
     worktreePath: worktree.path,
     branchName: worktree.branch ?? worktree.name,
   };

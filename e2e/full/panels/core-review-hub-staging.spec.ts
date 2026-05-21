@@ -17,6 +17,8 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
+const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
 test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
   let ctx: AppContext;
   let fixtureDir: string;
@@ -246,7 +248,7 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       cleanupCommit?.();
     });
 
-    test("commit button disabled with empty message", async () => {
+    test("commit button blocked with empty message", async () => {
       const { window } = ctx;
       const hub = window.locator(SEL.reviewHub.container);
 
@@ -256,15 +258,20 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
         timeout: T_MEDIUM,
       });
 
-      // Commit button visible but disabled (no message)
+      const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
+      await textarea.click();
+      await textarea.press(selectAllShortcut);
+      await textarea.press("Backspace");
+      await expect.poll(() => textarea.inputValue(), { timeout: T_SHORT }).toBe("");
+
+      // Blocked buttons stay focusable so their tooltip can explain what is missing.
       const commitBtn = hub.locator(SEL.reviewHub.commitButton(3));
       await expect(commitBtn).toBeVisible({ timeout: T_SHORT });
-      await expect(commitBtn).toBeDisabled({ timeout: T_SHORT });
+      await expect(commitBtn).toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
 
-      // Whitespace-only message still keeps it disabled
-      const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
+      // Whitespace-only message still keeps it blocked.
       await textarea.fill("   ");
-      await expect(commitBtn).toBeDisabled({ timeout: T_SHORT });
+      await expect(commitBtn).toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
     });
 
     test("commit button enabled with valid message", async () => {
@@ -275,7 +282,7 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       await textarea.fill("test: staging edge cases");
 
       const commitBtn = hub.locator(SEL.reviewHub.commitButton(3));
-      await expect(commitBtn).toBeEnabled({ timeout: T_SHORT });
+      await expect(commitBtn).not.toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
     });
 
     test("commit succeeds and shows clean state", async () => {

@@ -18,11 +18,16 @@ export function registerAppConfigActions(
   actions.set("agentSettings.get", () => ({
     id: "agentSettings.get",
     title: "Get Agent Settings",
-    description: "Get agent settings",
+    description:
+      "Read the per-agent settings map (model, flags, and other agent configuration). Takes no args. Returns { agents } — a record keyed by agent id of settings entries — plus an optional `settingsVersion`. Never errors; unconfigured agents are absent from the map. Use `agentSettings.set` to change a value.",
     category: "settings",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      agents: z.record(z.string(), AgentSettingsEntrySchema),
+      settingsVersion: z.number().optional(),
+    }),
     run: async () => {
       const settings = await agentSettingsClient.get();
       useAgentSettingsStore.setState({
@@ -92,6 +97,10 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+      inactiveThresholdHours: z.number(),
+    }),
     run: async () => {
       return await hibernationClient.getConfig();
     },
@@ -123,6 +132,10 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+      thresholdMinutes: z.number(),
+    }),
     run: async () => {
       return await idleTerminalClient.getConfig();
     },
@@ -154,6 +167,7 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ pathPattern: z.string() }),
     run: async () => {
       return await worktreeConfigClient.get();
     },

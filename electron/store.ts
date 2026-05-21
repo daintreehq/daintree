@@ -200,6 +200,9 @@ export interface StoreSchema {
     auditMaxRecords: number;
     auditLog?: McpAuditRecord[];
     turnOutcomeLog?: AssistantTurnRecord[];
+    abusePolicyEnabled: boolean;
+    abusePolicyMaxDenials: number;
+    abusePolicyWindowMs: number;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -248,6 +251,7 @@ export interface StoreSchema {
     newsletterPromptSeen: boolean;
     waitingNudgeSeen: boolean;
     seenAgentIds: string[];
+    availabilityFirstSeen: Record<string, number>;
     welcomeCardDismissed: boolean;
     setupBannerDismissed: boolean;
     checklist: {
@@ -282,6 +286,34 @@ export interface StoreSchema {
    * issues without reconfiguring on every launch.
    */
   logLevelOverrides: Record<string, string>;
+  /**
+   * Plugin runtime state. `disabledBuiltins` lists built-in plugin ids
+   * (manifest.name) the user has disabled from Preferences. PluginService
+   * filters these out at startup; built-ins cannot be uninstalled, only
+   * disabled — disable takes effect on next launch.
+   */
+  plugins: {
+    disabledBuiltins: string[];
+  };
+  /**
+   * Global default forge provider id for newly opened projects. `null` (or
+   * absent) means "no global default — fall back to hostname auto-match"
+   * per the forge resolver contract. Read with `?? null` fallback — no
+   * migration entry required (mirrors `dismissedUpdateVersion` pattern).
+   */
+  forgeDefaultProviderId?: string | null;
+  /**
+   * Per-provider credential records, keyed by the canonical
+   * `{pluginId}.{contributionId}` forge provider id. Each value is a
+   * `JSON.stringify`-serialized `Record<string, string>` of the provider's
+   * declared credential fields. Stored as a single flat top-level object —
+   * never written via electron-store dot-notation paths, since provider ids
+   * themselves contain dots and would silently nest. Absent means "no
+   * provider credentials saved" (read with `?? {}`). Plain text, same
+   * security model as `forgeDefaultProviderId` / the GitHub token (~/.gitconfig
+   * equivalent) — deliberately not encrypted.
+   */
+  forgeCredentials?: Record<string, string>;
 }
 
 const storeOptions = {
@@ -383,6 +415,9 @@ const storeOptions = {
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,
+      abusePolicyEnabled: false,
+      abusePolicyMaxDenials: 5,
+      abusePolicyWindowMs: 60_000,
     },
     helpAssistant: {
       docSearch: true,
@@ -397,10 +432,10 @@ const storeOptions = {
       hardwareAccelerationDisabled: false,
     },
     crashRecovery: {
-      autoRestoreOnCrash: false,
+      autoRestoreOnCrash: true,
     },
     onboarding: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       completed: false,
       currentStep: null,
       agentSetupIds: [],
@@ -408,6 +443,7 @@ const storeOptions = {
       newsletterPromptSeen: false,
       waitingNudgeSeen: false,
       seenAgentIds: [],
+      availabilityFirstSeen: {},
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
       checklist: {
@@ -426,6 +462,9 @@ const storeOptions = {
     updateChannel: "stable" as const,
     lastUpdateCheck: null,
     logLevelOverrides: {},
+    plugins: {
+      disabledBuiltins: [],
+    },
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

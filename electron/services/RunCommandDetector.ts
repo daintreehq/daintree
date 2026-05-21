@@ -2,6 +2,7 @@ import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { load } from "js-yaml";
+import { parse as parseToml } from "smol-toml";
 import type { RunCommand } from "../types/index.js";
 import { Cache } from "../utils/cache.js";
 
@@ -40,6 +41,8 @@ export class RunCommandDetector {
       this.detectMakefile(projectPath),
       this.detectJustfile(projectPath),
       this.detectTaskfile(projectPath),
+      this.detectProcfile(projectPath),
+      this.detectMise(projectPath),
       this.detectDjango(projectPath),
       this.detectComposer(projectPath),
       this.detectDevContainer(projectPath),
@@ -242,6 +245,105 @@ export class RunCommandDetector {
       return commands;
     } catch (error) {
       console.warn(`[RunCommandDetector] Failed to parse ${taskfilePath}:`, error);
+      return [];
+    }
+  }
+
+  private async detectProcfile(root: string): Promise<RunCommand[]> {
+    const procfilePath = path.join(root, "Procfile");
+    if (!existsSync(procfilePath)) return [];
+
+    try {
+      const content = await fs.readFile(procfilePath, "utf-8");
+      const lines = content.split("\n");
+      const commands: RunCommand[] = [];
+      const seen = new Set<string>();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+
+        const match = /^([A-Za-z0-9_-]+):\s*(.+)$/.exec(trimmed);
+        if (!match) continue;
+
+        const name = match[1];
+        const commandBody = match[2].trim();
+        if (!commandBody || seen.has(name)) continue;
+        if (!isSafeScriptName(name)) continue;
+
+        seen.add(name);
+        commands.push({
+          id: `procfile-${name}`,
+          name,
+          command: commandBody,
+          icon: "terminal",
+        });
+      }
+
+      return commands;
+    } catch (error) {
+      console.warn(`[RunCommandDetector] Failed to parse ${procfilePath}:`, error);
+      return [];
+    }
+  }
+
+  private async detectMise(root: string): Promise<RunCommand[]> {
+    const misePath = path.join(root, "mise.toml");
+    if (!existsSync(misePath)) return [];
+
+    try {
+      const content = await fs.readFile(misePath, "utf-8");
+      const doc = parseToml(content) as Record<string, unknown> | null;
+      if (!doc || typeof doc !== "object") return [];
+
+      const tasks = doc.tasks;
+      if (!tasks || typeof tasks !== "object" || Array.isArray(tasks)) return [];
+
+      const commands: RunCommand[] = [];
+
+      for (const [name, def] of Object.entries(tasks as Record<string, unknown>)) {
+        if (name.startsWith("_")) continue;
+        if (!isSafeScriptName(name)) continue;
+
+        if (typeof def === "string") {
+          commands.push({
+            id: `mise-${name}`,
+            name,
+            command: `mise run ${name}`,
+            icon: "terminal",
+            description: def,
+          });
+          continue;
+        }
+
+        if (typeof def !== "object" || def === null) continue;
+
+        const taskDef = def as Record<string, unknown>;
+        if (taskDef.hide === true) continue;
+
+        const run = taskDef.run;
+        if (!run) continue;
+        if (typeof run !== "string" && !Array.isArray(run)) continue;
+        if (
+          Array.isArray(run) &&
+          (run.length === 0 || !run.every((v): v is string => typeof v === "string"))
+        )
+          continue;
+
+        const desc = typeof taskDef.description === "string" ? taskDef.description : undefined;
+
+        commands.push({
+          id: `mise-${name}`,
+          name,
+          command: `mise run ${name}`,
+          icon: "terminal",
+          description: desc,
+        });
+      }
+
+      return commands;
+    } catch (error) {
+      console.warn(`[RunCommandDetector] Failed to parse ${misePath}:`, error);
       return [];
     }
   }

@@ -181,6 +181,10 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               inboxMessage: worktreeMsg,
               priority: "high",
               countable: false,
+              // Threads the success into a per-worktree group so subsequent
+              // worktree-lifecycle events (e.g. teardown) supersede this row
+              // cleanly instead of stacking unrelated entries.
+              correlationId: createdWorktreeId,
               action: {
                 label: "Undo",
                 onClick: () => {},
@@ -189,6 +193,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               },
             });
           } else {
+            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
             notify({
               type: "error",
               title: "Couldn't create worktree",
@@ -196,6 +201,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             });
           }
         } catch (error) {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Couldn't create worktree",

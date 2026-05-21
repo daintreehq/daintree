@@ -76,6 +76,7 @@ function setRecipeState(state: {
   currentProjectId?: string | null;
   runRecipe?: ReturnType<typeof vi.fn>;
   saveToRepo?: ReturnType<typeof vi.fn>;
+  deleteRecipe?: ReturnType<typeof vi.fn>;
   generateRecipeFromActiveTerminals?: (id: string) => unknown[];
 }) {
   recipeStoreMock.getState.mockReturnValue({
@@ -84,6 +85,7 @@ function setRecipeState(state: {
     currentProjectId: "currentProjectId" in state ? state.currentProjectId : "proj-1",
     runRecipe: state.runRecipe ?? vi.fn().mockResolvedValue(undefined),
     saveToRepo: state.saveToRepo ?? vi.fn().mockResolvedValue(undefined),
+    deleteRecipe: state.deleteRecipe ?? vi.fn().mockResolvedValue(undefined),
     generateRecipeFromActiveTerminals: state.generateRecipeFromActiveTerminals ?? vi.fn(() => []),
   });
 }
@@ -211,6 +213,26 @@ describe("recipeActions adversarial", () => {
     await run("recipe.saveToRepo", { recipeId: "r1", deleteOriginal: true });
 
     expect(saveToRepo).toHaveBeenCalledWith("r1", true);
+  });
+
+  it("recipe.delete forwards the recipeId to the store exactly once", async () => {
+    const deleteRecipe = vi.fn().mockResolvedValue(undefined);
+    setRecipeState({ deleteRecipe });
+
+    const run = setupActions();
+    await run("recipe.delete", { recipeId: "r1" });
+
+    expect(deleteRecipe).toHaveBeenCalledTimes(1);
+    expect(deleteRecipe).toHaveBeenCalledWith("r1");
+  });
+
+  it("recipe.delete propagates store rejection to the caller", async () => {
+    const deleteRecipe = vi.fn().mockRejectedValue(new Error("delete failed"));
+    setRecipeState({ deleteRecipe });
+
+    const run = setupActions();
+
+    await expect(run("recipe.delete", { recipeId: "r1" })).rejects.toThrow("delete failed");
   });
 
   it("recipe.editor.openFromLayout dispatches terminals from the live layout", async () => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
@@ -21,6 +21,7 @@ import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
@@ -28,7 +29,10 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
-import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
+import {
+  WorktreeDetailsSection,
+  WorktreeDeleteErrorBanner,
+} from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
@@ -47,6 +51,17 @@ import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArm
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+
+const HOVER_REVALIDATE_DELAY = 150;
+const REVALIDATE_FRESHNESS_GATE = 10_000;
+const MAX_CONCURRENT_REVALIDATES = 3;
+const inFlightRevalidates = new Set<string>();
+
+function isRevalidationAllowed(worktreeId: string): boolean {
+  return (
+    inFlightRevalidates.size < MAX_CONCURRENT_REVALIDATES || inFlightRevalidates.has(worktreeId)
+  );
+}
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -67,11 +82,19 @@ export interface WorktreeCardProps {
   dragHandleListeners?: SyntheticListenerMap;
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
+  isDragHandleDisabled?: boolean;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   projectHealth?: import("@shared/types").ProjectHealthData | null;
+  /**
+   * Multi-select state (grid variant only). When provided, modifier-clicks
+   * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`
+   * and a checkbox affordance becomes visible on hover or when selected.
+   */
+  isSelected?: boolean;
+  onToggleSelect?: (event: React.MouseEvent) => void;
 }
 
 export function WorktreeCard({
@@ -93,13 +116,33 @@ export function WorktreeCard({
   dragHandleListeners,
   dragHandleActivatorRef,
   isDraggingSort,
+  isDragHandleDisabled = false,
   onMoveUp,
   onMoveDown,
   canMoveUp,
   canMoveDown,
   projectHealth,
+  isSelected = false,
+  onToggleSelect,
 }: WorktreeCardProps) {
   "use memo";
+  const isMultiSelectEnabled = variant === "grid" && onToggleSelect !== undefined;
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (isMultiSelectEnabled && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onToggleSelect?.(e);
+      return;
+    }
+    onSelect();
+  };
+
+  const handleCheckboxClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleSelect?.(e);
+  };
   const isExpanded = useWorktreeSelectionStore((state) => state.expandedWorktrees.has(worktree.id));
   const toggleWorktreeExpanded = useWorktreeSelectionStore((state) => state.toggleWorktreeExpanded);
 
@@ -156,44 +199,6 @@ export function WorktreeCard({
       unpinWorktree(worktree.id);
     } else {
       pinWorktree(worktree.id);
-    }
-  };
-
-  const [hasSnapshot, setHasSnapshot] = useState(false);
-
-  // Check for snapshot availability — re-runs when agent activity changes
-  React.useEffect(() => {
-    let cancelled = false;
-    window.electron.git
-      .snapshotGet(worktree.id)
-      .then((info) => {
-        if (!cancelled) setHasSnapshot(info !== null && info.hasChanges);
-      })
-      .catch(() => {
-        // Ignore errors — snapshot check is best-effort
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [worktree.id, worktree.lastActivityTimestamp]);
-
-  const handleRevertAgentChanges = async () => {
-    try {
-      const result = await window.electron.git.snapshotRevert(worktree.id);
-      setHasSnapshot(false);
-      if (result.hasConflicts) {
-        // Notify about conflicts
-        void actionService.dispatch(
-          "app.showNotification",
-          {
-            type: "warning",
-            message: result.message,
-          },
-          { source: "user" }
-        );
-      }
-    } catch {
-      // Error handled by IPC layer
     }
   };
 
@@ -270,6 +275,17 @@ export function WorktreeCard({
   const dismissError = useErrorStore((state) => state.dismissError);
   const removeError = useErrorStore((state) => state.removeError);
 
+  const isBeingDeleted = useWorktreeStore((state) => state.deletingIds.has(worktree.id));
+  const deleteError = useWorktreeStore((state) => state.deleteErrors.get(worktree.id) ?? null);
+
+  const handleRetryDelete = () => {
+    getCurrentViewStore().getState().retryDelete(worktree.id);
+  };
+
+  const handleDismissDeleteError = () => {
+    getCurrentViewStore().getState().clearDeleteError(worktree.id);
+  };
+
   const handleErrorRetry = async (
     errorId: string,
     action: RetryAction,
@@ -300,6 +316,7 @@ export function WorktreeCard({
     resourceStatusLabel,
     resourceStatusColor,
     hasResourceConfig,
+    gitStateIndicator,
   } = useWorktreeStatus({ worktree });
 
   const hasPauseCommand = !!worktree.hasPauseCommand;
@@ -328,6 +345,9 @@ export function WorktreeCard({
     handleCloseAll,
     handleTerminateAll,
     handleResourceTeardown,
+    hasSnapshot,
+    handleRevertAgentChanges,
+    handleDeleteSnapshot,
   } = useWorktreeActions({
     worktree,
     onCopyTree,
@@ -374,7 +394,7 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.resource.resume",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 
@@ -382,7 +402,7 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.resource.pause",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 
@@ -390,7 +410,7 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.resource.connect",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 
@@ -404,7 +424,7 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.resource.provision",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 
@@ -412,16 +432,16 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.resource.status",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 
   const handleCopyContextFull = () => {
-    void copyContextWithFeedback(worktree.id);
+    void copyContextWithFeedback(worktree.id, "context-menu");
   };
 
   const handleCopyContextModified = () => {
-    void copyContextWithFeedback(worktree.id, { modified: true });
+    void copyContextWithFeedback(worktree.id, "context-menu", { modified: true });
   };
 
   const { copy: copyWorktreePath } = useCopyWithFeedback();
@@ -475,22 +495,20 @@ export function WorktreeCard({
       issueState: issue.state,
       issueUrl: issue.url,
     });
-    getCurrentViewStore().setState((prev) => {
-      const existing = prev.worktrees.get(worktree.id);
-      if (!existing) return prev;
-      const next = new Map(prev.worktrees);
-      next.set(worktree.id, {
-        ...existing,
-        issueNumber: issue.number,
-        issueTitle: issue.title,
-      });
-      return { worktrees: next };
+    // Record the manual association in the store so it survives subsequent
+    // `worktree-update` events (which carry only auto-detected issue state).
+    // This also optimistically re-merges the snapshot for immediate feedback.
+    getCurrentViewStore().getState().setManualAssociation(worktree.id, {
+      issueNumber: issue.number,
+      issueTitle: issue.title,
     });
   };
 
   const handleDetachIssue = async () => {
     await worktreeClient.detachIssue(worktree.id);
-    getCurrentViewStore().setState((prev) => {
+    const store = getCurrentViewStore();
+    store.getState().clearManualAssociation(worktree.id);
+    store.setState((prev) => {
       const existing = prev.worktrees.get(worktree.id);
       if (!existing) return prev;
       const next = new Map(prev.worktrees);
@@ -588,10 +606,71 @@ export function WorktreeCard({
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
 
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverWorktreeIdRef = useRef(worktree.id);
+  useEffect(() => {
+    hoverWorktreeIdRef.current = worktree.id;
+  }, [worktree.id]);
+
+  const handleRevalidate = useCallback(() => {
+    const id = hoverWorktreeIdRef.current;
+    if (
+      isActive ||
+      !isRevalidationAllowed(id) ||
+      (worktree.lastGitStatusCheckedAt &&
+        Date.now() - worktree.lastGitStatusCheckedAt < REVALIDATE_FRESHNESS_GATE)
+    ) {
+      return;
+    }
+    inFlightRevalidates.add(id);
+    void worktreeClient
+      .refresh(id)
+      .finally(() => {
+        inFlightRevalidates.delete(id);
+      })
+      .catch(() => {});
+  }, [isActive, worktree.lastGitStatusCheckedAt]);
+
+  const handlePointerEnter = useCallback(() => {
+    if (isActive || !worktree.lastGitStatusCheckedAt) return;
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      hoverTimerRef.current = null;
+      handleRevalidate();
+    }, HOVER_REVALIDATE_DELAY);
+  }, [isActive, worktree.lastGitStatusCheckedAt, handleRevalidate]);
+
+  const handlePointerLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleOpenPanelPalette = () => {
     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
-    void actionService.dispatch("panel.palette", undefined, { source: "context-menu" });
+    void actionService.dispatch("panel.palette", undefined, {
+      // eslint-disable-next-line no-restricted-syntax -- context-menu-source: hardcoded because callback lives outside the ContextMenu Root (see #8322)
+      source: "context-menu",
+    });
   };
+
+  const ariaStatusParts: string[] = [spineState];
+  if (gitStateIndicator && !(gitStateIndicator.kind === "dirty" && hasChanges)) {
+    ariaStatusParts.push(gitStateIndicator.label);
+  }
+  if (hasChanges) {
+    ariaStatusParts.push("has uncommitted changes");
+  }
+  const ariaStatusLabel = ariaStatusParts.join(", ");
 
   const cardContent = (
     <ContextMenu>
@@ -610,7 +689,8 @@ export function WorktreeCard({
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
             isOver && !isActive && "ring-2 ring-inset ring-border-default",
             worktree.isCurrent &&
-              "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+              "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']",
+            isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
@@ -618,16 +698,26 @@ export function WorktreeCard({
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
+          data-deleting={isBeingDeleted && !deleteError ? "true" : undefined}
+          aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${spineState}${hasChanges ? ", has uncommitted changes" : ""}`}
-          onClick={onSelect}
+          aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${ariaStatusLabel}`}
+          onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
+          onPointerEnter={handlePointerEnter}
+          onPointerLeave={handlePointerLeave}
         >
           <button
             type="button"
+            tabIndex={variant === "grid" ? -1 : undefined}
+            // Grid variant: suppress focus shift on click so the role="grid"
+            // container retains the keyboard tab stop after a modifier-click.
+            onMouseDown={
+              variant === "grid" ? (e: React.MouseEvent) => e.preventDefault() : undefined
+            }
             className={cn(
-              "absolute inset-0 z-0 outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-daintree-accent",
+              "absolute inset-0 z-0 outline-hidden",
               variant === "grid" && "rounded-lg",
               (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
             )}
@@ -663,7 +753,7 @@ export function WorktreeCard({
                   className={cn(
                     "absolute w-3 h-3 z-10 cursor-default",
                     chipState === "waiting" && "bg-activity-waiting",
-                    chipState === "cleanup" && "bg-github-merged",
+                    chipState === "cleanup" && "bg-pr-merged",
                     chipState === "complete" && "bg-category-blue",
                     variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
                   )}
@@ -690,24 +780,86 @@ export function WorktreeCard({
               </TooltipContent>
             </Tooltip>
           )}
-          <div className="relative z-10 flex">
-            {dragHandleListeners && (
-              <div
-                ref={dragHandleActivatorRef}
-                data-worktree-row-drag-handle=""
+          {isMultiSelectEnabled && (
+            <div
+              className={cn(
+                "absolute top-2 right-2 z-30 transition-opacity duration-150",
+                isSelected
+                  ? "opacity-100"
+                  : "opacity-0 group-hover/card:opacity-100 focus-within:opacity-100"
+              )}
+            >
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={isSelected}
+                aria-label={isSelected ? "Deselect worktree" : "Select worktree"}
+                tabIndex={-1}
+                onClick={handleCheckboxClick}
                 className={cn(
-                  "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors group-hover/card:delay-[50ms] motion-reduce:transition-none",
-                  isDraggingSort
+                  "flex items-center justify-center w-5 h-5 rounded",
+                  "border border-divider transition-colors",
+                  isSelected
                     ? "bg-overlay-emphasis text-text-primary"
-                    : "text-text-primary/25 group-hover/card:text-text-primary/40 group-hover/card:bg-overlay-soft"
+                    : "bg-daintree-bg/80 text-transparent hover:bg-overlay-subtle"
                 )}
-                aria-label="Drag to reorder"
-                {...dragHandleListeners}
               >
-                <GripVertical className="w-3 h-3" />
-              </div>
-            )}
-            <div className={cn("flex-1 min-w-0 py-3", dragHandleListeners ? "pl-1 pr-4" : "px-4")}>
+                <svg
+                  className="w-3 h-3"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 6.5l2.5 2.5 4.5-5" />
+                </svg>
+              </button>
+            </div>
+          )}
+          <div className="relative z-10 flex">
+            {(dragHandleListeners || isDragHandleDisabled) &&
+              (isDragHandleDisabled ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div
+                      ref={dragHandleActivatorRef}
+                      data-worktree-row-drag-handle=""
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
+                      aria-label="Manual reorder paused while filter is active"
+                      aria-disabled="true"
+                    >
+                      <GripVertical className="w-3 h-3" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="left" className="text-xs">
+                    Manual reorder paused while filter is active
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <div
+                  ref={dragHandleActivatorRef}
+                  data-worktree-row-drag-handle=""
+                  className={cn(
+                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors group-hover/card:delay-[50ms] motion-reduce:transition-none",
+                    isDraggingSort
+                      ? "bg-overlay-emphasis text-text-primary"
+                      : "text-text-primary/25 group-hover/card:text-text-primary/40 group-hover/card:bg-overlay-soft"
+                  )}
+                  aria-label="Drag to reorder"
+                  {...dragHandleListeners}
+                >
+                  <GripVertical className="w-3 h-3" />
+                </div>
+              ))}
+            <div
+              className={cn(
+                "flex-1 min-w-0 py-3",
+                dragHandleListeners || isDragHandleDisabled ? "pl-1 pr-4" : "px-4"
+              )}
+            >
               <WorktreeHeader
                 worktree={worktree}
                 isActive={isActive}
@@ -731,6 +883,8 @@ export function WorktreeCard({
                 resourceLastOutput={worktree.resourceStatus?.lastOutput}
                 resourceEndpoint={worktree.resourceStatus?.endpoint}
                 resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                lastGitStatusCheckedAt={worktree.lastGitStatusCheckedAt}
+                onRevalidateGitStatus={handleRevalidate}
                 onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                 onCleanupWorktree={
                   chipState === "cleanup" && !isMainWorktree
@@ -739,9 +893,10 @@ export function WorktreeCard({
                 }
                 badges={{
                   onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
+                  onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
                   onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
                 }}
+                gitStateIndicator={gitStateIndicator}
                 menu={{
                   launchAgents,
                   recipes,
@@ -762,8 +917,8 @@ export function WorktreeCard({
                   onRevealInFinder: handlePathClick,
                   onOpenIssuePortal: worktree.issueNumber ? handleOpenIssuePortal : undefined,
                   onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPRPortal: worktree.prUrl ? handleOpenPRPortal : undefined,
-                  onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
+                  onOpenPRPortal: worktree.linked?.pr?.url ? handleOpenPRPortal : undefined,
+                  onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
                   onAttachIssue: () => setShowIssuePicker(true),
                   onViewPlan: () => setShowPlanViewer(true),
                   onOpenReviewHub: openReviewHubForThisWorktree,
@@ -784,6 +939,7 @@ export function WorktreeCard({
                   onOpenPanelPalette: () => {
                     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
                     void actionService.dispatch("panel.palette", undefined, {
+                      // eslint-disable-next-line no-restricted-syntax -- context-menu-source: hardcoded because callback lives outside the ContextMenu Root (see #8322)
                       source: "context-menu",
                     });
                   },
@@ -797,6 +953,7 @@ export function WorktreeCard({
                   onSelectWorkingAgents: handleSelectWorkingAgents,
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
                   onRevertAgentChanges: handleRevertAgentChanges,
+                  onDeleteSnapshot: handleDeleteSnapshot,
                   hasSnapshot,
                   hasResourceConfig,
                   worktreeMode: worktree.worktreeMode,
@@ -843,6 +1000,7 @@ export function WorktreeCard({
                     effectiveSummary={effectiveSummary}
                     worktreeErrors={worktreeErrors}
                     isFocused={isFocused}
+                    isStale={isStaleCard}
                     onToggleExpand={handleToggleExpand}
                     onPathClick={handlePathClick}
                     onDismissError={dismissError}
@@ -850,6 +1008,8 @@ export function WorktreeCard({
                     onOpenReviewHub={openReviewHubForThisWorktree}
                     isLifecycleRunning={isLifecycleRunning}
                     lifecycleLabel={lifecycleLabel}
+                    isBeingDeleted={isBeingDeleted}
+                    deleteError={deleteError}
                     hasResourceConfig={hasResourceConfig}
                     resourceStatus={worktree.resourceStatus?.lastStatus}
                     onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
@@ -871,6 +1031,14 @@ export function WorktreeCard({
                     onTerminalSelect={handleTerminalSelect}
                   />
                 </div>
+              )}
+
+              {deleteError && (
+                <WorktreeDeleteErrorBanner
+                  message={deleteError}
+                  onRetry={handleRetryDelete}
+                  onDismiss={handleDismissDeleteError}
+                />
               )}
 
               <WorktreeDialogs
@@ -923,8 +1091,8 @@ export function WorktreeCard({
           onRevealInFinder={handlePathClick}
           onOpenIssuePortal={worktree.issueNumber ? handleOpenIssuePortal : undefined}
           onOpenIssueExternal={worktree.issueNumber ? handleOpenIssueExternal : undefined}
-          onOpenPRPortal={worktree.prUrl ? handleOpenPRPortal : undefined}
-          onOpenPRExternal={worktree.prUrl ? handleOpenPRExternal : undefined}
+          onOpenPRPortal={worktree.linked?.pr?.url ? handleOpenPRPortal : undefined}
+          onOpenPRExternal={worktree.linked?.pr?.url ? handleOpenPRExternal : undefined}
           onAttachIssue={() => setShowIssuePicker(true)}
           onViewPlan={() => setShowPlanViewer(true)}
           onOpenReviewHub={openReviewHubForThisWorktree}

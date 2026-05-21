@@ -273,7 +273,7 @@ describe("getGitRecoveryAction", () => {
     expect(getGitRecoveryAction("auth-failed")).toEqual({
       label: "Sign in with GitHub",
       actionId: "app.settings.openTab",
-      args: { tab: "github" },
+      args: { tab: "code-forge", subtab: "github" },
     });
     expect(getGitRecoveryAction("push-rejected-outdated")).toEqual({
       label: "Pull and rebase",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Lock, CheckCircle2 } from "lucide-react";
+import { Pause, Lock, CheckCircle2, Moon } from "lucide-react";
 import type {
   AgentState,
   PanelKind,
@@ -57,6 +57,11 @@ export interface TerminalHeaderContentProps {
    * so users get a quiet confirmation instead of the chip silently disappearing.
    */
   completedWithNoChanges?: boolean;
+  /**
+   * True when the terminal's renderer is hibernated (PTY preserved, xterm
+   * disposed). Drives the ambient Moon pill — Tier-1 only, no toast.
+   */
+  isHibernated?: boolean;
 }
 
 function formatMemory(kb: number): string {
@@ -73,9 +78,16 @@ function getResourceSeverity(cpuPercent: number, memoryKb: number): ResourceSeve
   return "muted";
 }
 
-// Three consecutive same-direction polls before the displayed band changes —
-// prevents flicker at threshold boundaries (CPU 50/80, mem 1G/2G).
-const SEVERITY_HYSTERESIS_POLLS = 3;
+const SEVERITY_ORDER: Record<ResourceSeverity, number> = { muted: 0, amber: 1, red: 2 };
+
+// Asymmetric same-direction poll hysteresis before the displayed band changes —
+// prevents flicker at threshold boundaries (CPU 50/80, mem 1G/2G). Escalating to
+// a hotter band reacts quickly (3 polls); de-escalating back down lingers longer
+// (5 polls) so hot states don't vanish on a single quiet poll. This deliberately
+// diverges from ProcessDetector's symmetric hysteresis: a missed spike is worse
+// than a slightly stale calm reading.
+const ESCALATION_HYSTERESIS_POLLS = 3;
+const DE_ESCALATION_HYSTERESIS_POLLS = 5;
 
 export function TerminalHeaderContent({
   id,
@@ -89,6 +101,7 @@ export function TerminalHeaderContent({
   queueCount = 0,
   flowStatus,
   completedWithNoChanges = false,
+  isHibernated = false,
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
@@ -122,7 +135,11 @@ export function TerminalHeaderContent({
         pendingCountRef.current = 1;
       }
 
-      if (pendingCountRef.current < SEVERITY_HYSTERESIS_POLLS) {
+      const threshold =
+        SEVERITY_ORDER[rawSeverity] > SEVERITY_ORDER[current]
+          ? ESCALATION_HYSTERESIS_POLLS
+          : DE_ESCALATION_HYSTERESIS_POLLS;
+      if (pendingCountRef.current < threshold) {
         return current;
       }
 
@@ -412,6 +429,32 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Output suspended</span>
               <span>Streaming stalled. Recovers automatically on focus.</span>
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
+          Uses the idle activity color, not accent. The PTY survives; focus wakes it.
+          Renders after Paused/Suspended so higher-urgency flow-control states lead
+          visually when both apply (a lingering flowStatus can outlive hibernation). */}
+      {isHibernated && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded ml-1 border border-divider"
+              role="status"
+              aria-live="polite"
+              data-testid="terminal-hibernated-badge"
+            >
+              <Moon className="w-3 h-3" aria-hidden="true" />
+              Hibernated
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">Renderer asleep</span>
+              <span>PTY preserved. Wakes on focus.</span>
             </div>
           </TooltipContent>
         </Tooltip>

@@ -278,7 +278,10 @@ describe("createApplicationMenu", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
-      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", "clone-repo");
+      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+        actionId: "project.cloneRepo",
+        args: undefined,
+      });
     });
   });
 
@@ -579,7 +582,10 @@ describe("update menu lifecycle", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
-      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", "open-settings");
+      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+        actionId: "app.settings",
+        args: undefined,
+      });
     });
   });
 

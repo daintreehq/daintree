@@ -1,0 +1,35 @@
+{
+  "name": "daintree.github",
+  "version": "0.1.0",
+  "displayName": "GitHub",
+  "description": "First-party GitHub forge provider — issues, pull requests, reviews, CI status, and rate-limit handling for github.com repositories.",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "permissions": [],
+  "contributes": {
+    "forgeProviders": [
+      {
+        "id": "github",
+        "name": "GitHub",
+        "matches": ["github.com"],
+        "capabilities": [
+          "issues",
+          "pulls",
+          "reviews",
+          "required-checks",
+          "draft-prs",
+          "assignees",
+          "releases"
+        ]
+      }
+    ],
+    "fileDecorationProviders": [
+      {
+        "id": "worktree-diff-review",
+        "scopes": ["worktree-diff:*"]
+      }
+    ]
+  }
+}

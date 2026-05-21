@@ -19,6 +19,8 @@ const serviceMock = vi.hoisted(() => ({
   getAuditRecords: vi.fn(() => []),
   getAuditConfig: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   clearAuditLog: vi.fn(),
+  getTurnOutcomeRecords: vi.fn(() => []),
+  clearTurnOutcomeLog: vi.fn(),
   setAuditEnabled: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   setAuditMaxRecords: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   getRuntimeState: vi.fn(() => ({
@@ -195,8 +197,28 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);
   });
 
-  it("cleanup removes all thirteen registered handlers", () => {
-    expect(ipcHandlers.size).toBe(13);
+  it("getTurnOutcomeRecords passes through service result", async () => {
+    serviceMock.getTurnOutcomeRecords.mockReturnValueOnce([
+      {
+        id: "turn-1",
+        timestamp: 1,
+        terminalId: "t1",
+        sessionId: "s1",
+        outcome: "answered",
+      },
+    ] as never);
+    const result = await getHandler(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS)(fakeEvent());
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as unknown[]).length).toBe(1);
+  });
+
+  it("clearTurnOutcomeLog calls service clear", async () => {
+    await getHandler(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG)(fakeEvent());
+    expect(serviceMock.clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleanup removes all eighteen registered handlers", () => {
+    expect(ipcHandlers.size).toBe(18);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

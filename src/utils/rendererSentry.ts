@@ -16,28 +16,28 @@ let consentUnsubscribe: (() => void) | undefined;
 // consent gate runs here in `beforeSend` to drop events before they leave
 // the renderer — `Sentry.init` is not idempotent and `Sentry.close` is
 // terminal, so runtime toggling must happen via this mutable closure.
-export async function initRendererSentry(): Promise<void> {
+//
+// `Sentry.init` runs synchronously up front so the SDK is ready before the
+// first React render. The consent snapshot then hydrates as a detached IPC
+// continuation, so bootstrap is not blocked on a renderer→main round-trip.
+// Until hydration completes the gate stays closed (`consentState` defaults
+// to `"off"` / `!hasSeenPrompt`), which matches the consent semantics: ship
+// nothing until we know the user opted in.
+export function initRendererSentry(): void {
   if (initialized) return;
   initialized = true;
 
   // Subscribe BEFORE fetching the initial snapshot so a consent change that
-  // lands during the await (e.g. another window flipping the level) is not
+  // lands during hydration (e.g. another window flipping the level) is not
   // lost in the gap between snapshot and subscription. If a broadcast fires
-  // during hydration, it wins — we must not overwrite fresher state with the
-  // stale snapshot.
+  // during hydration, it wins — the stale snapshot must not overwrite
+  // fresher state.
   let liveUpdateReceived = false;
   consentUnsubscribe?.();
   consentUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.((payload) => {
     consentState = payload;
     liveUpdateReceived = true;
   });
-
-  try {
-    const state = await window.electron?.sentry?.getConsentState();
-    if (state && !liveUpdateReceived) consentState = state;
-  } catch {
-    // IPC may not be available (e.g. test environments). Leave gate closed.
-  }
 
   Sentry.init({
     // globalHandlersIntegration would double-capture with our existing
@@ -58,10 +58,33 @@ export async function initRendererSentry(): Promise<void> {
     maxBreadcrumbs: 250,
   });
 
-  consentUnsubscribe?.();
-  consentUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.((payload) => {
-    consentState = payload;
-  });
+  // Hydrate the consent snapshot in the background; the gate stays closed
+  // until this resolves. The post-hydration re-subscription drops the
+  // `liveUpdateReceived` toggle since hydration is done — there is no
+  // longer a stale snapshot that could overwrite a fresh broadcast.
+  const snapshotPromise = window.electron?.sentry?.getConsentState?.();
+  if (snapshotPromise) {
+    snapshotPromise
+      .then((state) => {
+        if (state && !liveUpdateReceived) consentState = state;
+        // Install the steady-state listener BEFORE unsubscribing the
+        // hydration-aware one so we never have a coverage gap — if the
+        // re-subscribe throws, the hydration listener stays active and
+        // future broadcasts still update `consentState`.
+        const steadyStateUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.(
+          (payload) => {
+            consentState = payload;
+          }
+        );
+        consentUnsubscribe?.();
+        consentUnsubscribe = steadyStateUnsubscribe;
+      })
+      .catch(() => {
+        // IPC may not be available (e.g. test environments). Leave gate
+        // closed; the hydration-aware listener registered above stays
+        // active, so future broadcasts can still open it.
+      });
+  }
 }
 
 export interface CaptureOptions {

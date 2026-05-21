@@ -26,26 +26,53 @@ const setAgentPinnedMock = vi.fn(async (id: string, pinned: boolean) => {
 const dispatchMock = vi.fn();
 const refreshAvailabilityMock = vi.fn().mockResolvedValue(undefined);
 const toggleButtonVisibilityMock = vi.fn();
+const updateAgentMock = vi.fn().mockResolvedValue(undefined);
+const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
+const recordActionMruMock = vi.fn();
+
+// AgentTrayButton calls `useAgentSettingsStore.getState()` inside
+// `handleLaunch`, so the mock has to expose both the hook selector and a
+// static `getState`. `settings` reads via a getter so `beforeEach`
+// mutations to `sharedSettings` propagate through the static handle too.
+const agentSettingsState = {
+  get settings() {
+    return sharedSettings;
+  },
+  setAgentPinned: setAgentPinnedMock,
+  updateAgent: updateAgentMock,
+  updateWorktreePreset: updateWorktreePresetMock,
+};
 
 vi.mock("@/store/agentSettingsStore", () => ({
-  useAgentSettingsStore: (
-    selector: (s: {
-      settings: AgentSettings | null;
-      setAgentPinned: typeof setAgentPinnedMock;
-    }) => unknown
-  ) => selector({ settings: sharedSettings, setAgentPinned: setAgentPinnedMock }),
+  useAgentSettingsStore: Object.assign(
+    (selector: (s: typeof agentSettingsState) => unknown) => selector(agentSettingsState),
+    { getState: () => agentSettingsState }
+  ),
 }));
 
 vi.mock("@/store/actionMruStore", () => ({
-  useActionMruStore: (
-    selector: (s: { getSortedActionMruList: () => ActionFrecencyEntry[] }) => unknown
-  ) => selector({ getSortedActionMruList: () => [] }),
+  useActionMruStore: Object.assign(
+    (selector: (s: { getSortedActionMruList: () => ActionFrecencyEntry[] }) => unknown) =>
+      selector({ getSortedActionMruList: () => [] }),
+    { getState: () => ({ recordActionMru: recordActionMruMock }) }
+  ),
 }));
+
+let sharedAvailability: CliAvailability = {} as CliAvailability;
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: (
-    selector: (s: { refresh: typeof refreshAvailabilityMock; hasRealData: boolean }) => unknown
-  ) => selector({ refresh: refreshAvailabilityMock, hasRealData: true }),
+    selector: (s: {
+      refresh: typeof refreshAvailabilityMock;
+      hasRealData: boolean;
+      availability: CliAvailability;
+    }) => unknown
+  ) =>
+    selector({
+      refresh: refreshAvailabilityMock,
+      hasRealData: true,
+      availability: sharedAvailability,
+    }),
 }));
 
 vi.mock("@/store/panelStore", () => ({
@@ -64,9 +91,15 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/hooks", () => ({ useKeybindingDisplay: () => null }));
 
-vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex"] as const,
-}));
+vi.mock("@shared/config/agentIds", () => {
+  const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex"] as const;
+  const set: ReadonlySet<string> = new Set<string>(BUILT_IN_AGENT_IDS);
+  return {
+    BUILT_IN_AGENT_IDS,
+    BUILT_IN_AGENT_KEY_ACTIONS: BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
+    isBuiltInAgentId: (value: unknown): boolean => typeof value === "string" && set.has(value),
+  };
+});
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => ({
@@ -88,11 +121,17 @@ vi.mock("@/store/projectPresetsStore", () => ({
 }));
 
 vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  NEW_AGENT_TTL_MS: 14 * 24 * 60 * 60 * 1000,
   useAgentDiscoveryOnboarding: () => ({
     loaded: true,
     seenAgentIds: [],
+    availabilityFirstSeen: {},
     welcomeCardDismissed: true,
+    setupBannerDismissed: true,
     markAgentsSeen: vi.fn(),
+    recordAgentFirstSeen: vi.fn(),
+    dismissWelcomeCard: vi.fn(),
+    dismissSetupBanner: vi.fn(),
   }),
 }));
 
@@ -233,6 +272,9 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     toggleButtonVisibilityMock.mockClear();
     dispatchMock.mockClear();
     refreshAvailabilityMock.mockClear();
+    updateAgentMock.mockClear();
+    updateWorktreePresetMock.mockClear();
+    recordActionMruMock.mockClear();
     sharedSettings = {
       agents: {
         claude: { pinned: true },
@@ -245,6 +287,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       rightButtons: ["settings"],
       pinnedButtons: {},
     };
+    sharedAvailability = {} as CliAvailability;
   });
 
   it("unpinning in Settings > Toolbar flips the tray pin indicator for that agent", () => {
@@ -307,6 +350,33 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       "Toggle Gemini Agent visibility"
     ) as HTMLInputElement;
     expect(geminiCheckboxB.checked).toBe(true);
+  });
+
+  it("undefined-pin agent with ready availability renders checked and toggles to false", () => {
+    // Tri-state fallback (#7673): no explicit pin, ready CLI → visible.
+    sharedSettings = { agents: {} } as AgentSettings;
+    sharedAvailability = { claude: "ready" } as unknown as CliAvailability;
+
+    const settings = render(<ToolbarSettingsTab />);
+    const claudeCheckbox = settings.getByLabelText(
+      "Toggle Claude Agent visibility"
+    ) as HTMLInputElement;
+    expect(claudeCheckbox.checked).toBe(true);
+    fireEvent.click(claudeCheckbox);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("undefined-pin agent with missing availability renders unchecked and toggles to true", () => {
+    sharedSettings = { agents: {} } as AgentSettings;
+    sharedAvailability = { gemini: "missing" } as unknown as CliAvailability;
+
+    const settings = render(<ToolbarSettingsTab />);
+    const geminiCheckbox = settings.getByLabelText(
+      "Toggle Gemini Agent visibility"
+    ) as HTMLInputElement;
+    expect(geminiCheckbox.checked).toBe(false);
+    fireEvent.click(geminiCheckbox);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
   });
 
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {

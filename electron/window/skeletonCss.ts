@@ -61,10 +61,12 @@ export function injectSkeletonCss(wc: WebContents): void {
   lines.push(`  --skeleton-sidebar-width: ${sidebarWidth}px;`);
   lines.push(`  --skeleton-focus-mode: ${focusMode ? "1" : "0"};`);
 
-  // Reserve space for Windows native caption buttons (minimize/maximize/close).
-  // Static 138px ≈ 3 × 46px backplates on Windows 11 @ 96 DPI; Electron 41 has
-  // no API to read actual geometry, so the trailing toolbar spacer in Toolbar.tsx
-  // uses this var with a 138px fallback. See issue #7951.
+  // Reserve space for Windows native caption buttons in the pre-React skeleton
+  // (consumed by index.html's .skeleton-toolbar-right). The live Toolbar reads
+  // env(titlebar-area-width) directly via the Window Controls Overlay API, so
+  // this variable only covers the brief skeleton phase before WCO env vars are
+  // wired up in the renderer. 138px ≈ 3 × 46px backplates on Windows 11 @ 96 DPI.
+  // See issues #7951 and #8167.
   if (process.platform === "win32") {
     lines.push("  --win-caption-width: 138px;");
   }

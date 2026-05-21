@@ -51,20 +51,20 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
     inset 0 0 0 2px var(--sidebar-ring);
 }
 
-/* Reveal the per-row action toolbar whenever the row is focused (or any
-   descendant has focus). The card-internal `group-focus-within/card`
-   reveal only fires when focus lands inside the card; this rule handles
-   focus on the row wrapper itself. */
-[data-worktree-row]:focus [data-worktree-row-toolbar],
-[data-worktree-row]:focus-within [data-worktree-row-toolbar] {
+/* Reveal the per-row action toolbar whenever the row has keyboard focus
+   (or any descendant does). Uses `:focus-visible` / `:has(:focus-visible)`
+   rather than `:focus` / `:focus-within` so mousedown on a button does not
+   flash the toolbar before the click resolves. */
+[data-worktree-row]:focus-visible [data-worktree-row-toolbar],
+[data-worktree-row]:has(:focus-visible) [data-worktree-row-toolbar] {
   opacity: 1;
   pointer-events: auto;
 }
 
 /* Reveal the drag handle whenever the row has keyboard focus, matching the
    toolbar reveal pattern above. */
-[data-worktree-row]:focus [data-worktree-row-drag-handle],
-[data-worktree-row]:focus-within [data-worktree-row-drag-handle] {
+[data-worktree-row]:focus-visible [data-worktree-row-drag-handle],
+[data-worktree-row]:has(:focus-visible) [data-worktree-row-drag-handle] {
   color: color-mix(in srgb, var(--theme-text-primary) 30%, transparent);
   background-color: var(--theme-overlay-soft);
 }
@@ -84,14 +84,10 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
   background: var(--worktree-section-hover-bg, var(--theme-overlay-hover));
 }
 
-@media (prefers-reduced-motion: reduce) {
+@variant reduce-motion {
   .sidebar-worktree-card {
     transition: none;
   }
-}
-
-body[data-reduce-animations="true"] .sidebar-worktree-card {
-  transition: none;
 }
 
 @media (forced-colors: active) {

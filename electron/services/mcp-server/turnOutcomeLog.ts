@@ -42,6 +42,8 @@ const MIN_CLASSIFY_LENGTH = 50;
  * avoid false matches on later output that happens to mention "no sessions".
  */
 const RESUME_STALE_PROBE_CHARS = 500;
+/** Number of identical (toolId, argsSummary) calls within a turn window that triggers `reasoning-loop`. */
+const REASONING_LOOP_THRESHOLD = 3;
 
 // eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = /\[[0-9;?]*[A-Za-z]|\][^]*(?:|\\)/g;
@@ -147,8 +149,20 @@ export function classifyTurnOutcome(args: {
       ) {
         return "tier-rejected";
       }
-      if (lastRecord.result === "error") {
+      if (lastRecord.result === "error" || lastRecord.result === "collision") {
         return "tool-error";
+      }
+    }
+
+    const callCounts = new Map<string, number>();
+    for (const r of recentAuditRecords) {
+      if (r.sessionId === sessionId && r.timestamp >= turnStartTimestamp) {
+        const key = `${r.toolId}::${r.argsSummary}`;
+        const count = (callCounts.get(key) ?? 0) + 1;
+        if (count >= REASONING_LOOP_THRESHOLD) {
+          return "reasoning-loop";
+        }
+        callCounts.set(key, count);
       }
     }
   }
@@ -208,6 +222,18 @@ export class TurnOutcomeService {
    * a prior turn doesn't poison the current classification.
    */
   private turnStartByTerminal = new Map<string, number>();
+  /**
+   * Per-terminal UUID minted at the `toGroup === "active"` transition.
+   * Shared with audit records written during the same turn window.
+   */
+  private turnIdByTerminal = new Map<string, string>();
+  /**
+   * Session-keyed mirror of `turnIdByTerminal` for O(1) audit-stamp lookup.
+   * Populated eagerly at mint time when the terminal is already bound to a
+   * help session; empty for unbound terminals (correct: pre-session turn
+   * dispatches should carry no turnId).
+   */
+  private turnIdBySession = new Map<string, string>();
 
   constructor(private readonly deps: TurnOutcomeServiceDeps) {}
 
@@ -236,10 +262,35 @@ export class TurnOutcomeService {
     this.recentOutput.delete(terminalId);
     this.stuckRecorded.delete(terminalId);
     this.turnStartByTerminal.delete(terminalId);
+    const terminalTurnId = this.turnIdByTerminal.get(terminalId);
+    this.turnIdByTerminal.delete(terminalId);
+    const sessionId = this.deps.getSessionIdForTerminal(terminalId);
+    if (sessionId !== null) {
+      this.turnIdBySession.delete(sessionId);
+    } else if (terminalTurnId !== undefined) {
+      // Session binding was already revoked — fall back to a value scan
+      // so the entry doesn't leak for the process lifetime.
+      for (const [sid, tid] of this.turnIdBySession.entries()) {
+        if (tid === terminalTurnId) {
+          this.turnIdBySession.delete(sid);
+          break;
+        }
+      }
+    }
   }
 
   getRecentOutput(terminalId: string): string {
     return this.recentOutput.get(terminalId) ?? "";
+  }
+
+  /**
+   * Return the current turnId for a help session, or null when the session
+   * has no active turn. Called from the audit-write closure in
+   * `buildSessionServerDeps` to stamp every dispatch with the turn it
+   * belongs to.
+   */
+  getCurrentTurnIdForSession(sessionId: string): string | null {
+    return this.turnIdBySession.get(sessionId) ?? null;
   }
 
   hydrate(): void {
@@ -281,10 +332,17 @@ export class TurnOutcomeService {
     // append its own record. Resetting on the *exit* would prevent the
     // very recording we just guarded against. Also stamp the turn-start
     // timestamp so the classifier can ignore audit records from prior
-    // turns when this turn ends.
+    // turns when this turn ends, and mint a fresh turnId to correlate
+    // audit records written inside this window with the turn outcome.
     if (toGroup === "active") {
       this.stuckRecorded.delete(transition.terminalId);
       this.turnStartByTerminal.set(transition.terminalId, transition.timestamp);
+      const turnId = randomUUID();
+      this.turnIdByTerminal.set(transition.terminalId, turnId);
+      const sessionId = this.deps.getSessionIdForTerminal(transition.terminalId);
+      if (sessionId !== null) {
+        this.turnIdBySession.set(sessionId, turnId);
+      }
     }
 
     const isStuckTimeout =
@@ -317,6 +375,7 @@ export class TurnOutcomeService {
       turnStartTimestamp,
     });
 
+    const turnId = this.turnIdByTerminal.get(transition.terminalId);
     const record: AssistantTurnRecord = {
       id: randomUUID(),
       timestamp: transition.timestamp,
@@ -327,10 +386,18 @@ export class TurnOutcomeService {
       state: transition.state,
       previousState: transition.previousState,
     };
+    if (turnId !== undefined) {
+      record.turnId = turnId;
+    }
     this.appendRecordInternal(record);
     // Drain the ring so the next active turn classifies on its own output
     // rather than re-matching the prior turn's trailing text.
     this.recentOutput.delete(transition.terminalId);
+    // Clear the turnId so post-turn MCP dispatches (between this boundary
+    // and the next active entry) are not incorrectly stamped with the prior
+    // turn's ID. turnIdByTerminal is re-set on the next active transition.
+    this.turnIdBySession.delete(sessionId);
+    this.turnIdByTerminal.delete(transition.terminalId);
   }
 
   /**
@@ -404,9 +471,6 @@ export class TurnOutcomeService {
   clear(): void {
     this.hydrate();
     this.records = [];
-    this.stuckRecorded.clear();
-    this.recentOutput.clear();
-    this.turnStartByTerminal.clear();
     this.flushNow();
   }
 }

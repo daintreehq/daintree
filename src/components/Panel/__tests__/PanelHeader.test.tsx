@@ -420,6 +420,74 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("Open in grid button", () => {
+    it("renders when docked with onRestore and showRestoreControl", () => {
+      const onRestore = vi.fn();
+      render(
+        <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
+      );
+      const btn = screen.getByTestId("panel-open-in-grid");
+      expect(btn).toBeDefined();
+      expect(btn.getAttribute("aria-label")).toBe("Open in grid");
+    });
+
+    it("calls onRestore when clicked", () => {
+      const onRestore = vi.fn();
+      render(
+        <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
+      );
+      screen.getByTestId("panel-open-in-grid").click();
+      expect(onRestore).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not render when showRestoreControl is false (grouped dock panel)", () => {
+      const onRestore = vi.fn();
+      render(
+        <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: false })} />
+      );
+      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+    });
+
+    it("does not render when onRestore is not provided", () => {
+      render(
+        <PanelHeader
+          {...makeProps({ location: "dock", onMinimize: vi.fn(), showRestoreControl: true })}
+        />
+      );
+      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+    });
+
+    it("does not render when location is grid", () => {
+      const onRestore = vi.fn();
+      render(
+        <PanelHeader {...makeProps({ location: "grid", onRestore, showRestoreControl: true })} />
+      );
+      expect(screen.queryByTestId("panel-open-in-grid")).toBeNull();
+    });
+
+    it("renders alongside Collapse to Dock, each firing only its own handler", () => {
+      const onRestore = vi.fn();
+      const onMinimize = vi.fn();
+      render(
+        <PanelHeader
+          {...makeProps({
+            location: "dock",
+            onRestore,
+            onMinimize,
+            showRestoreControl: true,
+          })}
+        />
+      );
+      screen.getByTestId("panel-open-in-grid").click();
+      expect(onRestore).toHaveBeenCalledTimes(1);
+      expect(onMinimize).not.toHaveBeenCalled();
+
+      screen.getByTestId("panel-collapse-to-dock").click();
+      expect(onMinimize).toHaveBeenCalledTimes(1);
+      expect(onRestore).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Restore to Grid in overflow menu", () => {
     it("renders 'Restore to Grid' menu item when docked with onRestore", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onRestore: vi.fn() })} />);
@@ -445,6 +513,14 @@ describe("PanelHeader", () => {
       const restoreTooltip = tooltips.find((el) => el.textContent?.includes("Restore Grid View"));
       expect(restoreTooltip).toBeDefined();
       expect(restoreTooltip!.textContent).not.toContain("double-click header");
+    });
+
+    it("renders restore button with standardized labels (no 'Focus' wording)", () => {
+      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
+      const restoreBtn = screen.getByRole("button", { name: "Restore grid view" });
+      expect(restoreBtn).toBeDefined();
+      expect(restoreBtn.textContent).toContain("Restore");
+      expect(screen.queryByText("Exit Focus")).toBeNull();
     });
   });
 
@@ -544,29 +620,41 @@ describe("PanelHeader", () => {
   });
 
   describe("header double-click behavior", () => {
-    it("dispatches nav.toggleFocusMode when double-clicking header in grid mode", () => {
+    it("calls onToggleMaximize when double-clicking header in grid mode", () => {
+      const onToggleMaximize = vi.fn();
       const { container } = render(
-        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />
+        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize })} />
       );
       const header = container.firstElementChild as HTMLElement;
       fireEvent.dblClick(header);
-      expect(mockDispatch).toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
     });
 
     it("calls onRestore when double-clicking header in dock mode", () => {
       const onRestore = vi.fn();
-      const { container } = render(<PanelHeader {...makeProps({ location: "dock", onRestore })} />);
+      const onToggleMaximize = vi.fn();
+      const { container } = render(
+        <PanelHeader {...makeProps({ location: "dock", onRestore, onToggleMaximize })} />
+      );
       const header = container.firstElementChild as HTMLElement;
       fireEvent.dblClick(header);
       expect(onRestore).toHaveBeenCalledTimes(1);
-      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
-    it("does not dispatch when double-clicking a button within the header", () => {
-      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />);
+    it("does not call onToggleMaximize when double-clicking a button within the header", () => {
+      const onToggleMaximize = vi.fn();
+      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize })} />);
       const closeButton = screen.getByTestId("panel-close");
       fireEvent.dblClick(closeButton);
-      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+      expect(onToggleMaximize).not.toHaveBeenCalled();
+    });
+
+    it("does not throw when onToggleMaximize is undefined", () => {
+      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const header = container.firstElementChild as HTMLElement;
+      expect(() => fireEvent.dblClick(header)).not.toThrow();
     });
   });
 

@@ -1,14 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type {
+  McpAnomalySignal,
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,
   McpConfirmationDecision,
+  McpGrantRecord,
+  McpGrantRecordType,
+  McpGrantRevokedReason,
+  McpLogRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
+  MCP_AUDIT_SCHEMA_VERSION,
+  computeMcpAuditSeverity,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { McpTier } from "./shared.js";
 import {
@@ -17,11 +24,43 @@ import {
   CONFIRMATION_REQUIRED_CODE,
   USER_REJECTED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
+  MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
+  PRE_AUTH_FAILED_CODE,
 } from "./shared.js";
 
+const ANOMALY_MIN_RECORDS = 50;
+const LATENCY_SIGMA_THRESHOLD = 3;
+const FAILURE_CLUSTER_WINDOW = 10;
+const FAILURE_CLUSTER_MIN_FAILURES = 3;
+const MAD_SCALE_FACTOR = 0.6745;
+const P95_Z_SCORE_MIN_TOOLS = 5;
+
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) return sorted[0]!;
+  const rank = p * (sorted.length - 1);
+  const k = Math.floor(rank);
+  const f = rank - k;
+  const lower = sorted[k]!;
+  const upper = sorted[k + 1] ?? lower;
+  return lower + f * (upper - lower);
+}
+
+/**
+ * Hydrate predicate: existing on-disk records predate the discriminated
+ * union (#8442) and have no `type` field; new entries written by
+ * `appendGrantRecord` carry one. The union narrows on the presence of
+ * the field, never on a sentinel value, so legacy records remain plain
+ * `McpAuditRecord` instances.
+ */
+function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
+  return "type" in record && typeof (record as McpGrantRecord).type === "string";
+}
+
 export class AuditService {
-  private records: McpAuditRecord[] = [];
+  private records: McpLogRecord[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private hydrated = false;
   /**
@@ -30,6 +69,16 @@ export class AuditService {
    * no `toolId`/`tier` is known. Reset on app restart by design.
    */
   private auth401Count = 0;
+  /**
+   * Known {toolId, tier} combinations observed across the entire process
+   * lifetime. Seeded from hydrated records on the first `getSignals()` call.
+   * Survives `clear()` — clearing the ring frees space but should not
+   * re-trigger first-seen signals for combinations already observed.
+   */
+  private knownCombinations = new Set<string>();
+  /** Pre-auth record coalescing state — see `recordAuth401()`. */
+  private lastPreAuthRecordId: string | null = null;
+  private lastPreAuthRecordAt = 0;
 
   constructor(
     private readonly saveConfig: (patch: Record<string, unknown>) => void,
@@ -41,8 +90,24 @@ export class AuditService {
     const config = this.readConfig();
     const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
     const cap = this.normalizeMaxRecords(config.auditMaxRecords);
-    this.records =
-      persisted.length > cap ? persisted.slice(persisted.length - cap) : [...persisted];
+    const safe = persisted.filter(
+      (r: unknown): r is Record<string, unknown> => r !== null && typeof r === "object"
+    );
+    const backfilled = safe.map((r: Record<string, unknown>) => {
+      // Grant records (post-#8442) carry a `type` discriminator and never
+      // need audit-specific backfilling — pass them through unchanged.
+      if ("type" in r && typeof r.type === "string") {
+        return r as unknown as McpLogRecord;
+      }
+      return {
+        ...r,
+        schemaVersion: (r.schemaVersion as number) ?? MCP_AUDIT_SCHEMA_VERSION,
+        severity:
+          (r.severity as string) ??
+          computeMcpAuditSeverity(r.result as McpAuditResult, r.errorCode as string | undefined),
+      } as McpAuditRecord;
+    }) as McpLogRecord[];
+    this.records = backfilled.length > cap ? backfilled.slice(backfilled.length - cap) : backfilled;
     this.hydrated = true;
   }
 
@@ -66,6 +131,12 @@ export class AuditService {
     }
     if (outcome.kind === "dedup") {
       return { result: "dedup" };
+    }
+    if (outcome.kind === "collision") {
+      return { result: "collision", errorCode: MCP_DEDUP_KEY_COLLISION_CODE };
+    }
+    if (outcome.kind === "rate_limited") {
+      return { result: "rate_limited", errorCode: MCP_RATE_LIMITED_CODE };
     }
     const value = outcome.value;
     if (value.ok) return { result: "success" };
@@ -98,6 +169,8 @@ export class AuditService {
     outcome: AuditOutcome;
     confirmationDecision?: McpConfirmationDecision;
     argsSummary: string;
+    bannerSuppressed?: boolean;
+    turnId?: string;
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -116,6 +189,8 @@ export class AuditService {
       argsSummary: input.argsSummary,
       result: classification.result,
       durationMs: Math.max(0, Math.round(input.durationMs)),
+      schemaVersion: MCP_AUDIT_SCHEMA_VERSION,
+      severity: computeMcpAuditSeverity(classification.result, classification.errorCode),
     };
     if (classification.errorCode !== undefined) {
       record.errorCode = classification.errorCode;
@@ -125,33 +200,311 @@ export class AuditService {
     }
     if (classification.result === "unauthorized") {
       record.tierHint = minimumPermittingTier(input.toolId);
+      if (input.bannerSuppressed) {
+        record.bannerSuppressed = true;
+      }
+    }
+    if (input.turnId !== undefined) {
+      record.turnId = input.turnId;
     }
 
-    this.records.push(record);
-    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
-    if (this.records.length > cap) {
-      this.records.splice(0, this.records.length - cap);
-    }
-    this.scheduleFlush();
+    this.enqueueAndTrim(record);
   }
 
   /**
-   * Increment the session-scoped 401 counter. Called from the HTTP lifecycle
-   * on bearer auth failures (missing/malformed/revoked) before any tool
-   * dispatch occurs. Gated by the same `auditEnabled` kill switch as
-   * `appendRecord` so toggling audit logging off uniformly silences both
-   * record writes and counter increments.
+   * Append a grant-lifecycle record to the same ring buffer as dispatch
+   * audit entries. Sharing the buffer keeps the audit-log surface honest:
+   * a reader walking the records in order sees grants minted, dispatches
+   * authorised under them, and the eventual expiry or revocation as a
+   * single chronological trail.
+   */
+  appendGrantRecord(input: {
+    type: McpGrantRecordType;
+    sessionId: string;
+    toolId: string;
+    ttlMs: number;
+    expiresAt?: number;
+    revokedReason?: McpGrantRevokedReason;
+  }): void {
+    if (this.readConfig().auditEnabled === false) return;
+    this.hydrate();
+
+    const record: McpGrantRecord = {
+      id: randomUUID(),
+      timestamp: Date.now(),
+      type: input.type,
+      sessionId: input.sessionId,
+      toolId: input.toolId,
+      ttlMs: input.ttlMs,
+    };
+    if (input.expiresAt !== undefined) record.expiresAt = input.expiresAt;
+    if (input.revokedReason !== undefined) record.revokedReason = input.revokedReason;
+
+    this.enqueueAndTrim(record);
+  }
+
+  /**
+   * Increment the session-scoped 401 counter and emit a rate-limited
+   * pre-auth audit record. Called from the HTTP lifecycle on bearer auth
+   * failures (missing/malformed/revoked) before any tool dispatch occurs.
+   * Gated by the same `auditEnabled` kill switch as `appendRecord`.
+   *
+   * Rate limit: the first 401 writes a record immediately. Subsequent 401s
+   * within the coalesce window (1s) increment `repeatCount` on the most
+   * recent pre-auth record rather than writing duplicates. `repeatCount` on
+   * the record body tracks the total occurrences, with `undefined` for
+   * a single occurrence and `>= 2` once coalescing kicks in.
    */
   recordAuth401(): void {
     if (this.readConfig().auditEnabled === false) return;
     this.auth401Count += 1;
+    this.hydrate();
+
+    const now = Date.now();
+    const COALESCE_WINDOW_MS = 1000;
+
+    if (this.lastPreAuthRecordId !== null && now - this.lastPreAuthRecordAt < COALESCE_WINDOW_MS) {
+      const existing = this.records.find((r) => r.id === this.lastPreAuthRecordId);
+      // Narrow to McpAuditRecord — grant records carry a `type` discriminator;
+      // audit records do not. See `McpLogRecord` in shared/types/ipc/mcpServer.ts.
+      if (existing && !("type" in existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
+        existing.timestamp = now;
+        existing.repeatCount = (existing.repeatCount ?? 1) + 1;
+        this.lastPreAuthRecordAt = now;
+        this.scheduleFlush();
+        return;
+      }
+    }
+
+    const record: McpAuditRecord = {
+      id: randomUUID(),
+      timestamp: now,
+      toolId: "mcp.pre-auth",
+      sessionId: "",
+      tier: "system",
+      argsSummary: "pre-auth request rejected",
+      result: "unauthorized",
+      errorCode: PRE_AUTH_FAILED_CODE,
+      durationMs: 0,
+      schemaVersion: MCP_AUDIT_SCHEMA_VERSION,
+      severity: computeMcpAuditSeverity("unauthorized", PRE_AUTH_FAILED_CODE),
+    };
+
+    this.lastPreAuthRecordId = record.id;
+    this.lastPreAuthRecordAt = now;
+
+    this.enqueueAndTrim(record);
   }
 
+  private enqueueAndTrim(record: McpLogRecord): void {
+    this.records.push(record);
+    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
+    if (this.records.length > cap) {
+      const evicted = this.records.splice(0, this.records.length - cap);
+      // If the coalesce target was evicted, reset so the next 401 writes a new record.
+      if (this.lastPreAuthRecordId) {
+        for (const r of evicted) {
+          if (r.id === this.lastPreAuthRecordId) {
+            this.lastPreAuthRecordId = null;
+            this.lastPreAuthRecordAt = 0;
+            break;
+          }
+        }
+      }
+    }
+    this.scheduleFlush();
+  }
   /**
    * Read the session-scoped audit health counters. Renderer-facing.
    */
   getAuditStats(): McpAuditStats {
-    return { auth401Count: this.auth401Count };
+    const signals = this.getSignals();
+    return {
+      auth401Count: this.auth401Count,
+      anomalySignals: signals,
+      anomalySuppressed: this.dispatchRecordCount() < ANOMALY_MIN_RECORDS,
+      anomalyRecordFloor: ANOMALY_MIN_RECORDS,
+    };
+  }
+
+  /**
+   * Count of dispatch records (excluding grant-lifecycle entries) currently
+   * in the ring buffer. Anomaly detection operates strictly on dispatch
+   * records, so the suppression floor is measured against this count.
+   */
+  private dispatchRecordCount(): number {
+    let n = 0;
+    for (const r of this.records) {
+      if (!isGrantRecord(r)) n += 1;
+    }
+    return n;
+  }
+
+  getSignals(): McpAnomalySignal[] {
+    this.hydrate();
+    const records: McpAuditRecord[] = [];
+    for (const r of this.records) {
+      if (!isGrantRecord(r)) records.push(r);
+    }
+    if (records.length < ANOMALY_MIN_RECORDS) return [];
+
+    const signals: McpAnomalySignal[] = [];
+
+    // Seed knownCombinations from all records on first call so existing
+    // combos don't fire first-seen signals retroactively.
+    const firstCall = this.knownCombinations.size === 0;
+    if (firstCall) {
+      for (const r of records) {
+        this.knownCombinations.add(`${r.toolId} ${r.tier}`);
+      }
+    }
+
+    // 1. First-seen combinations — only for combos not yet in the set.
+    for (const r of records) {
+      const key = `${r.toolId} ${r.tier}`;
+      if (!this.knownCombinations.has(key)) {
+        this.knownCombinations.add(key);
+        signals.push({
+          id: `first-seen:${r.toolId}:${r.tier}`,
+          kind: "first-seen-combination",
+          toolId: r.toolId,
+          tier: r.tier,
+          severity: "danger",
+          timestamp: r.timestamp,
+          recordIds: [r.id],
+        });
+      }
+    }
+
+    // 2. Latency drift — per-tool modified z-score (MAD-based).
+    const latencySignals = this.computeLatencyDrift(records);
+    signals.push(...latencySignals);
+
+    // 3. Failure clustering — sliding window over chronological records.
+    const failureSignals = this.computeFailureClusters(records);
+    signals.push(...failureSignals);
+
+    // 4. P95 z-score — cross-tool outlier detection.
+    const p95Signals = this.computeP95ZScores(records);
+    signals.push(...p95Signals);
+
+    return signals;
+  }
+
+  private computeLatencyDrift(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const byTool = new Map<string, McpAuditRecord[]>();
+    for (const r of records) {
+      if (r.result !== "success") continue;
+      const list = byTool.get(r.toolId);
+      if (list) list.push(r);
+      else byTool.set(r.toolId, [r]);
+    }
+    for (const [toolId, toolRecords] of byTool) {
+      if (toolRecords.length < 2) continue;
+      const durations = toolRecords.map((r) => r.durationMs);
+      const median = percentile(durations, 0.5);
+      const absDeviations = durations.map((d) => Math.abs(d - median));
+      const mad = percentile(absDeviations, 0.5);
+      if (mad === 0) continue;
+      for (let i = 0; i < toolRecords.length; i++) {
+        const duration = durations[i]!;
+        const zScore = (MAD_SCALE_FACTOR * (duration - median)) / mad;
+        if (zScore >= LATENCY_SIGMA_THRESHOLD) {
+          const record = toolRecords[i]!;
+          signals.push({
+            id: `latency-drift:${record.id}`,
+            kind: "latency-drift",
+            toolId,
+            tier: record.tier,
+            severity: "danger",
+            timestamp: record.timestamp,
+            recordIds: [record.id],
+            zScore: Math.round(zScore * 100) / 100,
+            durationMs: duration,
+            baselineMedianMs: Math.round(median),
+          });
+        }
+      }
+    }
+    return signals;
+  }
+
+  private computeFailureClusters(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const emitted = new Set<string>();
+    for (let start = 0; start <= records.length - FAILURE_CLUSTER_WINDOW; start++) {
+      const windowRecords = records.slice(start, start + FAILURE_CLUSTER_WINDOW);
+      const failuresByTool = new Map<string, McpAuditRecord[]>();
+      for (const r of windowRecords) {
+        if (r.result === "success" || r.result === "dedup") continue;
+        const list = failuresByTool.get(r.toolId);
+        if (list) list.push(r);
+        else failuresByTool.set(r.toolId, [r]);
+      }
+      for (const [toolId, toolFailures] of failuresByTool) {
+        if (toolFailures.length < FAILURE_CLUSTER_MIN_FAILURES) continue;
+        const latest = toolFailures[toolFailures.length - 1]!;
+        const sigId = `failure-cluster:${toolId}:${latest.id}`;
+        if (emitted.has(sigId)) continue;
+        emitted.add(sigId);
+        signals.push({
+          id: sigId,
+          kind: "failure-cluster",
+          toolId,
+          severity: "danger",
+          timestamp: latest.timestamp,
+          recordIds: toolFailures.map((r) => r.id),
+          clusterSize: toolFailures.length,
+          clusterWindow: FAILURE_CLUSTER_WINDOW,
+        });
+      }
+    }
+    return signals;
+  }
+
+  private computeP95ZScores(records: readonly McpAuditRecord[]): McpAnomalySignal[] {
+    const signals: McpAnomalySignal[] = [];
+    const byTool = new Map<string, McpAuditRecord[]>();
+    for (const r of records) {
+      if (r.result !== "success") continue;
+      const list = byTool.get(r.toolId);
+      if (list) list.push(r);
+      else byTool.set(r.toolId, [r]);
+    }
+    if (byTool.size < P95_Z_SCORE_MIN_TOOLS) return signals;
+
+    const toolP95s: { toolId: string; p95: number; latestRecord: McpAuditRecord }[] = [];
+    for (const [toolId, toolRecords] of byTool) {
+      if (toolRecords.length < 2) continue;
+      const sorted = toolRecords.map((r) => r.durationMs).sort((a, b) => a - b);
+      const p95 = percentile(sorted, 0.95);
+      toolP95s.push({ toolId, p95, latestRecord: toolRecords[toolRecords.length - 1]! });
+    }
+    if (toolP95s.length < P95_Z_SCORE_MIN_TOOLS) return signals;
+
+    const p95s = toolP95s.map((t) => t.p95);
+    const medianP95 = percentile(p95s, 0.5);
+    const absDeviations = p95s.map((p) => Math.abs(p - medianP95));
+    const madP95 = percentile(absDeviations, 0.5);
+    if (madP95 === 0) return signals;
+
+    for (const entry of toolP95s) {
+      const zScore = (MAD_SCALE_FACTOR * (entry.p95 - medianP95)) / madP95;
+      if (zScore >= LATENCY_SIGMA_THRESHOLD) {
+        signals.push({
+          id: `p95-z-score:${entry.toolId}`,
+          kind: "p95-z-score",
+          toolId: entry.toolId,
+          severity: "danger",
+          timestamp: entry.latestRecord.timestamp,
+          recordIds: [entry.latestRecord.id],
+          zScore: Math.round(zScore * 100) / 100,
+          p95Ms: Math.round(entry.p95),
+        });
+      }
+    }
+    return signals;
   }
 
   private scheduleFlush(): void {
@@ -180,7 +533,27 @@ export class AuditService {
     this.flush();
   }
 
+  /**
+   * Newest-first view of dispatch records only. Grant lifecycle records
+   * (#8442) are filtered out for the legacy renderer surface that still
+   * shows `result`-keyed columns. {@link getLogRecords} returns the full
+   * union for callers that understand the new discriminator.
+   */
   getRecords(): McpAuditRecord[] {
+    this.hydrate();
+    const out: McpAuditRecord[] = [];
+    for (const record of this.records) {
+      if (!isGrantRecord(record)) out.push(record);
+    }
+    return out.reverse();
+  }
+
+  /**
+   * Newest-first view of the full log union — audit + grant records
+   * interleaved chronologically. Reserved for the audit panel surface
+   * that explicitly handles both shapes.
+   */
+  getLogRecords(): McpLogRecord[] {
     this.hydrate();
     return [...this.records].reverse();
   }
@@ -197,6 +570,9 @@ export class AuditService {
     this.hydrate();
     this.records = [];
     this.flushNow();
+    // knownCombinations intentionally preserved — clearing the ring frees
+    // space but should not re-trigger first-seen signals for combos already
+    // observed in this process lifetime.
   }
 
   setEnabled(enabled: boolean): { enabled: boolean; maxRecords: number } {
@@ -221,4 +597,6 @@ export type AuditOutcome =
   | { kind: "result"; value: import("../../../shared/types/actions.js").ActionDispatchResult }
   | { kind: "throw"; error: unknown }
   | { kind: "unauthorized" }
-  | { kind: "dedup" };
+  | { kind: "dedup" }
+  | { kind: "collision" }
+  | { kind: "rate_limited"; retryAfter: number };

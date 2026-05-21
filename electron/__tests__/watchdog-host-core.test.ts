@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  buildWatchdogKillPayload,
   createWatchdog,
   parseMainPid,
+  writeWatchdogKillFlag,
   HEARTBEAT_INTERVAL_MS,
   MAX_MISSED,
+  WATCHDOG_KILL_FLAG_NAME,
 } from "../watchdog-host-core.js";
 
 describe("parseMainPid", () => {
@@ -128,7 +131,8 @@ describe("createWatchdog", () => {
 
   it("wake clears the missed counter and resumes counting", () => {
     const killMain = vi.fn();
-    const wd = createWatchdog({ killMain, logError: () => {} });
+    let now = 1000;
+    const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
     wd.handleMessage({ type: "ping" });
 
     wd.handleMessage({ type: "sleep" });
@@ -138,7 +142,9 @@ describe("createWatchdog", () => {
     expect(wd.state.isPaused).toBe(false);
     expect(wd.state.missedBeats).toBe(0);
 
-    // After wake, normal counting resumes.
+    // Advance past the wake-grace window so missed-beat counting resumes
+    // (the grace exists to absorb queued-during-sleep tick bursts).
+    now += HEARTBEAT_INTERVAL_MS;
     for (let i = 0; i < MAX_MISSED; i++) wd.tick();
     expect(killMain).toHaveBeenCalledTimes(1);
   });
@@ -195,5 +201,166 @@ describe("createWatchdog", () => {
 
   it("HEARTBEAT_INTERVAL_MS × MAX_MISSED gives the conservative ~15s threshold", () => {
     expect(HEARTBEAT_INTERVAL_MS * MAX_MISSED).toBe(15000);
+  });
+
+  describe("wake-grace (monotonic-clock stale-tick suppression)", () => {
+    // The OS schedules `setInterval` callbacks during sleep and delivers them
+    // as a burst at wake — without the grace, those queued ticks would each
+    // increment `missedBeats` and cross the kill threshold before the
+    // arming ping has a chance to reset the counter.
+    it("suppresses ticks fired within HEARTBEAT_INTERVAL_MS of the most recent wake", () => {
+      const killMain = vi.fn();
+      const now = 1000;
+      const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
+      wd.handleMessage({ type: "ping" });
+
+      // Burst-fire ticks immediately after wake — the kernel has queued
+      // several intervals during sleep and they all land at once.
+      wd.handleMessage({ type: "sleep" });
+      wd.handleMessage({ type: "wake" });
+      for (let i = 0; i < MAX_MISSED * 5; i++) wd.tick();
+
+      expect(killMain).not.toHaveBeenCalled();
+      expect(wd.state.missedBeats).toBe(0);
+    });
+
+    it("resumes normal missed-beat counting once the grace window elapses", () => {
+      const killMain = vi.fn();
+      let now = 1000;
+      const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
+      wd.handleMessage({ type: "ping" });
+      wd.handleMessage({ type: "wake" });
+
+      // Advance the clock past one heartbeat interval — grace expires.
+      now += HEARTBEAT_INTERVAL_MS;
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not engage on startup before any wake has been observed", () => {
+      // `lastWakeTimestamp` starts at 0 — the grace must not suppress the
+      // very first ticks after boot, otherwise a stuck-at-boot main would
+      // escape detection.
+      const killMain = vi.fn();
+      const wd = createWatchdog({ killMain, logError: () => {}, now: () => 1000 });
+      wd.handleMessage({ type: "ping" });
+
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("grace boundary is strict `<` — tick at exactly HEARTBEAT_INTERVAL_MS counts", () => {
+      // Off-by-one guard: if the comparison were `<=`, the very first tick
+      // after the grace window expires would still be suppressed, delaying
+      // detection by one extra interval. Verify the boundary is `<`.
+      const killMain = vi.fn();
+      let now = 1000;
+      const wd = createWatchdog({ killMain, logError: () => {}, now: () => now });
+      wd.handleMessage({ type: "ping" });
+      wd.handleMessage({ type: "wake" });
+
+      // At `lastWakeTimestamp + HEARTBEAT_INTERVAL_MS - 1` the grace still applies.
+      now += HEARTBEAT_INTERVAL_MS - 1;
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+      expect(killMain).not.toHaveBeenCalled();
+
+      // At `lastWakeTimestamp + HEARTBEAT_INTERVAL_MS` the grace lifts.
+      now = 1000 + HEARTBEAT_INTERVAL_MS;
+      for (let i = 0; i < MAX_MISSED; i++) wd.tick();
+      expect(killMain).toHaveBeenCalledTimes(1);
+    });
+
+    it("`wake` message records the current monotonic timestamp", () => {
+      let now = 5000;
+      const wd = createWatchdog({ killMain: vi.fn(), logError: () => {}, now: () => now });
+      wd.handleMessage({ type: "wake" });
+      expect(wd.state.lastWakeTimestamp).toBe(5000);
+
+      now = 9000;
+      wd.handleMessage({ type: "wake" });
+      expect(wd.state.lastWakeTimestamp).toBe(9000);
+    });
+
+    it("defaults the clock to `performance.now` when `deps.now` is omitted", () => {
+      // Smoke-check that the default seam is wired — `lastWakeTimestamp`
+      // should land in the same monotonic frame as `performance.now()`.
+      const wd = createWatchdog({ killMain: vi.fn(), logError: () => {} });
+      const before = performance.now();
+      wd.handleMessage({ type: "wake" });
+      const after = performance.now();
+      expect(wd.state.lastWakeTimestamp).toBeGreaterThanOrEqual(before);
+      expect(wd.state.lastWakeTimestamp).toBeLessThanOrEqual(after);
+    });
+  });
+});
+
+describe("buildWatchdogKillPayload", () => {
+  it("captures missedBeats and mainPid plus a fresh killedAt timestamp", () => {
+    const before = Date.now();
+    const payload = buildWatchdogKillPayload(MAX_MISSED, 4242);
+    const after = Date.now();
+
+    expect(payload.missedBeats).toBe(MAX_MISSED);
+    expect(payload.mainPid).toBe(4242);
+    expect(payload.killedAt).toBeGreaterThanOrEqual(before);
+    expect(payload.killedAt).toBeLessThanOrEqual(after);
+  });
+
+  it("produces a JSON-serialisable object (the host writes it to disk)", () => {
+    const payload = buildWatchdogKillPayload(3, 1234);
+    const round = JSON.parse(JSON.stringify(payload));
+    expect(round).toEqual({
+      killedAt: payload.killedAt,
+      missedBeats: 3,
+      mainPid: 1234,
+    });
+  });
+
+  it("uses a stable flag filename (writer/reader must agree)", () => {
+    expect(WATCHDOG_KILL_FLAG_NAME).toBe("watchdog-kill.flag");
+  });
+});
+
+describe("writeWatchdogKillFlag", () => {
+  function makeDeps(overrides: Partial<{ throwOnWrite: boolean }> = {}) {
+    const writes: Array<{ path: string; data: string }> = [];
+    const deps = {
+      writeFileSync: vi.fn((p: string, data: string) => {
+        if (overrides.throwOnWrite) throw new Error("disk full");
+        writes.push({ path: p, data });
+      }),
+      joinPath: (userData: string, name: string) => `${userData}/${name}`,
+    };
+    return { deps, writes };
+  }
+
+  it("writes the flag at <userData>/watchdog-kill.flag with the expected payload", () => {
+    const { deps, writes } = makeDeps();
+    const ok = writeWatchdogKillFlag("/fake/userData", MAX_MISSED, 4242, deps);
+    expect(ok).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].path).toBe(`/fake/userData/${WATCHDOG_KILL_FLAG_NAME}`);
+    const parsed = JSON.parse(writes[0].data);
+    expect(parsed.missedBeats).toBe(MAX_MISSED);
+    expect(parsed.mainPid).toBe(4242);
+    expect(typeof parsed.killedAt).toBe("number");
+  });
+
+  it("returns false and writes nothing when userData is null (env missing)", () => {
+    const { deps, writes } = makeDeps();
+    const ok = writeWatchdogKillFlag(null, 3, 4242, deps);
+    expect(ok).toBe(false);
+    expect(writes).toHaveLength(0);
+    expect(deps.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it("returns false (and does NOT throw) when the write itself fails — fail-open", () => {
+    const { deps } = makeDeps({ throwOnWrite: true });
+    // The contract is: writeWatchdogKillFlag must never propagate. The caller
+    // immediately fires SIGKILL after this returns.
+    const ok = writeWatchdogKillFlag("/fake/userData", 3, 4242, deps);
+    expect(ok).toBe(false);
+    expect(deps.writeFileSync).toHaveBeenCalledTimes(1);
   });
 });

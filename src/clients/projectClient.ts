@@ -117,9 +117,13 @@ export const projectClient = {
     return window.electron.project.update(projectId, updates);
   },
 
-  switch: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
+  switch: (
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState,
+    options?: { focusIntent?: "focus-next-waiting" }
+  ): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.switch(projectId, outgoingState);
+    return window.electron.project.switch(projectId, outgoingState, options);
   },
 
   /**
@@ -144,6 +148,12 @@ export const projectClient = {
     }) => void
   ): (() => void) => {
     return window.electron.project.onSwitch(callback);
+  },
+
+  onWorktreeLoadStatus: (
+    callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
+  ): (() => void) => {
+    return window.electron.project.onWorktreeLoadStatus(callback);
   },
 
   getSettings: (projectId: string): Promise<ProjectSettings> => {

@@ -9,11 +9,13 @@ export function registerKeybindingActions(
   actions.set("keybinding.getOverrides", () => ({
     id: "keybinding.getOverrides",
     title: "Get Keybinding Overrides",
-    description: "Get configured keybinding overrides",
+    description:
+      "Read the user's keybinding overrides (custom shortcuts that differ from defaults). Takes no args. Returns a record mapping action id to an array of key combos. Never errors; returns an empty map when no overrides are configured. Defaults are not included — only explicit overrides.",
     category: "settings",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.record(z.string(), z.array(z.string())),
     run: async () => {
       await keybindingService.loadOverrides();
       return keybindingService.getOverridesSnapshot();
@@ -58,9 +60,12 @@ export function registerKeybindingActions(
     description: "Reset all keybinding overrides",
     category: "settings",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
     scope: "renderer",
+    dangerRationale:
+      "Resets all keybinding overrides to defaults. All custom shortcuts are permanently lost.",
     keywords: ["shortcuts", "hotkeys", "defaults", "restore"],
+    mcpAnnotations: { openWorldHint: false },
     run: async () => {
       await keybindingService.resetAllOverrides();
       return keybindingService.getOverridesSnapshot();

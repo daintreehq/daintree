@@ -425,7 +425,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).toContain("oauth.example.com");
-      expect(container.textContent).toContain("Open in External Browser");
+      expect(container.textContent).toContain("Open in external browser");
     });
 
     it("ignores events for different panelId", () => {
@@ -491,7 +491,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).not.toContain("example.com");
     });
 
-    it("Open in External Browser dispatches browser.openExternal with blocked URL", () => {
+    it("Open in external browser dispatches browser.openExternal with blocked URL", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const callback = getNavigationBlockedCallback();
 
@@ -505,7 +505,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       const openButton = Array.from(container.querySelectorAll("button")).find((b) =>
-        b.textContent?.includes("Open in External Browser")
+        b.textContent?.includes("Open in external browser")
       );
       expect(openButton).toBeDefined();
 
@@ -765,7 +765,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).toContain("Retry");
-      expect(container.textContent).toContain("Open in External Browser");
+      expect(container.textContent).toContain("Open in external browser");
     });
 
     it("Retry from timeout clears error and loads current URL", () => {

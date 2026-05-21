@@ -3,13 +3,14 @@
  */
 
 import { ipcMain } from "electron";
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
-import { typedHandle } from "../../utils.js";
+import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 
@@ -88,24 +89,62 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_BROADCAST_WRITE, handleTerminalBroadcastWrite)
   );
 
-  const handleTerminalSubmit = async (id: string, text: string) => {
+  const handleTerminalSubmit = async (id: string, text: string): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
       }
+      // PtyClient.submit is fire-and-forget — the pty-host silently no-ops
+      // a write to a terminal that's gone or has already exited (see
+      // `PtyManager.submit` / `TerminalProcess.submit`). That left structured
+      // fleet broadcast (`fleetExecution.executeFleetBroadcast`) seeing all
+      // submits as fulfilled and never disarming dead PTYs (#8706). Probe
+      // liveness here so the renderer gets an actual rejection it can
+      // classify and act on. Errno tokens (`EBADF`, `EPIPE`) lead the
+      // message so the renderer can match them via
+      // `classifyFleetRejectionReason` — Electron's structured-clone error
+      // serialization strips `.code` from `NodeJS.ErrnoException`, so the
+      // code MUST live in the message text to survive the IPC boundary.
+      // `getTerminalAsync` returns null both when the terminal genuinely
+      // doesn't exist (the case we want to surface to fleet broadcast) and
+      // when the broker rejects from a host crash / timeout (see
+      // `PtyClient.getTerminalAsync`'s `.catch(() => null)`). During a host
+      // restart that means every concurrent fleet submit briefly classifies
+      // as permanent and disarms the whole fleet — annoying but recoverable
+      // by re-arming. Splitting the two cases would need a new PtyClient
+      // method that propagates broker errors; out of scope for #8706. The
+      // pre-fix behavior had the opposite failure mode (kept firing into
+      // dead pipes), so this trade is a net win for the common case.
+      const info = await ptyClient.getTerminalAsync(id);
+      if (!info) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EBADF: terminal ${id} not found`,
+          context: { terminalId: id },
+        });
+      }
+      if (info.hasPty === false) {
+        throw new AppError({
+          code: "NOT_FOUND",
+          message: `EPIPE: terminal ${id} has no live PTY (exited)`,
+          context: { terminalId: id },
+        });
+      }
       ptyClient.submit(id, text);
     } catch (error) {
+      // Preserve AppError shape so the renderer sees the embedded errno
+      // token in the message — wrapping would lose the prefix.
+      if (error instanceof AppError) throw error;
       const errorMessage = formatErrorMessage(error, "Failed to submit to terminal");
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit));
 
   const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
     try {
       const parseResult = TerminalResizePayloadSchema.safeParse(payload);
       if (!parseResult.success) {
-        console.error("[IPC] Invalid terminal resize payload:", parseResult.error.format());
+        console.error("[IPC] Invalid terminal resize payload:", z.prettifyError(parseResult.error));
         return;
       }
 
@@ -123,16 +162,25 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
 
   const handleTerminalSetActivityTier = (
     _event: Electron.IpcMainEvent,
-    payload: { id: string; tier: PtyHostActivityTier }
+    payload: { id: string; tier: PtyHostActivityTier; pollingIntervalMs?: number }
   ) => {
     try {
       if (!payload || typeof payload !== "object") {
         return;
       }
-      const { id, tier } = payload;
+      const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
-      ptyClient.setActivityTier(id, effectiveTier);
+      // The renderer may send a cadence hint (issue #8596 — 200ms for VISIBLE-
+      // unfocused). Guard against malformed values; the PTY host falls back to
+      // the tier default when the field is missing or invalid.
+      const effectivePollingMs =
+        typeof pollingIntervalMs === "number" &&
+        Number.isFinite(pollingIntervalMs) &&
+        pollingIntervalMs > 0
+          ? pollingIntervalMs
+          : undefined;
+      ptyClient.setActivityTier(id, effectiveTier, effectivePollingMs);
     } catch (error) {
       console.error("[IPC] Failed to set activity tier:", error);
     }
@@ -227,7 +275,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       });
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));
+
+  const namespace = defineIpcNamespace({
+    name: "terminalIo",
+    ops: {
+      submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit),
+      forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
+    },
+  });
+  handlers.push(namespace.register());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

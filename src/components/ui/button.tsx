@@ -1,11 +1,12 @@
 import * as React from "react";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/Spinner";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] text-sm font-medium cursor-pointer select-none transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
+  "relative inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] text-sm font-medium cursor-pointer select-none transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
   {
     variants: {
       variant: {
@@ -49,21 +50,122 @@ const buttonVariants = cva(
   }
 );
 
+type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
+
+// Spinner size per button size — kept in lockstep with the CVA `[&_svg]:size-*`
+// rules so the overlay matches inline icon sizing.
+const SPINNER_SIZE_MAP: Record<ButtonSize, React.ComponentProps<typeof Spinner>["size"]> = {
+  default: "md",
+  sm: "sm",
+  xs: "xs",
+  lg: "md",
+  icon: "md",
+  "icon-sm": "sm",
+  "icon-xs": "xs",
+};
+
+// `gap` is not a CSS-inherited property, so the content wrapper can't pick up
+// the button's gap implicitly — mirror the per-size gap explicitly.
+const GAP_CLASS_MAP: Record<ButtonSize, string> = {
+  default: "gap-2",
+  sm: "gap-1.5",
+  xs: "gap-1",
+  lg: "gap-2.5",
+  icon: "gap-2",
+  "icon-sm": "gap-1.5",
+  "icon-xs": "gap-1",
+};
+
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  /**
+   * When true, overlays a centered spinner and dims the label without swapping
+   * it (preserving width + accessible name). Sets `aria-busy`/`aria-disabled`
+   * and blocks clicks/keyboard activation without using the native `disabled`
+   * attribute, so focus is preserved.
+   */
+  loading?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, type, ...props }, ref) => {
+  (
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      type,
+      loading = false,
+      onClick,
+      disabled,
+      children,
+      "aria-disabled": ariaDisabled,
+      ...props
+    },
+    ref
+  ) => {
     const Comp = asChild ? Slot : "button";
+    const resolvedSize: ButtonSize = size ?? "default";
+    const resolvedAriaDisabled = loading || disabled ? true : ariaDisabled || undefined;
+
+    const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (loading) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      onClick?.(event);
+    };
+
+    const spinner = loading ? (
+      <span
+        data-slot="button-spinner"
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        aria-hidden="true"
+      >
+        <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />
+      </span>
+    ) : null;
+
     return (
       <Comp
         type={asChild ? undefined : (type ?? "button")}
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(
+          buttonVariants({ variant, size }),
+          loading && "pointer-events-none",
+          className
+        )}
         ref={ref}
+        disabled={disabled}
+        onClick={handleClick}
         {...props}
-      />
+        // Component-owned loading state — placed after the prop spread so a
+        // consumer can't silently desync the announced ARIA state.
+        aria-busy={loading || undefined}
+        aria-disabled={resolvedAriaDisabled}
+        data-loading={loading || undefined}
+      >
+        {spinner}
+        {/* asChild + loading: overlay renders alongside the slotted child;
+            label dimming is intentionally not applied to the asChild path
+            (would require cloning the consumer's element). No call site
+            combines asChild with loading. */}
+        {asChild ? (
+          <Slottable>{children}</Slottable>
+        ) : (
+          <span
+            data-slot="button-content"
+            className={cn(
+              "inline-flex items-center justify-center",
+              GAP_CLASS_MAP[resolvedSize],
+              loading && "opacity-30 transition-opacity duration-150 ease-out"
+            )}
+          >
+            {children}
+          </span>
+        )}
+      </Comp>
     );
   }
 );

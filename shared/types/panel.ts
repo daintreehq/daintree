@@ -170,6 +170,16 @@ export interface TerminalReconnectError {
   };
 }
 
+/** Structured error state for scrollback restore failures (issue #8535) */
+export interface TerminalScrollbackRestoreError {
+  /** Human-readable error message */
+  message: string;
+  /** Error classification: write timeout, parse error from xterm, or other */
+  type: "timeout" | "parse" | "error";
+  /** Timestamp when error occurred (milliseconds since epoch) */
+  timestamp: number;
+}
+
 /** Exit behavior for panels/terminals after process exits */
 export type PanelExitBehavior = "keep" | "trash" | "remove" | "restart";
 
@@ -252,6 +262,8 @@ export interface PtyPanelData extends BasePanelData {
   restartError?: TerminalRestartError;
   /** Reconnection failure error - set when reconnection fails during project switch */
   reconnectError?: TerminalReconnectError;
+  /** Scrollback restore failure - set when deferred scrollback replay fails */
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy.
    *  Excludes `data-loss` (transient pulse only — never persisted as state). */
   flowStatus?: PersistableFlowStatus;
@@ -271,6 +283,8 @@ export interface PtyPanelData extends BasePanelData {
   devCommand?: string;
   /** Dev server status for dev-preview panels */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server phase label for dev-preview panels */
+  devServerPhaseLabel?: string | null;
   /** Dev server URL for dev-preview panels */
   devServerUrl?: string;
   /** Dev server error for dev-preview panels */
@@ -279,6 +293,8 @@ export interface PtyPanelData extends BasePanelData {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
+  devPreviewConsoleTab?: "output" | "console";
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
@@ -366,8 +382,12 @@ export interface DevPreviewPanelData extends BasePanelData {
   browserZoom?: number;
   /** Whether the console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
+  devPreviewConsoleTab?: "output" | "console";
   /** Dev server status */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server phase label */
+  devServerPhaseLabel?: string | null;
   /** Dev server URL */
   devServerUrl?: string;
   /** Dev server error */
@@ -378,6 +398,12 @@ export interface DevPreviewPanelData extends BasePanelData {
   exitBehavior?: PanelExitBehavior;
   /** Active viewport preset (undefined = fill/full-width) */
   viewportPreset?: ViewportPresetId;
+  /** Whether the active viewport preset is rotated to landscape (width/height swapped) */
+  viewportRotated?: boolean;
+  /** Device-pixel-ratio override for the active viewport preset (visual change deferred to #8278) */
+  viewportDpr?: 1 | 2 | 3;
+  /** Whether the viewport is scaled down to fit the available pane (zoom-to-fit) */
+  viewportFit?: boolean;
   /** Last captured scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
 }
@@ -454,6 +480,8 @@ export interface TerminalInstance {
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;
+  /** Error code or message from agent state transitions (e.g., "ECONNRESET", "EPIPE") */
+  error?: string;
   /** Extracted session cost in dollars from the last completed agent run */
   sessionCost?: number;
   /** Extracted session token count from the last completed agent run */
@@ -473,6 +501,8 @@ export interface TerminalInstance {
   reconnectError?: TerminalReconnectError;
   /** Error that occurred when spawning the PTY process */
   spawnError?: import("./pty-host.js").SpawnError;
+  /** Error that occurred during deferred scrollback restore (issue #8535) */
+  scrollbackRestoreError?: TerminalScrollbackRestoreError;
   flowStatus?: PersistableFlowStatus;
   runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;
@@ -486,6 +516,8 @@ export interface TerminalInstance {
   devCommand?: string;
   /** Dev server status for dev-preview panels */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server phase label for dev-preview panels */
+  devServerPhaseLabel?: string | null;
   /** Dev server URL for dev-preview panels */
   devServerUrl?: string;
   /** Dev server error for dev-preview panels */
@@ -494,8 +526,16 @@ export interface TerminalInstance {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
+  devPreviewConsoleTab?: "output" | "console";
   /** Active viewport preset for dev-preview responsive emulation (undefined = fill) */
   viewportPreset?: ViewportPresetId;
+  /** Whether the active dev-preview viewport preset is rotated to landscape */
+  viewportRotated?: boolean;
+  /** Device-pixel-ratio override for the active dev-preview viewport preset */
+  viewportDpr?: 1 | 2 | 3;
+  /** Whether the dev-preview viewport is scaled to fit the available pane */
+  viewportFit?: boolean;
   /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
@@ -560,6 +600,12 @@ export interface TerminalInstance {
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * Timestamp (ms) of the last user-initiated focus on this panel. Used by
+   * panel restore to promote the most-recently-active panel per worktree to
+   * the priority restore tier.
+   */
+  lastActiveAt?: number;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

@@ -1,7 +1,8 @@
-import { createElement, useCallback, useState, type ReactNode } from "react";
+import { createElement, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { WorktreeState } from "@/types";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
+import { useMenuActionSource } from "@/components/ui/menu-source";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -40,6 +41,10 @@ export interface UseWorktreeActionsResult {
   handleCloseAll: () => void;
   handleTerminateAll: () => void;
   handleResourceTeardown: () => void;
+
+  hasSnapshot: boolean;
+  handleRevertAgentChanges: () => void;
+  handleDeleteSnapshot: () => void;
 }
 
 export function useWorktreeActions({
@@ -60,10 +65,111 @@ export function useWorktreeActions({
   });
 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const source = useMenuActionSource();
 
   const closeConfirmDialog = useCallback(() => {
     setConfirmDialog({ isOpen: false });
   }, []);
+
+  const [hasSnapshot, setHasSnapshot] = useState(false);
+  const [snapshotCreatedAt, setSnapshotCreatedAt] = useState<number | null>(null);
+
+  // Check for snapshot availability — re-runs when agent activity changes.
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.git
+      .snapshotGet(worktree.id)
+      .then((info) => {
+        if (cancelled) return;
+        const available = info !== null && info.hasChanges;
+        setHasSnapshot(available);
+        setSnapshotCreatedAt(available ? info.createdAt : null);
+      })
+      .catch(() => {
+        // Snapshot check is best-effort, but a failure after a prior success
+        // (host restart, snapshot deleted externally) must not leave the
+        // Revert button live against a snapshot that may no longer exist.
+        if (cancelled) return;
+        setHasSnapshot(false);
+        setSnapshotCreatedAt(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [worktree.id, worktree.lastActivityTimestamp]);
+
+  const handleRevertAgentChanges = useCallback(() => {
+    const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;
+    const preview =
+      snapshotCreatedAt != null
+        ? createElement(
+            "p",
+            { className: "text-xs text-daintree-text/60" },
+            `Snapshot captured ${new Date(snapshotCreatedAt).toLocaleString()}.`
+          )
+        : undefined;
+    setConfirmDialog({
+      isOpen: true,
+      title: `Revert agent changes for '${label}'?`,
+      description:
+        "Reverting to the pre-agent snapshot permanently discards every working tree change made since the snapshot in this worktree. This cannot be undone.",
+      confirmLabel: "Revert agent changes",
+      variant: "destructive",
+      children: preview,
+      onConfirm: () => {
+        setConfirmDialog({ isOpen: false });
+        window.electron.git
+          .snapshotRevert(worktree.id)
+          .then((result) => {
+            setHasSnapshot(false);
+            setSnapshotCreatedAt(null);
+            if (result.hasConflicts) {
+              void actionService.dispatch(
+                "app.showNotification",
+                { type: "warning", message: result.message },
+                { source: "user" }
+              );
+            }
+          })
+          .catch((error) => {
+            logError("Failed to revert agent changes", error);
+          });
+      },
+    });
+  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, snapshotCreatedAt]);
+
+  const handleDeleteSnapshot = useCallback(() => {
+    const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;
+    const preview =
+      snapshotCreatedAt != null
+        ? createElement(
+            "p",
+            { className: "text-xs text-daintree-text/60" },
+            `Snapshot captured ${new Date(snapshotCreatedAt).toLocaleString()}.`
+          )
+        : undefined;
+    setConfirmDialog({
+      isOpen: true,
+      title: `Delete snapshot for '${label}'?`,
+      description:
+        "Deleting the pre-agent snapshot permanently removes the saved restore point. Your working tree is left unchanged, but you'll no longer be able to revert agent changes. This cannot be undone.",
+      confirmLabel: "Delete snapshot",
+      variant: "destructive",
+      children: preview,
+      onConfirm: () => {
+        setConfirmDialog({ isOpen: false });
+        window.electron.git
+          .snapshotDelete(worktree.id)
+          .then(() => {
+            setHasSnapshot(false);
+            setSnapshotCreatedAt(null);
+          })
+          .catch((error) => {
+            logError("Failed to delete snapshot", error);
+          });
+      },
+    });
+  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, snapshotCreatedAt]);
 
   const handlePathClick = useCallback(() => {
     void actionService.dispatch("system.openPath", { path: worktree.path }, { source: "user" });
@@ -79,7 +185,7 @@ export function useWorktreeActions({
       try {
         await runRecipe(recipeId, worktree.path, worktree.id, {
           issueNumber: worktree.issueNumber,
-          prNumber: worktree.prNumber,
+          prNumber: worktree.linked?.pr?.ref.number,
           worktreePath: worktree.path,
           branchName: worktree.branch,
         });
@@ -124,12 +230,24 @@ export function useWorktreeActions({
   }, [worktree.id]);
 
   const handleCloseAll = useCallback(() => {
-    void actionService.dispatch(
-      "worktree.sessions.trashAll",
-      { worktreeId: worktree.id },
-      { source: "user" }
-    );
-  }, [worktree.id]);
+    const label = worktree.issueTitle ?? worktree.branch;
+    setConfirmDialog({
+      isOpen: true,
+      title: `Trash all sessions for '${label}'?`,
+      description:
+        "Every session in this worktree moves to trash. Active agents, running processes, and unsaved scrollback will be lost. Sessions can be restored from trash before garbage collection.",
+      confirmLabel: "Trash all sessions",
+      variant: "destructive",
+      onConfirm: () => {
+        void actionService.dispatch(
+          "worktree.sessions.trashAll",
+          { worktreeId: worktree.id, confirmed: true },
+          { source: "user" }
+        );
+        setConfirmDialog({ isOpen: false });
+      },
+    });
+  }, [worktree.id, worktree.issueTitle, worktree.branch]);
 
   const handleTerminateAll = useCallback(() => {
     const label = worktree.issueTitle ?? worktree.branch;
@@ -185,7 +303,7 @@ export function useWorktreeActions({
         void actionService.dispatch(
           "worktree.resource.teardown",
           { worktreeId: worktree.id },
-          { source: "context-menu" }
+          { source }
         );
         setConfirmDialog({ isOpen: false });
       },
@@ -213,5 +331,8 @@ export function useWorktreeActions({
     handleSelectAllAgents,
     handleSelectWaitingAgents,
     handleSelectWorkingAgents,
+    hasSnapshot,
+    handleRevertAgentChanges,
+    handleDeleteSnapshot,
   };
 }

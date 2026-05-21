@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Search, X, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
+import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
-interface ShortcutBinding extends KeybindingConfig {
+interface ShortcutBinding extends RegisteredKeybindingConfig {
   effectiveCombo: string;
   isOverridden: boolean;
 }

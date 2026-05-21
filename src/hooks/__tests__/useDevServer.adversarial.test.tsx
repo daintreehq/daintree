@@ -42,6 +42,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
     isRestarting: overrides.isRestarting ?? false,
     generation: overrides.generation ?? 0,
     updatedAt: overrides.updatedAt ?? Date.now(),
+    phaseLabel: overrides.phaseLabel ?? undefined,
   };
 }
 
@@ -609,7 +610,7 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.url).toBe("http://localhost:4173/");
   });
 
-  it("auto-restarts a stuck starting session once when no URL is detected", async () => {
+  it("escalates stuckTier at 6s/12s/25s without restarting a stuck starting session (#8276)", async () => {
     vi.useFakeTimers();
     try {
       ensureMock.mockImplementation((request: { projectId: string }) =>
@@ -632,13 +633,149 @@ describe("useDevServer adversarial races", () => {
           })
         )
       );
-      restartMock.mockImplementation((request: { projectId: string }) =>
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.status).toBe("starting");
+      expect(result.current.stuckTier).toBe(0);
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(2);
+
+      await act(async () => {
+        vi.advanceTimersByTime(13000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(3);
+
+      // The #8276 contract: escalation never silently restarts.
+      expect(restartMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels pending stuck timers when the server recovers (#8276)", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
         Promise.resolve(
           buildState({
             panelId: "panel-1",
             projectId: request.projectId,
             status: "starting",
-            terminalId: `restart-${request.projectId}`,
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      let stateChangedHandler: ((payload: { state: DevPreviewSessionState }) => void) | null = null;
+      onStateChangedMock.mockImplementation(
+        (cb: (payload: { state: DevPreviewSessionState }) => void) => {
+          stateChangedHandler = cb;
+          return vi.fn();
+        }
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(1);
+
+      // Server reports a URL — the stuck timer effect must tear down its
+      // pending tier-2/tier-3 timers and reset the tier.
+      await act(async () => {
+        stateChangedHandler?.({
+          state: buildState({
+            panelId: "panel-1",
+            projectId: "project-1",
+            status: "running",
+            terminalId: "term-project-1",
+            url: "http://localhost:3000/",
+          }),
+        });
+        await Promise.resolve();
+      });
+
+      expect(result.current.status).toBe("running");
+      expect(result.current.stuckTier).toBe(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(30000);
+        await Promise.resolve();
+      });
+
+      expect(result.current.stuckTier).toBe(0);
+      expect(restartMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("advances stuckTier exactly on the 6s/12s/25s boundaries (#8276)", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
           })
         )
       );
@@ -656,25 +793,27 @@ describe("useDevServer adversarial races", () => {
         await Promise.resolve();
       });
 
-      expect(result.current.status).toBe("starting");
-      expect(ensureMock).toHaveBeenCalledTimes(1);
+      const tick = async (ms: number) => {
+        await act(async () => {
+          vi.advanceTimersByTime(ms);
+          await Promise.resolve();
+        });
+      };
 
-      await act(async () => {
-        vi.advanceTimersByTime(10000);
-        await Promise.resolve();
-      });
+      await tick(5999);
+      expect(result.current.stuckTier).toBe(0);
+      await tick(1); // 6000
+      expect(result.current.stuckTier).toBe(1);
+      await tick(5999); // 11999
+      expect(result.current.stuckTier).toBe(1);
+      await tick(1); // 12000
+      expect(result.current.stuckTier).toBe(2);
+      await tick(12999); // 24999
+      expect(result.current.stuckTier).toBe(2);
+      await tick(1); // 25000
+      expect(result.current.stuckTier).toBe(3);
 
-      expect(restartMock).toHaveBeenCalledTimes(1);
-      expect(restartMock).toHaveBeenCalledWith(
-        expect.objectContaining({ panelId: "panel-1", projectId: "project-1" })
-      );
-
-      await act(async () => {
-        vi.advanceTimersByTime(20000);
-        await Promise.resolve();
-      });
-
-      expect(restartMock).toHaveBeenCalledTimes(1);
+      expect(restartMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -726,6 +865,8 @@ describe("useDevServer adversarial races", () => {
       });
 
       expect(restartMock).not.toHaveBeenCalled();
+      // Installing is exempt from stuck-start escalation (#8276).
+      expect(result.current.stuckTier).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -779,6 +920,7 @@ describe("useDevServer adversarial races", () => {
       });
 
       expect(restartMock).not.toHaveBeenCalled();
+      expect(result.current.stuckTier).toBe(0);
     } finally {
       vi.useRealTimers();
     }

@@ -52,14 +52,22 @@ export function useHeldShortcutReveal(): void {
       clearReveal();
     };
 
+    // Defense-in-depth for Linux WMs (Wayland / some X11) that swallow the
+    // modifier keyup on a virtual-workspace switch without firing window blur.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") clearReveal();
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", handleBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearReveal();
     };
   }, []);

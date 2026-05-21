@@ -24,6 +24,31 @@ function createPointerEvent(
   return { clientX, clientY, currentTarget } as unknown as React.PointerEvent<HTMLButtonElement>;
 }
 
+function createFocusTarget(
+  rect: { left: number; top: number },
+  dataState?: string
+): HTMLButtonElement {
+  const el = document.createElement("button");
+  if (dataState) el.setAttribute("data-state", dataState);
+  el.getBoundingClientRect = () =>
+    ({
+      left: rect.left,
+      top: rect.top,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return el;
+}
+
+function createFocusEvent(currentTarget: HTMLButtonElement): React.FocusEvent<HTMLButtonElement> {
+  return { currentTarget } as unknown as React.FocusEvent<HTMLButtonElement>;
+}
+
 describe("useShortcutHintHover", () => {
   beforeEach(() => {
     shortcutHintStore.setState({
@@ -148,8 +173,8 @@ describe("useShortcutHintHover", () => {
 
   it("suppresses hint for non-milestone non-zero count", () => {
     getDisplayComboMock.mockReturnValue("⌘B");
-    // Count 4 is not a milestone
-    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 4 });
+    // Count 3 is not a milestone
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 3 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
 
@@ -297,6 +322,177 @@ describe("useShortcutHintHover", () => {
     });
     act(() => {
       vi.advanceTimersByTime(1500);
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  // --- Focus parity tests (WCAG 1.4.13) ---
+
+  it("shows hint immediately on focus, positioned from getBoundingClientRect", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 42, top: 84 })));
+    });
+
+    // No timer advance — focus fires synchronously.
+    const hint = shortcutHintStore.getState().activeHint;
+    expect(hint).not.toBeNull();
+    expect(hint!.actionId).toBe("nav.toggleSidebar");
+    expect(hint!.displayCombo).toBe("⌘B");
+    expect(hint!.x).toBe(42);
+    expect(hint!.y).toBe(84);
+  });
+
+  it("skips focus hint when displayCombo is empty", () => {
+    getDisplayComboMock.mockReturnValue("");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 10, top: 20 })));
+    });
+
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("suppresses focus hint when trigger data-state is delayed-open", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onFocus(
+        createFocusEvent(createFocusTarget({ left: 1, top: 2 }, "delayed-open"))
+      );
+    });
+
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("suppresses focus hint for non-milestone non-zero count", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    // Count 3 is not a milestone
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 3 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 5, top: 6 })));
+    });
+
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("hides the hint on blur", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 1, top: 1 })));
+    });
+    expect(shortcutHintStore.getState().activeHint).not.toBeNull();
+
+    act(() => {
+      result.current.onBlur();
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("blur does not hide a hint owned by a different element", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({
+      "nav.toggleSidebar": 0,
+      "panel.togglePortal": 0,
+    });
+
+    const { result: a } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+    const { result: b } = renderHook(() => useShortcutHintHover("panel.togglePortal"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    // A is focused and showed its hint.
+    act(() => {
+      a.current.onFocus(createFocusEvent(createFocusTarget({ left: 1, top: 1 })));
+    });
+    // B's hint then takes over (simulating a pointer dwell on B).
+    act(() => {
+      shortcutHintStore.getState().show("panel.togglePortal", "⌘P", { x: 9, y: 9 });
+    });
+    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.togglePortal");
+
+    // A blurs — must NOT clear B's hint.
+    act(() => {
+      a.current.onBlur();
+    });
+    expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.togglePortal");
+
+    // B blurring its own hint does clear it.
+    act(() => {
+      b.current.onBlur();
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("focus cancels a pending pointer dwell timer (no double-show)", () => {
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    // Pointer enter starts the 1500ms dwell.
+    act(() => {
+      result.current.onPointerEnter(createPointerEvent(100, 200));
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    // Focus fires immediately and must cancel the pending dwell.
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 7, top: 8 })));
+    });
+    const focusHint = shortcutHintStore.getState().activeHint;
+    expect(focusHint!.x).toBe(7);
+    expect(focusHint!.y).toBe(8);
+
+    // One-shot gating + cancelled timer: no second show, position stays the focus one.
+    shortcutHintStore.getState().hide();
+    act(() => {
+      vi.advanceTimersByTime(2000);
     });
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });

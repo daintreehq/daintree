@@ -69,8 +69,8 @@ export function QuickSwitcher({
           <PaletteFooterHints
             primaryHint={{ keys: ["↵"], label }}
             hints={[
-              { keys: ["↑", "↓"], label: "to navigate" },
-              { keys: ["Esc"], label: "to close" },
+              { keys: ["↑", "↓"], label: "navigate" },
+              { keys: ["Esc"], label: "close" },
             ]}
           />
         </div>

@@ -1,3 +1,4 @@
+import os from "os";
 import v8 from "node:v8";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
@@ -10,11 +11,27 @@ import { getWritesSuppressed } from "./diskPressureState.js";
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
 
-const WARN_THRESHOLDS_MB: Record<string, number> = {
-  Browser: 300,
-  Tab: 768,
-  Utility: 500,
-};
+// Per-process-type warn thresholds as fractions of total device RAM. Calibrated
+// against the previous absolute ceilings (Browser 300 / Tab 768 / Utility 500)
+// on an 8 GB baseline — fraction × 8192 MB reproduces the legacy value exactly,
+// so behavior on a typical low-end machine is unchanged.
+const BROWSER_MEMORY_FRACTION = 300 / 8192;
+const TAB_MEMORY_FRACTION = 768 / 8192;
+const UTILITY_MEMORY_FRACTION = 500 / 8192;
+
+// Combined working-set ceiling across all monitored processes. Working-set
+// sums double-count shared library pages on macOS, so this is intentionally
+// generous — it is a pressure heuristic, not a precise private-footprint
+// budget. 25% of total RAM is enough headroom that the per-process thresholds
+// trip first under typical leak shapes while still catching fan-out cases
+// where several processes individually stay below their own limits.
+const AGGREGATE_MEMORY_FRACTION = 0.25;
+
+// System-wide available-memory floor. Triggers pressure when free + purgeable
+// drops below this fraction of total RAM regardless of how Daintree's own
+// processes are doing — catches the case where the OS is starved by non-
+// Daintree workloads, swap exhaustion, or shrinking purgeable caches on macOS.
+const SYSTEM_LOW_MEMORY_FRACTION = 0.1;
 
 const SNAPSHOT_THRESHOLD_MB = 600;
 
@@ -29,6 +46,25 @@ const TREND_WARN_MB_PER_HOUR = 5;
 export const WARMUP_INTERVALS = 5;
 export const PRESSURE_COUNT_TIER2 = 3;
 export const MITIGATION_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Settle window between applying a tier 1 mitigation step and re-sampling
+ * footprint via `app.getAppMetrics()`. Chromium PartitionAlloc returns freed
+ * pages to the OS via background `MemoryReclaimer` (`MADV_FREE` on
+ * macOS/Linux, Windows background trim), so privateBytes lags reclamation by
+ * a few seconds. 3s sits within the 2–5s window confirmed reliable on all
+ * three platforms while staying well under {@link POLL_INTERVAL_MS}.
+ */
+export const RECLAIM_SETTLE_MS = 3_000;
+
+/**
+ * Below this MB delta, tier 1 is considered to have reclaimed effectively
+ * nothing — if pressure also persists after the settle window, the ladder
+ * escalates to tier 2. Above this threshold tier 1 is judged to have worked
+ * (the pressure that prompted us may have legitimately re-arrived, but
+ * that's a different cycle and should not chain into immediate escalation).
+ */
+export const MIN_RECLAIMED_MB = 50;
 
 interface PidTrendState {
   startedAt: number;
@@ -182,6 +218,17 @@ export interface MemoryPressureActions {
   hibernateIdleProjects: () => Promise<void>;
   trimPtyHostState?: () => void;
   /**
+   * Optional accelerator that compresses the per-terminal hibernation timer
+   * under memory pressure. Tier 1 fires at the same point as
+   * `destroyHiddenWebviews(1)`; tier 2 fires alongside `hibernateIdleProjects`.
+   * Fan-out implementations should push a `window:accelerate-hibernation`
+   * event to every live renderer — the renderer-side handler in
+   * `setupResourceListeners` calls `terminalInstanceService.accelerateHibernation`.
+   * Optional so legacy callers and test fixtures with partial action objects
+   * keep compiling.
+   */
+  accelerateTerminalHibernation?: (level: 1 | 2) => void;
+  /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
    * pressure evaluation so renderer samples land alongside the metrics
    * snapshot. Implementations should fan a `window:sample-blink-memory`
@@ -199,8 +246,40 @@ export interface MemoryPressureActions {
   sampleRendererElu?: () => void;
 }
 
+// workingSetSize is the only memory field Electron guarantees on all three
+// platforms: privateBytes is Windows-only and reported as 0 (not undefined)
+// on macOS/Linux, which silently defeated the previous `privateBytes ??
+// workingSetSize` fallback.
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
-  return (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
+  return proc.memory.workingSetSize / 1024;
+}
+
+/**
+ * Read system-wide available memory in MB. On macOS, "available" = free +
+ * purgeable, because Darwin holds reclaimable pages as purgeable rather than
+ * free — using `free` alone would fire false positives on every healthy mac.
+ * On Windows/Linux, `free` alone is accurate. Returns null when the Chromium
+ * API is unavailable (e.g., under test mocks). Mirrors the pattern in
+ * ProjectViewManager.getAvailableMemoryMb so the two memory floors stay in
+ * sync.
+ */
+function readAvailableMemoryMb(): number | null {
+  try {
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo !== "function") return null;
+    const info = getInfo.call(process);
+    const freeKb = typeof info.free === "number" ? info.free : 0;
+    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+    const availableKb = freeKb + purgeableKb;
+    if (availableKb <= 0) return null;
+    return availableKb / 1024;
+  } catch {
+    return null;
+  }
 }
 
 let currentAppMetricsPollIntervalMs = POLL_INTERVAL_MS;
@@ -218,6 +297,18 @@ export function refreshAppMetricsMonitor(): void {
 }
 
 export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
+  // Scale thresholds to device RAM once per monitor lifetime. os.totalmem() is
+  // stable for the process lifetime; mirroring ResourceProfileService's
+  // constructor pattern keeps the spy-on-totalmem pattern working in tests.
+  const totalMemMb = os.totalmem() / 1024 / 1024;
+  const warnThresholdsMb: Record<string, number> = {
+    Browser: totalMemMb * BROWSER_MEMORY_FRACTION,
+    Tab: totalMemMb * TAB_MEMORY_FRACTION,
+    Utility: totalMemMb * UTILITY_MEMORY_FRACTION,
+  };
+  const aggregateWarnThresholdMb = totalMemMb * AGGREGATE_MEMORY_FRACTION;
+  const systemLowMemoryThresholdMb = totalMemMb * SYSTEM_LOW_MEMORY_FRACTION;
+
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
   let removeSuspendListener: (() => void) | null = null;
@@ -245,15 +336,17 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       const metrics = app.getAppMetrics();
       const activePids = new Set<number>();
       let hasPressure = false;
+      let aggregateMb = 0;
 
       for (const proc of metrics) {
         if (!MONITORED_TYPES.has(proc.type)) continue;
 
         activePids.add(proc.pid);
         const mb = getProcessMemoryMb(proc);
+        aggregateMb += mb;
         logDebug("process-memory-sample", { pid: proc.pid, type: proc.type, mb: Math.round(mb) });
 
-        const threshold = WARN_THRESHOLDS_MB[proc.type];
+        const threshold = warnThresholdsMb[proc.type];
         if (threshold !== undefined && mb > threshold) {
           hasPressure = true;
           if (!thresholdExceededPids.has(proc.pid)) {
@@ -262,7 +355,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               pid: proc.pid,
               type: proc.type,
               mb: Math.round(mb),
-              thresholdMb: threshold,
+              thresholdMb: Math.round(threshold),
             });
           }
         } else if (threshold !== undefined) {
@@ -342,6 +435,26 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         }
       }
 
+      // Aggregate working-set check: fans-out of small processes can collectively
+      // exceed a safe footprint without any single one tripping its per-type
+      // threshold. Feeds the same hasPressure signal so the existing tiered
+      // mitigation pipeline handles the response — no separate log emission to
+      // avoid noisy parallel warnings alongside per-process notices.
+      if (aggregateMb > aggregateWarnThresholdMb) {
+        hasPressure = true;
+      }
+
+      // System-wide signal: trigger pressure when free + purgeable drops below
+      // SYSTEM_LOW_MEMORY_FRACTION of total RAM. Catches OS-level starvation
+      // (heavy non-Daintree workloads, swap exhaustion, shrinking purgeable
+      // caches) that the per-process and aggregate checks cannot see. Null
+      // return means the Chromium API is unavailable (tests / sandboxed forks)
+      // and the signal is skipped.
+      const availableMb = readAvailableMemoryMb();
+      if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
+        hasPressure = true;
+      }
+
       for (const pid of trendState.keys()) {
         if (!activePids.has(pid)) trendState.delete(pid);
       }
@@ -372,10 +485,23 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       mitigationInFlight = true;
       void (async () => {
         try {
+          let beforeMb = 0;
+          try {
+            for (const proc of app.getAppMetrics()) {
+              if (!MONITORED_TYPES.has(proc.type)) continue;
+              beforeMb += getProcessMemoryMb(proc);
+            }
+          } catch {
+            // If pre-sample fails, beforeMb stays 0; delta will be 0 and we'll
+            // err on the side of escalating if pressure persists.
+          }
+
           logInfo("memory-pressure-tier1-mitigation", {
             pollCount,
             consecutivePressureCount,
+            beforeMb: Math.round(beforeMb),
           });
+
           await actions.clearCaches();
           await actions.destroyHiddenWebviews(1);
 
@@ -384,18 +510,79 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           } catch {
             /* non-critical */
           }
+          try {
+            actions.accelerateTerminalHibernation?.(1);
+          } catch {
+            /* non-critical */
+          }
+
+          await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
+
+          let afterMb = 0;
+          let pressureRemains = false;
+          let resampleFailed = false;
+          try {
+            for (const proc of app.getAppMetrics()) {
+              if (!MONITORED_TYPES.has(proc.type)) continue;
+              const mb = getProcessMemoryMb(proc);
+              afterMb += mb;
+              const threshold = warnThresholdsMb[proc.type];
+              if (threshold !== undefined && mb > threshold) {
+                pressureRemains = true;
+              }
+            }
+            // Aggregate fan-out can hold the combined footprint above the safe
+            // ceiling even when no single process trips its per-type threshold.
+            // Mirror the main poll's aggregate gate here so aggregate-driven
+            // pressure can still escalate to tier 2 when tier 1 under-reclaims —
+            // without this, aggregate-only pressure triggers tier 1 forever but
+            // can never reach tier 2.
+            if (afterMb > aggregateWarnThresholdMb) {
+              pressureRemains = true;
+            }
+          } catch {
+            // Re-sample failed — assume pressure persists and treat reclaim
+            // as zero so the gate falls through to escalation. Without
+            // forcing afterMb=beforeMb here, deltaMb would equal the full
+            // beforeMb, satisfying `deltaMb >= MIN_RECLAIMED_MB` and
+            // *suppressing* escalation, which is the opposite of the
+            // safe-side intent.
+            pressureRemains = true;
+            resampleFailed = true;
+            afterMb = beforeMb;
+          }
+
+          const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
+          logInfo("memory-pressure-tier1-reclaim", {
+            beforeMb: Math.round(beforeMb),
+            afterMb: Math.round(afterMb),
+            deltaMb: Math.round(deltaMb),
+            pressureRemains,
+            resampleFailed,
+          });
 
           if (
-            consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&
+            pressureRemains &&
+            deltaMb < MIN_RECLAIMED_MB &&
             Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
           ) {
+            // Stamp the cooldown BEFORE the tier-2 actions so a thrown
+            // hibernateIdleProjects (after destroyHiddenWebviews succeeded)
+            // doesn't leave the cooldown unconsumed and let the next poll
+            // re-fire destroyHiddenWebviews(2).
+            lastTier2At = Date.now();
             logInfo("memory-pressure-tier2-mitigation", {
               pollCount,
               consecutivePressureCount,
+              deltaMb: Math.round(deltaMb),
             });
             await actions.destroyHiddenWebviews(2);
             await actions.hibernateIdleProjects();
-            lastTier2At = Date.now();
+            try {
+              actions.accelerateTerminalHibernation?.(2);
+            } catch {
+              /* non-critical */
+            }
           }
         } catch (err) {
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });

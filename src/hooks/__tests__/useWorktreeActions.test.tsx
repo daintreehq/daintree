@@ -142,7 +142,7 @@ describe("copyContextWithFeedback", () => {
       result: { fileCount: 10, stats: { totalSize: 2048 }, format: "xml" },
     });
 
-    await copyContextWithFeedback("wt-1");
+    await copyContextWithFeedback("wt-1", "context-menu");
 
     expect(addNotificationMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "info", message: "Copying context…" })
@@ -159,7 +159,7 @@ describe("copyContextWithFeedback", () => {
       result: { fileCount: 3, stats: null, format: "xml" },
     });
 
-    await copyContextWithFeedback("wt-1", { modified: true });
+    await copyContextWithFeedback("wt-1", "context-menu", { modified: true });
 
     expect(addNotificationMock).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Copying modified files…" })
@@ -174,7 +174,7 @@ describe("copyContextWithFeedback", () => {
   it("shows 'No files to copy' when result is null", async () => {
     dispatchMock.mockResolvedValueOnce({ ok: true, result: null });
 
-    await copyContextWithFeedback("wt-1");
+    await copyContextWithFeedback("wt-1", "context-menu");
 
     expect(updateNotificationMock).toHaveBeenCalledWith(
       "toast-123",
@@ -188,7 +188,7 @@ describe("copyContextWithFeedback", () => {
       error: { message: "Something went wrong" },
     });
 
-    await copyContextWithFeedback("wt-1");
+    await copyContextWithFeedback("wt-1", "context-menu");
 
     expect(updateNotificationMock).toHaveBeenCalledWith(
       "toast-123",
@@ -205,7 +205,7 @@ describe("copyContextWithFeedback", () => {
   it("handles thrown errors gracefully", async () => {
     dispatchMock.mockRejectedValueOnce(new Error("Network error"));
 
-    await copyContextWithFeedback("wt-1");
+    await copyContextWithFeedback("wt-1", "context-menu");
 
     expect(updateNotificationMock).toHaveBeenCalledWith(
       "toast-123",

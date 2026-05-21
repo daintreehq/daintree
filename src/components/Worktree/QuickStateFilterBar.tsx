@@ -17,7 +17,7 @@ const FILTER_VISUALS: Record<
 > = {
   working: { Icon: HollowCircle, color: STATE_COLORS.working },
   waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
-  finished: { Icon: HollowCircle, color: STATE_COLORS.completed },
+  finished: { Icon: HollowCircle, color: "text-category-blue" },
 };
 
 interface QuickStateFilterBarProps {

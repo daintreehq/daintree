@@ -5,6 +5,8 @@ import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import {
   sanitizeTerminals,
   sanitizeTerminalSizes,
@@ -24,7 +26,8 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   const handleProjectSwitch = async (
     ctx: import("../../types.js").IpcContext,
     projectId: string,
-    outgoingState?: ProjectSwitchOutgoingState
+    outgoingState?: ProjectSwitchOutgoingState,
+    options?: { focusIntent?: "focus-next-waiting" }
   ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -40,6 +43,13 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const pvm = resolveProjectViewManager(deps, ctx.event);
     if (pvm) {
+      // Record the focus intent on the PVM instance BEFORE switchTo so the
+      // cached-view fast path can pick it up synchronously and the cold-start
+      // path can read it after the paint gate resolves. PVM owns the lifecycle
+      // (consumed exactly once or discarded on timeout/error).
+      if (options?.focusIntent) {
+        pvm.setPendingFocusIntent(projectId, options.focusIntent);
+      }
       await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectSwitch]",
       });
@@ -170,12 +180,23 @@ async function activateProjectView(
     console.warn("[ProjectSwitch] Failed to clear active scratch:", err);
   }
 
+  // Capture the outgoing project id before the pointer flips so we can
+  // broadcast its bumped `lastOpened` to every cached view (#8561).
+  const previousProjectId = projectStore.getCurrentProjectId();
+
   // Update the main process global state
   await projectStore.setCurrentProject(projectId);
 
   if (options.markActive) {
     projectStore.updateProjectStatus(projectId, "active");
   }
+
+  // Push the persisted `lastOpened`/`status` updates to every renderer.
+  // `setCurrentProject` writes both the departing and activated rows inside a
+  // single transaction but does not emit IPC; without this broadcast, cached
+  // WebContentsView stores keep stale MRU timestamps and the next
+  // `Cmd+Alt+=` / project switcher pick targets the wrong project.
+  broadcastProjectSwitchUpdates(previousProjectId, projectId);
 
   // Reopen requires the workspace host to be resumed BEFORE loadProject so
   // the host is ready to accept worktree IPC from the newly-active view.
@@ -192,6 +213,12 @@ async function activateProjectView(
     const senderWindow = getWindowForWebContents(event.sender);
     const windowId = senderWindow?.id ?? deps.mainWindow?.id;
     if (windowId !== undefined) {
+      // Forward-fail: the view swap already committed to the new project, so a
+      // load failure surfaces as a Tier 3 recovery banner rather than reverting
+      // (#8400). Send a targeted status to *this* view only (broadcastToRenderer
+      // would also hit LRU-cached other-project views); null on success clears a
+      // stale banner when a previously-failed view is reactivated successfully.
+      let worktreeLoadError: string | null = null;
       try {
         await deps.worktreeService.loadProject(project.path, windowId);
 
@@ -209,6 +236,13 @@ async function activateProjectView(
         }
       } catch (err) {
         console.error(`${options.logPrefix} Failed to load worktrees:`, err);
+        worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
+      }
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+          projectId,
+          worktreeLoadError,
+        });
       }
     }
 

@@ -185,4 +185,64 @@ describe("built-in themes", () => {
       ).toMatch(expectedTint[polarity]);
     }
   });
+
+  it("never ships a dock-shadow extension that overrides the fix with a weak alpha (#8156)", () => {
+    // applyAppThemeToRoot sets extensions["dock-shadow"] as an inline style,
+    // which beats the corrected src/index.css base value. Any theme that opts
+    // back in must use the alpha-pinned relative-color form so it stays visible
+    // on light themes — never a raw low-alpha rgba() like the original bug.
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const dockShadow = source.extensions?.["dock-shadow"];
+      if (dockShadow === undefined) continue;
+      const pinned = dockShadow.match(/rgb\(from var\(--theme-shadow-color\) r g b \/ ([0-9.]+)\)/);
+      expect(
+        pinned,
+        `${source.id} dock-shadow "${dockShadow}" must use the alpha-pinned relative-color form`
+      ).toBeTruthy();
+      expect(
+        Number(pinned![1]),
+        `${source.id} dock-shadow alpha ${pinned![1]} below 0.25 visibility threshold`
+      ).toBeGreaterThanOrEqual(0.25);
+    }
+  });
+
+  it("dark themes override toolbar-control-armed-shadow with a white-tinted hairline; light themes inherit the black-tinted CSS fallback", () => {
+    // Dark themes must provide a white-tinted hairline override — the CSS fallback
+    // is black-tinted (rgba(0,0,0,0.18)) so on dark surfaces it would render
+    // invisibly. Light themes must NOT define this extension; a copy-paste from a
+    // dark theme would put a white ring on a light toolbar, which inverts the
+    // original #8175 bug.
+    const parseAlpha = (value: string): number => {
+      const match = value.match(/rgba?\([^)]*?,\s*([0-9.]+)\s*\)/);
+      return match ? Number(match[1]) : NaN;
+    };
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const armed = source.extensions?.["toolbar-control-armed-shadow"];
+      if (source.type === "dark") {
+        expect(
+          armed,
+          `${source.id} (dark) missing toolbar-control-armed-shadow override`
+        ).toBeTruthy();
+        expect(
+          armed,
+          `${source.id} toolbar-control-armed-shadow must use the hairline geometry`
+        ).toMatch(/inset\s+0\s+0\s+0\s+1px/);
+        expect(
+          armed,
+          `${source.id} toolbar-control-armed-shadow must be white-tinted on a dark theme`
+        ).toMatch(/rgba\(\s*255\s*,\s*255\s*,\s*255/);
+        const alpha = parseAlpha(armed!);
+        expect(
+          alpha,
+          `${source.id} toolbar-control-armed-shadow alpha ${alpha} outside [0.08, 0.25]`
+        ).toBeGreaterThanOrEqual(0.08);
+        expect(alpha).toBeLessThanOrEqual(0.25);
+      } else {
+        expect(
+          armed,
+          `${source.id} (light) must not override toolbar-control-armed-shadow; it should inherit the black-tinted CSS fallback`
+        ).toBeUndefined();
+      }
+    }
+  });
 });

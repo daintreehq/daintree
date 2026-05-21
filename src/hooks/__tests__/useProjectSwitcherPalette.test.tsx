@@ -2,54 +2,62 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getBulkStatsMock, useProjectStoreMock, notifyMock, projectState, projectStatsState } =
-  vi.hoisted(() => {
-    const getBulkStatsMock = vi.fn();
+const {
+  getBulkStatsMock,
+  useProjectStoreMock,
+  notifyMock,
+  copyMock,
+  projectState,
+  projectStatsState,
+} = vi.hoisted(() => {
+  const getBulkStatsMock = vi.fn();
+  const copyMock = vi.fn().mockResolvedValue(true);
 
-    const projectStatsState = {
-      stats: {} as Record<
-        string,
-        { activeAgentCount: number; waitingAgentCount: number; processCount: number }
-      >,
-    };
+  const projectStatsState = {
+    stats: {} as Record<
+      string,
+      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+    >,
+  };
 
-    const projectState = {
-      projects: [
-        {
-          id: "project-1",
-          name: "Project One",
-          path: "/repo/one",
-          emoji: "🌲",
-          color: "#00aa00",
-          lastOpened: 123,
-          frecencyScore: 3.0,
-          status: "active" as const,
-        },
-      ],
-      currentProject: null as { id: string } | null,
-      switchProject: vi.fn().mockResolvedValue(undefined),
-      reopenProject: vi.fn().mockResolvedValue(undefined),
-      loadProjects: vi.fn().mockResolvedValue(undefined),
-      addProject: vi.fn().mockResolvedValue(undefined),
-      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      removeProject: vi.fn().mockResolvedValue(undefined),
-      locateProject: vi.fn().mockResolvedValue(undefined),
-    };
+  const projectState = {
+    projects: [
+      {
+        id: "project-1",
+        name: "Project One",
+        path: "/repo/one",
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 123,
+        frecencyScore: 3.0,
+        status: "active" as const,
+      },
+    ],
+    currentProject: null as { id: string } | null,
+    switchProject: vi.fn().mockResolvedValue(undefined),
+    reopenProject: vi.fn().mockResolvedValue(undefined),
+    loadProjects: vi.fn().mockResolvedValue(undefined),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    locateProject: vi.fn().mockResolvedValue(undefined),
+  };
 
-    const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-      selector(projectState)
-    );
-    const notifyMock = vi.fn().mockReturnValue("");
+  const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
+    selector(projectState)
+  );
+  const notifyMock = vi.fn().mockReturnValue("");
 
-    return {
-      getBulkStatsMock,
-      useProjectStoreMock,
-      notifyMock,
-      projectState,
-      projectStatsState,
-    };
-  });
+  return {
+    getBulkStatsMock,
+    useProjectStoreMock,
+    notifyMock,
+    copyMock,
+    projectState,
+    projectStatsState,
+  };
+});
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -69,6 +77,10 @@ vi.mock("@/store/projectStatsStore", () => ({
 
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
+}));
+
+vi.mock("@/hooks/useCopyWithFeedback", () => ({
+  useCopyWithFeedback: () => ({ copied: false, copy: copyMock }),
 }));
 
 import { usePaletteStore } from "@/store/paletteStore";
@@ -418,6 +430,24 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.removeConfirmProject).toBeNull();
     });
 
+    it("stop confirmation closes the active project so the renderer leaves project view", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        await result.current.stopProject("project-1");
+      });
+
+      expect(result.current.stopConfirmProjectId).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmStopProject();
+      });
+
+      expect(projectState.closeActiveProject).toHaveBeenCalledWith("project-1");
+      expect(projectState.closeProject).not.toHaveBeenCalled();
+      expect(result.current.stopConfirmProjectId).toBeNull();
+    });
+
     it("confirm calls removeProject for non-active project, not closeActiveProject", async () => {
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -472,6 +502,115 @@ describe("useProjectSwitcherPalette", () => {
           title: "Failed to close project",
         })
       );
+    });
+  });
+
+  describe("activeProject decoupling — issue #8174", () => {
+    function makeProject(i: number) {
+      return {
+        id: `project-${i}`,
+        name: `Project ${i}`,
+        path: `/repo/p${i}`,
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 1000 - i,
+        frecencyScore: 1.0,
+        status: "active" as const,
+      };
+    }
+
+    it("exposes the active project as a SearchableProject with enriched stats + pin state", async () => {
+      const projects = [{ ...makeProject(1), pinned: true }, makeProject(2)];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "project-1" };
+      projectStatsState.stats = {
+        "project-1": { processCount: 3, activeAgentCount: 1, waitingAgentCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await waitFor(() => {
+        expect(result.current.activeProject).not.toBeNull();
+      });
+
+      expect(result.current.activeProject?.id).toBe("project-1");
+      expect(result.current.activeProject?.isActive).toBe(true);
+      // Conditional context-menu items on the toolbar pill depend on these
+      // enriched fields, so assert them explicitly rather than relying on id
+      // equality to imply they're populated.
+      expect(result.current.activeProject?.isPinned).toBe(true);
+      expect(result.current.activeProject?.processCount).toBe(3);
+      expect(result.current.activeProject?.path).toBe("/repo/p1");
+    });
+
+    it("keeps activeProject populated even when the active project sits outside the 15-item results cap", async () => {
+      // Build 20 projects with the active project at the back of the MRU list
+      // (lowest lastOpened). With MAX_RESULTS=15, the active project should
+      // NOT appear in results, but activeProject must still expose it.
+      const projects = Array.from({ length: 20 }, (_, i) => makeProject(i + 1));
+      // Make project-20 the most-stale entry so it falls outside the 15 window.
+      projects[19] = { ...projects[19]!, lastOpened: 0 };
+      projectState.projects = projects;
+      projectState.currentProject = { id: "project-20" };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await waitFor(() => {
+        expect(result.current.activeProject?.id).toBe("project-20");
+      });
+
+      const idsInResults = result.current.results.map((p) => p.id);
+      expect(idsInResults).not.toContain("project-20");
+      expect(result.current.results).toHaveLength(15);
+      expect(result.current.activeProject?.isActive).toBe(true);
+      // Fields the pill context-menu reads must remain populated even when
+      // the active project sits outside the results window.
+      expect(result.current.activeProject?.path).toBe("/repo/p20");
+      expect(result.current.activeProject?.processCount).toBe(0);
+    });
+
+    it("keeps activeProject populated even when the current query filters out the active project", async () => {
+      const projects = [
+        { ...makeProject(1), name: "alpha-service" },
+        { ...makeProject(2), name: "beta-app" },
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "project-1" };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await waitFor(() => {
+        expect(result.current.activeProject?.id).toBe("project-1");
+      });
+
+      act(() => {
+        result.current.setQuery("beta");
+      });
+
+      // The active project is filtered out by the query, but activeProject still resolves.
+      const idsInResults = result.current.results.map((p) => p.id);
+      expect(idsInResults).not.toContain("project-1");
+      expect(result.current.activeProject?.id).toBe("project-1");
+    });
+
+    it("returns null when no project is currently active", async () => {
+      projectState.projects = [makeProject(1)];
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      // Wait for searchableProjects to populate so the activeProject memo has
+      // genuinely run with a non-empty list, otherwise the `null` assertion
+      // could resolve trivially before any project data is present.
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      expect(result.current.activeProject).toBeNull();
     });
   });
 
@@ -785,6 +924,39 @@ describe("useProjectSwitcherPalette", () => {
         result.current.toggle();
       });
       expect(result.current.selectedIndex).toBe(1);
+    });
+  });
+
+  describe("copyPath", () => {
+    it("writes the path to the clipboard and emits a transient Path copied toast on success", async () => {
+      copyMock.mockResolvedValueOnce(true);
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        result.current.copyPath("/repo/one");
+      });
+
+      expect(copyMock).toHaveBeenCalledWith("/repo/one");
+      expect(notifyMock).toHaveBeenCalledWith({
+        type: "info",
+        title: "Path copied",
+        message: "/repo/one",
+        transient: true,
+      });
+    });
+
+    it("does not emit a toast when the clipboard write fails", async () => {
+      copyMock.mockResolvedValueOnce(false);
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        result.current.copyPath("/repo/one");
+      });
+
+      expect(copyMock).toHaveBeenCalledWith("/repo/one");
+      expect(notifyMock).not.toHaveBeenCalled();
     });
   });
 });

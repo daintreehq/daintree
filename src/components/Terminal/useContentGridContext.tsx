@@ -6,6 +6,7 @@ import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   usePanelStore,
+  panelStoreApi,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
@@ -23,8 +24,10 @@ import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
+  getMaxGridCapacity,
   GRID_TRANSITION_DURATION_MS,
   GRID_FIT_DELAY_MS,
+  ABSOLUTE_MAX_GRID_TERMINALS,
 } from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
@@ -35,18 +38,27 @@ import { useProjectBranding } from "@/hooks";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import {
+  ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuCheckboxItem,
-  ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 import { actionService } from "@/services/ActionService";
+
+// Stable empty arrays — returned from `useShallow` selectors and memos when
+// the filtered list is empty so the previous reference is reused (avoids a
+// spurious re-render emitting a new `[]` each call). Module-local; never
+// mutated.
+const EMPTY_PANEL_IDS: string[] = [];
+const EMPTY_TERMINALS: TerminalInstance[] = [];
+const EMPTY_TAB_GROUPS: TabGroup[] = [];
 
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
   const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
@@ -65,9 +77,21 @@ export interface ContentGridContext {
   defaultCwd?: string;
   agentAvailability?: CliAvailability;
   emptyContent?: React.ReactNode;
-  panelsById: Record<string, TerminalInstance>;
   gridTerminals: TerminalInstance[];
   tabGroups: TabGroup[];
+  /**
+   * Tab groups that fit in the grid at the readable minimum size, sliced from
+   * `tabGroups` by `maxGridCapacity`. Renderers iterate this list (not the raw
+   * `tabGroups`) so any panels above capacity are excluded from the grid and
+   * routed to the overflow status strip instead. See #8702.
+   */
+  visibleTabGroups: TabGroup[];
+  /**
+   * Tab groups that exceed the grid's screen-fit capacity and render as
+   * compact status cards below the grid. Empty when `tabGroups.length <=
+   * maxGridCapacity`. See #8702.
+   */
+  overflowTabGroups: TabGroup[];
   focusedId: string | null;
   maximizedId: string | null;
   maximizeTarget: ReturnType<typeof usePanelStore.getState>["maximizeTarget"];
@@ -116,6 +140,7 @@ export interface ContentGridContext {
   projectIconSvg: string | undefined;
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
   isInTrash: (id: string) => boolean;
+  isWorktreeInitialized: boolean;
   getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => TerminalInstance[];
   getPanelGroup: (panelId: string) => TabGroup | undefined;
   getActiveTabId: (groupId: string) => string | null;
@@ -136,9 +161,17 @@ export function useContentGridContext({
   emptyContent,
 }: ContentGridProps): ContentGridResult {
   "use memo";
+  // Subscribe only to structural fields. `panelsById` itself is intentionally
+  // excluded — `updateAgentState`/`updateActivity` spread it on every agent
+  // tick, which would invalidate `useShallow` and re-run the whole hook. The
+  // structural fields below (`panelIds`, `tabGroups`, `trashedTerminals`)
+  // plus the dedicated `gridPanelIds`/`fleetPanelIds` subscriptions defined
+  // further down only change on add/remove/move/trash/restore. Memos that
+  // need per-panel fields read `panelsById` non-reactively via
+  // `panelStoreApi.getState()` at evaluation time. See issue #8593.
   const {
-    panelsById,
     storeTerminalIds,
+    storeTabGroups,
     trashedTerminals,
     focusedId,
     maximizedId,
@@ -151,8 +184,8 @@ export function useContentGridContext({
     setFocused,
   } = usePanelStore(
     useShallow((state) => ({
-      panelsById: state.panelsById,
       storeTerminalIds: state.panelIds,
+      storeTabGroups: state.tabGroups,
       trashedTerminals: state.trashedTerminals,
       focusedId: state.focusedId,
       maximizedId: state.maximizedId,
@@ -182,7 +215,7 @@ export function useContentGridContext({
   );
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
-  const { worktreeMap } = useWorktrees();
+  const { worktreeMap, isInitialized: isWorktreeInitialized } = useWorktrees();
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId != null && activeWorktree != null;
   const activeWorktreeName = activeWorktree
@@ -202,20 +235,39 @@ export function useContentGridContext({
   );
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
-  const gridTerminals = useMemo(() => {
-    const result: TerminalInstance[] = [];
-    for (const id of storeTerminalIds) {
-      const t = panelsById[id];
-      if (
-        t &&
-        (t.location === "grid" || t.location === undefined) &&
-        (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ) {
-        result.push(t);
+  // Structurally-filtered list of grid panel IDs for the active worktree.
+  // The selector body runs on every store update, but `useShallow` returns
+  // the previous reference whenever membership and order are unchanged —
+  // agent-state/activity ticks mutate `panelsById` references without
+  // changing `location`, so the filter result stays stable. This is what
+  // makes the location-change paths (trashPanel of ungrouped, moveTerminalTo
+  // Dock/Grid of ungrouped) correctly invalidate downstream memos while
+  // per-tick mutations are absorbed.
+  const gridPanelIds = usePanelStore(
+    useShallow((state) => {
+      const ids = state.panelIdsByWorktreeId[activeWorktreeId ?? "__none__"];
+      if (!ids || ids.length === 0) return EMPTY_PANEL_IDS;
+      const result: string[] = [];
+      for (const id of ids) {
+        const t = state.panelsById[id];
+        if (t && (t.location === "grid" || t.location === undefined)) {
+          result.push(id);
+        }
       }
+      return result.length === 0 ? EMPTY_PANEL_IDS : result;
+    })
+  );
+
+  const gridTerminals = useMemo(() => {
+    if (gridPanelIds.length === 0) return EMPTY_TERMINALS;
+    const byId = panelStoreApi.getState().panelsById;
+    const result: TerminalInstance[] = [];
+    for (const id of gridPanelIds) {
+      const t = byId[id];
+      if (t) result.push(t);
     }
     return result;
-  }, [panelsById, storeTerminalIds, activeWorktreeId]);
+  }, [gridPanelIds]);
 
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
@@ -227,11 +279,20 @@ export function useContentGridContext({
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
 
   const tabGroups = useMemo(() => {
-    void storeTerminalIds;
-    void panelsById;
+    // Structural-change triggers:
+    //   - `gridPanelIds` catches add/remove and dock↔grid location changes
+    //     for ungrouped panels (where neither `storeTabGroups` nor
+    //     `trashedTerminals` would fire).
+    //   - `storeTabGroups` catches tab-group mutations (create, add panel,
+    //     delete) where membership of grid panels is unchanged.
+    //   - `trashedTerminals` retained for the contentGridTrashDep regression
+    //     test contract; it overlaps with `gridPanelIds` for grid panels but
+    //     also covers restore-from-trash paths.
+    void gridPanelIds;
+    void storeTabGroups;
     void trashedTerminals;
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-  }, [getTabGroups, activeWorktreeId, storeTerminalIds, panelsById, trashedTerminals]);
+  }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals]);
 
   const handleAddTabForPanel = useCallback(
     async (panel: TerminalInstance) => {
@@ -278,10 +339,27 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
-  const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
-
-  const maxGridCapacity = getMaxGridCapacity();
-  const isGridFull = tabGroups.length >= maxGridCapacity;
+  // Subscribe reactively to the derived capacity so height-only resizes
+  // re-partition the grid. A `state.getMaxGridCapacity` function reference
+  // is stable across height changes and would leave the partition stale
+  // (verified against `useGridNavigation`'s inline-derived selector).
+  const maxGridCapacity = useLayoutConfigStore((state) => {
+    if (!state.gridDimensions) return ABSOLUTE_MAX_GRID_TERMINALS;
+    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
+  });
+  // Split the grid panels at the screen-fit capacity. Everything past the cap
+  // renders in the overflow status strip (#8702) so we never paint terminals
+  // narrower than MIN_TERMINAL_WIDTH_PX.
+  const visibleTabGroups = useMemo(
+    () => (tabGroups.length <= maxGridCapacity ? tabGroups : tabGroups.slice(0, maxGridCapacity)),
+    [tabGroups, maxGridCapacity]
+  );
+  const overflowTabGroups = useMemo(
+    () =>
+      tabGroups.length <= maxGridCapacity ? EMPTY_TAB_GROUPS : tabGroups.slice(maxGridCapacity),
+    [tabGroups, maxGridCapacity]
+  );
+  const isGridFull = visibleTabGroups.length >= maxGridCapacity;
 
   const { setNodeRef, isOver } = useDroppable({
     id: "grid-container",
@@ -303,10 +381,12 @@ export function useContentGridContext({
   }, [isDragging]);
 
   const placeholderInGrid =
-    placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= tabGroups.length;
+    placeholderIndex !== null &&
+    placeholderIndex >= 0 &&
+    placeholderIndex <= visibleTabGroups.length;
 
   const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
-  const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
+  const gridItemCount = visibleTabGroups.length + (showPlaceholder ? 1 : 0);
 
   const bindGridRegion = useCallback((node: HTMLDivElement | null) => {
     useMacroFocusStore.getState().setRegionRef("grid", node);
@@ -454,7 +534,13 @@ export function useContentGridContext({
     }
   }, [layoutConfig, clearPreMaximizeLayout]);
 
-  const hysteresisGridColsRef = useRef<number | undefined>(undefined);
+  // Previous committed column count, fed back into `computeGridColumns` for
+  // breakpoint hysteresis. Held as state (not a ref) so the `gridCols` memo can
+  // read it during render — the React Compiler disallows ref reads there. The
+  // effect below settles it to the committed value; feeding the result back is
+  // a hysteresis fixed point, so this costs at most one extra render per actual
+  // column change.
+  const [hysteresisGridCols, setHysteresisGridCols] = useState<number | undefined>(undefined);
 
   const gridCols = useMemo(() => {
     if (
@@ -469,14 +555,16 @@ export function useContentGridContext({
       return preMaximizeLayout.gridCols;
     }
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(
-      gridItemCount,
-      gridWidth,
-      strategy,
-      value,
-      hysteresisGridColsRef.current
-    );
-  }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
+    return computeGridColumns(gridItemCount, gridWidth, strategy, value, hysteresisGridCols);
+  }, [
+    gridItemCount,
+    layoutConfig,
+    gridWidth,
+    maximizedId,
+    preMaximizeLayout,
+    activeWorktreeId,
+    hysteresisGridCols,
+  ]);
 
   const layoutTransition: Transition = useMemo(
     () => ({
@@ -501,7 +589,7 @@ export function useContentGridContext({
       void actionService.dispatch(
         "agent.launch",
         { agentId, location: "grid", cwd: defaultCwd || undefined },
-        { source: "context-menu" }
+        { source: "user" }
       );
     },
     [defaultCwd]
@@ -509,28 +597,46 @@ export function useContentGridContext({
 
   const handleGridLayoutChange = useCallback(
     (strategy: "automatic" | "fixed-columns" | "fixed-rows") => {
-      void actionService.dispatch(
-        "panel.gridLayout.setStrategy",
-        { strategy },
-        { source: "context-menu" }
-      );
+      void actionService.dispatch("panel.gridLayout.setStrategy", { strategy }, { source: "user" });
     },
     []
   );
 
   const panelIds = useMemo(() => {
-    const ids = tabGroups.map((g) => g.panelIds[0] ?? g.id);
+    // Only visible groups participate in SortableContext / dnd — overflow
+    // status cards are non-draggable and live outside the grid container.
+    const ids = visibleTabGroups.map((g) => g.panelIds[0] ?? g.id);
     if (showPlaceholder && placeholderInGrid) {
       const insertIndex = Math.min(Math.max(0, placeholderIndex), ids.length);
       ids.splice(insertIndex, 0, GRID_PLACEHOLDER_ID);
     }
     return ids;
-  }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
+  }, [visibleTabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
+
+  // Structurally-filtered fleet panel IDs. Delegates membership to
+  // `buildFleetPanels` (single source of truth — see #5989) and projects to
+  // IDs so `useShallow`'s element-wise compare absorbs agent-state/activity
+  // ticks. Only re-emits when fleet composition (armed set, arm order) or
+  // panel location changes shift the rendered set.
+  const fleetPanelIds = usePanelStore(
+    useShallow((state) => {
+      if (!isFleetScopeEnabled) return EMPTY_PANEL_IDS;
+      const panels = buildFleetPanels(armOrder, armedIds, state.panelsById);
+      if (panels.length === 0) return EMPTY_PANEL_IDS;
+      return panels.map((p) => p.id);
+    })
+  );
 
   const fleetPanels = useMemo(() => {
-    if (!isFleetScopeEnabled) return [];
-    return buildFleetPanels(armOrder, armedIds, panelsById);
-  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
+    if (fleetPanelIds.length === 0) return EMPTY_TERMINALS;
+    const byId = panelStoreApi.getState().panelsById;
+    const result: TerminalInstance[] = [];
+    for (const id of fleetPanelIds) {
+      const t = byId[id];
+      if (t) result.push(t);
+    }
+    return result;
+  }, [fleetPanelIds]);
 
   const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
@@ -540,7 +646,10 @@ export function useContentGridContext({
     return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
   }, [fleetPanels]);
 
-  const hysteresisFleetColsRef = useRef<number | undefined>(undefined);
+  // See `hysteresisGridCols` — same prior-render feedback for breakpoint
+  // hysteresis, held as state so the `fleetGridCols` memo can read it during
+  // render.
+  const [hysteresisFleetCols, setHysteresisFleetCols] = useState<number | undefined>(undefined);
 
   const fleetGridCols = useMemo(() => {
     if (!isFleetScopeRender) return 1;
@@ -550,9 +659,9 @@ export function useContentGridContext({
       gridWidth,
       strategy,
       value,
-      hysteresisFleetColsRef.current
+      hysteresisFleetCols
     );
-  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth]);
+  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth, hysteresisFleetCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
   useEffect(() => {
@@ -560,7 +669,7 @@ export function useContentGridContext({
       isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
       prevFleetGridColsRef.current = fleetGridCols;
-      hysteresisFleetColsRef.current = writeFleetHysteresis;
+      setHysteresisFleetCols(writeFleetHysteresis);
       return;
     }
     const ids = fleetPanels.map((t) => t.id);
@@ -569,54 +678,27 @@ export function useContentGridContext({
     }
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
-    hysteresisFleetColsRef.current = writeFleetHysteresis;
+    setHysteresisFleetCols(writeFleetHysteresis);
     if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
         GRID_TRANSITION_DURATION_MS
       );
     }
-    const cancelRef = { cancelled: false };
     const timeoutId = window.setTimeout(() => {
       if (isDraggingRef.current) return;
-      let index = 0;
-      const processNext = () => {
-        if (cancelRef.cancelled || index >= ids.length) return;
-        if (isDraggingRef.current) return;
-        const id = ids[index++]!;
-        const managed = terminalInstanceService.get(id);
-        if (managed?.hostElement.isConnected) {
-          terminalInstanceService.fit(id);
-        }
-        requestAnimationFrame(processNext);
-      };
-      processNext();
+      terminalInstanceService.batchResize(ids);
     }, GRID_FIT_DELAY_MS);
     return () => {
-      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
   }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
 
-  const startBatchFit = useEffectEvent((cancelRef: { cancelled: boolean }) => {
+  const startBatchFit = useEffectEvent(() => {
     const ids = gridTerminals.map((t) => t.id);
     return window.setTimeout(() => {
       if (isDraggingRef.current) return;
-
-      let index = 0;
-      const processNext = () => {
-        if (cancelRef.cancelled || index >= ids.length) return;
-        if (isDraggingRef.current) return;
-
-        const id = ids[index++]!;
-        const managed = terminalInstanceService.get(id);
-
-        if (managed?.hostElement.isConnected) {
-          terminalInstanceService.fit(id);
-        }
-        requestAnimationFrame(processNext);
-      };
-      processNext();
+      terminalInstanceService.batchResize(ids);
     }, GRID_FIT_DELAY_MS);
   });
   const prevGridColsRef = useRef(gridCols);
@@ -626,8 +708,9 @@ export function useContentGridContext({
 
     const colsChanged = prevGridColsRef.current !== gridCols;
     prevGridColsRef.current = gridCols;
-    hysteresisGridColsRef.current =
-      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined;
+    setHysteresisGridCols(
+      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
+    );
 
     if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
@@ -639,11 +722,9 @@ export function useContentGridContext({
       }
     }
 
-    const cancelRef = { cancelled: false };
-    const timeoutId = startBatchFit(cancelRef);
+    const timeoutId = startBatchFit();
 
     return () => {
-      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
   }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
@@ -743,56 +824,98 @@ export function useContentGridContext({
     }
   }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
 
+  // Focus reconciliation when capacity shrinks (sidebar opens, window narrows):
+  // if `focusedId` has slipped into the overflow strip, arrow keys and Cmd+N
+  // can't reach it anymore. Drop focus onto the first visible panel instead so
+  // the user has a working keyboard model (#8702). Only fires when the focused
+  // panel is in the active worktree's grid set but no longer visible.
+  useEffect(() => {
+    if (!focusedId) return;
+    const focusedInVisible = visibleTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (focusedInVisible) return;
+    const focusedInOverflow = overflowTabGroups.some((g) => g.panelIds.includes(focusedId));
+    if (!focusedInOverflow) return;
+    const fallback = visibleTabGroups[0]?.panelIds[0] ?? null;
+    if (fallback) setFocused(fallback);
+  }, [focusedId, visibleTabGroups, overflowTabGroups, setFocused]);
+
   const gridContextMenuContent = (
     <ContextMenuContent>
-      <ContextMenuItem onSelect={() => handleGridLaunch("terminal")}>New Terminal</ContextMenuItem>
-      <ContextMenuItem onSelect={() => handleGridLaunch("browser")}>New Browser</ContextMenuItem>
+      <ContextMenuActionItem
+        actionId="agent.launch"
+        args={{ agentId: "terminal", location: "grid", cwd: defaultCwd || undefined }}
+      >
+        New Terminal
+      </ContextMenuActionItem>
+      <ContextMenuActionItem
+        actionId="agent.launch"
+        args={{ agentId: "browser", location: "grid", cwd: defaultCwd || undefined }}
+      >
+        New Browser
+      </ContextMenuActionItem>
       {gridAgentMenuItems.length > 0 && <ContextMenuSeparator />}
       {gridAgentMenuItems.map((agent) => (
-        <ContextMenuItem
+        <ContextMenuActionItem
           key={agent.id}
+          actionId="agent.launch"
+          args={{ agentId: agent.id, location: "grid", cwd: defaultCwd || undefined }}
           disabled={!agent.canLaunch}
-          onSelect={() => handleGridLaunch(agent.id)}
         >
           New {agent.name}
-        </ContextMenuItem>
+        </ContextMenuActionItem>
       ))}
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
         <ContextMenuSubContent>
-          <ContextMenuCheckboxItem
-            checked={layoutConfig.strategy === "automatic"}
-            onSelect={() => handleGridLayoutChange("automatic")}
-          >
-            Automatic
-          </ContextMenuCheckboxItem>
-          <ContextMenuCheckboxItem
-            checked={layoutConfig.strategy === "fixed-columns"}
-            onSelect={() => handleGridLayoutChange("fixed-columns")}
-          >
-            Fixed Columns
-          </ContextMenuCheckboxItem>
-          <ContextMenuCheckboxItem
-            checked={layoutConfig.strategy === "fixed-rows"}
-            onSelect={() => handleGridLayoutChange("fixed-rows")}
-          >
-            Fixed Rows
-          </ContextMenuCheckboxItem>
+          <MenuActionSourceContext.Consumer>
+            {(menuSource) => (
+              <>
+                <ContextMenuCheckboxItem
+                  checked={layoutConfig.strategy === "automatic"}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "panel.gridLayout.setStrategy",
+                      { strategy: "automatic" },
+                      { source: menuSource ?? "user" }
+                    )
+                  }
+                >
+                  Automatic
+                </ContextMenuCheckboxItem>
+                <ContextMenuCheckboxItem
+                  checked={layoutConfig.strategy === "fixed-columns"}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "panel.gridLayout.setStrategy",
+                      { strategy: "fixed-columns" },
+                      { source: menuSource ?? "user" }
+                    )
+                  }
+                >
+                  Fixed Columns
+                </ContextMenuCheckboxItem>
+                <ContextMenuCheckboxItem
+                  checked={layoutConfig.strategy === "fixed-rows"}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "panel.gridLayout.setStrategy",
+                      { strategy: "fixed-rows" },
+                      { source: menuSource ?? "user" }
+                    )
+                  }
+                >
+                  Fixed Rows
+                </ContextMenuCheckboxItem>
+              </>
+            )}
+          </MenuActionSourceContext.Consumer>
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSeparator />
-      <ContextMenuItem
-        onSelect={() =>
-          void actionService.dispatch(
-            "app.settings.openTab",
-            { tab: "terminal" },
-            { source: "context-menu" }
-          )
-        }
-      >
+      <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
         Terminal Settings...
-      </ContextMenuItem>
+      </ContextMenuActionItem>
     </ContextMenuContent>
   );
 
@@ -802,9 +925,10 @@ export function useContentGridContext({
     defaultCwd,
     agentAvailability,
     emptyContent,
-    panelsById,
     gridTerminals,
     tabGroups,
+    visibleTabGroups,
+    overflowTabGroups,
     focusedId,
     maximizedId,
     maximizeTarget,
@@ -853,6 +977,7 @@ export function useContentGridContext({
     projectIconSvg,
     worktreeMap,
     isInTrash,
+    isWorktreeInitialized,
     getTabGroupPanels,
     getPanelGroup,
     getActiveTabId,

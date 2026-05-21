@@ -18,7 +18,7 @@ Complete reference for Daintree's semantic token system. Every built-in and cust
 | Scrim | `scrim-*` | Modal backdrop dimming |
 | Shadow | `shadow-*` | Elevation shadow profiles |
 | Material | `material-*` | Backdrop blur/saturation strategy |
-| GitHub | `github-*` | PR/issue state colors |
+| PR state | `pr-*` | PR/issue state colors |
 | Search | `search-*` | Search highlighting (independent of accent) |
 | Terminal | `terminal-*` | Terminal emulator layer (independent of workbench) |
 | Syntax | `syntax-*` | Code editor token colors |
@@ -186,16 +186,16 @@ Derived from `ThemeStrategy` in the palette:
 | `material-opacity`    | Surface opacity when blur active | `1` (or `0.9` when blur > 0) |
 | `radius-scale`        | Global border-radius multiplier  | `1`                          |
 
-## GitHub Tokens
+## PR State Tokens
 
-| Token           | Purpose                   |
-| --------------- | ------------------------- |
-| `github-open`   | Open issue/PR indicator   |
-| `github-merged` | Merged PR indicator       |
-| `github-closed` | Closed issue/PR indicator |
-| `github-draft`  | Draft PR indicator        |
+| Token       | Purpose                   |
+| ----------- | ------------------------- |
+| `pr-open`   | Open issue/PR indicator   |
+| `pr-merged` | Merged PR indicator       |
+| `pr-closed` | Closed issue/PR indicator |
+| `pr-draft`  | Draft PR indicator        |
 
-Dark themes use GitHub's dark-mode palette; light themes use GitHub's light-mode palette.
+Provider-agnostic — these color any forge's PR/issue state. Defaults follow GitHub's dark/light palette; each theme can override them individually.
 
 ## Search Tokens
 

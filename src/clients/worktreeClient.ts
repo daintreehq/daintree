@@ -21,8 +21,8 @@ export const worktreeClient = {
     return window.electron.worktree.getAll();
   },
 
-  refresh: (): Promise<void> => {
-    return window.electron.worktree.refresh();
+  refresh: (worktreeId?: string): Promise<void> => {
+    return window.electron.worktree.refresh(worktreeId);
   },
 
   refreshPullRequests: (): Promise<void> => {
@@ -61,8 +61,25 @@ export const worktreeClient = {
     return window.electron.worktree.getAvailableBranch(rootPath, branchName);
   },
 
-  delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void> => {
-    return window.electron.worktree.delete(worktreeId, force, deleteBranch);
+  delete: async (
+    worktreeId: string,
+    force?: boolean,
+    deleteBranch?: boolean,
+    mutationId?: string
+  ): Promise<void> => {
+    // Route through the dedicated worktree port (#8405) so the host's ack map
+    // can dedupe outbox replays by `mutationId`, and so a host crash mid-call
+    // rejects the request immediately (HOST_EXITED) instead of leaving the
+    // legacy IPC promise pending. The legacy `window.electron.worktree.delete`
+    // path stays in the preload bridge for backward compat with non-outbox
+    // callers (none today in the renderer), but the renderer's user-driven
+    // deletes always go through this port-backed wrapper.
+    await window.electron.worktreePort.request("delete-worktree", {
+      worktreeId,
+      force,
+      deleteBranch,
+      mutationId,
+    });
   },
 
   onUpdate: (callback: (state: WorktreeState) => void): (() => void) => {
@@ -89,6 +106,10 @@ export const worktreeClient = {
     return window.electron.worktree.restartService();
   },
 
+  retryProjectLoad: (): Promise<void> => {
+    return window.electron.worktree.retryProjectLoad();
+  },
+
   onRemove: (callback: (data: { worktreeId: string }) => void): (() => void) => {
     return window.electron.worktree.onRemove(callback);
   },
@@ -102,6 +123,10 @@ export const worktreeClient = {
     action: "provision" | "teardown" | "resume" | "pause" | "status"
   ): Promise<void> => {
     await window.electron.worktreePort.request("resource-action", { worktreeId, action });
+  },
+
+  retrySetup: async (worktreeId: string): Promise<void> => {
+    await window.electron.worktreePort.request("run-lifecycle-setup", { worktreeId });
   },
 
   switchEnvironment: async (worktreeId: string, envKey: string): Promise<void> => {

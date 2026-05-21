@@ -24,20 +24,27 @@ let mockHasRealData = true;
 let mockActionMruList: string[] = [];
 
 const markAgentsSeenMock = vi.fn().mockResolvedValue(undefined);
+const recordAgentFirstSeenMock = vi.fn().mockResolvedValue(undefined);
 const dismissWelcomeCardMock = vi.fn().mockResolvedValue(undefined);
 const dismissSetupBannerMock = vi.fn().mockResolvedValue(undefined);
 let mockSeenAgentIds: string[] = [];
+let mockAvailabilityFirstSeen: Record<string, number> = {};
 let mockWelcomeCardDismissed = true;
 const mockSetupBannerDismissed = true;
 let mockOnboardingLoaded = true;
 
+const TEST_NEW_AGENT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  NEW_AGENT_TTL_MS: 14 * 24 * 60 * 60 * 1000,
   useAgentDiscoveryOnboarding: () => ({
     loaded: mockOnboardingLoaded,
     seenAgentIds: mockSeenAgentIds,
+    availabilityFirstSeen: mockAvailabilityFirstSeen,
     welcomeCardDismissed: mockWelcomeCardDismissed,
     setupBannerDismissed: mockSetupBannerDismissed,
     markAgentsSeen: markAgentsSeenMock,
+    recordAgentFirstSeen: recordAgentFirstSeenMock,
     dismissWelcomeCard: dismissWelcomeCardMock,
     dismissSetupBanner: dismissSetupBannerMock,
   }),
@@ -69,18 +76,25 @@ vi.mock("@/store/agentSettingsStore", () => ({
   ),
 }));
 
+const recordActionMruMock = vi.fn();
+
 vi.mock("@/store/actionMruStore", () => ({
-  useActionMruStore: (
-    selector: (s: { getSortedActionMruList: () => ActionFrecencyEntry[] }) => unknown
-  ) =>
-    selector({
-      getSortedActionMruList: () =>
-        mockActionMruList.map((id) => ({
-          id,
-          score: mockActionMruList.length - mockActionMruList.indexOf(id),
-          lastAccessedAt: Date.now(),
-        })),
-    }),
+  useActionMruStore: Object.assign(
+    (selector: (s: { getSortedActionMruList: () => ActionFrecencyEntry[] }) => unknown) =>
+      selector({
+        getSortedActionMruList: () =>
+          mockActionMruList.map((id) => ({
+            id,
+            score: mockActionMruList.length - mockActionMruList.indexOf(id),
+            lastAccessedAt: Date.now(),
+          })),
+      }),
+    {
+      getState: () => ({
+        recordActionMru: recordActionMruMock,
+      }),
+    }
+  ),
 }));
 
 type MockCliAvailabilityStoreState = {
@@ -172,6 +186,25 @@ vi.mock("@/config/agents", () => ({
 
 vi.mock("@/lib/colorUtils", () => ({
   getBrandColorHex: (id: string) => `#brand-${id}`,
+}));
+
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="context-menu-content">{children}</div>
+  ),
+  ContextMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+  }) => (
+    <div role="menuitem" onClick={(e) => onSelect?.(e as unknown as Event)}>
+      {children}
+    </div>
+  ),
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -335,6 +368,7 @@ vi.mock("lucide-react", () => ({
   Settings2: () => <span data-testid="settings2-icon" />,
   ChevronRight: () => <span data-testid="chevron-right-icon" />,
   Keyboard: () => <span data-testid="keyboard-icon" />,
+  Unplug: () => <span data-testid="unplug-icon" />,
 }));
 
 import { AgentTrayButton } from "../AgentTrayButton";
@@ -374,8 +408,11 @@ describe("AgentTrayButton", () => {
     mockHasRealData = true;
     mockActionMruList = [];
     markAgentsSeenMock.mockClear();
+    recordAgentFirstSeenMock.mockClear();
+    recordActionMruMock.mockClear();
     dismissWelcomeCardMock.mockClear();
     mockSeenAgentIds = [];
+    mockAvailabilityFirstSeen = {};
     mockWelcomeCardDismissed = true;
     mockOnboardingLoaded = true;
     mockCcrPresetsByAgent = {};
@@ -919,7 +956,10 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("agent-tray-discovery-badge").getAttribute("data-visible")).toBe("false");
   });
 
-  it("calls markAgentsSeen with all ready agent ids on tray open", () => {
+  it("does not call markAgentsSeen on tray open — discovery is now per-launch", () => {
+    // Regression for #8177: opening the dropdown used to burn the NEW dot
+    // for every ready agent at once. The signal must survive until the
+    // user actually launches one.
     const availability = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({});
     mockWelcomeCardDismissed = true;
@@ -930,12 +970,28 @@ describe("AgentTrayButton", () => {
     markAgentsSeenMock.mockClear();
 
     openChangeSpy!(true);
-    expect(markAgentsSeenMock).toHaveBeenCalledTimes(1);
-    const [ids] = markAgentsSeenMock.mock.calls[0] as [string[]];
+    expect(markAgentsSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("records availabilityFirstSeen for all ready agents on tray open", () => {
+    // Tray open is the canonical "user could now see this agent" moment, so
+    // it anchors the TTL window. The IPC is idempotent server-side; the hook
+    // only writes timestamps for ids that aren't already recorded.
+    const availability = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockWelcomeCardDismissed = true;
+    mockSeenAgentIds = [];
+
+    render(<AgentTrayButton agentAvailability={availability} />);
+    recordAgentFirstSeenMock.mockClear();
+
+    openChangeSpy!(true);
+    expect(recordAgentFirstSeenMock).toHaveBeenCalledTimes(1);
+    const [ids] = recordAgentFirstSeenMock.mock.calls[0] as [string[]];
     expect(ids.sort()).toEqual(["claude", "gemini"]);
   });
 
-  it("does not call markAgentsSeen when no agents are ready on tray open", () => {
+  it("does not call recordAgentFirstSeen when no agents are ready on tray open", () => {
     const availability = {
       claude: "missing",
       gemini: "missing",
@@ -943,10 +999,135 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({});
 
     render(<AgentTrayButton agentAvailability={availability} />);
-    markAgentsSeenMock.mockClear();
+    recordAgentFirstSeenMock.mockClear();
 
     openChangeSpy!(true);
-    expect(markAgentsSeenMock).not.toHaveBeenCalled();
+    expect(recordAgentFirstSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("launching an agent calls markAgentsSeen with only that agent id", () => {
+    const availability = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockSeenAgentIds = [];
+
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    markAgentsSeenMock.mockClear();
+
+    fireEvent.click(getByTestId("agent-tray-row-claude"));
+
+    expect(markAgentsSeenMock).toHaveBeenCalledTimes(1);
+    expect(markAgentsSeenMock).toHaveBeenCalledWith(["claude"]);
+  });
+
+  it("launching an agent records palette MRU so the sort reflects tray usage", () => {
+    // Regression for #8177: ActionService.dispatch does not auto-record MRU,
+    // so without an explicit recordActionMru call the tray's MRU-based sort
+    // never reflects tray launches.
+    const availability = { codex: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    recordActionMruMock.mockClear();
+
+    fireEvent.click(getByTestId("agent-tray-row-codex"));
+
+    expect(recordActionMruMock).toHaveBeenCalledTimes(1);
+    expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
+  });
+
+  it("decays the NEW dot for agents first seen more than the TTL ago", () => {
+    const availability = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockWelcomeCardDismissed = true;
+    mockSeenAgentIds = [];
+    const now = Date.now();
+    mockAvailabilityFirstSeen = {
+      // Past the TTL by 1ms — must NOT show the NEW dot.
+      claude: now - TEST_NEW_AGENT_TTL_MS - 1,
+      // Inside the TTL window — must still show the NEW dot.
+      gemini: now - 1000,
+    };
+
+    const { queryByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    expect(queryByTestId("agent-tray-new-pill-claude")).toBeNull();
+    expect(queryByTestId("agent-tray-new-pill-gemini")).toBeTruthy();
+  });
+
+  it("renders the NEW indicator as a screen-reader-paired dot rather than a text pill", () => {
+    // #8177: unify with the trigger badge — dot is aria-hidden, screen
+    // readers get "New" via the adjacent sr-only span. No visible "NEW" text.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockSeenAgentIds = [];
+
+    const { getByTestId, container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const dot = getByTestId("agent-tray-new-pill-claude");
+    expect(dot.getAttribute("aria-hidden")).toBe("true");
+    expect(dot.textContent ?? "").toBe("");
+    expect(dot.className).toContain("rounded-full");
+    expect(dot.className).toContain("bg-status-info");
+
+    // Screen reader pairing: the row should expose "New" via an sr-only sibling.
+    const row = container.querySelector(
+      '[data-testid="agent-tray-row-claude"]'
+    ) as HTMLElement | null;
+    expect(row).toBeTruthy();
+    const srOnly = Array.from(row!.querySelectorAll(".sr-only")).map((el) =>
+      el.textContent?.trim()
+    );
+    expect(srOnly).toContain("New");
+  });
+
+  it("renders the NEW dot inside the SplitLaunchItem trigger when the agent has presets", () => {
+    // Regression for #8177: agents with presets route through SplitLaunchItem
+    // (not LaunchRow). The dot must surface there too, or the most visible
+    // agents get no per-row discovery indicator.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockSeenAgentIds = [];
+    mockMergedPresetsFn = (agentId: string) =>
+      agentId === "claude" ? [{ id: "user-alpha", name: "Alpha" }] : [];
+
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const dot = getByTestId("agent-tray-new-pill-claude");
+    expect(dot.getAttribute("aria-hidden")).toBe("true");
+    expect(dot.className).toContain("rounded-full");
+    expect(dot.className).toContain("bg-status-info");
+  });
+
+  it("clears the NEW dot when the agent is launched via the SplitLaunchItem trigger", () => {
+    // Pressing Enter on the SubTrigger goes through onLaunch → handleLaunch,
+    // which now fires markAgentsSeen([agentId]) per-launch.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+    mockSeenAgentIds = [];
+    mockMergedPresetsFn = (agentId: string) =>
+      agentId === "claude" ? [{ id: "user-alpha", name: "Alpha" }] : [];
+
+    const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    markAgentsSeenMock.mockClear();
+    fireEvent.keyDown(getAllByTestId("submenu-trigger")[0]!, { key: "Enter" });
+
+    expect(markAgentsSeenMock).toHaveBeenCalledTimes(1);
+    expect(markAgentsSeenMock).toHaveBeenCalledWith(["claude"]);
+  });
+
+  it("pinned rows render the pin icon muted until the row is highlighted", () => {
+    // #8177: the filled pin used to read as an active control. Muted until
+    // hover/focus makes it clear the icon is a state marker.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+
+    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const claudeRow = container.querySelector(
+      '[data-testid="agent-tray-row-claude"]'
+    ) as HTMLElement | null;
+    expect(claudeRow).toBeTruthy();
+    const pinIcon = claudeRow!.querySelector('[data-testid="pin-icon"]') as HTMLElement | null;
+    expect(pinIcon).toBeTruthy();
+    const classes = pinIcon!.getAttribute("data-classname") ?? "";
+    expect(classes).toContain("text-daintree-text/40");
+    expect(classes).toContain("group-data-[highlighted]:text-daintree-text");
   });
 
   it("ignores panels from other worktrees for session detection", () => {

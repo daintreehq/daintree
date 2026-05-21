@@ -1,25 +1,28 @@
 import type React from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
 import { useAnimate, useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
-import { ActivityLight } from "../ActivityLight";
-import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
+import { CommitChip } from "./CommitChip";
+import { Spinner } from "@/components/ui/Spinner";
+import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
   Activity,
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
   Plug,
   Play,
+  RotateCcw,
   Square,
   Trash2,
 } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -41,6 +44,7 @@ export interface WorktreeDetailsSectionProps {
   effectiveSummary?: string | null;
   worktreeErrors: ErrorRecord[];
   isFocused: boolean;
+  isStale?: boolean;
   onToggleExpand: (e: React.MouseEvent) => void;
   onPathClick: () => void;
   onDismissError: (id: string) => void;
@@ -48,6 +52,9 @@ export interface WorktreeDetailsSectionProps {
   onOpenReviewHub?: () => void;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
+
+  isBeingDeleted?: boolean;
+  deleteError?: string | null;
 
   hasResourceConfig?: boolean;
   resourceStatus?: string;
@@ -70,6 +77,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     effectiveSummary,
     worktreeErrors,
     isFocused,
+    isStale,
     onToggleExpand,
     onPathClick,
     onDismissError,
@@ -78,6 +86,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     reviewState,
     isLifecycleRunning,
     lifecycleLabel,
+    isBeingDeleted,
+    deleteError,
 
     hasResourceConfig,
     resourceStatus,
@@ -89,6 +99,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
+
+  // Forge-resolved committer avatar (#8514). Resolves to a real GitHub
+  // profile picture when the email is public; `undefined` while loading or on
+  // miss, so the existing Gravatar tier transparently takes over.
+  const forgeAuthorAvatarUrl = useForgeAuthorAvatar({
+    email: worktree.worktreeChanges?.lastCommitAuthor?.email,
+    linkedProviderId: worktree.linked?.providerId,
+  });
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const [countScope, animate] = useAnimate<HTMLSpanElement>();
@@ -125,6 +143,29 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const showReviewHubButton = !!onOpenReviewHub && hasChanges;
   const rightButtonGroupShown = showReviewHubButton;
 
+  const lifecycleState = worktree.lifecycleStatus?.state;
+  const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
+  const lifecycleError = worktree.lifecycleStatus?.error;
+  const lifecycleOutput = worktree.lifecycleStatus?.output;
+  const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
+  const [isRetryingSetup, setIsRetryingSetup] = useState(false);
+  const handleRetrySetup = async (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (isRetryingSetup) return;
+    setIsRetryingSetup(true);
+    try {
+      // Pin the action context to this card's worktree so `isEnabled` evaluates
+      // against the failed card, not whichever worktree happens to be focused.
+      await actionService.dispatch(
+        "worktree.lifecycle.retrySetup",
+        { worktreeId: worktree.id },
+        { source: "user", contextOverride: { focusedWorktreeId: worktree.id } }
+      );
+    } finally {
+      setIsRetryingSetup(false);
+    }
+  };
+
   const rsLower = resourceStatus?.toLowerCase();
   const showResourceResume =
     hasResourceConfig &&
@@ -138,269 +179,384 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
 
   return (
-    <div
-      id={detailsId}
-      className="mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
-    >
-      {isExpanded ? (
-        <div className="-m-3">
-          <button
-            onClick={onToggleExpand}
-            aria-expanded={true}
-            aria-controls={detailsPanelId}
-            className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
-            id={`${detailsId}-button`}
-          >
-            <span className="text-xs font-medium text-text-muted">Details</span>
-            <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
-          </button>
-          <div
-            id={detailsPanelId}
-            role="region"
-            aria-labelledby={`${detailsId}-button`}
-            className="p-3"
-          >
-            <WorktreeDetails
-              worktree={worktree}
-              homeDir={homeDir}
-              effectiveNote={effectiveNote}
-              effectiveSummary={effectiveSummary}
-              worktreeErrors={worktreeErrors}
-              hasChanges={hasChanges}
-              isFocused={isFocused}
-              onPathClick={onPathClick}
-              onDismissError={onDismissError}
-              onRetryError={onRetryError}
-              showLastCommit={true}
-              lastActivityTimestamp={worktree.lastActivityTimestamp}
-              showTime={true}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="-m-3 flex items-stretch">
-          <div
-            onClick={onToggleExpand}
-            className={cn(
-              "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-              rightButtonGroupShown ? "rounded-l-[var(--radius-lg)]" : "rounded-[var(--radius-lg)]"
-            )}
-          >
+    <>
+      <div
+        id={detailsId}
+        className="mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+      >
+        {isExpanded ? (
+          <div className="-m-3">
             <button
-              type="button"
-              aria-expanded={false}
+              onClick={onToggleExpand}
+              aria-expanded={true}
               aria-controls={detailsPanelId}
+              className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
               id={`${detailsId}-button`}
-              aria-label="Show details"
-              className={cn(
-                "absolute inset-0",
-                rightButtonGroupShown
-                  ? "rounded-l-[var(--radius-lg)]"
-                  : "rounded-[var(--radius-lg)]",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
-              )}
-            />
-            <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
-              {isLifecycleRunning && lifecycleLabel ? (
-                <span className="flex items-center gap-1.5 text-text-secondary">
+            >
+              {isBeingDeleted && !deleteError ? (
+                <span
+                  className="flex items-center gap-1.5 text-xs font-medium text-text-secondary"
+                  role="status"
+                  aria-live="polite"
+                >
                   <Spinner size="xs" className="shrink-0" />
-                  <span className="truncate">{lifecycleLabel}</span>
+                  <span>Deleting…</span>
                 </span>
-              ) : lifecycleLabel &&
-                !isLifecycleRunning &&
-                worktree.lifecycleStatus?.state !== "success" ? (
-                <span className="text-status-error">{lifecycleLabel}</span>
-              ) : isConflicted ? (
-                <span className="flex items-center gap-1.5 text-status-error">
-                  <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                  <span className="truncate">Conflicts need review</span>
-                </span>
-              ) : hasChanges && worktree.worktreeChanges ? (
-                <span className="flex items-center gap-1.5 text-text-secondary">
-                  <span ref={countScope} className="inline-block">
-                    {worktree.worktreeChanges.changedFileCount} file
-                    {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
-                  </span>
-                  {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
-                    (worktree.worktreeChanges.deletions ?? 0) > 0) && (
-                    <span className="flex items-center gap-0.5">
-                      {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
-                        <span className="text-status-success">
-                          +{worktree.worktreeChanges.insertions}
-                        </span>
-                      )}
-                      {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
-                        (worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                          <span className="text-text-muted">/</span>
-                        )}
-                      {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                        <span className="text-status-error">
-                          -{worktree.worktreeChanges.deletions}
+              ) : (
+                <span className="text-xs font-medium text-text-muted">Details</span>
+              )}
+              <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
+            </button>
+            <div
+              id={detailsPanelId}
+              role="region"
+              aria-labelledby={`${detailsId}-button`}
+              className="p-3"
+            >
+              <WorktreeDetails
+                worktree={worktree}
+                homeDir={homeDir}
+                effectiveNote={effectiveNote}
+                effectiveSummary={effectiveSummary}
+                worktreeErrors={worktreeErrors}
+                hasChanges={hasChanges}
+                isFocused={isFocused}
+                isStale={isStale}
+                onPathClick={onPathClick}
+                onDismissError={onDismissError}
+                onRetryError={onRetryError}
+                showLastCommit={true}
+                lastActivityTimestamp={worktree.lastActivityTimestamp}
+                showTime={true}
+                forgeAvatarUrl={forgeAuthorAvatarUrl}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="-m-3 flex flex-col">
+            <div className="flex items-stretch">
+              <div
+                onClick={onToggleExpand}
+                className={cn(
+                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
+                  rightButtonGroupShown
+                    ? "rounded-l-[var(--radius-lg)]"
+                    : "rounded-[var(--radius-lg)]"
+                )}
+              >
+                <button
+                  type="button"
+                  aria-expanded={false}
+                  aria-controls={detailsPanelId}
+                  id={`${detailsId}-button`}
+                  aria-label="Show details"
+                  className={cn(
+                    "absolute inset-0",
+                    rightButtonGroupShown
+                      ? "rounded-l-[var(--radius-lg)]"
+                      : "rounded-[var(--radius-lg)]",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                  )}
+                />
+                <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
+                  {isBeingDeleted && !deleteError ? (
+                    <span
+                      className="flex items-center gap-1.5 text-text-secondary"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Spinner size="xs" className="shrink-0" />
+                      <span className="truncate">Deleting…</span>
+                    </span>
+                  ) : isLifecycleRunning && lifecycleLabel ? (
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      <span
+                        aria-hidden="true"
+                        className="inline-block w-2 h-2 rounded-full bg-text-secondary animate-pulse-immediate shrink-0"
+                      />
+                      <span className="truncate">{lifecycleLabel}</span>
+                    </span>
+                  ) : lifecycleLabel &&
+                    !isLifecycleRunning &&
+                    worktree.lifecycleStatus?.state !== "success" ? (
+                    <span className="text-status-error">{lifecycleLabel}</span>
+                  ) : isConflicted ? (
+                    <span className="flex items-center gap-1.5 text-status-error">
+                      <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                      <span className="truncate">Conflicts need review</span>
+                    </span>
+                  ) : hasChanges && worktree.worktreeChanges ? (
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      <span ref={countScope} className="inline-block">
+                        {worktree.worktreeChanges.changedFileCount} file
+                        {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
+                      </span>
+                      {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
+                        (worktree.worktreeChanges.deletions ?? 0) > 0) && (
+                        <span className="flex items-center gap-0.5">
+                          {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
+                            <span className="text-status-success">
+                              +{worktree.worktreeChanges.insertions}
+                            </span>
+                          )}
+                          {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
+                            (worktree.worktreeChanges.deletions ?? 0) > 0 && (
+                              <span className="text-text-muted">/</span>
+                            )}
+                          {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
+                            <span className="text-status-error">
+                              -{worktree.worktreeChanges.deletions}
+                            </span>
+                          )}
                         </span>
                       )}
                     </span>
-                  )}
-                </span>
-              ) : (
-                <span
-                  className={cn(
-                    computedSubtitle.tone === "warning" && "text-status-warning",
-                    computedSubtitle.tone === "info" && "text-status-info",
-                    computedSubtitle.tone === "muted" && "text-text-muted"
-                  )}
-                >
-                  {computedSubtitle.text}
-                </span>
-              )}
-            </span>
-
-            {hasResourceConfig && (
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  <span className="sr-only">Resource actions</span>
-                </ContextMenuTrigger>
-                <ContextMenuContent onClick={(e) => e.stopPropagation()}>
-                  {showResourceResume && onResourceResume && (
-                    <ContextMenuItem onClick={onResourceResume}>
-                      <Play className="w-3.5 h-3.5 mr-2" />
-                      Resume
-                    </ContextMenuItem>
-                  )}
-                  {showResourcePause && onResourcePause && (
-                    <ContextMenuItem onClick={onResourcePause}>
-                      <Square className="w-3.5 h-3.5 mr-2" />
-                      Pause
-                    </ContextMenuItem>
-                  )}
-                  {showResourceConnect && (
-                    <ContextMenuItem onClick={onResourceConnect}>
-                      <Plug className="w-3.5 h-3.5 mr-2" />
-                      Connect
-                    </ContextMenuItem>
-                  )}
-                  {(showResourceResume || showResourcePause || showResourceConnect) &&
-                    onResourceStatus && <ContextMenuSeparator />}
-                  {onResourceStatus && (
-                    <ContextMenuItem onClick={onResourceStatus}>
-                      <Activity className="w-3.5 h-3.5 mr-2" />
-                      Check Status
-                    </ContextMenuItem>
-                  )}
-                  {onResourceTeardown && (
-                    <>
-                      <ContextMenuSeparator />
-                      <ContextMenuItem onClick={onResourceTeardown} className="text-status-error">
-                        <Trash2 className="w-3.5 h-3.5 mr-2" />
-                        Teardown
-                      </ContextMenuItem>
-                    </>
-                  )}
-                </ContextMenuContent>
-              </ContextMenu>
-            )}
-
-            {hasResourceConfig &&
-              (showResourceResume || showResourcePause || showResourceConnect) && (
-                <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
-                  {showResourceResume && onResourceResume && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onResourceResume();
-                          }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                          aria-label="Resume Resource"
-                        >
-                          <Play className="w-3 h-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Resume Resource</TooltipContent>
-                    </Tooltip>
-                  )}
-                  {showResourcePause && onResourcePause && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onResourcePause();
-                          }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                          aria-label="Pause Resource"
-                        >
-                          <Square className="w-3 h-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Pause Resource</TooltipContent>
-                    </Tooltip>
-                  )}
-                  {showResourceConnect && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onResourceConnect!();
-                          }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                          aria-label="Connect to Resource"
-                        >
-                          <Plug className="w-3 h-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Connect to Resource</TooltipContent>
-                    </Tooltip>
-                  )}
-                </span>
-              )}
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
-                  {worktree.lastActivityTimestamp != null ? (
-                    <>
-                      <ActivityLight
-                        lastActivityTimestamp={worktree.lastActivityTimestamp}
-                        className="w-1.5 h-1.5"
-                      />
-                      <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-                    </>
                   ) : (
-                    <span>No activity</span>
+                    <span
+                      className={cn(
+                        computedSubtitle.tone === "warning" && "text-status-warning",
+                        computedSubtitle.tone === "info" && "text-status-info",
+                        computedSubtitle.tone === "muted" && "text-text-muted"
+                      )}
+                    >
+                      {computedSubtitle.text}
+                    </span>
                   )}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {worktree.lastActivityTimestamp != null
-                  ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                  : "No recent activity recorded"}
-              </TooltipContent>
-            </Tooltip>
-          </div>
+                </span>
 
-          {showReviewHubButton && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={onOpenReviewHub}
-                  className={cn(
-                    "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
-                    "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
-                    "rounded-r-[var(--radius-lg)]",
-                    "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                {hasResourceConfig && (
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <span className="sr-only">Resource actions</span>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent onClick={(e) => e.stopPropagation()}>
+                      {showResourceResume && onResourceResume && (
+                        <ContextMenuItem onClick={onResourceResume}>
+                          <Play className="w-3.5 h-3.5 mr-2" />
+                          Resume
+                        </ContextMenuItem>
+                      )}
+                      {showResourcePause && onResourcePause && (
+                        <ContextMenuItem onClick={onResourcePause}>
+                          <Square className="w-3.5 h-3.5 mr-2" />
+                          Pause
+                        </ContextMenuItem>
+                      )}
+                      {showResourceConnect && (
+                        <ContextMenuItem onClick={onResourceConnect}>
+                          <Plug className="w-3.5 h-3.5 mr-2" />
+                          Connect
+                        </ContextMenuItem>
+                      )}
+                      {(showResourceResume || showResourcePause || showResourceConnect) &&
+                        onResourceStatus && <ContextMenuSeparator />}
+                      {onResourceStatus && (
+                        <ContextMenuItem onClick={onResourceStatus}>
+                          <Activity className="w-3.5 h-3.5 mr-2" />
+                          Check Status
+                        </ContextMenuItem>
+                      )}
+                      {onResourceTeardown && (
+                        <>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            onClick={onResourceTeardown}
+                            className="text-status-error"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 mr-2" />
+                            Teardown
+                          </ContextMenuItem>
+                        </>
+                      )}
+                    </ContextMenuContent>
+                  </ContextMenu>
+                )}
+
+                {hasResourceConfig &&
+                  (showResourceResume || showResourcePause || showResourceConnect) && (
+                    <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
+                      {showResourceResume && onResourceResume && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onResourceResume();
+                              }}
+                              className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              aria-label="Resume Resource"
+                            >
+                              <Play className="w-3 h-3" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Resume Resource</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {showResourcePause && onResourcePause && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onResourcePause();
+                              }}
+                              className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              aria-label="Pause Resource"
+                            >
+                              <Square className="w-3 h-3" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Pause Resource</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {showResourceConnect && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onResourceConnect!();
+                              }}
+                              className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              aria-label="Connect to Resource"
+                            >
+                              <Plug className="w-3 h-3" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Connect to Resource</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </span>
                   )}
-                  aria-label="Open Review & Commit"
-                >
-                  <GitCommitHorizontal className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Review & Commit</TooltipContent>
-            </Tooltip>
+
+                {worktree.worktreeChanges?.lastCommitTimestampMs != null &&
+                  Number.isFinite(worktree.worktreeChanges.lastCommitTimestampMs) && (
+                    <CommitChip
+                      lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
+                      author={worktree.worktreeChanges.lastCommitAuthor}
+                      commitMessage={worktree.worktreeChanges.lastCommitMessage}
+                      forgeAvatarUrl={forgeAuthorAvatarUrl}
+                      lastActivityTimestamp={worktree.lastActivityTimestamp}
+                    />
+                  )}
+              </div>
+
+              {showReviewHubButton && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={onOpenReviewHub}
+                      className={cn(
+                        "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
+                        "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
+                        "rounded-r-[var(--radius-lg)]",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                      )}
+                      aria-label="Open Review & Commit"
+                    >
+                      <GitCommitHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Review & Commit</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+
+            {lifecycleFailed && (
+              <div className="flex flex-col gap-2 border-t border-border-default px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-text-muted truncate">
+                    Setup didn't finish. Re-run when you're ready.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRetrySetup}
+                    disabled={isRetryingSetup}
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
+                      "text-status-error hover:bg-status-error/10",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                    )}
+                    aria-label="Retry setup"
+                  >
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                    {isRetryingSetup ? "Retrying…" : "Retry setup"}
+                  </button>
+                </div>
+                {hasLifecycleDetails && (
+                  <details className="text-xs">
+                    <summary className="flex items-center gap-1 text-text-muted cursor-pointer select-none">
+                      <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                      Show details
+                    </summary>
+                    <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all select-text">
+                      {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+export interface WorktreeDeleteErrorBannerProps {
+  message: string;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}
+
+/**
+ * Stand-alone banner so the card can render it outside of the details section
+ * (which is hidden when the card is collapsed). The user must be able to see
+ * a delete failure regardless of collapse state — otherwise a collapsed card
+ * silently absorbs the error.
+ */
+export function WorktreeDeleteErrorBanner({
+  message,
+  onRetry,
+  onDismiss,
+}: WorktreeDeleteErrorBannerProps) {
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      data-testid="worktree-delete-error-banner"
+      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+    >
+      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-status-error">Couldn't delete worktree</span>
+          <span className="break-words text-text-secondary">{message}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="worktree-delete-retry"
+              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              Retry
+            </button>
+          )}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              data-testid="worktree-delete-dismiss"
+              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              Dismiss
+            </button>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

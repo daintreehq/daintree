@@ -63,6 +63,7 @@ const PERSISTED_DEV_PREVIEW_FIELDS = [
   "browserHistory",
   "browserZoom",
   "devPreviewConsoleOpen",
+  "devPreviewConsoleTab",
   "devPreviewScrollPosition",
   "exitBehavior",
 ] as const satisfies readonly (keyof DevPreviewData)[];
@@ -134,6 +135,7 @@ const devPreviewFixture: TerminalInstance = {
   browserHistory: browserHistoryFixture,
   browserZoom: 1,
   devPreviewConsoleOpen: false,
+  devPreviewConsoleTab: "console",
   devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
   exitBehavior: "keep",
 };
@@ -155,6 +157,7 @@ const savedDevPreview: SavedTerminalData = {
   browserHistory: browserHistoryFixture,
   browserZoom: 1,
   devPreviewConsoleOpen: false,
+  devPreviewConsoleTab: "console",
   devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
   exitBehavior: "keep",
   createdAt: 1_700_000_000_000,

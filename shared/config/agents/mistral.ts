@@ -106,19 +106,6 @@ export const config: AgentConfig = {
     debounceMs: 6000,
     promptFastPathMinQuietMs: 6000,
   },
-  routing: {
-    capabilities: ["javascript", "typescript", "python", "rust", "go", "general-purpose"],
-    domains: {
-      frontend: 0.7,
-      backend: 0.8,
-      testing: 0.7,
-      refactoring: 0.75,
-      debugging: 0.75,
-      architecture: 0.7,
-    },
-    maxConcurrent: 2,
-    enabled: true,
-  },
   // Vibe emits "vibe --resume {session_id}" on exit (session_exit.py:21).
   // Critical: Vibe has NO `/quit` slash command — only `/exit`.
   resume: {

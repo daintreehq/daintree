@@ -3,6 +3,7 @@ import { actionService } from "@/services/ActionService";
 import type { AnyActionDefinition } from "@/services/actions/actionTypes";
 import type { ActionDefinition } from "@shared/types/actions";
 import type { PluginActionDescriptor } from "@shared/types/plugin";
+import { requestPluginConfirmation, usePluginConfirmStore } from "@/store/pluginConfirmStore";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -21,6 +22,10 @@ export function usePluginActions(): void {
     let disposed = false;
     let pushReceived = false;
     const registered = new Map<string, PluginActionDescriptor>();
+    // requestIds of confirm dialogs currently awaiting a user decision.
+    // Dropped on cleanup so an in-flight resolver can't outlive the hook
+    // (HMR / app-state change while a modal is open) and strand its promise.
+    const inFlightConfirms = new Set<string>();
 
     const sync = (descriptors: PluginActionDescriptor[]): void => {
       if (disposed) return;
@@ -37,7 +42,7 @@ export function usePluginActions(): void {
         if (!descriptorsEqual(current, next)) {
           // Re-register so stale title/category/schema is replaced.
           actionService.unregister(id);
-          actionService.register(toSyntheticDefinition(next));
+          actionService.register(toSyntheticDefinition(next, inFlightConfirms));
           registered.set(id, next);
         }
       }
@@ -50,7 +55,7 @@ export function usePluginActions(): void {
           );
           continue;
         }
-        actionService.register(toSyntheticDefinition(descriptor));
+        actionService.register(toSyntheticDefinition(descriptor, inFlightConfirms));
         registered.set(id, descriptor);
       }
     };
@@ -79,6 +84,13 @@ export function usePluginActions(): void {
     return () => {
       disposed = true;
       cleanup();
+      // Settle any open confirm dialogs as "rejected" so their dispatch
+      // promises resolve instead of leaking a resolver in the store.
+      const drop = usePluginConfirmStore.getState().drop;
+      for (const requestId of inFlightConfirms) {
+        drop(requestId);
+      }
+      inFlightConfirms.clear();
       for (const id of registered.keys()) {
         actionService.unregister(id);
       }
@@ -96,14 +108,23 @@ function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor):
     a.category === b.category &&
     a.kind === b.kind &&
     a.danger === b.danger &&
+    a.effectiveDanger === b.effectiveDanger &&
     JSON.stringify(a.keywords ?? null) === JSON.stringify(b.keywords ?? null) &&
     JSON.stringify(a.inputSchema ?? null) === JSON.stringify(b.inputSchema ?? null)
   );
 }
 
-function toSyntheticDefinition(descriptor: PluginActionDescriptor): AnyActionDefinition {
-  const { pluginId, id, title, description, category, kind, danger, keywords, inputSchema } =
-    descriptor;
+function toSyntheticDefinition(
+  descriptor: PluginActionDescriptor,
+  inFlightConfirms: Set<string>
+): AnyActionDefinition {
+  const { pluginId, id, title, description, category, kind, keywords, inputSchema } = descriptor;
+
+  // Read the host-authoritative classification, never the plugin's advisory
+  // `danger`. Fail safe to "confirm" if `effectiveDanger` is absent — e.g. a
+  // stale descriptor from a pre-migration cached WebContentsView — so a
+  // missing field can never silently downgrade a destructive action.
+  const effectiveDanger = descriptor.effectiveDanger ?? "confirm";
 
   const definition: ActionDefinition = {
     id,
@@ -111,10 +132,39 @@ function toSyntheticDefinition(descriptor: PluginActionDescriptor): AnyActionDef
     description: description ?? "",
     category,
     kind,
-    danger,
+    danger: effectiveDanger,
     scope: "renderer",
     keywords: keywords ? [...keywords] : undefined,
-    run: async (args) => {
+    run: async (args, ctx) => {
+      // Confirm before dispatching a host-classified destructive plugin
+      // action. Skip for agent-sourced dispatch: the MCP bridge already
+      // surfaced its own confirm dialog and a second prompt would
+      // double-gate the same call. This is a UI consent gate, not a
+      // security boundary (enforcement is trust-based per #5651).
+      if (effectiveDanger === "confirm" && ctx?.dispatchSource !== "agent") {
+        const requestId = crypto.randomUUID();
+        inFlightConfirms.add(requestId);
+        let decision;
+        try {
+          decision = await requestPluginConfirmation({
+            requestId,
+            pluginId,
+            actionId: id,
+            actionTitle: title ?? id,
+            actionDescription: description ?? "",
+          });
+        } finally {
+          inFlightConfirms.delete(requestId);
+        }
+        // User cancelled (or the hook unmounted and dropped the request):
+        // return silently. Returning a `{ ok: false }`-shaped value would be
+        // wrapped by ActionService as a *successful* dispatch result, and a
+        // thrown error would surface a misleading failure toast — neither is
+        // correct for a deliberate user cancellation.
+        if (decision !== "approved") {
+          return undefined;
+        }
+      }
       return window.electron.plugin.invoke(pluginId, id, args);
     },
   };

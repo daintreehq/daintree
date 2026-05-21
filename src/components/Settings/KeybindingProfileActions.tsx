@@ -26,6 +26,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         });
       }
     } catch {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Export failed",
@@ -45,6 +46,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
       try {
         result = await window.electron.keybinding.importProfile();
       } catch {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Import failed",
@@ -55,6 +57,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
 
       if (!result.ok) {
         if (result.errors[0] === "Cancelled") return;
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Import failed",

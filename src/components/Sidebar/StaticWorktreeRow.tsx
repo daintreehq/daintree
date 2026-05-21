@@ -3,6 +3,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeCard, type WorktreeCardProps } from "@/components/Worktree";
 import { WorktreeCardErrorFallback } from "@/components/Worktree/WorktreeCardErrorFallback";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { getWorktreeSidebarRowId } from "./useWorktreeSidebarKeyboard";
 import type { WorktreeState } from "@/types";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
@@ -18,6 +19,7 @@ interface StaticWorktreeRowProps {
   agentSettings: UseAgentLauncherReturn["agentSettings"];
   homeDir: string | undefined;
   aggregateCounts?: WorktreeCardProps["aggregateCounts"];
+  isDragHandleDisabled?: boolean;
   ariaRowIndex: number;
 }
 
@@ -32,6 +34,7 @@ function StaticWorktreeRow({
   agentSettings,
   homeDir,
   aggregateCounts,
+  isDragHandleDisabled,
   ariaRowIndex,
 }: StaticWorktreeRowProps) {
   const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
@@ -72,6 +75,7 @@ function StaticWorktreeRow({
   return (
     <div
       role="row"
+      id={getWorktreeSidebarRowId(worktreeId)}
       data-worktree-row={worktreeId}
       tabIndex={-1}
       aria-rowindex={ariaRowIndex}
@@ -99,6 +103,7 @@ function StaticWorktreeRow({
             agentAvailability={availability}
             agentSettings={agentSettings}
             homeDir={homeDir}
+            isDragHandleDisabled={isDragHandleDisabled}
           />
         </ErrorBoundary>
       </div>

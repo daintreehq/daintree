@@ -6,7 +6,7 @@ import type { OnboardingState } from "@shared/types";
 const trackMock = vi.fn(() => Promise.resolve());
 
 const defaultOnboardingState: OnboardingState = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   completed: false,
   currentStep: null,
   agentSetupIds: [],
@@ -14,6 +14,7 @@ const defaultOnboardingState: OnboardingState = {
   newsletterPromptSeen: false,
   waitingNudgeSeen: false,
   seenAgentIds: [],
+  availabilityFirstSeen: {},
   welcomeCardDismissed: false,
   setupBannerDismissed: false,
   checklist: {

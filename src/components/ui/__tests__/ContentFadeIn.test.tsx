@@ -77,9 +77,9 @@ describe("content-fade-in CSS contract", () => {
   // shouldn't matter — we're asserting authored intent in src/index.css.
   const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
 
-  it("declares the data-reduce-animations override for .content-fade-in", () => {
+  it("declares the reduce-motion override for .content-fade-in (OS + app toggle)", () => {
     const block = css.match(
-      /body\[data-reduce-animations="true"\]\s+\.content-fade-in\s*\{[^}]*\}/
+      /@variant\s+reduce-motion\s*\{[\s\S]*?\.content-fade-in\s*\{[^}]*\}/
     )?.[0];
     expect(block).toBeTruthy();
     expect(block).toMatch(/animation:\s*none/);

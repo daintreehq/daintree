@@ -1,5 +1,6 @@
 import {
   Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -12,7 +13,12 @@ import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
+import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { terminalClient } from "@/clients";
+import { logWarn } from "@/utils/logger";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpPanelBanners } from "./HelpPanelBanners";
@@ -28,6 +34,7 @@ import {
   useCliAvailabilityStore,
   useProjectStore,
   useWorktreeSelectionStore,
+  useTerminalInputStore,
 } from "@/store";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
@@ -40,6 +47,10 @@ import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { HelpSessionController } from "@/controllers/HelpSessionController";
+
+const LazyHybridInputBar = lazy(() =>
+  import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
+);
 
 const RESIZE_STEP = 10;
 const RESIZE_PAGE_STEP = 50;
@@ -88,6 +99,7 @@ export function HelpPanel({
 }: HelpPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const inputBarRef = useRef<HybridInputBarHandle>(null);
   // Element that owned focus when the panel last opened. We restore focus to
   // it on close so keyboard users return to where they were rather than
   // body. Mirrors the pattern in AppDialog/AppPaletteDialog.
@@ -96,6 +108,11 @@ export function HelpPanel({
   const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   const isVisible = isVisibleProp ?? effectiveWidth > 0;
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+  const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
+  // Tracks the last preferredAgentId the switch effect acted on so a single
+  // preference change drives at most one switch attempt (the effect re-runs
+  // on unrelated dep changes while the async launch settles).
+  const prevPreferredAgentIdRef = useRef<string | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
@@ -139,8 +156,16 @@ export function HelpPanel({
   const cliAvailability = useCliAvailabilityStore((s) => s.availability);
   const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
+  const effectiveAgentId = isBuiltInAgentId(agentId) ? agentId : undefined;
+  const showHybridInputBar = shouldShowHybridInputBar({
+    hasAgentIdentity: effectiveAgentId !== undefined,
+    hybridInputEnabled,
+    isFleetArmed: false,
+    fleetSize: 0,
+  });
 
   // Intersection of "wired for the assistant overlay" and "CLI is installed".
   // Drives the single-supported-agent auto-skip in the controller.
@@ -228,6 +253,52 @@ export function HelpPanel({
     }
   }, [terminalId, terminal?.agentState, markConversationStarted]);
 
+  // React to a Settings agent change while a session is already bound.
+  // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice
+  // made in the Daintree Assistant settings tab reaches here as a genuine
+  // change. Replace the live session with the chosen agent, gated by the
+  // same D1 confirm as a new session when there's a conversation to lose.
+  // (#8353 — switching the assistant agent was a silent no-op.)
+  useEffect(() => {
+    // No preference, or no live session to replace. Do NOT record the value
+    // yet — a preference chosen before a terminal binds must still trigger
+    // the switch once the terminal appears (#8353 critical fix).
+    if (!preferredAgentId || !terminalId) return;
+    // Already running the preferred agent — covers first-mount hydration and
+    // the user reverting the dropdown back to the live agent. Reconcile any
+    // open confirm so a stale "Switch to X?" prompt can't fire the wrong
+    // agent after the preference moved on.
+    if (preferredAgentId === agentId) {
+      prevPreferredAgentIdRef.current = preferredAgentId;
+      if (showAgentSwitchConfirm) setShowAgentSwitchConfirm(false);
+      return;
+    }
+    // Dedupe: this preference, against the current live agent, was already
+    // acted on (the effect re-runs on unrelated dep changes while the async
+    // launch settles).
+    if (prevPreferredAgentIdRef.current === preferredAgentId) return;
+    prevPreferredAgentIdRef.current = preferredAgentId;
+    const shouldConfirm =
+      (terminal?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminal.agentState)) ||
+      conversationTouched;
+    if (shouldConfirm) {
+      // The dialog title and confirm action both read live `preferredAgentId`,
+      // so a retarget to a third agent while the dialog is open tracks the
+      // latest preference without needing a separate pending field.
+      setShowAgentSwitchConfirm(true);
+      return;
+    }
+    controller.selectAgent(preferredAgentId);
+  }, [
+    controller,
+    preferredAgentId,
+    terminalId,
+    agentId,
+    terminal?.agentState,
+    conversationTouched,
+    showAgentSwitchConfirm,
+  ]);
+
   // Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
   // a pre-flight snapshot once per session and surface a Tier-1 banner.
   useEffect(() => {
@@ -262,13 +333,29 @@ export function HelpPanel({
         if (!state.isOpen) return;
 
         const current = document.activeElement;
-        if (current?.closest?.(".xterm-helper-textarea") && panelRef.current?.contains(current)) {
+        if (
+          (current?.closest?.(".xterm-helper-textarea") || current?.closest?.(".cm-editor")) &&
+          panelRef.current?.contains(current)
+        ) {
           return;
         }
 
-        // When an agent terminal is running, target its xterm input first.
-        // Falls back to the first-tabbable sweep for pre-launch / missing-CLI.
+        // When an agent terminal is running, target the HybridInputBar editor
+        // first (when available), then the xterm input as fallback. The bar
+        // ref is null during the lazy Suspense window — in that case fall back
+        // to xterm so cold-load opens still focus something.
+        //
+        // `focusWithCursorAtEnd()` schedules `view.focus()` inside its own
+        // requestAnimationFrame (HybridInputBar.tsx:538), so we cannot
+        // synchronously check `document.activeElement` after calling it. We
+        // trust the bar's internal rAF to take focus when its ref is present
+        // — no xterm fallback in that branch, otherwise CodeMirror would
+        // steal focus from xterm one frame later and produce a focus flicker.
         if (terminalId && terminal && terminal.spawnStatus !== "missing-cli") {
+          if (showHybridInputBar && inputBarRef.current) {
+            inputBarRef.current.focusWithCursorAtEnd();
+            return;
+          }
           terminalInstanceService.focus(terminalId);
           const after = document.activeElement;
           if (after?.closest?.(".xterm-helper-textarea") && panelRef.current?.contains(after)) {
@@ -297,7 +384,7 @@ export function HelpPanel({
       el.focus();
     }
     return undefined;
-  }, [isOpen, isVisible, focusRequest, terminalId, terminal]);
+  }, [isOpen, isVisible, focusRequest, terminalId, terminal, showHybridInputBar]);
 
   // Resize via mouse drag
   const handleResizeStart = useCallback(
@@ -386,6 +473,22 @@ export function HelpPanel({
     setShowNewSessionConfirm(false);
   }, []);
 
+  const handleConfirmAgentSwitch = useCallback(() => {
+    setShowAgentSwitchConfirm(false);
+    // Guard against the preference having moved back to the running agent (or
+    // cleared) between opening the dialog and confirming.
+    if (preferredAgentId && preferredAgentId !== agentId) {
+      controller.selectAgent(preferredAgentId);
+    }
+  }, [controller, preferredAgentId, agentId]);
+
+  // Leave preferredAgentId as the user set it — reverting it on cancel would
+  // be a silent fallback the dropdown wouldn't reflect. The session simply
+  // stays on the running agent until the user confirms a switch.
+  const handleCancelAgentSwitch = useCallback(() => {
+    setShowAgentSwitchConfirm(false);
+  }, []);
+
   const handleOpenSettings = useCallback(() => {
     void actionService.dispatch("app.settings.openTab", { tab: "assistant" }, { source: "user" });
   }, []);
@@ -409,10 +512,16 @@ export function HelpPanel({
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
-  // running PTY when the assistant terminal has focus.
+  // running PTY when the assistant terminal has focus; the .cm-editor check
+  // lets the HybridInputBar dismiss its autocomplete / expanded modal first.
+  // Both guards are scoped to the panel so a focused CodeMirror or xterm in a
+  // different panel (e.g. FileViewer, a grid terminal) can't trap Escape here.
   const handleEscape = useCallback(() => {
     const active = document.activeElement as HTMLElement | null;
-    if (active?.closest(".xterm-helper-textarea")) return;
+    if (active && panelRef.current?.contains(active)) {
+      if (active.closest(".xterm-helper-textarea")) return;
+      if (active.closest(".cm-editor")) return;
+    }
     handleClose();
   }, [handleClose]);
   useEscapeStack(isOpen, handleEscape);
@@ -507,9 +616,38 @@ export function HelpPanel({
                     launchAgentId={agentId ?? undefined}
                     getRefreshTier={getRefreshTier}
                     cwd={terminal.cwd}
+                    hasBottomBar={showHybridInputBar}
                   />
                 </Suspense>
               </div>
+              {showHybridInputBar && (
+                <Suspense fallback={null}>
+                  <LazyHybridInputBar
+                    ref={inputBarRef}
+                    terminalId={terminalId}
+                    cwd={terminal?.cwd ?? ""}
+                    agentId={effectiveAgentId}
+                    agentHasLifecycleEvent={terminal?.stateChangeTrigger !== undefined}
+                    agentState={terminal?.agentState}
+                    disabled={terminal?.isInputLocked === true}
+                    onSend={({ text }) => {
+                      if (terminal?.isInputLocked === true) return;
+                      terminalInstanceService.notifyUserInput(terminalId);
+                      // submit can now reject for dead PTYs (#8706); swallow
+                      // to log so the unhandled rejection doesn't leak — the
+                      // help panel is a one-shot send with no recovery UI.
+                      terminalClient.submit(terminalId, text).catch((err) => {
+                        logWarn("[HelpPanel] submit failed", { terminalId, error: err });
+                      });
+                    }}
+                    onSendKey={(key) => {
+                      if (terminal?.isInputLocked === true) return;
+                      terminalInstanceService.notifyUserInput(terminalId);
+                      terminalClient.sendKey(terminalId, key);
+                    }}
+                  />
+                </Suspense>
+              )}
             </>
           )
         ) : session.assistantVersionTooOld ? (
@@ -575,6 +713,17 @@ export function HelpPanel({
         confirmLabel="Start new session"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
+        variant="destructive"
+      />
+      <ConfirmDialog
+        isOpen={showAgentSwitchConfirm}
+        title={`Switch to ${
+          getAgentConfig(preferredAgentId ?? "")?.name ?? preferredAgentId ?? "agent"
+        }?`}
+        description="The current session will end and the conversation will be discarded."
+        confirmLabel="Switch agent"
+        onConfirm={handleConfirmAgentSwitch}
+        onClose={handleCancelAgentSwitch}
         variant="destructive"
       />
     </aside>

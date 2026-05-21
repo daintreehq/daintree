@@ -177,6 +177,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     applyDeferredResize: vi.fn(),
     openLink: vi.fn(),
     getCwdProvider: vi.fn(() => undefined),
+    onHibernationChanged: vi.fn(),
     onBufferModeChange: vi.fn(),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),

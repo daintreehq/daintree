@@ -16,17 +16,46 @@ function applyNextjsTurbopack(runner: RunCommand, turbopackEnabled = true): RunC
   return { ...runner, command: `${runner.command}${sep}--turbopack` };
 }
 
+export function findAllDevServerCandidates(
+  allDetectedRunners: RunCommand[] | undefined,
+  turbopackEnabled = true
+): RunCommand[] {
+  if (!allDetectedRunners || allDetectedRunners.length === 0) return [];
+
+  const seen = new Set<string>();
+  const result: RunCommand[] = [];
+  let hasPriorityMatch = false;
+
+  for (const name of DEV_SCRIPT_PRIORITY) {
+    const runner = allDetectedRunners.find((r) => r.name === name && !seen.has(r.id));
+    if (runner) {
+      seen.add(runner.id);
+      result.push(applyNextjsTurbopack(runner, turbopackEnabled));
+      hasPriorityMatch = true;
+    }
+  }
+
+  if (!hasPriorityMatch) {
+    const devcontainer = allDetectedRunners.find((r) => r.id === "devcontainer-poststart");
+    if (devcontainer && !seen.has(devcontainer.id)) {
+      seen.add(devcontainer.id);
+      result.push(devcontainer);
+    }
+  }
+
+  for (const runner of allDetectedRunners) {
+    if (!seen.has(runner.id)) {
+      seen.add(runner.id);
+      result.push(applyNextjsTurbopack(runner, turbopackEnabled));
+    }
+  }
+
+  return result;
+}
+
 export function findDevServerCandidate(
   allDetectedRunners: RunCommand[] | undefined,
   turbopackEnabled = true
 ): RunCommand | undefined {
-  if (!allDetectedRunners) {
-    return undefined;
-  }
-
-  const candidate = DEV_SCRIPT_PRIORITY.map((name) =>
-    allDetectedRunners.find((runner) => runner.name === name)
-  ).find((runner) => runner !== undefined);
-
-  return candidate ? applyNextjsTurbopack(candidate, turbopackEnabled) : undefined;
+  return findAllDevServerCandidates(allDetectedRunners, turbopackEnabled)[0];
 }

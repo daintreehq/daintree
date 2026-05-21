@@ -31,7 +31,8 @@ export interface ProjectSettingsSnapshot {
   color: string | undefined;
   branchPrefixCustom: string;
 
-  githubRemote: string | undefined;
+  forgeRemote: string | undefined;
+  forgeProviderOverride: string | null;
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   notificationOverrides: Partial<NotificationSettings> | undefined;
@@ -70,7 +71,7 @@ export function createProjectSettingsSnapshot(
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
-  githubRemote: string | undefined = undefined,
+  forgeRemote: string | undefined = undefined,
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
   notificationOverrides: Partial<NotificationSettings> | undefined = undefined,
@@ -79,7 +80,8 @@ export function createProjectSettingsSnapshot(
   activeResourceEnvironment: string | undefined = undefined,
   defaultWorktreeMode: string | undefined = undefined,
   turbopackEnabled: boolean = true,
-  daintreeMcpTier: DaintreeMcpTier = "off"
+  daintreeMcpTier: DaintreeMcpTier = "off",
+  forgeProviderOverride: string | null = null
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -159,7 +161,8 @@ export function createProjectSettingsSnapshot(
     color: color?.trim() || undefined,
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
-    githubRemote,
+    forgeRemote,
+    forgeProviderOverride,
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
@@ -288,7 +291,8 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.branchPrefixMode !== b.branchPrefixMode) return false;
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
 
-  if (a.githubRemote !== b.githubRemote) return false;
+  if (a.forgeRemote !== b.forgeRemote) return false;
+  if (a.forgeProviderOverride !== b.forgeProviderOverride) return false;
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   // Terminal settings comparison

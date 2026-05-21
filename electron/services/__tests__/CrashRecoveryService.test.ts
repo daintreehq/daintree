@@ -31,6 +31,7 @@ const appMock = vi.hoisted(() => {
 
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
+  resilientRenameSync: vi.fn(),
 }));
 
 vi.mock("../../utils/fs.js", () => utilsMock);
@@ -93,6 +94,9 @@ describe("CrashRecoveryService", () => {
         fs.writeFileSync(fp, data, enc ?? "utf-8");
       }
     );
+    utilsMock.resilientRenameSync.mockImplementation((src: string, dest: string) => {
+      fs.renameSync(src, dest);
+    });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -652,6 +656,280 @@ describe("CrashRecoveryService", () => {
     });
   });
 
+  describe("backup rotation (rolling pair)", () => {
+    it("rotates current → previous before writing new current", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const currentPath = path.join(backupDir, "session-state.json");
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+      const firstSnapshot = {
+        capturedAt: 1_000,
+        appState: { sidebarWidth: 100, terminals: [{ id: "t1", kind: "terminal" }] },
+      };
+      fs.writeFileSync(currentPath, JSON.stringify(firstSnapshot));
+
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 200, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      // After rotation, previous contains the original snapshot and current
+      // contains the freshly written one.
+      expect(fs.existsSync(previousPath)).toBe(true);
+      const rotated = JSON.parse(fs.readFileSync(previousPath, "utf8"));
+      expect(rotated.capturedAt).toBe(1_000);
+      const fresh = JSON.parse(fs.readFileSync(currentPath, "utf8"));
+      expect(fresh.appState.sidebarWidth).toBe(200);
+    });
+
+    it("does not rotate when no current backup exists yet", () => {
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 100, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      const previousPath = path.join(userData, "backups", "session-state.previous.json");
+      expect(fs.existsSync(previousPath)).toBe(false);
+      // resilientRenameSync must not have been called when there is no source file.
+      expect(utilsMock.resilientRenameSync).not.toHaveBeenCalled();
+    });
+
+    it("still writes new current when rotation rename throws (best-effort)", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const currentPath = path.join(backupDir, "session-state.json");
+      fs.writeFileSync(
+        currentPath,
+        JSON.stringify({ capturedAt: 1_000, appState: { terminals: [] } })
+      );
+
+      utilsMock.resilientRenameSync.mockImplementationOnce(() => {
+        throw new Error("EPERM: rename failed");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 999, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      // Rotation failed but the new current was written anyway.
+      const fresh = JSON.parse(fs.readFileSync(currentPath, "utf8"));
+      expect(fresh.appState.sidebarWidth).toBe(999);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[CrashRecovery] Backup rotation rename failed:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("restoreBackup falls back to previous when current is missing", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const previousSnapshot = {
+        capturedAt: Date.now() - 60_000,
+        appState: { sidebarWidth: 777, terminals: [{ id: "t-prev", kind: "terminal" }] },
+      };
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.previous.json"),
+        JSON.stringify(previousSnapshot)
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      const result = svc.restoreBackup();
+
+      expect(result).toBe(true);
+      expect(storeMock.set).toHaveBeenCalledWith("appState", previousSnapshot.appState);
+    });
+
+    it("restoreBackup falls back to previous when current is corrupt", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), "{ this is not json");
+      const previousSnapshot = {
+        capturedAt: Date.now() - 60_000,
+        appState: { sidebarWidth: 555, terminals: [] },
+      };
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.previous.json"),
+        JSON.stringify(previousSnapshot)
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      const result = svc.restoreBackup();
+
+      expect(result).toBe(true);
+      expect(storeMock.set).toHaveBeenCalledWith("appState", previousSnapshot.appState);
+    });
+
+    it("restoreBackup returns false when both current and previous are corrupt", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), "not json");
+      fs.writeFileSync(path.join(backupDir, "session-state.previous.json"), "also not json");
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      storeMock.set.mockClear();
+      const result = svc.restoreBackup();
+
+      expect(result).toBe(false);
+      expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("readBackupInfo (via getLastBackupTimestamp) falls back to previous when current is missing", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+      fs.writeFileSync(
+        previousPath,
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: [] } })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const ts = svc.getLastBackupTimestamp();
+      const stat = fs.statSync(previousPath);
+      expect(ts).toBe(stat.mtimeMs);
+    });
+
+    it("readBackupInfo skips corrupt current and reports previous timestamp", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      // Corrupt current — exists on disk but unparseable.
+      const currentPath = path.join(backupDir, "session-state.json");
+      fs.writeFileSync(currentPath, "{ corrupt");
+      // Valid previous.
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+      fs.writeFileSync(
+        previousPath,
+        JSON.stringify({ capturedAt: Date.now() - 30_000, appState: { terminals: [] } })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      // Without the parseability gate, getLastBackupTimestamp would return the
+      // corrupt current's mtimeMs and mislead the UI into showing a backup
+      // exists at a timestamp it can't actually restore from.
+      const ts = svc.getLastBackupTimestamp();
+      const previousStat = fs.statSync(previousPath);
+      expect(ts).toBe(previousStat.mtimeMs);
+    });
+
+    it("rolling pair stays a pair across multiple takeBackup calls (no chain accumulation)", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const currentPath = path.join(backupDir, "session-state.json");
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+
+      // First write to set the baseline (no previous yet).
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 1, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      // Change state and write again — previous now holds gen-1, current holds gen-2.
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 2, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      svc.takeBackup();
+
+      // Change state and write a third time — previous now holds gen-2, current holds gen-3.
+      // Critically: gen-1 must be gone (no `.previous.previous.json` accumulation).
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 3, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      svc.takeBackup();
+
+      const current = JSON.parse(fs.readFileSync(currentPath, "utf8"));
+      const previous = JSON.parse(fs.readFileSync(previousPath, "utf8"));
+      expect(current.appState.sidebarWidth).toBe(3);
+      expect(previous.appState.sidebarWidth).toBe(2);
+      // No third-generation file ever created — the directory must hold at
+      // most two backup files (plus crash logs in a sibling dir).
+      const backupFiles = fs.readdirSync(backupDir).filter((f) => f.endsWith(".json"));
+      expect(backupFiles.sort()).toEqual(["session-state.json", "session-state.previous.json"]);
+    });
+
+    it("consumeMarker caches previous-generation snapshot when current is corrupt", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), "corrupt");
+      const previousSnapshot = {
+        capturedAt: Date.now() - 30_000,
+        appState: { sidebarWidth: 321, terminals: [{ id: "p1", kind: "terminal" }] },
+      };
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.previous.json"),
+        JSON.stringify(previousSnapshot)
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.hasBackup).toBe(true);
+      expect(pending!.panels).toBeDefined();
+      expect(pending!.panels![0]).toMatchObject({ id: "p1", kind: "terminal" });
+
+      // Cached snapshot ensures restoreBackup applies the previous-generation
+      // appState even if the backup files are deleted under it. consumeMarker
+      // renames the current backup to a crashed-* path during initialize, so
+      // we sweep all .json files instead of unlinking specific paths.
+      for (const file of fs.readdirSync(backupDir)) {
+        if (file.endsWith(".json")) fs.unlinkSync(path.join(backupDir, file));
+      }
+      const restored = svc.restoreBackup();
+      expect(restored).toBe(true);
+      expect(storeMock.set).toHaveBeenCalledWith("appState", previousSnapshot.appState);
+    });
+  });
+
   describe("panel summaries", () => {
     it("populates panels from backup when crash is detected", () => {
       // Set up backup with terminals
@@ -864,10 +1142,16 @@ describe("CrashRecoveryService", () => {
       expect(svc.getConfig()).toEqual({ autoRestoreOnCrash: true });
     });
 
-    it("defaults to false for invalid stored value", () => {
+    it("defaults to true for invalid stored value", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: "yes" });
       const svc = makeService();
-      expect(svc.getConfig().autoRestoreOnCrash).toBe(false);
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
+    });
+
+    it("defaults to true when stored value is undefined", () => {
+      storeMock.get.mockReturnValue(undefined);
+      const svc = makeService();
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
     });
 
     it("setConfig persists to store", () => {
@@ -877,6 +1161,17 @@ describe("CrashRecoveryService", () => {
 
       expect(result.autoRestoreOnCrash).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("crashRecovery", { autoRestoreOnCrash: true });
+    });
+
+    it("setConfig ignores non-boolean autoRestoreOnCrash so an opt-out survives a malformed patch", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      const result = svc.setConfig({
+        autoRestoreOnCrash: undefined as unknown as boolean,
+      });
+
+      expect(result.autoRestoreOnCrash).toBe(false);
+      expect(storeMock.set).toHaveBeenCalledWith("crashRecovery", { autoRestoreOnCrash: false });
     });
   });
 
@@ -899,6 +1194,145 @@ describe("CrashRecoveryService", () => {
       const ts = svc.getLastBackupTimestamp();
       const stat = fs.statSync(backupPath);
       expect(ts).toBe(stat.mtimeMs);
+    });
+  });
+
+  describe("getBackupPanelCount", () => {
+    it("returns null when no backup snapshot is cached", () => {
+      const svc = makeService();
+      svc.initialize();
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
+    it("returns terminal count from cached snapshot after crash detection", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "terminal" },
+              { id: "t3", kind: "browser" },
+            ],
+          },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBe(3);
+    });
+
+    it("returns zero when cached snapshot has an empty terminals array", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: [] },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBe(0);
+    });
+
+    it("returns null when cached snapshot has no appState", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now() })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
+    it("returns null when backup file exists on disk but no crash marker is present", () => {
+      // Defends the cache-only contract: a stale disk backup must never bleed
+      // into the panel count on a fresh boot. cachedBackupSnapshot is only
+      // populated by consumeMarker(), which requires a marker file.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: [{ id: "t1", kind: "terminal" }] },
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+    });
+
+    it("returns null when terminals is not an array", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: "not an array" },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount()).toBeNull();
     });
   });
 
@@ -931,7 +1365,7 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set.mock.calls[0][0]).toBe("appState");
     });
 
-    it("clears cached backup snapshot so restoreBackup has no stale reference", () => {
+    it("removes the renamed crashed-backup file so restoreBackup has no source", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
         markerPath,
@@ -955,13 +1389,18 @@ describe("CrashRecoveryService", () => {
       const svc = makeService();
       svc.initialize();
 
-      // Delete backup file so restoreBackup can only succeed via cache
-      fs.unlinkSync(path.join(backupDir, "session-state.json"));
-
+      // After initialize the live backup has been renamed to
+      // session-state.crashed-*.json. resetToFresh must unlink it so the
+      // user can't restore stale state by accident after explicitly
+      // choosing a fresh start.
       storeMock.set.mockClear();
       svc.resetToFresh();
 
       expect(svc.restoreBackup()).toBe(false);
+      const remaining = fs
+        .readdirSync(backupDir)
+        .filter((f) => f.startsWith("session-state.crashed-"));
+      expect(remaining).toEqual([]);
     });
   });
 
@@ -992,7 +1431,7 @@ describe("CrashRecoveryService", () => {
       expect(fs.existsSync(markerPath)).toBe(true);
     });
 
-    it("clears cached backup snapshot even when crashRecorded prevents backup/marker cleanup", () => {
+    it("unlinks crashed-backup file on cleanupOnExit even when crashRecorded skips marker cleanup", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
         markerPath,
@@ -1016,14 +1455,12 @@ describe("CrashRecoveryService", () => {
       const svc = makeService();
       svc.initialize();
 
-      // Record crash so cleanupOnExit skips takeBackup/deleteMarker
       svc.recordCrash(new Error("test crash"));
-
-      // Delete backup file so restoreBackup can only succeed via cache
-      fs.unlinkSync(path.join(backupDir, "session-state.json"));
-
       svc.cleanupOnExit();
 
+      // The crashed-* file is unlinked regardless of crashRecorded so a
+      // re-run during the dying process doesn't restore stale state. The
+      // crashed-* file is owned by this service instance only.
       expect(svc.restoreBackup()).toBe(false);
     });
   });
@@ -1074,6 +1511,241 @@ describe("CrashRecoveryService", () => {
         expect.any(String),
         "utf-8"
       );
+    });
+
+    it("routes consumeMarker backup rename through resilientRenameSync", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: [] } })
+      );
+      const markerSessionStart = Date.now() - 5000;
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: markerSessionStart,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const expectedDest = path.join(backupDir, `session-state.crashed-${markerSessionStart}.json`);
+      expect(utilsMock.resilientRenameSync).toHaveBeenCalledWith(
+        path.join(backupDir, "session-state.json"),
+        expectedDest
+      );
+      expect(fs.existsSync(expectedDest)).toBe(true);
+      expect(fs.existsSync(path.join(backupDir, "session-state.json"))).toBe(false);
+    });
+  });
+
+  describe("crash cause classification", () => {
+    function osUptimeSpy(returnValue: number): ReturnType<typeof vi.spyOn> {
+      return vi.spyOn(os, "uptime").mockReturnValue(returnValue);
+    }
+
+    it("returns 'uncaught-exception' when marker has crashLogPath", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-abc.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "abc",
+          timestamp: Date.now(),
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "22.0",
+          arch: "x64",
+        })
+      );
+
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.crashCause).toBe("uncaught-exception");
+    });
+
+    it("returns 'suspended-then-lost' when marker has lastSuspendStart", () => {
+      const uptime = osUptimeSpy(10_000);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5_000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastSuspendStart: Date.now() - 4_000,
+            lastHeartbeatMs: Date.now() - 4_500,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("suspended-then-lost");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'power-loss' when os.uptime is shorter than elapsed wall time", () => {
+      // sessionStart = 5min ago, but uptime is only 10 seconds — definitive reboot
+      const uptime = osUptimeSpy(10);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("power-loss");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'external-kill' when heartbeat stale but system did not reboot", () => {
+      // uptime far exceeds elapsed wall time → no reboot. Heartbeat is 5min
+      // stale → external kill (SIGKILL, OOM killer, force-quit).
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("external-kill");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'unknown' when no attribution signal fires", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        const now = Date.now();
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: now - 10_000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            // Fresh heartbeat → not stale. No suspend stamp. uptime >> elapsed.
+            lastHeartbeatMs: now - 5_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("unknown");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("returns 'native-crash' when a Crashpad .dmp newer than sessionStart exists", () => {
+      const dumpsDir = path.join(userData, "crashpad-dumps");
+      const completedDir = path.join(dumpsDir, "completed");
+      fs.mkdirSync(completedDir, { recursive: true });
+      const dumpPath = path.join(completedDir, "abc-xyz.dmp");
+      fs.writeFileSync(dumpPath, "fake-minidump");
+      const sessionStartMs = Date.now() - 60_000;
+      // Backdate the dump's mtime so it's between sessionStart and now.
+      const dumpMtime = new Date(sessionStartMs + 5_000);
+      fs.utimesSync(dumpPath, dumpMtime, dumpMtime);
+
+      const getPathMock = appMock.getPath as ReturnType<typeof vi.fn>;
+      getPathMock.mockImplementation((key: string) => {
+        if (key === "crashDumps") return dumpsDir;
+        return userData;
+      });
+
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 30_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        expect(svc.getPendingCrash()!.entry.crashCause).toBe("native-crash");
+      } finally {
+        getPathMock.mockReturnValue(userData);
+      }
+    });
+  });
+
+  describe("heartbeat and suspend stamping", () => {
+    it("writes lastHeartbeatMs on initialize", () => {
+      const before = Date.now();
+      const svc = makeService();
+      svc.initialize();
+      const after = Date.now();
+
+      const marker = JSON.parse(fs.readFileSync(path.join(userData, "running.lock"), "utf8"));
+      expect(typeof marker.lastHeartbeatMs).toBe("number");
+      expect(marker.lastHeartbeatMs).toBeGreaterThanOrEqual(before);
+      expect(marker.lastHeartbeatMs).toBeLessThanOrEqual(after);
+    });
+
+    it("refreshes lastHeartbeatMs on each backup-timer tick", () => {
+      vi.useFakeTimers();
+      try {
+        const svc = makeService();
+        svc.initialize();
+        svc.startBackupTimer();
+
+        const firstMarker = JSON.parse(
+          fs.readFileSync(path.join(userData, "running.lock"), "utf8")
+        );
+        const firstHeartbeat = firstMarker.lastHeartbeatMs;
+
+        vi.advanceTimersByTime(60_000);
+
+        const secondMarker = JSON.parse(
+          fs.readFileSync(path.join(userData, "running.lock"), "utf8")
+        );
+        expect(secondMarker.lastHeartbeatMs).toBeGreaterThan(firstHeartbeat);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -1225,6 +1897,321 @@ describe("CrashRecoveryService", () => {
 
       vi.advanceTimersByTime(200);
       expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("watchdog attribution", () => {
+    function writeMarker(sessionStartMs: number): void {
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+    }
+
+    function writeWatchdogFlag(payload: unknown, mtimeMs?: number): string {
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(flagPath, JSON.stringify(payload), "utf8");
+      if (typeof mtimeMs === "number") {
+        const t = new Date(mtimeMs);
+        fs.utimesSync(flagPath, t, t);
+      }
+      return flagPath;
+    }
+
+    it("annotates the crash entry when a fresh watchdog flag is present", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogKilledAt).toBe(killedAt);
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+      expect(pending!.entry.watchdogMainPid).toBe(4242);
+    });
+
+    it("consumes (unlinks) the flag regardless of attribution outcome", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const flagPath = writeWatchdogFlag(
+        { killedAt: sessionStartMs + 16_000, missedBeats: 3, mainPid: 4242 },
+        sessionStartMs + 16_000
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("leaves entry without cause when no watchdog flag is present", () => {
+      writeMarker(Date.now() - 5000);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(pending!.entry.watchdogKilledAt).toBeUndefined();
+    });
+
+    it("rejects a stale flag (mtime far earlier than current session) and still unlinks it", () => {
+      const sessionStartMs = Date.now() - 1000;
+      writeMarker(sessionStartMs);
+      // Stale flag: mtime is 1 hour before this session started — clearly
+      // a leftover from a previous run where unlink failed.
+      const staleMtime = sessionStartMs - 3_600_000;
+      const flagPath = writeWatchdogFlag(
+        { killedAt: staleMtime, missedBeats: 3, mainPid: 4242 },
+        staleMtime
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      // Flag is still cleaned up so it can't poison the next launch.
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("accepts a flag whose mtime is within the 5-second grace window before sessionStartMs", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // 3 seconds before sessionStartMs is within the 5s grace — should still
+      // be treated as fresh (clock drift / fs mtime resolution).
+      const mtime = sessionStartMs - 3_000;
+      writeWatchdogFlag({ killedAt: mtime, missedBeats: 3, mainPid: 4242 }, mtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("ignores a malformed JSON flag, warns, and unlinks it", () => {
+      const sessionStartMs = Date.now() - 5_000;
+      writeMarker(sessionStartMs);
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(flagPath, "not valid json{{{", "utf8");
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(fs.existsSync(flagPath)).toBe(false);
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("ignores a flag whose payload is the right shape but missing fields", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // missedBeats omitted
+      writeWatchdogFlag(
+        { killedAt: sessionStartMs + 16_000, mainPid: 4242 },
+        sessionStartMs + 16_000
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("annotates entries built from an existing crash log too", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-precrash.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "precrash",
+          timestamp: Date.now() - 10_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "23.0",
+          arch: "arm64",
+          errorMessage: "pre-existing crash record",
+        })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.errorMessage).toBe("pre-existing crash record");
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+    });
+
+    it("persists the annotation back onto the on-disk crash log file", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-disk-update.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "disk-update",
+          timestamp: Date.now() - 10_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "23.0",
+          arch: "arm64",
+        })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          crashLogPath,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const onDisk = JSON.parse(fs.readFileSync(crashLogPath, "utf8"));
+      expect(onDisk.cause).toBe("watchdog-deadlock");
+      expect(onDisk.watchdogKilledAt).toBe(killedAt);
+      expect(onDisk.watchdogMissedBeats).toBe(3);
+      expect(onDisk.watchdogMainPid).toBe(4242);
+    });
+
+    it("surfaces a dev-mode crash with a fresh watchdog flag (otherwise discarded as orphan)", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      // Dev-mode orphan marker — no crashLogPath, isPackaged: false — that
+      // would normally be discarded. The fresh watchdog flag must promote it
+      // to a genuine watchdog-deadlock crash and the flag must be unlinked.
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: false,
+        })
+      );
+      const killedAt = sessionStartMs + 16_000;
+      const flagPath = writeWatchdogFlag({ killedAt, missedBeats: 3, mainPid: 4242 }, killedAt);
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+      expect(pending!.entry.watchdogMissedBeats).toBe(3);
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("unlinks a stale flag even when the dev-mode marker is discarded as orphaned", () => {
+      const sessionStartMs = Date.now() - 1000;
+      // Dev orphan marker + stale flag from a prior session — the orphan is
+      // correctly discarded but the stale flag must still be cleaned up so
+      // it doesn't poison the next launch.
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: false,
+        })
+      );
+      const staleMtime = sessionStartMs - 3_600_000;
+      const flagPath = writeWatchdogFlag(
+        { killedAt: staleMtime, missedBeats: 3, mainPid: 4242 },
+        staleMtime
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).toBeNull();
+      expect(fs.existsSync(flagPath)).toBe(false);
+    });
+
+    it("rejects flag payloads with non-positive numeric values", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const mtime = sessionStartMs + 16_000;
+      // All-zero numbers: pass `typeof === "number"` but are not real values
+      // produced by buildWatchdogKillPayload (killedAt = Date.now() > 0,
+      // missedBeats >= 1, mainPid > 0).
+      writeWatchdogFlag({ killedAt: 0, missedBeats: 0, mainPid: 0 }, mtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("accepts a flag just inside the inclusive grace window (sessionStartMs - 4900)", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // 100ms inside the 5s grace boundary — comfortably above filesystem
+      // mtime precision on Linux ext4 / macOS HFS+, so the test is reliable
+      // across CI platforms. The exact boundary (sessionStartMs - 5000) is
+      // unsafe to assert here because fs.utimesSync(Date) rounds through
+      // float seconds and the round-trip can land 1-2ms either side.
+      const insideMtime = sessionStartMs - 4_900;
+      writeWatchdogFlag({ killedAt: insideMtime, missedBeats: 3, mainPid: 4242 }, insideMtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("rejects a flag clearly outside the grace window", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      // 100ms outside the 5s grace — clearly stale, robust to fs mtime
+      // rounding on all platforms.
+      const outsideMtime = sessionStartMs - 5_100;
+      writeWatchdogFlag({ killedAt: outsideMtime, missedBeats: 3, mainPid: 4242 }, outsideMtime);
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()!.entry.cause).toBeUndefined();
     });
   });
 });

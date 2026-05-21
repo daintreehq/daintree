@@ -5,7 +5,7 @@ import type {
   OrderBy,
   StatusFilter,
   TypeFilter,
-  GitHubFilter,
+  PrIssueFilter,
   SessionFilter,
   ActivityFilter,
 } from "@/store/worktreeFilterStore";
@@ -97,7 +97,7 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   const name = worktree.name.toLowerCase();
   const branch = (worktree.branch ?? "").toLowerCase();
   const issueTitle = (worktree.issueTitle ?? "").toLowerCase();
-  const prTitle = (worktree.prTitle ?? "").toLowerCase();
+  const prTitle = (worktree.linked?.pr?.title ?? "").toLowerCase();
 
   return Math.max(
     scoreField(issueTitle, q, 4, 3),
@@ -132,7 +132,7 @@ export interface FilterState {
   query: string;
   statusFilters: Set<StatusFilter>;
   typeFilters: Set<TypeFilter>;
-  githubFilters: Set<GitHubFilter>;
+  prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
 }
@@ -147,7 +147,7 @@ export function matchesFilters(
   if (filters.query.length > 0) {
     const exactNum = parseExactNumber(filters.query);
     if (exactNum !== null) {
-      if (worktree.issueNumber !== exactNum && worktree.prNumber !== exactNum) {
+      if (worktree.issueNumber !== exactNum && worktree.linked?.pr?.ref.number !== exactNum) {
         return false;
       }
     } else {
@@ -170,15 +170,21 @@ export function matchesFilters(
     if (!filters.typeFilters.has(type)) return false;
   }
 
-  // GitHub filters (OR within category)
-  if (filters.githubFilters.size > 0) {
+  // PR/issue filters (OR within category)
+  if (filters.prIssueFilters.size > 0) {
     let hasMatch = false;
 
-    if (filters.githubFilters.has("hasIssue") && worktree.issueNumber) hasMatch = true;
-    if (filters.githubFilters.has("hasPR") && worktree.prNumber) hasMatch = true;
-    if (filters.githubFilters.has("prOpen") && worktree.prState === "open") hasMatch = true;
-    if (filters.githubFilters.has("prMerged") && worktree.prState === "merged") hasMatch = true;
-    if (filters.githubFilters.has("prClosed") && worktree.prState === "closed") hasMatch = true;
+    if (filters.prIssueFilters.has("hasIssue") && worktree.issueNumber) hasMatch = true;
+    if (filters.prIssueFilters.has("hasPR") && worktree.linked?.pr) hasMatch = true;
+    if (filters.prIssueFilters.has("prOpen") && worktree.linked?.pr?.state === "open")
+      hasMatch = true;
+    if (filters.prIssueFilters.has("prMerged") && worktree.linked?.pr?.state === "merged")
+      hasMatch = true;
+    if (
+      filters.prIssueFilters.has("prClosed") &&
+      (worktree.linked?.pr?.state === "closed" || worktree.linked?.pr?.state === "declined")
+    )
+      hasMatch = true;
 
     if (!hasMatch) return false;
   }
@@ -374,7 +380,7 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.query.length > 0 ||
     filters.statusFilters.size > 0 ||
     filters.typeFilters.size > 0 ||
-    filters.githubFilters.size > 0 ||
+    filters.prIssueFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
     filters.activityFilters.size > 0
   );
@@ -398,7 +404,7 @@ export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
     if (query.trim().length > 0) {
       const exactNum = parseExactNumber(query);
       if (exactNum !== null) {
-        return w.issueNumber === exactNum || w.prNumber === exactNum;
+        return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
       }
       return scoreWorktree(w, query) > 0;
     }
@@ -426,7 +432,7 @@ export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
 export interface ChipCounts {
   status: Record<StatusFilter, number>;
   branchType: Record<TypeFilter, number>;
-  github: Record<GitHubFilter, number>;
+  prIssue: Record<PrIssueFilter, number>;
   sessions: Record<SessionFilter, number>;
   activity: Record<ActivityFilter, number>;
 }
@@ -449,7 +455,7 @@ const TYPE_KEYS: TypeFilter[] = [
   "detached",
   "other",
 ];
-const GITHUB_KEYS: GitHubFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
+const PR_ISSUE_KEYS: PrIssueFilter[] = ["hasIssue", "hasPR", "prOpen", "prMerged", "prClosed"];
 const SESSION_KEYS: SessionFilter[] = ["hasTerminals", "working", "waiting", "completed", "exited"];
 const ACTIVITY_KEYS: ActivityFilter[] = ["last15m", "last1h", "last24h", "last7d"];
 
@@ -470,46 +476,79 @@ export function emptyChipCounts(): ChipCounts {
   return {
     status: emptyRecord(STATUS_KEYS),
     branchType: emptyRecord(TYPE_KEYS),
-    github: emptyRecord(GITHUB_KEYS),
+    prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
     activity: emptyRecord(ACTIVITY_KEYS),
   };
 }
 
+const DEFAULT_DERIVED_META: DerivedWorktreeMeta = {
+  terminalCount: 0,
+  hasWorkingAgent: false,
+  hasWaitingAgent: false,
+  hasCompletedAgent: false,
+  hasExitedAgent: false,
+  hasMergeConflict: false,
+  chipState: null,
+};
+
+function withoutGroup<K extends keyof FilterState>(filters: FilterState, group: K): FilterState {
+  return { ...filters, [group]: new Set() };
+}
+
 export function computeChipCounts(
   worktrees: readonly (Worktree | WorktreeState)[],
   derivedMetaMap: Map<string, DerivedWorktreeMeta>,
-  activeWorktreeId: string | null
+  activeWorktreeId: string | null,
+  filters: FilterState
 ): ChipCounts {
   const counts = emptyChipCounts();
   const now = Date.now();
 
-  for (const worktree of worktrees) {
-    const isActive = worktree.id === activeWorktreeId;
-    const statuses = computeStatus(worktree, isActive);
+  const baseIsActive = (w: (typeof worktrees)[number]) => w.id === activeWorktreeId;
+  const getDerived = (id: string) => derivedMetaMap.get(id) ?? DEFAULT_DERIVED_META;
+  const matchesGroup = (w: (typeof worktrees)[number], groupKey: keyof FilterState) =>
+    matchesFilters(w, withoutGroup(filters, groupKey), getDerived(w.id), baseIsActive(w));
+
+  // Build base set per group — filtered by all OTHER groups + query
+  const statusBase = worktrees.filter((w) => matchesGroup(w, "statusFilters"));
+  const typeBase = worktrees.filter((w) => matchesGroup(w, "typeFilters"));
+  const prIssueBase = worktrees.filter((w) => matchesGroup(w, "prIssueFilters"));
+  const sessionsBase = worktrees.filter((w) => matchesGroup(w, "sessionFilters"));
+  const activityBase = worktrees.filter((w) => matchesGroup(w, "activityFilters"));
+
+  for (const w of statusBase) {
+    const statuses = computeStatus(w, baseIsActive(w));
     for (const status of statuses) counts.status[status]++;
+  }
 
-    const type = getWorktreeType(worktree);
-    counts.branchType[type]++;
+  for (const w of typeBase) {
+    counts.branchType[getWorktreeType(w)]++;
+  }
 
-    if (worktree.issueNumber) counts.github.hasIssue++;
-    if (worktree.prNumber) counts.github.hasPR++;
-    if (worktree.prState === "open") counts.github.prOpen++;
-    if (worktree.prState === "merged") counts.github.prMerged++;
-    if (worktree.prState === "closed") counts.github.prClosed++;
+  for (const w of prIssueBase) {
+    if (w.issueNumber) counts.prIssue.hasIssue++;
+    if (w.linked?.pr) counts.prIssue.hasPR++;
+    if (w.linked?.pr?.state === "open") counts.prIssue.prOpen++;
+    if (w.linked?.pr?.state === "merged") counts.prIssue.prMerged++;
+    if (w.linked?.pr?.state === "closed" || w.linked?.pr?.state === "declined")
+      counts.prIssue.prClosed++;
+  }
 
-    const meta = derivedMetaMap.get(worktree.id);
-    if (meta) {
-      if (meta.terminalCount > 0) counts.sessions.hasTerminals++;
-      if (meta.hasWorkingAgent) counts.sessions.working++;
-      if (meta.hasWaitingAgent) counts.sessions.waiting++;
-      if (meta.hasCompletedAgent) counts.sessions.completed++;
-      if (meta.hasExitedAgent) counts.sessions.exited++;
-    }
+  for (const w of sessionsBase) {
+    const meta = getDerived(w.id);
+    if (meta.terminalCount > 0) counts.sessions.hasTerminals++;
+    if (meta.hasWorkingAgent) counts.sessions.working++;
+    if (meta.hasWaitingAgent) counts.sessions.waiting++;
+    if (meta.hasCompletedAgent) counts.sessions.completed++;
+    if (meta.hasExitedAgent) counts.sessions.exited++;
+  }
 
-    const lastActivity = worktree.lastActivityTimestamp ?? 0;
+  for (const w of activityBase) {
+    const lastActivity = w.lastActivityTimestamp ?? 0;
     if (lastActivity > 0) {
       const elapsed = now - lastActivity;
+      if (elapsed < 0) continue;
       for (const key of ACTIVITY_KEYS) {
         if (elapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
       }

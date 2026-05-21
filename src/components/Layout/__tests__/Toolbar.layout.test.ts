@@ -149,8 +149,10 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).not.toMatch(/>Beta</);
     });
 
-    it("empty-state button has conditional aria-label for accessibility", () => {
-      expect(source).toContain('aria-label={currentProject ? undefined : "Open project"}');
+    it("project switcher button has an accessible aria-label", () => {
+      expect(source).toMatch(
+        /aria-label=\{[\s\S]*currentProject[\s\S]*Open project switcher for \$\{currentProject\.name\}[\s\S]*"Open project"[\s\S]*\}/
+      );
     });
   });
 
@@ -186,7 +188,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
-  describe("Windows caption control spacer — issue #7951", () => {
+  describe("Windows caption control spacer — issues #7951 / #8167", () => {
     it("imports isWindows from the platform helper", () => {
       expect(source).toMatch(/import\s*{[^}]*\bisWindows\b[^}]*}\s*from\s*"@\/lib\/platform"/);
     });
@@ -199,8 +201,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toMatch(/isWindows\(\)\s*&&\s*\(/);
     });
 
-    it("reserves space via the --win-caption-width CSS variable", () => {
-      expect(source).toContain("var(--win-caption-width, 138px)");
+    it("derives spacer width from the WCO env(titlebar-area-width) expression", () => {
+      expect(source).toContain("calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))");
+      expect(source).not.toContain("var(--win-caption-width");
     });
 
     it("collapses the spacer to zero width when entering fullscreen", () => {
@@ -209,7 +212,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("places the spacer inside the right toolbar group, after the portal toggle", () => {
       const rightGroupIndex = source.indexOf('aria-label="Tools and settings"');
-      const spacerIndex = source.indexOf("var(--win-caption-width, 138px)");
+      const spacerIndex = source.indexOf("env(titlebar-area-width");
       const portalToggleIndex = source.indexOf('buttonRegistry["portal-toggle"]');
       expect(rightGroupIndex).toBeGreaterThan(-1);
       expect(spacerIndex).toBeGreaterThan(-1);
@@ -219,13 +222,30 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("uses scoped transition-[width] motion, not transition-all", () => {
-      expect(source).toMatch(/transition-\[width\]\s+duration-150/);
+      expect(source).toContain("transition-[width]");
+      expect(source).not.toContain("transition-all");
+    });
+
+    it("uses Tier 3 panel timing (200ms restore / 120ms collapse), not Tier 1", () => {
+      expect(source).toMatch(
+        /transition-\[width\]\s+duration-200\s+data-\[fullscreen=true\]:duration-\[120ms\]/
+      );
+      expect(source).not.toContain("duration-150");
+    });
+
+    it("drives the asymmetric collapse duration via a data-fullscreen attribute", () => {
+      expect(source).toMatch(/data-fullscreen=\{isFullscreen \? "true" : undefined\}/);
+    });
+
+    it("applies the Tier 3 timing to both the macOS and Windows spacers", () => {
+      const tier3 = /duration-200 data-\[fullscreen=true\]:duration-\[120ms\]/g;
+      expect((source.match(tier3) ?? []).length).toBeGreaterThanOrEqual(2);
     });
 
     it("spacer is decorative (aria-hidden) and not focusable as a toolbar item", () => {
       const spacerBlock = source.slice(
         source.indexOf("isWindows() &&"),
-        source.indexOf("var(--win-caption-width, 138px)") + 200
+        source.indexOf("env(titlebar-area-width") + 200
       );
       expect(spacerBlock).toContain('aria-hidden="true"');
       expect(spacerBlock).not.toContain("data-toolbar-item");

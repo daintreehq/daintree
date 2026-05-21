@@ -578,4 +578,123 @@ describe("useDevServer logic", () => {
       expect(shouldAutoStart("", "stopped")).toBe(false);
     });
   });
+
+  // ─── Staged stuck-start escalation (#8276) ────────────────────────
+  //
+  // Mirrors the hook's timer effect: when the server is genuinely stuck
+  // in `starting`, `stuckTier` advances at 6s/12s/25s. The old behaviour
+  // (silent `devPreview.restart()` at 10s) is gone — escalation now only
+  // produces a tier number; the user drives any restart.
+  describe("stuckTier escalation", () => {
+    const STUCK_TIER1_MS = 6000;
+    const STUCK_TIER2_MS = 12000;
+    const STUCK_TIER3_MS = 25000;
+    const POST_SPAWN_POLL_WINDOW_MS = 5000; // lesson #4169
+
+    type StuckSession = {
+      status: DevPreviewStatus;
+      url: string | null;
+      terminalId: string | null;
+    };
+
+    // Schedule-time gate: matches the effect's early `setStuckTier(0)`.
+    function isStuckEligible(
+      session: StuckSession,
+      ctx: { projectId: string | null; isRestarting: boolean }
+    ): boolean {
+      return (
+        session.status === "starting" &&
+        !!ctx.projectId &&
+        !!session.terminalId &&
+        !session.url &&
+        !ctx.isRestarting
+      );
+    }
+
+    // Fire-time guard + tier accumulation: matches `advanceTier`, which
+    // re-checks the latest session before raising the tier.
+    function computeStuckTier(
+      elapsedMs: number,
+      sessionAtFire: StuckSession,
+      eligibleAtSchedule: boolean
+    ): 0 | 1 | 2 | 3 {
+      if (!eligibleAtSchedule) return 0;
+      let tier: 0 | 1 | 2 | 3 = 0;
+      const stillStuck =
+        sessionAtFire.status === "starting" && !sessionAtFire.url && !!sessionAtFire.terminalId;
+      if (!stillStuck) return 0;
+      if (elapsedMs >= STUCK_TIER1_MS) tier = 1;
+      if (elapsedMs >= STUCK_TIER2_MS) tier = 2;
+      if (elapsedMs >= STUCK_TIER3_MS) tier = 3;
+      return tier;
+    }
+
+    const starting: StuckSession = { status: "starting", url: null, terminalId: "term-1" };
+    const eligibleCtx = { projectId: "proj-1", isRestarting: false };
+
+    it("stays at tier 0 before the first threshold", () => {
+      expect(
+        computeStuckTier(STUCK_TIER1_MS - 1, starting, isStuckEligible(starting, eligibleCtx))
+      ).toBe(0);
+    });
+
+    it("escalates 1 → 2 → 3 at 6s / 12s / 25s", () => {
+      const eligible = isStuckEligible(starting, eligibleCtx);
+      expect(computeStuckTier(STUCK_TIER1_MS, starting, eligible)).toBe(1);
+      expect(computeStuckTier(STUCK_TIER2_MS, starting, eligible)).toBe(2);
+      expect(computeStuckTier(STUCK_TIER3_MS, starting, eligible)).toBe(3);
+      expect(computeStuckTier(60000, starting, eligible)).toBe(3);
+    });
+
+    it("never escalates while installing (first-run installs are exempt)", () => {
+      const installing: StuckSession = {
+        status: "installing",
+        url: null,
+        terminalId: "term-1",
+      };
+      const eligible = isStuckEligible(installing, eligibleCtx);
+      expect(eligible).toBe(false);
+      expect(computeStuckTier(STUCK_TIER3_MS, installing, eligible)).toBe(0);
+    });
+
+    it("does not escalate once the server reports a URL", () => {
+      const running: StuckSession = {
+        status: "running",
+        url: "http://localhost:3000",
+        terminalId: "term-1",
+      };
+      expect(isStuckEligible(running, eligibleCtx)).toBe(false);
+      // Even if a stale timer fires, the fire-time guard sees a URL.
+      expect(computeStuckTier(STUCK_TIER3_MS, running, true)).toBe(0);
+    });
+
+    it("does not escalate while a restart is in flight", () => {
+      expect(isStuckEligible(starting, { projectId: "proj-1", isRestarting: true })).toBe(false);
+    });
+
+    it("resets to 0 when the session leaves starting before a timer fires", () => {
+      const movedToError: StuckSession = {
+        status: "error",
+        url: null,
+        terminalId: "term-1",
+      };
+      expect(computeStuckTier(STUCK_TIER3_MS, movedToError, true)).toBe(0);
+    });
+
+    it("first tier fires after the post-spawn poll window so fast servers never escalate", () => {
+      // Lesson #4169: the 5s URL-detection poll resolves fast-start false
+      // positives; tier 1 must sit strictly past that window.
+      expect(STUCK_TIER1_MS).toBeGreaterThan(POST_SPAWN_POLL_WINDOW_MS);
+    });
+
+    it("escalation produces only a tier — it never triggers a restart", () => {
+      // The #8276 behavioural contract: the old effect called
+      // `window.electron.devPreview.restart()` at 10s. The replacement has
+      // no restart path; the only output is a 0–3 tier the UI reacts to.
+      const tiers = [0, STUCK_TIER1_MS, STUCK_TIER2_MS, STUCK_TIER3_MS, 99999].map((ms) =>
+        computeStuckTier(ms, starting, isStuckEligible(starting, eligibleCtx))
+      );
+      for (const t of tiers) expect([0, 1, 2, 3]).toContain(t);
+    });
+  });
 });

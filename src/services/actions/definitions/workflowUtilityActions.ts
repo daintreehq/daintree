@@ -15,7 +15,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       id: "workflow.prepBranchForReview",
       title: "Prep Branch for Review",
       description:
-        "Inspect a worktree's staging status and detected runners; returns a typed verdict for what to run next.",
+        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Args (all optional): `cwd` — worktree path, defaults to the active worktree path; `projectId` — for runner detection, defaults to the current project (pass explicitly when `cwd` is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when `cwd` is omitted and no worktree is active.",
       category: "worktree",
       kind: "query",
       danger: "safe",

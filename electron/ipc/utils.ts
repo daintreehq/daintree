@@ -36,7 +36,7 @@ function parseIpcPayload<S extends z.ZodTypeAny>(
 ): z.output<S> {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
-    console.error(`[IPC] Validation failed for ${channel}:`, parsed.error.flatten());
+    console.error(`[IPC] Validation failed for ${channel}:`, z.prettifyError(parsed.error));
     throw new ValidationError(channel);
   }
   return parsed.data;
@@ -56,8 +56,6 @@ export const channelToCategory: Record<string, IpcChannelCategory> = {
   "artifact:save-to-file": "artifactOps",
   "worktree:create": "gitOps",
   "worktree:delete": "gitOps",
-  "worktree:create-for-task": "gitOps",
-  "worktree:cleanup-task": "gitOps",
   "git:get-file-diff": "gitOps",
   "git:get-project-pulse": "gitOps",
   "git:list-commits": "gitOps",

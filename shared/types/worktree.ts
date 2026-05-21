@@ -1,5 +1,14 @@
-import type { FileChangeDetail, WorktreeChanges } from "./git.js";
+import type { FileChangeDetail, RepoState, WorktreeChanges } from "./git.js";
 import type { GitHubPRCIStatus } from "./github.js";
+import type { PluginWorktreeLinked } from "./plugin.js";
+
+/**
+ * Opaque ownership token for an active fleet scope. Minted by
+ * `enterFleetScope()` and required by `exitFleetScope(token)` so a stale exit
+ * whose async continuation runs after a newer `enterFleetScope()` becomes a
+ * structural no-op (token mismatch) rather than racing a mutable slot.
+ */
+export type FleetScopeToken = string & { readonly __brand: unique symbol };
 
 /** Worktree mood indicator */
 export type WorktreeMood = "stable" | "active" | "stale" | "error";
@@ -28,6 +37,42 @@ export interface WorktreeLifecycleStatus {
   startedAt: number;
   completedAt?: number;
   error?: string;
+  /**
+   * Absolute path to the persisted full-output log file for this run, when the
+   * caller (teardown / resource-teardown phases) opted into log persistence.
+   * Undefined for phases that don't persist a log, or when the write failed.
+   */
+  logPath?: string;
+}
+
+/**
+ * Failure-severity classification for a settled lifecycle phase.
+ * `billing-critical` — the failure may leave cloud resources running and
+ * billing (resource teardown). `cosmetic` — local cleanup failed but the
+ * worktree directory is about to be deleted anyway.
+ */
+export type WorktreeLifecyclePhaseCategory = "billing-critical" | "cosmetic";
+
+/**
+ * Settled result for a single lifecycle phase, accumulated across multi-phase
+ * runs (resource-teardown then teardown) so a later phase no longer overwrites
+ * an earlier phase's outcome. All fields are primitives for structured-clone
+ * IPC transport. `exitCode`/`signalName` capture the child-process `close`
+ * event structurally — a SIGKILL after timeout escalation is categorically
+ * different from a self-inflicted non-zero exit.
+ */
+export interface WorktreeLifecyclePhaseResult {
+  phase: WorktreeLifecyclePhase;
+  state: WorktreeLifecycleState;
+  category: WorktreeLifecyclePhaseCategory;
+  exitCode: number | null;
+  signalName: string | null;
+  output?: string;
+  error?: string;
+  startedAt: number;
+  completedAt: number;
+  timedOut?: boolean;
+  aborted?: boolean;
 }
 
 /** Resource status from the last manual status check */
@@ -71,6 +116,9 @@ export interface Worktree {
 
   /** Whether this worktree is in detached HEAD state */
   isDetached?: boolean;
+
+  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
+  repoState?: RepoState;
 
   /** Whether this is the currently active worktree based on cwd */
   isCurrent: boolean;
@@ -156,9 +204,6 @@ export interface Worktree {
   /** Reason git considers this worktree prunable, if provided */
   prunableReason?: string;
 
-  /** Task ID for task-scoped worktree orchestration */
-  taskId?: string;
-
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
 
@@ -174,6 +219,18 @@ export interface Worktree {
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
 
+  /** Name of the base branch (e.g. "develop") for divergence display */
+  baseBranchName?: string | null;
+
+  /** Commits the worktree branch is ahead of the base branch */
+  baseAheadCount?: number | null;
+
+  /** Commits the worktree branch is behind the base branch */
+  baseBehindCount?: number | null;
+
+  /** True when the upstream tracking branch and base branch point to the same commit */
+  baseMatchesUpstream?: boolean;
+
   /**
    * Epoch ms of the last successful background `git fetch` for this worktree's
    * repo. Mirrors `RepoFetchCoordinator`'s per-commondir `lastSuccessfulFetch`
@@ -181,6 +238,9 @@ export interface Worktree {
    * `null` until the first successful fetch lands.
    */
   lastFetchedAt?: number | null;
+
+  /** Epoch ms of the last completed git status check for this worktree. */
+  lastGitStatusCheckedAt?: number;
 
   /**
    * True when this worktree's repo is currently in an auth-failed fetch state
@@ -207,6 +267,13 @@ export interface Worktree {
    * so we don't surface a GitHub-token CTA for non-GitHub remotes.
    */
   isGitHubRemote?: boolean;
+
+  /**
+   * Provider-agnostic projection of the worktree's linked forge resources
+   * (issue and/or PR). Replaces the legacy flat `prNumber` / `prState` /
+   * `issueNumber` / `issueTitle` fields.
+   */
+  linked?: PluginWorktreeLinked | null;
 
   /** Resource status from the last manual status check */
   resourceStatus?: WorktreeResourceStatus;

@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
+import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
 const dispatchMock = vi.fn();
 const updateWorktreePresetMock = vi.fn();
@@ -28,6 +29,12 @@ let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockActiveWorktreeId: string | null = null;
+
+const WithMenuSource = ({ children }: { children: React.ReactNode }) => (
+  <MenuActionSourceContext.Provider value="context-menu">
+    {children}
+  </MenuActionSourceContext.Provider>
+);
 let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
@@ -287,6 +294,46 @@ vi.mock("@/components/ui/context-menu", () => ({
       role="menuitem"
       data-testid="context-menu-sub-trigger"
       data-disabled={disabled ? "true" : undefined}
+    >
+      {children}
+    </div>
+  ),
+  ContextMenuActionItem: ({
+    children,
+    actionId,
+    args,
+    dispatchOptions,
+    onSelect,
+    disabled,
+    className,
+    "data-testid": dataTestId,
+  }: {
+    children: React.ReactNode;
+    actionId?: string;
+    args?: unknown;
+    dispatchOptions?: Record<string, unknown>;
+    onSelect?: (e: Event) => void;
+    disabled?: boolean;
+    className?: string;
+    "data-testid"?: string;
+  }) => (
+    <div
+      role="menuitem"
+      data-testid={dataTestId ?? "context-menu-item"}
+      data-disabled={disabled ? "true" : undefined}
+      className={className}
+      onClick={(e) => {
+        if (disabled) return;
+        onSelect?.(e as unknown as Event);
+        if (e.defaultPrevented) return;
+        dispatchMock(actionId, args, {
+          ...dispatchOptions,
+          source:
+            dispatchOptions && typeof dispatchOptions === "object" && "source" in dispatchOptions
+              ? dispatchOptions.source
+              : "user",
+        });
+      }}
     >
       {children}
     </div>
@@ -768,7 +815,7 @@ describe("AgentButton preset UX", () => {
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", presetId: "user-blue" },
-        { source: "context-menu" }
+        { source: "user" }
       );
     });
 
@@ -795,7 +842,7 @@ describe("AgentButton preset UX", () => {
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", presetId: null },
-        { source: "context-menu" }
+        { source: "user" }
       );
     });
   });
@@ -920,7 +967,7 @@ describe("AgentButton preset UX", () => {
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
         { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
-        { source: "context-menu" }
+        { source: "user" }
       );
     });
 
@@ -936,7 +983,7 @@ describe("AgentButton preset UX", () => {
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
         { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
-        { source: "context-menu" }
+        { source: "user" }
       );
     });
 
@@ -964,7 +1011,9 @@ describe("AgentButton preset UX", () => {
       mockWorktrees = [{ id: "wt-1", name: "Main", isMainWorktree: true }];
 
       const { getByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        <WithMenuSource>
+          <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        </WithMenuSource>
       );
       fireEvent.click(getByTestId("agent-context-worktree-wt-1"));
 
@@ -981,7 +1030,9 @@ describe("AgentButton preset UX", () => {
       mockWorktrees = [{ id: "wt-1", name: "Main", isMainWorktree: true }];
 
       const { getByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        <WithMenuSource>
+          <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        </WithMenuSource>
       );
       fireEvent.click(getByTestId("agent-context-worktree-dock-wt-1"));
 
@@ -1059,6 +1110,199 @@ describe("AgentButton preset UX", () => {
       const preventDefault = vi.fn();
       dropdownCloseAutoFocusSpy!({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("aria-disabled gating (issue #8107)", () => {
+    it("primary button uses aria-disabled (not native disabled) while loading and the click is guarded", () => {
+      // availability === undefined ⇒ isLoading. Native `disabled` would
+      // strip pointer events and the Tooltip explaining the wait would
+      // never show, so we expose aria-disabled and guard the handler.
+      mockMergedPresetsFn = () => [];
+
+      const { getByRole } = render(
+        <WithMenuSource>
+          <AgentButton type="claude" availability={undefined} />
+        </WithMenuSource>
+      );
+
+      const button = getByRole("button");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(button.hasAttribute("disabled")).toBe(false);
+
+      fireEvent.click(button);
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("primary button is not aria-disabled when the agent is ready", () => {
+      mockMergedPresetsFn = () => [];
+
+      const { getByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      expect(getByRole("button").getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("chevron button is aria-disabled and blocks the menu open via preventDefault when not launchable", () => {
+      mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
+      );
+
+      const chevron = getByTestId("chevron-icon").closest("button");
+      expect(chevron).toBeTruthy();
+      expect(chevron!.getAttribute("aria-disabled")).toBe("true");
+      expect(chevron!.hasAttribute("disabled")).toBe(false);
+
+      // fireEvent returns false when a handler called preventDefault, which
+      // is what stops Radix's pointerdown-driven open from firing.
+      expect(fireEvent.pointerDown(chevron!)).toBe(false);
+    });
+
+    it("chevron button stays interactive (no preventDefault) when launchable", () => {
+      mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const chevron = getByTestId("chevron-icon").closest("button");
+      expect(chevron).toBeTruthy();
+      expect(chevron!.getAttribute("aria-disabled")).toBeNull();
+      expect(fireEvent.pointerDown(chevron!)).toBe(true);
+    });
+
+    it("split-button primary is aria-disabled while loading and the click is guarded", () => {
+      // The with-presets branch is a separate JSX tree from the plain
+      // button; assert it carries the same aria-disabled + click guard.
+      mockMergedPresetsFn = () => [{ id: "p", name: "P" }];
+
+      const { getByTestId, getAllByRole } = render(
+        <AgentButton type="claude" availability={undefined} />
+      );
+
+      const buttons = getAllByRole("button");
+      for (const button of buttons) {
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        expect(button.hasAttribute("disabled")).toBe(false);
+      }
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = buttons.find((b) => !b.contains(chevronIcon));
+      expect(primary).toBeTruthy();
+      fireEvent.click(primary!);
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("chevron copy names the precondition (no blocked 'Click to …' promise) when not launchable", () => {
+      // The chevron blocks clicks when not launchable, so its
+      // tooltip/aria-label must not imperatively promise an action.
+      for (const state of ["missing", "installed"]) {
+        mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+        const { getByTestId, unmount } = render(
+          <AgentButton type="claude" availability={state as unknown as CliAvailability[string]} />
+        );
+        const chevron = getByTestId("chevron-icon").closest("button");
+        expect(chevron!.getAttribute("aria-label")).toBeTruthy();
+        expect(chevron!.getAttribute("aria-label")).not.toMatch(/click to/i);
+        unmount();
+      }
+    });
+
+    it("chevron blocks keyboard menu-open keys via preventDefault when not launchable", () => {
+      mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
+      );
+
+      const chevron = getByTestId("chevron-icon").closest("button");
+      for (const key of ["Enter", " ", "ArrowDown"]) {
+        expect(fireEvent.keyDown(chevron!, { key })).toBe(false);
+      }
+    });
+  });
+
+  describe("tooltip and aria copy (issue #8173)", () => {
+    function tooltipTexts(getAllByTestId: (id: string) => HTMLElement[]): string[] {
+      return getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+    }
+
+    it("loading tooltip uses the Unicode ellipsis and the aria-label omits it", () => {
+      mockMergedPresetsFn = () => [];
+
+      const { getByRole, getAllByTestId } = render(
+        <AgentButton type="claude" availability={undefined} />
+      );
+
+      // Tooltip carries U+2026, no redundant "availability", no ASCII "...".
+      expect(tooltipTexts(getAllByTestId)).toContain("Checking Claude CLI…");
+      // Aria-label is the plain accessible name — punctuation glyphs like the
+      // ellipsis are meaningless to screen readers and must not leak in.
+      expect(getByRole("button").getAttribute("aria-label")).toBe("Checking Claude CLI");
+    });
+
+    it("loading copy holds in the split-button (with-presets) branch", () => {
+      mockMergedPresetsFn = () => [{ id: "p", name: "P" }];
+
+      const { getByTestId, getAllByRole, getAllByTestId } = render(
+        <AgentButton type="claude" availability={undefined} />
+      );
+
+      expect(tooltipTexts(getAllByTestId)).toContain("Checking Claude CLI…");
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary!.getAttribute("aria-label")).toBe("Checking Claude CLI");
+    });
+
+    it("non-launchable copy is verb-noun with no gesture language", () => {
+      const cases: Array<[string, string]> = [
+        ["missing", "Install Claude CLI"],
+        ["installed", "Configure Claude"],
+        ["blocked", "Configure Claude"],
+      ];
+      for (const [state, expected] of cases) {
+        mockMergedPresetsFn = () => [];
+        const { getByRole, getAllByTestId, unmount } = render(
+          <AgentButton type="claude" availability={state as unknown as CliAvailability[string]} />
+        );
+        expect(tooltipTexts(getAllByTestId)).toContain(expected);
+        expect(getByRole("button").getAttribute("aria-label")).toBe(expected);
+        unmount();
+      }
+    });
+
+    it("ready aria-label drops the redundant 'Agent' suffix", () => {
+      mockMergedPresetsFn = () => [];
+
+      const { getByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      expect(getByRole("button").getAttribute("aria-label")).toBe("Start Claude");
+    });
+
+    it("unauthenticated state keeps the aria-label clean while the tooltip carries the sign-in cue", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getByTestId, getAllByRole, getAllByTestId } = render(
+        <AgentButton
+          type="claude"
+          availability={"unauthenticated" as unknown as CliAvailability[string]}
+        />
+      );
+
+      const launchTooltip = tooltipTexts(getAllByTestId).find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toContain("sign-in not detected");
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      // The sign-in suffix is a tooltip-only cue; it must not bleed into the
+      // accessible name.
+      expect(primary!.getAttribute("aria-label")).toBe("Start Claude");
     });
   });
 });
