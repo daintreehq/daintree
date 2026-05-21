@@ -225,7 +225,6 @@ export class HelpSessionJobService {
           console.warn(`${ATTACH_LOG_TAG} Supervisor stdin error:`, err);
         }
       });
-      child.stdin?.unref?.();
       this.supervisor = child;
     } catch (err) {
       console.warn(`${ATTACH_LOG_TAG} Failed to spawn supervisor:`, err);
