@@ -17,7 +17,11 @@ const execFileAsync = promisify(execFile);
 const ModelEntrySchema = z
   .object({
     name: z.string().optional(),
-    limit: z.object({ context: z.number().optional() }).passthrough().optional(),
+    // `limit.context` is read lazily as `unknown` at the catalog level so a
+    // single non-numeric value (e.g. `null`, `"unlimited"`, or any future
+    // type) never rejects the entire catalog. `extractRemote` guards with
+    // `typeof ctx === "number"` before reading the value.
+    limit: z.object({ context: z.unknown() }).passthrough().optional(),
   })
   .passthrough();
 
@@ -418,7 +422,14 @@ export class AgentModelCatalogService {
     } catch {
       return null;
     }
-    if (!Array.isArray(parsed)) return null;
+    // Real Codex emits `{"models": [...]}`; older or hypothetical bare-array
+    // shapes are still accepted so the catalog survives format changes.
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { models?: unknown } | null)?.models)
+        ? (parsed as { models: unknown[] }).models
+        : null;
+    if (!entries) return null;
 
     const CodexEntrySchema = z
       .object({
@@ -433,7 +444,7 @@ export class AgentModelCatalogService {
 
     const models: AgentModelConfig[] = [];
     let maxContext = 0;
-    for (const entry of parsed) {
+    for (const entry of entries) {
       const safe = CodexEntrySchema.safeParse(entry);
       if (!safe.success) continue;
       const id = safe.data.slug ?? safe.data.id;

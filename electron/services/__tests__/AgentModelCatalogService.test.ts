@@ -153,12 +153,13 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.length).toBeGreaterThan(0);
   });
 
-  it("tolerates malformed entries — bad entries skipped, valid ones surface", async () => {
+  it("tolerates malformed entries — non-object entries skipped, valid ones surface", async () => {
     const fetchImpl = mockFetch({
       anthropic: {
         models: {
           "claude-sonnet-4-6": { name: "Claude Sonnet 4.6", limit: { context: 1_000_000 } },
-          "broken-model": { limit: { context: "not-a-number" } },
+          "string-entry": "not-an-object",
+          "null-entry": null,
           "claude-opus-4-6": { name: "Claude Opus 4.6", limit: { context: 200_000 } },
         },
       },
@@ -169,7 +170,8 @@ describe("AgentModelCatalogService", () => {
 
     expect(result.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
     expect(result.models.map((m) => m.id)).toContain("claude-opus-4-6");
-    expect(result.models.find((m) => m.id === "broken-model")).toBeUndefined();
+    expect(result.models.find((m) => m.id === "string-entry")).toBeUndefined();
+    expect(result.models.find((m) => m.id === "null-entry")).toBeUndefined();
   });
 
   it("dedupes concurrent calls via singleflight", async () => {
@@ -284,6 +286,82 @@ describe("AgentModelCatalogService", () => {
     expect(result.source).toBe("bundled");
     expect(result.models).toEqual([]);
     expect(result.contextWindow).toBeNull();
+  });
+
+  it("accepts codex CLI output as a {models: [...]} object (real shape)", async () => {
+    const execFileImpl: ExecFn = vi.fn(async () => ({
+      stdout: JSON.stringify({
+        models: [
+          { slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000 },
+          { slug: "gpt-5.4", display_name: "GPT-5.4", context_window: 128_000 },
+        ],
+      }),
+      stderr: "",
+    })) as unknown as ExecFn;
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({}),
+      execFileImpl,
+      codexCommand: "codex",
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toContain("gpt-5.5");
+    expect(result.contextWindow).toBe(256_000);
+  });
+
+  it("tolerates non-numeric limit.context anywhere in the remote catalog", async () => {
+    const fetchImpl = mockFetch({
+      anthropic: {
+        models: {
+          "claude-sonnet-4-6": { name: "Claude Sonnet 4.6", limit: { context: 200_000 } },
+          "claude-experimental": { name: "Claude Experimental", limit: { context: "unlimited" } },
+        },
+      },
+      // A whole separate provider with a malformed entry must not poison
+      // the catalog for the well-formed anthropic provider.
+      openai: {
+        models: {
+          "gpt-5.4": { name: "GPT-5.4", limit: { context: null } },
+        },
+      },
+    });
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("claude");
+
+    expect(result.source).toBe("merged");
+    expect(result.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
+    expect(result.models.map((m) => m.id)).toContain("claude-experimental");
+    expect(result.contextWindow).toBe(200_000);
+  });
+
+  it("dedupes concurrent codex CLI calls via singleflight", async () => {
+    const execFileImpl: ExecFn = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        stdout: JSON.stringify({
+          models: [{ slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000 }],
+        }),
+        stderr: "",
+      };
+    }) as unknown as ExecFn;
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({}),
+      execFileImpl,
+    });
+
+    await Promise.all([
+      service.getResolvedModels("codex"),
+      service.getResolvedModels("codex"),
+      service.getResolvedModels("codex"),
+    ]);
+
+    expect(execFileImpl).toHaveBeenCalledTimes(1);
   });
 
   it("derives shortLabel from name for remote-only models", async () => {
