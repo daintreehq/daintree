@@ -217,7 +217,10 @@ vi.mock("@/config/agents", () => ({
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
+  actionService: {
+    dispatch: (...args: unknown[]) => mockDispatch(...args),
+    getContext: () => ({}),
+  },
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -456,6 +459,7 @@ beforeEach(() => {
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           takePendingHibernation: mockTakePendingHibernation,
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,
@@ -630,6 +634,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-default",
       projectPath: "/repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -658,6 +663,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-late",
       projectPath: "/late-repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -775,6 +781,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-default",
       projectPath: "/repo",
       agentId: "codex",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -1197,6 +1204,7 @@ describe("HelpPanel — session provisioning", () => {
       projectId: "proj-1",
       projectPath: "/repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",

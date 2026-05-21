@@ -90,7 +90,9 @@ vi.mock("@shared/config/agentIds", () => ({
 }));
 vi.mock("../../../shared/utils/agentAvailability", () => ({ isAgentInstalled: () => true }));
 vi.mock("@/lib/accessibility", () => ({ TABBABLE_SELECTOR: "button" }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: vi.fn(), getContext: () => ({}) },
+}));
 vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes: vi.fn() }));
 vi.mock("@/hooks/useEscapeStack", () => ({ useEscapeStack: vi.fn() }));
 vi.mock("@/types", () => ({ TerminalRefreshTier: { BACKGROUND: 0, ACTIVE: 1 } }));
@@ -208,6 +210,18 @@ function resetState() {
 beforeEach(() => {
   vi.clearAllMocks();
   resetState();
+
+  Object.defineProperty(globalThis, "window", {
+    value: {
+      electron: {
+        help: {
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
+        },
+      },
+    },
+    writable: true,
+    configurable: true,
+  });
 });
 
 function bindTerminal(agentId: string, agentState = "idle") {
