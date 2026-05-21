@@ -19,6 +19,7 @@ import type {
 } from "./shared.js";
 import type {
   ActiveBearerRecord,
+  McpActiveClientInfo,
   McpIssueGrantResult,
   McpRevokeSessionGrantsResult,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -44,7 +45,6 @@ import {
   MCP_STOP_DRAIN_TIMEOUT_MS,
   MCP_SERVER_KEY,
 } from "./shared.js";
-import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
 
 export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
@@ -246,13 +246,25 @@ export class HttpLifecycle {
   /**
    * Record (or refresh) the bearer behind an authenticated session handshake.
    * Called once per new session — not per request — because only handshake
-   * requests carry the `Authorization` header through this path. The hash of
-   * the full header is the stable per-token identity; `userAgent` and
-   * `lastActiveAt` are updated on every (re)connect so a reconnecting client
-   * surfaces fresh metadata. `requestsSinceLaunch` counts handshakes for the
-   * bearer since the server last started.
+   * requests carry the `Authorization` header through this path. Only
+   * `external`-tier bearers are tracked: the "External clients" row is for
+   * third-party MCP clients (Claude Code, Cursor, scripts), never the
+   * Daintree Assistant's own help-session or in-pane agent tokens — surfacing
+   * those would let the user disconnect their own assistant.
+   *
+   * The hash of the full header is the stable per-token identity; `userAgent`
+   * and `lastActiveAt` refresh on every (re)connect. `requestsSinceLaunch`
+   * counts handshakes for the bearer since the server last started. Pushes a
+   * runtime-state change so an open settings tab reflects the new connection
+   * live (session handshakes are infrequent, so this is not chatty).
    */
-  private touchBearer(authHeader: string, userAgent: string, sessionId: string): void {
+  private touchBearer(
+    authHeader: string,
+    userAgent: string,
+    sessionId: string,
+    tier: McpTier
+  ): void {
+    if (tier !== "external") return;
     const tokenHash = createHash("sha256").update(authHeader).digest("hex");
     const token4LastChars = extractBearerToken(authHeader)?.slice(-4) ?? "****";
     const now = Date.now();
@@ -273,14 +285,30 @@ export class HttpLifecycle {
     entry.requestsSinceLaunch += 1;
     entry.sessionIds.add(sessionId);
     this.sessionToTokenHash.set(sessionId, tokenHash);
+    this.deps.emitRuntimeStateChange();
+  }
+
+  /**
+   * Bump a tracked bearer's `lastActiveAt` on a subsequent (non-handshake)
+   * authenticated request so the settings row reflects real recency, not just
+   * connection time. No-op for untracked (internal-tier) sessions. Does not
+   * push a runtime-state change — per-message traffic would be far too chatty;
+   * the refreshed value is picked up on the next list fetch.
+   */
+  private markBearerActive(sessionId: string): void {
+    const tokenHash = this.sessionToTokenHash.get(sessionId);
+    if (tokenHash === undefined) return;
+    const entry = this.bearerRegister.get(tokenHash);
+    if (entry) entry.lastActiveAt = Date.now();
   }
 
   /**
    * Drop a closing session from its owning bearer entry. Idempotent — a
-   * no-op when the session was never registered (non-handshake path) or the
-   * entry was already cleared by an explicit disconnect. Removes the bearer
-   * entry once its last session closes so the settings tab reflects only
-   * live connections. Wired into every per-session teardown path via the
+   * no-op when the session was never registered (non-handshake / internal
+   * tier) or the entry was already cleared by an explicit disconnect. Removes
+   * the bearer entry once its last session closes so the settings tab reflects
+   * only live connections, and pushes a runtime-state change so an open tab
+   * updates. Wired into every per-session teardown path via the
    * `dropBearerState` callback plus the inline transport-close handlers.
    */
   detachBearerSession(sessionId: string): void {
@@ -293,6 +321,7 @@ export class HttpLifecycle {
     if (entry.sessionIds.size === 0) {
       this.bearerRegister.delete(tokenHash);
     }
+    this.deps.emitRuntimeStateChange();
   }
 
   /** Live snapshot for the settings tab. The raw token is never exposed. */
@@ -739,7 +768,7 @@ export class HttpLifecycle {
         this.headerString(req.headers["user-agent"]),
         "sse"
       );
-      this.touchBearer(authHeader, resolveUserAgent(req), sessionId);
+      this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
       const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
       if (pinnedWebContentsId !== null) {
@@ -807,6 +836,7 @@ export class HttpLifecycle {
 
       if (session) {
         this.deps.sessionStore.resetIdleTimer(sid);
+        this.markBearerActive(sid);
         await session.transport.handlePostMessage(req, res);
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
@@ -849,6 +879,7 @@ export class HttpLifecycle {
         return;
       }
       this.deps.sessionStore.resetHttpIdleTimer(sessionId);
+      this.markBearerActive(sessionId);
       await session.transport.handleRequest(req, res);
       return;
     }
@@ -894,7 +925,7 @@ export class HttpLifecycle {
         // Register the bearer against the SDK-confirmed session id (not the
         // pre-generated `newSessionId`) so detachment keys match the ids the
         // teardown paths see.
-        this.touchBearer(authHeader, resolveUserAgent(req), initializedSessionId);
+        this.touchBearer(authHeader, resolveUserAgent(req), initializedSessionId, tier);
       },
     });
 

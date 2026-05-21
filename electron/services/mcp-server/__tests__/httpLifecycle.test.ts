@@ -20,7 +20,12 @@ import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 
 type BearerTestHandle = {
-  touchBearer: (authHeader: string, userAgent: string, sessionId: string) => void;
+  touchBearer: (
+    authHeader: string,
+    userAgent: string,
+    sessionId: string,
+    tier: "workbench" | "action" | "system" | "external"
+  ) => void;
   detachBearerSession: (sessionId: string) => void;
 };
 
@@ -454,7 +459,12 @@ describe("HttpLifecycle", () => {
 
     it("registers a bearer and exposes only the suffix, never the raw token", () => {
       const lc = new HttpLifecycle(fakeDeps());
-      (lc as unknown as BearerTestHandle).touchBearer(authA, "Claude Code/1.0", "sess-1");
+      (lc as unknown as BearerTestHandle).touchBearer(
+        authA,
+        "Claude Code/1.0",
+        "sess-1",
+        "external"
+      );
 
       const bearers = lc.listActiveBearers();
       expect(bearers).toHaveLength(1);
@@ -470,13 +480,34 @@ describe("HttpLifecycle", () => {
       expect(bearers[0]).not.toHaveProperty("sessionIds");
     });
 
+    it("tracks only external-tier bearers, never internal (help/pane) tokens", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Help/1", "sess-help", "action");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      expect(lc.listActiveBearers()).toHaveLength(0);
+      // A subsequent external bearer is still tracked.
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+      expect(lc.listActiveBearers()).toHaveLength(1);
+    });
+
+    it("pushes a runtime-state change on connect and on final disconnect", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
+      handle.detachBearerSession("sess-1");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
+    });
+
     it("coalesces two sessions onto one entry and only drops it when both close", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1");
-      handle.touchBearer(authA, "Client/2", "sess-2");
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      handle.touchBearer(authA, "Client/2", "sess-2", "external");
 
-      let bearers = lc.listActiveBearers();
+      const bearers = lc.listActiveBearers();
       expect(bearers).toHaveLength(1);
       // requestsSinceLaunch counts each handshake; userAgent reflects the latest.
       expect(bearers[0]!.requestsSinceLaunch).toBe(2);
@@ -492,8 +523,8 @@ describe("HttpLifecycle", () => {
     it("keys distinct tokens to distinct entries", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1");
-      handle.touchBearer(authB, "Client/2", "sess-2");
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      handle.touchBearer(authB, "Client/2", "sess-2", "external");
       expect(lc.listActiveBearers()).toHaveLength(2);
     });
 
@@ -505,7 +536,7 @@ describe("HttpLifecycle", () => {
 
     it("getBearerSessionIds returns a snapshot or null", () => {
       const lc = new HttpLifecycle(fakeDeps());
-      (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1");
+      (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1", "external");
       expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-1"]);
       expect(lc.getBearerSessionIds("nonexistent")).toBeNull();
     });
@@ -513,7 +544,7 @@ describe("HttpLifecycle", () => {
     it("clearBearer evicts the entry and its reverse-lookup rows", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1");
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
       lc.clearBearer(hashOf(authA));
       expect(lc.listActiveBearers()).toHaveLength(0);
       // Reverse rows gone: a late detach for the cleared session is harmless.

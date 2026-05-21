@@ -1241,6 +1241,30 @@ describe("McpServerSettingsTab", () => {
       });
     });
 
+    it("populates the clients row when a runtime-state change fires after mount", async () => {
+      let runtimeCb: (() => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: () => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      const listActiveBearers = vi
+        .fn()
+        .mockResolvedValueOnce([]) // initial mount: nothing connected
+        .mockResolvedValue([bearer]); // after the push: one client
+      installMcpApi({ onRuntimeStateChanged, listActiveBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("External clients");
+
+      runtimeCb?.();
+      await waitForContent(container, "External clients (1)");
+    });
+
     it("shows the assistant-attribution pill only when daintreeControl is on", async () => {
       installMcpApi({}, { getSettings: vi.fn().mockResolvedValue({ daintreeControl: true }) });
 

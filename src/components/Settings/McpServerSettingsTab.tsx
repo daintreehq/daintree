@@ -27,7 +27,6 @@ import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { logError } from "@/utils/logger";
 import {
   type McpActiveClientInfo,
@@ -586,7 +585,7 @@ export function McpServerSettingsTab() {
                                 <span className="font-mono">…{bearer.token4LastChars}</span>
                                 {" · "}
                                 {bearer.requestsSinceLaunch}{" "}
-                                {bearer.requestsSinceLaunch === 1 ? "session" : "sessions"}
+                                {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
                                 {" · active "}
                                 {formatRelativeTime(bearer.lastActiveAt)}
                               </div>
