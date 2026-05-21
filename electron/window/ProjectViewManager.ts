@@ -84,10 +84,17 @@ type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
 interface PaintGate {
   webContentsId: number;
   /**
-   * The view that was active when the gate opened — still attached during the
-   * wait. Resize events must reach it too so visible bounds stay in sync.
+   * The view that was visible when the gate opened — still attached during the
+   * wait. This may be a registered project view or the unbound welcome view on
+   * first-run/project-picker windows. Resize events must reach it too so
+   * visible bounds stay in sync.
    */
-  outgoingEntry: ViewEntry | null;
+  outgoingView: WebContentsView | null;
+  /**
+   * Project id for the outgoing view when it is a registered project view.
+   * Unbound welcome views have no project id and are never LRU candidates.
+   */
+  outgoingProjectId: string | null;
   /**
    * Soft timer — fires `onSoftTimeout` but does NOT resolve the gate. The
    * outgoing view stays attached so the soft tail is invisible to the user.
@@ -217,9 +224,9 @@ export class ProjectViewManager {
       if (view) {
         (view as WebContentsView).setBounds({ x: 0, y: 0, width, height });
       }
-      const outgoing = this.pendingPaintGate?.outgoingEntry;
-      if (outgoing && !outgoing.view.webContents.isDestroyed() && outgoing.view !== view) {
-        outgoing.view.setBounds({ x: 0, y: 0, width, height });
+      const outgoing = this.pendingPaintGate?.outgoingView;
+      if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
+        outgoing.setBounds({ x: 0, y: 0, width, height });
       }
     };
     win.on("resize", this.resizeHandler);
@@ -308,6 +315,8 @@ export class ProjectViewManager {
     // Snapshot previous state for rollback
     const previousProjectId = this.activeProjectId;
     const previousEntry = previousProjectId ? (this.views.get(previousProjectId) ?? null) : null;
+    const unboundOutgoingView = previousEntry ? null : this.getUnboundOutgoingView();
+    const outgoingView = previousEntry?.view ?? unboundOutgoingView;
 
     // Try to activate cached view (fast path — already painted, no skeleton gate needed)
     const cached = this.views.get(projectId);
@@ -384,8 +393,14 @@ export class ProjectViewManager {
 
     // Insert incoming view BEHIND the outgoing view (index 0). Chromium's
     // `WebContentsView` child stack is z-ordered last-on-top, so this keeps
-    // the outgoing view visually on top while the incoming view boots.
-    this.win.contentView.addChildView(view, 0);
+    // the outgoing view visually on top while the incoming view boots. On a
+    // true first-run window the outgoing view is the unbound welcome view, not
+    // a registered project entry; it still needs the same anti-flash bridge.
+    if (outgoingView) {
+      this.win.contentView.addChildView(view, 0);
+    } else {
+      this.win.contentView.addChildView(view);
+    }
     this.updateViewBounds(view);
     this.activeProjectId = projectId;
     entry.state = "active";
@@ -401,14 +416,19 @@ export class ProjectViewManager {
     // a profile push between gate creation and log emission.
     const softMs = this.paintGateTimeoutMs;
     const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
-    const paintGatePromise = this.waitForPaint(view.webContents.id, previousEntry, () => {
-      // Soft timeout: outgoing stays attached, gate keeps waiting. Logging
-      // only — the user never sees an unfinished frame on the soft path.
-      logWarn("projectview.paintgate.softtimeout", {
-        projectId,
-        waitedMs: softMs,
-      });
-    });
+    const paintGatePromise = this.waitForPaint(
+      view.webContents.id,
+      outgoingView,
+      previousEntry?.projectId ?? null,
+      () => {
+        // Soft timeout: outgoing stays attached, gate keeps waiting. Logging
+        // only — the user never sees an unfinished frame on the soft path.
+        logWarn("projectview.paintgate.softtimeout", {
+          projectId,
+          waitedMs: softMs,
+        });
+      }
+    );
 
     let visibleAt: number;
     try {
@@ -435,6 +455,8 @@ export class ProjectViewManager {
       // outgoing view longer can't recover a stuck renderer.
       if (previousEntry && this.activeProjectId === projectId) {
         this.deactivateEntry(previousEntry);
+      } else if (unboundOutgoingView && this.activeProjectId === projectId) {
+        this.detachUnboundOutgoingView(unboundOutgoingView);
       }
 
       logInfo("projectview.coldstart", {
@@ -476,6 +498,11 @@ export class ProjectViewManager {
         registerAppView(this.win, previousEntry.view);
         previousEntry.state = "active";
         previousEntry.lastUsed = Date.now();
+      } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
+        // Same rollback requirement for first-run/unbound windows: the visible
+        // welcome view is not a project entry, but IPC helpers still need
+        // getAppWebContents() to resolve to it after a failed first switch.
+        registerAppView(this.win, unboundOutgoingView);
       }
 
       notifyError(loadError, { source: "project-switch" });
@@ -512,7 +539,8 @@ export class ProjectViewManager {
    */
   private waitForPaint(
     webContentsId: number,
-    outgoingEntry: ViewEntry | null,
+    outgoingView: WebContentsView | null,
+    outgoingProjectId: string | null,
     onSoftTimeout?: () => void
   ): Promise<PaintGateOutcome> {
     // Cancel any prior gate from a previous switch attempt. Should not
@@ -530,7 +558,8 @@ export class ProjectViewManager {
       let settled = false;
       const gate: PaintGate = {
         webContentsId,
-        outgoingEntry,
+        outgoingView,
+        outgoingProjectId,
         softTimeout: setTimeout(() => {
           // Soft tail: log only. Keep waiting for either the paint signal
           // or the hard timeout — DO NOT resolve.
@@ -869,6 +898,44 @@ export class ProjectViewManager {
     entry.state = "active";
     entry.lastUsed = Date.now();
     this.activeProjectId = entry.projectId;
+  }
+
+  private getUnboundOutgoingView(): WebContentsView | null {
+    if (this.win.isDestroyed()) return null;
+    const candidate = this.win.contentView.children[0] as WebContentsView | undefined;
+    if (!candidate?.webContents || candidate.webContents.isDestroyed()) return null;
+    if (this.webContentsToProject.has(candidate.webContents.id)) return null;
+    return candidate;
+  }
+
+  private detachUnboundOutgoingView(view: WebContentsView): void {
+    if (!this.win.isDestroyed()) {
+      try {
+        this.win.contentView.removeChildView(view);
+      } catch {
+        // The welcome view may already have been detached by window teardown.
+      }
+    }
+
+    const wc = view.webContents;
+    const wcId = wc.id;
+    if (this.windowRegistry) {
+      this.windowRegistry.unregisterAppViewWebContents(this.win.id, wcId);
+    }
+    forgetBlinkSample(wcId);
+    forgetEluSample(wcId);
+
+    try {
+      this.onViewEvicted?.(wcId);
+    } catch (error) {
+      console.error("[ProjectViewManager] onViewEvicted threw for unbound view:", error);
+    }
+
+    if (!wc.isDestroyed()) {
+      detachRendererConsoleCapture(wc);
+      unregisterWebContents(wc);
+      wc.close();
+    }
   }
 
   private createView(_projectId: string): WebContentsView {
@@ -1318,7 +1385,7 @@ export class ProjectViewManager {
     // (e.g. an efficiency-profile transition firing during a slow cold
     // start) would evict the outgoing view and expose the unpainted
     // incoming frame, re-creating the exact flash this gate prevents.
-    const gateOutgoingProjectId = this.pendingPaintGate?.outgoingEntry?.projectId ?? null;
+    const gateOutgoingProjectId = this.pendingPaintGate?.outgoingProjectId ?? null;
 
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId && id !== gateOutgoingProjectId)

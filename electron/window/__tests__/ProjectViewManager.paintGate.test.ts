@@ -555,6 +555,79 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     await switchPromise;
   });
 
+  it("detaches the unbound welcome view after the first project view paints", async () => {
+    manager.dispose();
+
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: 150,
+      cachedProjectViews: 3,
+    });
+
+    const welcomeWc = createMockWebContents();
+    const welcomeView = { webContents: welcomeWc, setBounds: vi.fn() };
+    win.contentView.addChildView(welcomeView);
+
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-first", "/path/first");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const incomingAdd = win.contentView.addChildView.mock.calls.find(
+      ([view]) => (view as { webContents: MockWc }).webContents === incomingWc
+    );
+    expect(incomingAdd).toBeDefined();
+    expect(incomingAdd?.[1]).toBe(0);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(win.contentView.removeChildView).toHaveBeenCalledWith(welcomeView);
+    expect(welcomeWc.close).toHaveBeenCalled();
+    expect(incomingWc.close).not.toHaveBeenCalled();
+    expect(manager.getActiveProjectId()).toBe("proj-first");
+    expect(manager.getProjectIdForWebContents(incomingWc.id)).toBe("proj-first");
+  });
+
+  it("restores the unbound welcome view registration when first project load fails", async () => {
+    manager.dispose();
+
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 50,
+      paintGateHardTimeoutMs: 150,
+      cachedProjectViews: 3,
+    });
+
+    const welcomeWc = createMockWebContents();
+    const welcomeView = { webContents: welcomeWc, setBounds: vi.fn() };
+    win.contentView.addChildView(welcomeView);
+
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+    vi.mocked(registerAppView).mockClear();
+
+    const switchPromise = manager.switchTo("proj-first", "/path/first").catch((err) => err);
+    await Promise.resolve();
+    failWc._fireOnce("did-fail-load", {}, -3, "ERR_FAILED");
+    await switchPromise;
+
+    expect(win.contentView.removeChildView).not.toHaveBeenCalledWith(welcomeView);
+    expect(welcomeWc.close).not.toHaveBeenCalled();
+    expect(failWc.close).toHaveBeenCalled();
+    expect(manager.getActiveProjectId()).toBeNull();
+
+    const registerCalls = vi.mocked(registerAppView).mock.calls;
+    const lastCall = registerCalls[registerCalls.length - 1];
+    expect(lastCall?.[1]).toBe(welcomeView);
+  });
+
   it("dispose() while paint gate is pending settles the wait without throwing", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
