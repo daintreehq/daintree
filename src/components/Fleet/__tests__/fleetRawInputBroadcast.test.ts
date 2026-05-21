@@ -5,16 +5,13 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TerminalInstance } from "@shared/types";
 
 const broadcastMock = vi.hoisted(() => vi.fn<(ids: string[], data: string) => void>());
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
-const enterFleetScopeMock = vi.hoisted(() => vi.fn<() => void>());
-const worktreeSelectionStateRef = vi.hoisted(() => ({
-  current: { activeWorktreeId: "wt-1" as string | null },
-}));
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -32,15 +29,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyUserInput: notifyUserInputMock,
     notifyEnterPressed: notifyEnterPressedMock,
     clearDirectingState: clearDirectingStateMock,
-  },
-}));
-
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: {
-    getState: () => ({
-      activeWorktreeId: worktreeSelectionStateRef.current.activeWorktreeId,
-      enterFleetScope: enterFleetScopeMock,
-    }),
   },
 }));
 
@@ -72,7 +60,6 @@ function resetStores(): void {
   notifyUserInputMock.mockReset();
   notifyEnterPressedMock.mockReset();
   clearDirectingStateMock.mockReset();
-  enterFleetScopeMock.mockReset();
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -83,10 +70,8 @@ function resetStores(): void {
   });
   useFleetFailureStore.getState().clear();
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
-  // Default to unhydrated so existing tests don't accidentally trigger
-  // fleet-scope side effects. Cross-worktree tests opt in by hydrating.
   useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
-  worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+  useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
 }
 
 describe("broadcastFleetRawInput", () => {
@@ -244,22 +229,24 @@ describe("broadcastFleetRawInput", () => {
     // Raw input broadcast must never rearrange the layout. Set up the exact
     // conditions that used to auto-enter fleet scope — cross-worktree targets,
     // scoped mode, hydrated — and assert the broadcast still goes out while
-    // `enterFleetScope` is never called. Fleet scope is now strictly opt-in
-    // via the `fleet.scope.enter` action.
+    // fleet scope stays inactive. The real worktree store is observed (not a
+    // mock) so this guard catches scope entry via any path, not just a
+    // verbatim revert. Fleet scope is now strictly opt-in via the
+    // `fleet.scope.enter` action.
     seedPanels([
       makeTerminal("t1", { worktreeId: "wt-1" }),
       makeTerminal("t2", { worktreeId: "wt-2" }),
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-    worktreeSelectionStateRef.current.activeWorktreeId = "wt-1";
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
 
     expect(broadcastFleetRawInput("t1", "ls\r")).toBe(true);
 
     // The write still goes out to every target...
     expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2"], "ls\r");
     // ...but the layout is left untouched.
-    expect(enterFleetScopeMock).not.toHaveBeenCalled();
+    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(false);
   });
 
   it("performs the raw broadcast alongside notifyEnterPressed for plain Enter", () => {
