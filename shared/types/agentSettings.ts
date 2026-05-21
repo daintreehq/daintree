@@ -426,6 +426,56 @@ export function buildResumeCommand(
   return parts.join(" ");
 }
 
+/**
+ * Builds a "resume the most recent session" launch command for agents whose
+ * `session-id` resume config declares `resumeLatestArgs`. Used as a fallback
+ * when the graceful-shutdown pattern-match capture loop failed to harvest a
+ * session ID — instead of launching fresh and losing the user's context, the
+ * CLI's own "continue last" flag picks up the prior conversation in the
+ * launch CWD (Claude `--continue`, Gemini `-r latest`, Codex `resume --last`,
+ * etc.).
+ *
+ * Persisted launch flags are prepended using the same shell-escape rules as
+ * {@link buildResumeCommand} (raw for `-`-prefixed tokens, escaped for
+ * positional values).
+ *
+ * @returns The resume-latest command string, or `undefined` if the agent
+ *   has no resume config, isn't a `session-id` kind, or doesn't declare
+ *   `resumeLatestArgs`.
+ */
+export function buildResumeLatestCommand(
+  agentId: string,
+  launchFlags?: string[]
+): string | undefined {
+  const agentConfig = getEffectiveAgentConfig(agentId);
+  const resume = agentConfig?.resume;
+  if (!agentConfig || !resume) return undefined;
+  if (resume.kind !== "session-id") return undefined;
+  const fallbackArgs = resume.resumeLatestArgs;
+  if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
+
+  const parts = [agentConfig.command];
+
+  if (launchFlags?.length) {
+    for (const flag of launchFlags) {
+      if (flag.startsWith("-")) {
+        parts.push(flag);
+      } else {
+        parts.push(escapeShellArg(flag));
+      }
+    }
+  }
+
+  for (const arg of fallbackArgs) {
+    if (arg.startsWith("-")) {
+      parts.push(arg);
+    } else {
+      parts.push(escapeShellArgOptional(arg));
+    }
+  }
+  return parts.join(" ");
+}
+
 export interface BuildLaunchCommandFromFlagsOptions {
   /** Absolute path to the clipboard temp directory (re-injected for agents that support it) */
   clipboardDirectory?: string;

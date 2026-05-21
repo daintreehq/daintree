@@ -11,6 +11,7 @@ import {
   generateAgentCommand,
   buildAgentLaunchFlags,
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
 } from "@shared/types";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
@@ -157,7 +158,8 @@ export const createRestartActions = (
   | "toggleInputLocked"
   | "activateFallbackPreset"
 > => ({
-  restartTerminal: async (id) => {
+  restartTerminal: async (id, options) => {
+    const allowResumeLatest = options?.allowResumeLatest !== false;
     const terminal = get().panelsById[id];
 
     if (!terminal) {
@@ -339,6 +341,17 @@ export const createRestartActions = (
         const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, nextAgentLaunchFlags);
         if (resumeCmd) {
           commandToRun = resumeCmd;
+        }
+      } else if (allowResumeLatest) {
+        // No captured session ID — graceful-shutdown pattern match missed or
+        // timed out. Try the agent's resume-latest fallback (e.g. claude
+        // --continue, codex resume --last, gemini -r latest) before falling
+        // through to a fresh launch so the user keeps their prior CWD-scoped
+        // conversation. Suppressed by moveToNewWorktreeAndTransfer because the
+        // new CWD would resume a stale or unrelated session.
+        const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, nextAgentLaunchFlags);
+        if (resumeLatestCmd) {
+          commandToRun = resumeLatestCmd;
         }
       }
 
@@ -703,7 +716,9 @@ export const createRestartActions = (
                 return { panelsById: newById, panelIdsByWorktreeId: newIndex };
               });
 
-              await get().restartTerminal(id);
+              // Suppress resume-latest: the CWD has changed; we want a fresh
+              // launch + buffer-injected context, not a stale CWD-scoped session.
+              await get().restartTerminal(id, { allowResumeLatest: false });
 
               // After restart, inject captured history as a first prompt for agent terminals
               const restarted = get().panelsById[id];

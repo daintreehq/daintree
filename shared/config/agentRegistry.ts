@@ -235,6 +235,15 @@ export type AgentResume =
       sessionIdPattern: string;
       /** Optional raw key sequence sent before `quitCommand` (e.g. Ctrl-C). */
       shutdownKeySequence?: string;
+      /**
+       * CLI args for resuming the most recent session without a captured ID
+       * (e.g. ["--continue"] for Claude, ["-r", "latest"] for Gemini,
+       * ["resume", "--last"] for Codex). When present, the relaunch path uses
+       * these args as a fallback when `sessionIdPattern` capture missed
+       * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
+       * Omit for agents that have no resume-latest flag.
+       */
+      resumeLatestArgs?: string[];
     }
   | {
       kind: "rolling-history";

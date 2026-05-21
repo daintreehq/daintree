@@ -98,6 +98,7 @@ vi.mock("@shared/types", () => ({
   generateAgentCommand: vi.fn().mockReturnValue("claude --resume"),
   buildAgentLaunchFlags: vi.fn().mockReturnValue([]),
   buildResumeCommand: vi.fn().mockReturnValue(null),
+  buildResumeLatestCommand: vi.fn().mockReturnValue(null),
   buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude"),
 }));
 

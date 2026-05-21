@@ -123,6 +123,8 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "gemini --resume ([\\w-]+)",
+    // `latest` is required — bare `-r` opens an interactive picker that blocks the PTY.
+    resumeLatestArgs: ["-r", "latest"],
   },
   env: {
     GEMINI_CLI_ALT_SCREEN: "false",

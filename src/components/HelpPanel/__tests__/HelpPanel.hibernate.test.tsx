@@ -12,6 +12,7 @@ const {
   mockRevokeSession,
   mockGracefulKill,
   mockBuildResumeCommand,
+  mockBuildResumeLatestCommand,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
   mockSystemSleepGetMetrics,
@@ -38,6 +39,7 @@ const {
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGracefulKill: vi.fn().mockResolvedValue(null),
   mockBuildResumeCommand: vi.fn(),
+  mockBuildResumeLatestCommand: vi.fn(),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
@@ -173,6 +175,7 @@ vi.mock("@/config/agents", () => ({
 
 vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
+  buildResumeLatestCommand: (...args: unknown[]) => mockBuildResumeLatestCommand(...args),
 }));
 
 vi.mock("@/services/ActionService", () => ({

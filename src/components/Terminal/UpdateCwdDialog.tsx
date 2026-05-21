@@ -51,7 +51,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       }
 
       updateTerminalCwd(terminalId, newCwd);
-      await restartTerminal(terminalId);
+      // Suppress resume-latest: cwd is changing, so a CWD-scoped fallback
+      // would pick up an unrelated session in the new directory.
+      await restartTerminal(terminalId, { allowResumeLatest: false });
 
       onClose();
     } catch (error) {

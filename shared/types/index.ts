@@ -314,6 +314,7 @@ export {
   generateAgentCommand,
   buildAgentLaunchFlags,
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
 } from "./agentSettings.js";
 

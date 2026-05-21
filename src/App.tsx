@@ -74,7 +74,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { buildResumeCommand } from "@shared/types/agentSettings";
+import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
@@ -918,11 +918,12 @@ function App() {
                       if (result.resumeSession) {
                         const session = result.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const command = buildResumeCommand(
-                          session.agentId,
-                          session.sessionId,
-                          session.agentLaunchFlags
-                        );
+                        const command =
+                          buildResumeCommand(
+                            session.agentId,
+                            session.sessionId,
+                            session.agentLaunchFlags
+                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
@@ -955,11 +956,12 @@ function App() {
                       if (selected.resumeSession) {
                         const session = selected.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const command = buildResumeCommand(
-                          session.agentId,
-                          session.sessionId,
-                          session.agentLaunchFlags
-                        );
+                        const command =
+                          buildResumeCommand(
+                            session.agentId,
+                            session.sessionId,
+                            session.agentLaunchFlags
+                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
