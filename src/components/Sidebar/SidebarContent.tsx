@@ -1389,7 +1389,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           }}
           className={`inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent ${
             canArmMatching
-              ? "text-category-blue hover:text-category-blue/80 hover:bg-tint/[0.06]"
+              ? "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]"
               : "text-daintree-text/25 cursor-not-allowed"
           }`}
           aria-label={armMatchingLabel}
