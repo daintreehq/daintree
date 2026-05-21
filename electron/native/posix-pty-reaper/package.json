@@ -1,0 +1,13 @@
+{
+  "name": "posix-pty-reaper",
+  "version": "0.0.0",
+  "private": true,
+  "description": "POSIX crash-safe supervisor for help-session PTY tree reaping (#8769)",
+  "main": "index.cjs",
+  "gypfile": true,
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ]
+}

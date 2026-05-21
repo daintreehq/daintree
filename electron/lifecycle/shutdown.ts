@@ -9,6 +9,7 @@ import {
 } from "../services/AgentAvailabilityStore.js";
 import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { disposePtyClient } from "../services/PtyClient.js";
+import { helpSessionJobService } from "../services/HelpSessionJobService.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
@@ -302,6 +303,16 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               disposeAgentAvailabilityStore();
             } catch (err) {
               console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
+            }
+            // Disarm the POSIX crash-safe supervisor before tearing down the
+            // PTY client. The cooperative graceful-kill above already handled
+            // the help sessions, so DISARM tells the supervisor this is a clean
+            // quit and it should not SIGKILL on pipe close. No-op on Windows /
+            // when no supervisor was started.
+            try {
+              helpSessionJobService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
             }
             if (ptyClient) {
               try {
