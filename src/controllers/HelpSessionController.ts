@@ -180,38 +180,70 @@ async function provisionHelpSession(
   }
 }
 
+/**
+ * Three-state version probe.
+ * - `ok`: version meets the minimum (or no minimum is configured).
+ * - `indeterminate`: the probe couldn't get a definitive answer (IPC threw,
+ *   no installed version reported, or semver comparison failed).
+ * - `too-old`: a definitive too-old result, carrying the gate payload.
+ *
+ * The launch paths collapse `ok`/`indeterminate` into "proceed" (transient
+ * failure is permissive — see `checkAssistantVersion`). The manual
+ * "Check again" path keeps them distinct so a transient failure doesn't
+ * silently dismiss the gate and auto-launch an outdated CLI.
+ */
+type VersionProbeResult =
+  | { status: "ok" }
+  | { status: "indeterminate" }
+  | { status: "too-old"; block: VersionTooOld };
+
 // `refresh=true` bypasses the 12h AgentVersionService cache — pass on retry
 // so a user who manually updates the CLI outside Daintree's update flow can
 // recover within one panel reopen instead of waiting for cache expiry.
-async function checkAssistantVersion(
+async function probeAssistantVersion(
   agentId: string,
   agentName: string,
   refresh = false
-): Promise<VersionTooOld | null> {
+): Promise<VersionProbeResult> {
   const config = getAgentConfig(agentId);
   const required = config?.assistantMinVersion;
-  if (!required) return null;
+  if (!required) return { status: "ok" };
 
   let info;
   try {
     info = await window.electron.system.getAgentVersion(agentId, refresh);
   } catch (err) {
     logError("Failed to probe assistant CLI version", err);
-    return null;
+    return { status: "indeterminate" };
   }
 
   const installed = info?.installedVersion;
-  if (!installed) return null;
+  if (!installed) return { status: "indeterminate" };
 
   try {
     if (semver.lt(installed, required)) {
-      return { agentId, agentName, installedVersion: installed, requiredVersion: required };
+      return {
+        status: "too-old",
+        block: { agentId, agentName, installedVersion: installed, requiredVersion: required },
+      };
     }
   } catch (err) {
     logError("Failed to compare assistant CLI version", err);
-    return null;
+    return { status: "indeterminate" };
   }
-  return null;
+  return { status: "ok" };
+}
+
+// Launch-path wrapper preserving the original permissive contract: any
+// non-definitive result (ok or indeterminate) returns null so the launch
+// proceeds; only a definitive too-old result blocks.
+async function checkAssistantVersion(
+  agentId: string,
+  agentName: string,
+  refresh = false
+): Promise<VersionTooOld | null> {
+  const result = await probeAssistantVersion(agentId, agentName, refresh);
+  return result.status === "too-old" ? result.block : null;
 }
 
 async function loadCustomLaunchFlags(): Promise<string[]> {
@@ -442,7 +474,11 @@ export class HelpSessionController {
     // post-dispatch check handles its own cleanup, so we don't bump
     // `_launchGen` here.
     if (prev && prev.preferredAgentId !== inputs.preferredAgentId) {
-      this._patch({ assistantVersionTooOld: null });
+      // Drop any in-flight "Check again" cooldown too — it belongs to the
+      // previous agent's gate; leaving it would disable the new gate's
+      // button until the stale probe settles.
+      this._clearCheckAgainCooldownTimer();
+      this._patch({ assistantVersionTooOld: null, isCheckingVersion: false });
     }
 
     // Reset auto-launch guard when the panel closes so the next open can
@@ -764,28 +800,34 @@ export class HelpSessionController {
     this._armCheckAgainCooldownTimer();
 
     safeFireAndForget(
-      checkAssistantVersion(agentId, agentName, true)
-        .then((versionBlock) => {
+      probeAssistantVersion(agentId, agentName, true)
+        .then((result) => {
           // Stale-agent guard: the user may have switched preferred agents
           // while the probe was in flight — don't act on a result that no
           // longer matches what's blocking.
           if (this._snapshot.assistantVersionTooOld?.agentId !== agentId) return;
-          if (versionBlock) {
-            this._patch({ assistantVersionTooOld: versionBlock });
+          if (result.status === "too-old") {
+            this._patch({ assistantVersionTooOld: result.block });
             return;
           }
-          // Probe passed — clear the gate and let the normal idle→launch
-          // path re-evaluate. Resetting `_hasAutoLaunched` is required or
-          // `_maybeAutoLaunch` returns early.
+          if (result.status === "indeterminate") {
+            // Couldn't get a definitive answer (transient probe failure).
+            // Keep the gate visible rather than dismissing it and
+            // auto-launching a CLI that may still be outdated.
+            return;
+          }
+          // status === "ok" — version is now current. Clear the gate and
+          // let the normal idle→launch path re-evaluate. Resetting
+          // `_hasAutoLaunched` is required or `_maybeAutoLaunch` bails.
           this._hasBlockedThisSession = false;
           this._hasAutoLaunched = false;
           this._patch({ assistantVersionTooOld: null });
           if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
         })
         .catch((err) => {
-          // checkAssistantVersion already swallows probe failures and returns
-          // null; this guards against unexpected throws. The gate stays
-          // visible as its own retry surface, so no toast.
+          // probeAssistantVersion already swallows probe failures; this
+          // guards against unexpected throws. The gate stays visible as its
+          // own retry surface, so no toast.
           logError("HelpPanel: check-again version probe threw", err);
         })
         .finally(() => {

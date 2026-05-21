@@ -610,6 +610,63 @@ describe("HelpSessionController — checkVersionAgain", () => {
     ctrl.stop();
   });
 
+  it("keeps the gate when the probe fails transiently (does not dismiss on error)", async () => {
+    const ctrl = new HelpSessionController();
+    getAgentVersionMock().mockRejectedValue(new Error("probe failed"));
+    setBlock(ctrl);
+
+    ctrl.checkVersionAgain();
+    await vi.waitFor(() => {
+      // Probe settled; the gate must remain visible rather than clearing.
+      expect(getAgentVersionMock()).toHaveBeenCalled();
+    });
+    expect(ctrl.getSnapshot().assistantVersionTooOld).not.toBeNull();
+    ctrl.stop();
+  });
+
+  it("keeps the gate when the probe returns an undeterminable version", async () => {
+    const ctrl = new HelpSessionController();
+    getAgentVersionMock().mockResolvedValue({ installedVersion: null, latestVersion: null });
+    setBlock(ctrl);
+
+    ctrl.checkVersionAgain();
+    await vi.waitFor(() => {
+      expect(getAgentVersionMock()).toHaveBeenCalled();
+    });
+    expect(ctrl.getSnapshot().assistantVersionTooOld).not.toBeNull();
+    ctrl.stop();
+  });
+
+  it("does not re-enable the button on cooldown alone while a slow probe is still in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const ctrl = new HelpSessionController();
+      ctrl.start();
+      let resolveProbe: (v: { installedVersion: string }) => void = () => {};
+      getAgentVersionMock().mockReturnValue(
+        new Promise((resolve) => {
+          resolveProbe = resolve;
+        })
+      );
+      setBlock(ctrl);
+
+      ctrl.checkVersionAgain();
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+
+      // Cooldown elapses but the probe hasn't settled — button stays disabled.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+
+      // Probe settles → button re-enables.
+      resolveProbe({ installedVersion: "1.2.0" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(false);
+      ctrl.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("holds isCheckingVersion until both the probe settles and the 5s cooldown elapses", async () => {
     vi.useFakeTimers();
     try {
