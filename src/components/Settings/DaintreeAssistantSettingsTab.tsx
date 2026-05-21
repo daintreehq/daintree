@@ -562,7 +562,7 @@ export function DaintreeAssistantSettingsTab() {
           ariaLabel="Allow the assistant to call Daintree control tools"
           disabled={loading}
         />
-        {settings.daintreeControl && (
+        {!loading && settings.daintreeControl && (
           <div
             className={cn(
               "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
@@ -691,8 +691,6 @@ export function DaintreeAssistantSettingsTab() {
           showInlineLoading ? (
             <p className="text-xs text-daintree-text/50">Loading…</p>
           ) : null
-        ) : !mcpStatus ? (
-          <p className="text-xs text-daintree-text/50">Couldn't load MCP status.</p>
         ) : runtimeSnapshot.state === "disabled" ? (
           <div className="space-y-2">
             <p className="text-xs text-daintree-text/60 select-text">
@@ -732,6 +730,8 @@ export function DaintreeAssistantSettingsTab() {
               </button>
             </div>
           </div>
+        ) : !mcpStatus ? (
+          <p className="text-xs text-daintree-text/50">Couldn't load MCP status.</p>
         ) : (
           <div className="contents">
             <div className="flex items-center gap-2">

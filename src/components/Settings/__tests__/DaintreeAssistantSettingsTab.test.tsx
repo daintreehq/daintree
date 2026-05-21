@@ -498,6 +498,98 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
   });
 
+  it("renders the starting state without connection actions", async () => {
+    installApi(
+      {},
+      {
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "starting",
+          port: null,
+          lastError: null,
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Server is starting…");
+
+    expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /rotate mcp key/i })).toBeNull();
+  });
+
+  it("still surfaces the failed runtime state when getStatus fails", async () => {
+    installApi(
+      {},
+      {
+        getStatus: vi.fn().mockRejectedValue(new Error("ipc down")),
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: "EADDRINUSE: port 45454 already in use",
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server failed to start");
+
+    expect(container.textContent).not.toContain("Couldn't load MCP status");
+    expect(screen.getByRole("button", { name: /open mcp server settings/i })).toBeTruthy();
+  });
+
+  it("renders the failed fallback copy when lastError is null", async () => {
+    installApi(
+      {},
+      {
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: null,
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Check the MCP server tab for details");
+  });
+
+  it("hides the local-server disclosure when Daintree control is persisted off", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: false,
+        tier: "action" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+        customArgs: "",
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Daintree control");
+
+    expect(container.textContent).not.toContain("starts a local HTTP server on 127.0.0.1");
+  });
+
   it("lists Codex in the agent dropdown when it passes the assistant gate", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
