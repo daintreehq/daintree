@@ -1949,12 +1949,8 @@ class TerminalInstanceService {
     });
   }
 
-  applyRendererPolicy(
-    id: string,
-    tier: TerminalRefreshTier,
-    options?: { fleetDriven?: boolean }
-  ): void {
-    this.rendererPolicy.applyRendererPolicy(id, tier, options);
+  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
+    this.rendererPolicy.applyRendererPolicy(id, tier);
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
