@@ -7,6 +7,7 @@ import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import type { DetectionResult } from "./ProcessDetector.js";
+import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -60,6 +61,7 @@ export class PtyManager extends EventEmitter {
   private agentStateService: AgentStateService;
   private ptyPool: PtyPool | null = null;
   private processTreeCache: ProcessTreeCache | null = null;
+  private imagePathProbe: ImagePathProbe | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
   // Resize requests that arrived before the terminal was registered.
@@ -76,6 +78,10 @@ export class PtyManager extends EventEmitter {
 
   setProcessTreeCache(cache: ProcessTreeCache): void {
     this.processTreeCache = cache;
+  }
+
+  setImagePathProbe(probe: ImagePathProbe): void {
+    this.imagePathProbe = probe;
   }
 
   /**
@@ -264,6 +270,7 @@ export class PtyManager extends EventEmitter {
           ptyPool: this.ptyPool,
           sabModeEnabled: this.sabModeEnabled,
           processTreeCache: this.processTreeCache,
+          imagePathProbe: this.imagePathProbe,
         },
         spawnContext,
         ptyProcess,

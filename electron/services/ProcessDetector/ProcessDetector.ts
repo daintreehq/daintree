@@ -1,5 +1,6 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
+import type { ImagePathProbe } from "../pty/ImagePathProbe.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { logIdentityDebug } from "../pty/identityDebug.js";
 import type { ChildProcess, DetectedProcessCandidate, CommandIdentity } from "./types.js";
@@ -42,6 +43,7 @@ export class ProcessDetector {
   private lastCurrentCommand: string | undefined;
   private lastEvidenceSource: DetectionEvidenceSource | null = null;
   private cache: ProcessTreeCache;
+  private imagePathProbe: ImagePathProbe | null;
   private unsubscribe: (() => void) | null = null;
   private isStarted: boolean = false;
   private onStreak: number = 0;
@@ -73,7 +75,8 @@ export class ProcessDetector {
     ptyPid: number,
     callback: DetectionCallback,
     cache: ProcessTreeCache,
-    isLaunchAnchored: boolean = true
+    isLaunchAnchored: boolean = true,
+    imagePathProbe: ImagePathProbe | null = null
   ) {
     this.terminalId = terminalId;
     this.spawnedAt = spawnedAt;
@@ -81,6 +84,7 @@ export class ProcessDetector {
     this.callback = callback;
     this.cache = cache;
     this.isLaunchAnchored = isLaunchAnchored;
+    this.imagePathProbe = imagePathProbe;
   }
 
   /**
@@ -542,6 +546,19 @@ export class ProcessDetector {
       if (candidate) {
         bestMatch = selectPreferredCandidate(bestMatch, candidate);
       }
+      // Image-path candidate: defeats `process.title`/`setproctitle` rewrites
+      // where `comm` and argv have both been clobbered to something like
+      // "Claude Code" but the on-disk binary is still `/opt/homebrew/bin/claude`.
+      // Runs alongside the comm match (not as a replacement) so the existing
+      // selectPreferredCandidate priority logic picks the agent over a generic
+      // icon when both fire. #8790
+      const imageBasename = this.imagePathProbe?.readBasename(proc.pid) ?? null;
+      if (imageBasename) {
+        const imageCandidate = buildDetectedCandidate(imageBasename, proc.command, order++);
+        if (imageCandidate) {
+          bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
+        }
+      }
     }
 
     // Grandchild fallback. Only run when direct children didn't produce an
@@ -560,6 +577,17 @@ export class ProcessDetector {
           );
           if (candidate) {
             bestMatch = selectPreferredCandidate(bestMatch, candidate);
+          }
+          const grandImageBasename = this.imagePathProbe?.readBasename(grandchild.pid) ?? null;
+          if (grandImageBasename) {
+            const grandImageCandidate = buildDetectedCandidate(
+              grandImageBasename,
+              grandchild.command || grandchild.comm,
+              order++
+            );
+            if (grandImageCandidate) {
+              bestMatch = selectPreferredCandidate(bestMatch, grandImageCandidate);
+            }
           }
         }
       }
