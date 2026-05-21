@@ -5,6 +5,7 @@ import type * as HelpSessionServiceModule from "../../services/HelpSessionServic
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
+import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
 
 let cachedHelpService: typeof HelpServiceModule | null = null;
 async function getHelpService(): Promise<typeof HelpServiceModule> {
@@ -71,6 +72,24 @@ async function handleProvisionSession(
   });
 }
 
+async function handleGetPinnedActionContext(
+  sessionId: string
+): Promise<PinnedActionContextSnapshot | null> {
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  const { helpSessionService } = await getHelpSessionService();
+  const context = helpSessionService.getActionContextForSessionId(sessionId);
+  if (!context) return null;
+  const worktreeId = context.focusedWorktreeId ?? context.activeWorktreeId ?? null;
+  const worktreeName = context.activeWorktreeName ?? null;
+  const worktreeBranch = context.activeWorktreeBranch ?? null;
+  const terminalId = context.focusedTerminalId ?? null;
+  // Suppress the chip entirely when the snapshot carries no identifying
+  // target — a context with neither worktree nor terminal tells the user
+  // nothing actionable.
+  if (worktreeId === null && terminalId === null) return null;
+  return { worktreeId, worktreeName, worktreeBranch, terminalId };
+}
+
 async function handleRevokeSession(sessionId: string): Promise<void> {
   const { helpSessionService } = await getHelpSessionService();
   await helpSessionService.revokeSession(sessionId);
@@ -112,6 +131,10 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     revokeSession: op(HELP_METHOD_CHANNELS.revokeSession, handleRevokeSession),
+    getPinnedActionContext: op(
+      HELP_METHOD_CHANNELS.getPinnedActionContext,
+      handleGetPinnedActionContext
+    ),
     takePendingHibernation: op(
       HELP_METHOD_CHANNELS.takePendingHibernation,
       handleTakePendingHibernation,

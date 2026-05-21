@@ -16,6 +16,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { ActionContext } from "@shared/types/actions";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
@@ -137,13 +138,15 @@ type ProvisionOutcome =
 
 async function provisionHelpSession(
   project: HelpProjectRef,
-  agentId: string
+  agentId: string,
+  context?: ActionContext
 ): Promise<ProvisionOutcome> {
   try {
     const result = await window.electron.help.provisionSession({
       projectId: project.id,
       projectPath: project.path,
       agentId,
+      ...(context && { context }),
     });
     if (!result) {
       return {
@@ -565,6 +568,12 @@ export class HelpSessionController {
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
 
+    // Snapshot the focused worktree/terminal synchronously before any await
+    // so the session is pinned to what the user had focused at launch — the
+    // HelpPanel footer chip surfaces this binding (#8772), and pinned tool
+    // dispatch relies on the same snapshot (#8317).
+    const launchContext = actionService.getContext();
+
     const gen = ++this._launchGen;
     const replaceExisting = options.replaceExisting === true;
     const reservedId = options.requestedId ?? null;
@@ -602,7 +611,7 @@ export class HelpSessionController {
       useHelpPanelStore.getState().setTerminal(reservedId, launchAgentId, null);
     }
 
-    safeFireAndForget(this._executeLaunch(gen, options, launchProject, presetEnv), {
+    safeFireAndForget(this._executeLaunch(gen, options, launchProject, presetEnv, launchContext), {
       context: reservedId
         ? options.force
           ? "Help: run-anyway re-launch"
@@ -1017,7 +1026,9 @@ export class HelpSessionController {
       const launchProject = inputs.currentProject;
       this._hasAutoLaunched = true;
       const gen = ++this._launchGen;
-      safeFireAndForget(this._executeAutoLaunch(gen, launchAgentId, launchProject), {
+      // Snapshot focus synchronously before the async launch — see launch().
+      const launchContext = actionService.getContext();
+      safeFireAndForget(this._executeAutoLaunch(gen, launchAgentId, launchProject, launchContext), {
         context: "Auto-launching preferred help agent",
       });
       return;
@@ -1069,7 +1080,8 @@ export class HelpSessionController {
   private async _executeAutoLaunch(
     gen: number,
     launchAgentId: string,
-    launchProject: HelpProjectRef
+    launchProject: HelpProjectRef,
+    launchContext?: ActionContext
   ): Promise<void> {
     let session: HelpSessionRef | null = null;
     try {
@@ -1111,7 +1123,7 @@ export class HelpSessionController {
       this._hasBlockedThisSession = false;
       this._patch({ assistantVersionTooOld: null });
 
-      const outcome = await provisionHelpSession(launchProject, launchAgentId);
+      const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;
         this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
@@ -1247,7 +1259,8 @@ export class HelpSessionController {
     gen: number,
     options: HelpLaunchOptions,
     launchProject: HelpProjectRef,
-    presetEnv: Record<string, string> | undefined
+    presetEnv: Record<string, string> | undefined,
+    launchContext?: ActionContext
   ): Promise<void> {
     const launchAgentId = options.agentId;
     const reservedId = options.requestedId ?? null;
@@ -1295,7 +1308,7 @@ export class HelpSessionController {
         this._patch({ assistantVersionTooOld: null });
       }
 
-      const outcome = await provisionHelpSession(launchProject, launchAgentId);
+      const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });

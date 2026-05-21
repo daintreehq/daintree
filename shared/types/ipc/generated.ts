@@ -297,6 +297,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string | null;
   };
+  "help:get-pinned-action-context": {
+    args: [sessionId: string];
+    result: import("./help.js").PinnedActionContextSnapshot | null;
+  };
   "help:mark-terminal": {
     args: [terminalId: string];
     result: void;
