@@ -31,11 +31,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h> /* pid_t — not transitively included by the Linux headers */
 #include <unistd.h>
 
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
-#include <sys/types.h>
 #endif
 
 #if defined(__linux__)
