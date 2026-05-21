@@ -363,6 +363,20 @@ export class HelpSessionService {
   }
 
   /**
+   * Session-id keyed sibling of `getWebContentsIdForToken`. Lets the
+   * sessionId-facing IPC handlers (#8772) reject reads from a window other
+   * than the one that minted the session, mirroring the per-window pin from
+   * #7002 without exposing the bearer token. Returns null for unknown or
+   * revoked sessions.
+   */
+  getWebContentsIdForSessionId(sessionId: string): number | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.projectViewWebContentsId;
+  }
+
+  /**
    * Inverse of `terminalBySessionId` for the assistant-turn audit. Returns
    * the help-session id currently bound to a given terminal id, or null
    * when the terminal is not (or no longer) a help-session terminal. Linear

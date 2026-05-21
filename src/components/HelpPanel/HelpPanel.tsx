@@ -199,7 +199,9 @@ export function HelpPanel({
     pinnedContext?.terminalId != null &&
     (!pinnedTerminalPanel || pinnedTerminalPanel.exitCode !== undefined);
   const isPinnedWorktreeDiverged =
-    pinnedContext?.worktreeId != null && pinnedContext.worktreeId !== focusedWorktreeId;
+    pinnedContext?.worktreeId != null &&
+    focusedWorktreeId !== null &&
+    pinnedContext.worktreeId !== focusedWorktreeId;
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   const effectiveAgentId = isBuiltInAgentId(agentId) ? agentId : undefined;
