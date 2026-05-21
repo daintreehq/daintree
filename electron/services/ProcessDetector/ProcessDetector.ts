@@ -44,6 +44,11 @@ export class ProcessDetector {
   private lastEvidenceSource: DetectionEvidenceSource | null = null;
   private cache: ProcessTreeCache;
   private imagePathProbe: ImagePathProbe | null;
+  // PIDs the detector probed in the previous detect pass. On the next pass we
+  // diff against the current set and evict any PIDs that disappeared from the
+  // tree so an OS PID-reuse cycle can't return the prior process's basename
+  // through a stale ImagePathProbe entry.
+  private previouslyProbedPids = new Set<number>();
   private unsubscribe: (() => void) | null = null;
   private isStarted: boolean = false;
   private onStreak: number = 0;
@@ -265,6 +270,15 @@ export class ProcessDetector {
       this.unsubscribe = null;
       logDebug(`Stopped ProcessDetector for terminal ${this.terminalId}`);
     }
+    // Release ImagePathProbe entries for this terminal's last-known children
+    // so a recycled PID inherited by a different terminal doesn't see stale
+    // basenames. The probe is shared across all terminals.
+    if (this.imagePathProbe) {
+      for (const pid of this.previouslyProbedPids) {
+        this.imagePathProbe.evict(pid);
+      }
+    }
+    this.previouslyProbedPids.clear();
     this.isStarted = false;
   }
 
@@ -528,7 +542,12 @@ export class ProcessDetector {
     if (!isBusy) {
       // True absence of children with healthy cache → negative evidence. Let
       // merge logic below consider shell-command evidence before committing
-      // no_agent.
+      // no_agent. Also evict any image-path entries from the last pass — the
+      // children disappeared, so previously-cached basenames are now stale
+      // and could mislead a future detection cycle on a recycled PID. We
+      // explicitly do NOT evict on the blind-`ps` path above because the
+      // empty children list there is "no evidence", not "real absence".
+      this.evictDisappearedImagePathPids(new Set());
       return this.mergeWithShellEvidence(null, { isBusy: false, currentCommand: undefined });
     }
 
@@ -540,6 +559,7 @@ export class ProcessDetector {
 
     let bestMatch: DetectedProcessCandidate | null = null;
     let order = 0;
+    const probedPids = new Set<number>();
 
     for (const proc of processes) {
       const candidate = buildDetectedCandidate(proc.name, proc.command, order++);
@@ -552,11 +572,14 @@ export class ProcessDetector {
       // Runs alongside the comm match (not as a replacement) so the existing
       // selectPreferredCandidate priority logic picks the agent over a generic
       // icon when both fire. #8790
-      const imageBasename = this.imagePathProbe?.readBasename(proc.pid) ?? null;
-      if (imageBasename) {
-        const imageCandidate = buildDetectedCandidate(imageBasename, proc.command, order++);
-        if (imageCandidate) {
-          bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
+      if (this.imagePathProbe) {
+        probedPids.add(proc.pid);
+        const imageBasename = this.imagePathProbe.readBasename(proc.pid);
+        if (imageBasename) {
+          const imageCandidate = buildDetectedCandidate(imageBasename, proc.command, order++);
+          if (imageCandidate) {
+            bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
+          }
         }
       }
     }
@@ -578,15 +601,18 @@ export class ProcessDetector {
           if (candidate) {
             bestMatch = selectPreferredCandidate(bestMatch, candidate);
           }
-          const grandImageBasename = this.imagePathProbe?.readBasename(grandchild.pid) ?? null;
-          if (grandImageBasename) {
-            const grandImageCandidate = buildDetectedCandidate(
-              grandImageBasename,
-              grandchild.command || grandchild.comm,
-              order++
-            );
-            if (grandImageCandidate) {
-              bestMatch = selectPreferredCandidate(bestMatch, grandImageCandidate);
+          if (this.imagePathProbe) {
+            probedPids.add(grandchild.pid);
+            const grandImageBasename = this.imagePathProbe.readBasename(grandchild.pid);
+            if (grandImageBasename) {
+              const grandImageCandidate = buildDetectedCandidate(
+                grandImageBasename,
+                grandchild.command || grandchild.comm,
+                order++
+              );
+              if (grandImageCandidate) {
+                bestMatch = selectPreferredCandidate(bestMatch, grandImageCandidate);
+              }
             }
           }
         }
@@ -615,10 +641,30 @@ export class ProcessDetector {
     const primaryProcess = processes[0];
     const primaryCommand = primaryProcess?.command;
 
+    this.evictDisappearedImagePathPids(probedPids);
+
     return this.mergeWithShellEvidence(bestMatch, {
       isBusy,
       currentCommand: bestMatch?.processCommand || primaryCommand,
     });
+  }
+
+  /**
+   * Evict ImagePathProbe entries for PIDs that were probed last pass but are
+   * absent this pass. Without this, a recycled PID could return the prior
+   * process's cached basename for up to 30s (the probe's eviction TTL) plus
+   * the cache hard-max window, causing a brief misidentification before the
+   * background refresh writes the new value. Diffing here is O(N) per pass
+   * where N is the worst-case 10 children × ~10 grandchildren = 100 PIDs.
+   */
+  private evictDisappearedImagePathPids(currentProbedPids: Set<number>): void {
+    if (!this.imagePathProbe) return;
+    for (const pid of this.previouslyProbedPids) {
+      if (!currentProbedPids.has(pid)) {
+        this.imagePathProbe.evict(pid);
+      }
+    }
+    this.previouslyProbedPids = currentProbedPids;
   }
 
   /**

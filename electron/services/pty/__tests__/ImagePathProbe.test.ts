@@ -165,9 +165,33 @@ describe("ImagePathProbe", () => {
 
         expect(probe.readBasename(123)).toBe("claude");
 
-        vi.advanceTimersByTime(1600); // past 1500ms hard-max
+        vi.advanceTimersByTime(5100); // past 5000ms hard-max
         expect(probe.readBasename(123)).toBeNull();
         expect(readlinkMock.calls).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("survives a 1500ms poll-interval tick without blanking the basename", async () => {
+      // Regression guard for the hard-max=poll-interval timing bug. With the
+      // ProcessTreeCache poll at 1500ms and (previously) the probe's max age
+      // at 1500ms, every poll past the first one would fall past max-age
+      // under setTimeout jitter, return null, and defeat hysteresis. With
+      // the 5000ms ceiling the cached basename survives at least one poll
+      // cycle.
+      vi.useFakeTimers();
+      try {
+        const probe = new ImagePathProbe();
+        probe.readBasename(123);
+        readlinkMock.queue[0]!.resolve("/opt/homebrew/bin/claude");
+        await flush();
+
+        vi.advanceTimersByTime(1500);
+        expect(probe.readBasename(123)).toBe("claude");
+
+        vi.advanceTimersByTime(1500);
+        expect(probe.readBasename(123)).toBe("claude");
       } finally {
         vi.useRealTimers();
       }
@@ -306,6 +330,32 @@ describe("ImagePathProbe", () => {
       expect(probe.readBasename(123)).toBeNull();
       // Disposed probe must not schedule a new readlink call for the same PID.
       expect(readlinkMock.calls).toHaveLength(1);
+    });
+
+    it("does not overwrite a recreated entry with the stale in-flight resolution", async () => {
+      // Regression guard for the checkId reset bug. PID 123 is probed and
+      // its refresh is in flight. evict() drops the entry. A fresh read on
+      // the same PID creates a new entry. When the old in-flight refresh
+      // finally resolves it must NOT overwrite the new entry's state — the
+      // global monotonic checkId ensures the old refresh's checkId no
+      // longer matches.
+      const probe = new ImagePathProbe();
+      probe.readBasename(123); // schedules first refresh
+      probe.evict(123); // drops entry; first refresh still in flight
+
+      probe.readBasename(123); // creates new entry, schedules second refresh
+      expect(readlinkMock.queue).toHaveLength(2);
+
+      // Old refresh resolves with a stale result — must not be written into
+      // the new entry.
+      readlinkMock.queue[0]!.resolve("/old/stale/binary");
+      await flush();
+      expect(probe.readBasename(123)).toBeNull();
+
+      // New refresh resolves with the fresh value.
+      readlinkMock.queue[1]!.resolve("/new/bin/claude");
+      await flush();
+      expect(probe.readBasename(123)).toBe("claude");
     });
 
     it("drops stale entries past the 30s eviction TTL on the next read", async () => {

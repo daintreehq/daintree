@@ -4,13 +4,17 @@ import { readlink } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
-// Stale-while-revalidate windows mirror ForegroundProcessGroupProbe: soft-stale
-// triggers a background refresh, hard-max blanks the basename so the detector
-// stops trusting a long-dead lookup. Eviction TTL drops PIDs we haven't read
-// in a while so the per-PID Map cannot grow unbounded across a long session
-// of short-lived children.
+// Stale-while-revalidate windows. Soft-stale (500ms) triggers a background
+// refresh on the next read; the cached basename is still returned so the
+// detector keeps a continuous signal across polls. Hard-max (5000ms) is
+// 3-4× the 1500ms ProcessTreeCache poll interval — using anything close to
+// the poll interval causes every poll to fall past max-age in setTimeout
+// jitter, blanking the basename and defeating hysteresis. Eviction TTL keeps
+// idle PIDs out of the map so it cannot grow unbounded across a long session
+// of short-lived children; ProcessDetector also evicts disappeared child
+// PIDs proactively so PID reuse can't return a stale prior-process basename.
 const IMAGE_PATH_SOFT_STALE_MS = 500;
-const IMAGE_PATH_MAX_AGE_MS = 1500;
+const IMAGE_PATH_MAX_AGE_MS = 5000;
 const IMAGE_PATH_PROBE_TIMEOUT_MS = 750;
 const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
 
@@ -18,7 +22,10 @@ const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
 // the actual executable, plus dylibs/frameworks/system libs that share the
 // `txt` fd class. Filter those out so we land on the real binary rather than
 // the first system library the process loaded.
-const MACOS_SYSTEM_PATH_PREFIXES = ["/System/", "/usr/lib/", "/Library/Apple/"];
+// Narrow to `/System/Library/` (not bare `/System/`) so apps installed under
+// `/System/Applications/Foo.app/Contents/MacOS/Foo` are still picked up as the
+// executable rather than misclassified as a system library.
+const MACOS_SYSTEM_PATH_PREFIXES = ["/System/Library/", "/usr/lib/", "/Library/Apple/"];
 const MACOS_LIBRARY_SUFFIXES = [".dylib", ".framework", ".bundle"];
 
 interface CacheEntry {
@@ -55,6 +62,11 @@ interface CacheEntry {
 export class ImagePathProbe {
   private readonly entries = new Map<number, CacheEntry>();
   private disposed = false;
+  // Probe-wide monotonic counter so a refresh that resolves AFTER its entry
+  // was evicted-and-recreated cannot overwrite the new entry — the new entry
+  // will have a different checkId from the in-flight one. A per-entry counter
+  // would reset to 0 on recreation and collide with the in-flight value.
+  private nextCheckId = 0;
 
   /**
    * Sync read against the per-PID cache. Returns the cached executable
@@ -76,7 +88,7 @@ export class ImagePathProbe {
         updatedAt: 0,
         lastReadAt: now,
         refreshing: false,
-        checkId: 0,
+        checkId: this.nextCheckId,
       };
       this.entries.set(pid, entry);
       this.scheduleRefresh(pid, entry);
@@ -132,7 +144,8 @@ export class ImagePathProbe {
 
   private scheduleRefresh(pid: number, entry: CacheEntry): void {
     entry.refreshing = true;
-    const checkId = ++entry.checkId;
+    const checkId = ++this.nextCheckId;
+    entry.checkId = checkId;
     void this.refresh(pid)
       .then((basename) => {
         if (this.disposed) return;

@@ -1560,6 +1560,56 @@ describe("ProcessDetector", () => {
       );
     });
 
+    it("evicts ImagePathProbe entries for children that disappear between passes", () => {
+      // PID-reuse safety: if pid 200 was probed last pass and is gone this
+      // pass, the detector must evict its image-path cache entry so a future
+      // process with the recycled PID doesn't inherit the stale basename.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-evict",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(imagePathProbe.readBasename).toHaveBeenCalledWith(200);
+
+      // Child disappears.
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      expect(imagePathProbe.evict).toHaveBeenCalledWith(200);
+    });
+
+    it("evicts ImagePathProbe entries for the terminal's last-seen children on stop()", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-evict-stop",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      detector.stop();
+
+      expect(imagePathProbe.evict).toHaveBeenCalledWith(200);
+    });
+
     it("resolves grandchild image paths when the direct child is only an icon match", () => {
       // Grandchild fallback path: zsh → bash → renamed-claude. The direct
       // child has only an icon (priority > 0 triggers grandchild scan); the
