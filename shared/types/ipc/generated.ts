@@ -24,6 +24,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./agentCapabilities.js").AgentRegistry;
   };
+  "agent-capabilities:get-resolved-model-list": {
+    args: [agentId: string];
+    result: import("./agentCapabilities.js").ResolvedModelCatalog | null;
+  };
   "agent-capabilities:is-agent-enabled": {
     args: [agentId: string];
     result: boolean;

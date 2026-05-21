@@ -9,6 +9,7 @@ import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogC
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { AgentVersionService } from "../services/AgentVersionService.js";
+import type { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
 import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import type { ResourceProfileService } from "../services/ResourceProfileService.js";
 import type { WorktreePortBroker } from "../services/WorktreePortBroker.js";
@@ -32,6 +33,7 @@ let mainProcessWatchdogClient: MainProcessWatchdogClient | null = null;
 let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
+let agentModelCatalogService: AgentModelCatalogService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
@@ -142,6 +144,12 @@ export function getAgentVersionService(): AgentVersionService | null {
 }
 export function setAgentVersionService(v: AgentVersionService | null): void {
   agentVersionService = v;
+}
+export function getAgentModelCatalogService(): AgentModelCatalogService | null {
+  return agentModelCatalogService;
+}
+export function setAgentModelCatalogService(v: AgentModelCatalogService | null): void {
+  agentModelCatalogService = v;
 }
 export function getAgentUpdateHandler(): AgentUpdateHandler | null {
   return agentUpdateHandler;

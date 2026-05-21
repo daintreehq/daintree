@@ -6,6 +6,7 @@ export const AGENT_CAPABILITIES_METHOD_CHANNELS = {
   getAgentMetadata: "agent-capabilities:get-agent-metadata",
   isAgentEnabled: "agent-capabilities:is-agent-enabled",
   getCcrPresets: "agent-capabilities:get-ccr-presets",
+  getResolvedModelList: "agent-capabilities:get-resolved-model-list",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof AGENT_CAPABILITIES_METHOD_CHANNELS;

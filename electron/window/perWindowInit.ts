@@ -10,6 +10,7 @@ import {
 } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
+import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
 import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
@@ -32,6 +33,8 @@ import {
   setMainProcessWatchdogClientRef,
   getAgentVersionService,
   setAgentVersionService,
+  getAgentModelCatalogService,
+  setAgentModelCatalogService,
   getAgentUpdateHandler,
   setAgentUpdateHandler,
   getWorkspaceClientRef,
@@ -147,6 +150,16 @@ export async function initPerWindowServices(
     const versionSvc = new AgentVersionService(cliAvailabilityService);
     setAgentVersionService(versionSvc);
     setAgentUpdateHandler(new AgentUpdateHandler(ptyClient, versionSvc, cliAvailabilityService));
+
+    if (!getAgentModelCatalogService()) {
+      const modelCatalogSvc = new AgentModelCatalogService();
+      setAgentModelCatalogService(modelCatalogSvc);
+      // Warm the cache in the background so the first renderer request hits
+      // populated data. Errors are already silenced inside getCatalog().
+      void modelCatalogSvc.getCatalog().catch(() => {
+        /* swallow — surfaced via console.warn inside the service */
+      });
+    }
 
     let lastCrashDetails: {
       crashType: string;

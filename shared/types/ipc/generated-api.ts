@@ -26,6 +26,9 @@ export interface GeneratedElectronAPI {
     getRegistry(
       ...args: IpcInvokeMap["agent-capabilities:get-registry"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:get-registry"]["result"]>;
+    getResolvedModelList(
+      ...args: IpcInvokeMap["agent-capabilities:get-resolved-model-list"]["args"]
+    ): Promise<IpcInvokeMap["agent-capabilities:get-resolved-model-list"]["result"]>;
     isAgentEnabled(
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
