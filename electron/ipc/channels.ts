@@ -614,6 +614,18 @@ export const CHANNELS = {
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
   /**
+   * List the external bearers currently connected to the local MCP server.
+   * Returns only the display suffix and token hash — never the raw token.
+   * Backs the "External clients" row on the MCP Server settings tab (#8778).
+   */
+  MCP_SERVER_LIST_ACTIVE_BEARERS: "mcp-server:list-active-bearers",
+  /**
+   * Disconnect a single external bearer by its token hash: revoke every
+   * session it owns and evict it from the live register. One bearer only —
+   * key rotation (revoke-all) stays a separate action (#8778).
+   */
+  MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
+  /**
    * Push channel: a grant lifecycle event (`issued`, `expired`, `revoked`)
    * fired for the help-session pinned to this renderer. Targeted send —
    * grant state is session-scoped and never broadcast.

@@ -344,6 +344,8 @@ export type {
   McpAnomalySignal,
   McpRuntimeSnapshot,
   McpRuntimeState,
+  ActiveBearerRecord,
+  DisconnectBearerResult,
 } from "./ipc/mcpServer.js";
 export {
   MCP_AUDIT_MIN_RECORDS,

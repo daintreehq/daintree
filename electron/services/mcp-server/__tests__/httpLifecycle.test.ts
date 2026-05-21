@@ -15,8 +15,16 @@ vi.mock("../../../store.js", () => ({
 
 import http from "node:http";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
+
+type BearerTestHandle = {
+  touchBearer: (authHeader: string, userAgent: string, sessionId: string) => void;
+  detachBearerSession: (sessionId: string) => void;
+};
+
+const hashOf = (authHeader: string) => createHash("sha256").update(authHeader).digest("hex");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockServer = any;
@@ -437,6 +445,79 @@ describe("HttpLifecycle", () => {
         .calls[0]?.[0];
       expect(callArgs).toBeDefined();
       expect(callArgs.turnId).toBeUndefined();
+    });
+  });
+
+  describe("bearer register", () => {
+    const authA = "Bearer secret-token-aaaa";
+    const authB = "Bearer secret-token-bbbb";
+
+    it("registers a bearer and exposes only the suffix, never the raw token", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      (lc as unknown as BearerTestHandle).touchBearer(authA, "Claude Code/1.0", "sess-1");
+
+      const bearers = lc.listActiveBearers();
+      expect(bearers).toHaveLength(1);
+      expect(bearers[0]).toMatchObject({
+        tokenHash: hashOf(authA),
+        token4LastChars: "aaaa",
+        userAgent: "Claude Code/1.0",
+        requestsSinceLaunch: 1,
+      });
+      // The raw token must never cross the listing surface.
+      expect(JSON.stringify(bearers)).not.toContain("secret-token-aaaa");
+      // sessionIds is internal only.
+      expect(bearers[0]).not.toHaveProperty("sessionIds");
+    });
+
+    it("coalesces two sessions onto one entry and only drops it when both close", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1");
+      handle.touchBearer(authA, "Client/2", "sess-2");
+
+      let bearers = lc.listActiveBearers();
+      expect(bearers).toHaveLength(1);
+      // requestsSinceLaunch counts each handshake; userAgent reflects the latest.
+      expect(bearers[0]!.requestsSinceLaunch).toBe(2);
+      expect(bearers[0]!.userAgent).toBe("Client/2");
+
+      handle.detachBearerSession("sess-1");
+      expect(lc.listActiveBearers()).toHaveLength(1);
+
+      handle.detachBearerSession("sess-2");
+      expect(lc.listActiveBearers()).toHaveLength(0);
+    });
+
+    it("keys distinct tokens to distinct entries", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1");
+      handle.touchBearer(authB, "Client/2", "sess-2");
+      expect(lc.listActiveBearers()).toHaveLength(2);
+    });
+
+    it("detachBearerSession is a no-op for unknown sessions", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      expect(() => (lc as unknown as BearerTestHandle).detachBearerSession("ghost")).not.toThrow();
+      expect(lc.listActiveBearers()).toHaveLength(0);
+    });
+
+    it("getBearerSessionIds returns a snapshot or null", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1");
+      expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-1"]);
+      expect(lc.getBearerSessionIds("nonexistent")).toBeNull();
+    });
+
+    it("clearBearer evicts the entry and its reverse-lookup rows", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1");
+      lc.clearBearer(hashOf(authA));
+      expect(lc.listActiveBearers()).toHaveLength(0);
+      // Reverse rows gone: a late detach for the cleared session is harmless.
+      expect(() => handle.detachBearerSession("sess-1")).not.toThrow();
     });
   });
 

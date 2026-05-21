@@ -10,6 +10,8 @@ import {
   EyeOff,
   RefreshCw,
   ScrollText,
+  Plug,
+  ChevronRight,
 } from "lucide-react";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -25,12 +27,14 @@ import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { logError } from "@/utils/logger";
 import {
   type McpActiveClientInfo,
   type McpAuditRecord,
   type AssistantTurnRecord,
   type McpAuditStats,
+  type ActiveBearerRecord,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -92,7 +96,36 @@ export function McpServerSettingsTab() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
+  const [activeBearers, setActiveBearers] = useState<ActiveBearerRecord[]>([]);
+  const [bearersExpanded, setBearersExpanded] = useState(false);
+  const [disconnectingHash, setDisconnectingHash] = useState<string | null>(null);
+  // Drives the neutral attribution pill on the top card: when the Daintree
+  // Assistant holds the server open, the toggle reflects assistant intent
+  // rather than a manual choice.
+  const [keptAliveByAssistant, setKeptAliveByAssistant] = useState(false);
+
   useSettingsTabValidation("mcp", Boolean(error));
+
+  // Bearer list + assistant-control flag are non-critical: a failure must not
+  // block the rest of the tab, so they're fetched outside the main mount
+  // Promise.all and swallow errors to a quiet log.
+  const refreshActiveBearers = async (): Promise<void> => {
+    try {
+      const bearers = await window.electron.mcpServer.listActiveBearers();
+      setActiveBearers(bearers);
+    } catch (err) {
+      logError("Failed to load MCP active bearers", err);
+    }
+  };
+
+  const refreshAssistantControl = async (): Promise<void> => {
+    try {
+      const settings = await window.electron.helpAssistant?.getSettings();
+      setKeptAliveByAssistant(settings?.daintreeControl === true);
+    } catch (err) {
+      logError("Failed to load Daintree Assistant settings", err);
+    }
+  };
 
   const refreshAuditRecords = async (): Promise<void> => {
     try {
@@ -162,6 +195,9 @@ export function McpServerSettingsTab() {
         setAuditLoading(false);
       });
 
+    void refreshActiveBearers();
+    void refreshAssistantControl();
+
     const unsub = window.electron.mcpServer.onRuntimeStateChanged(() => {
       if (!settled) return;
       window.electron.mcpServer
@@ -176,6 +212,10 @@ export function McpServerSettingsTab() {
         .catch((err) => {
           logError("Failed to refresh MCP status on runtime change", err);
         });
+      // A runtime-state push fires on connect/disconnect, server restart, and
+      // the assistant toggling `daintreeControl` — refresh both derived views.
+      void refreshActiveBearers();
+      void refreshAssistantControl();
     });
 
     return () => {
@@ -418,6 +458,21 @@ export function McpServerSettingsTab() {
     }
   };
 
+  const handleDisconnectBearer = async (tokenHash: string) => {
+    if (disconnectingHash) return;
+    setDisconnectingHash(tokenHash);
+    try {
+      setError(null);
+      await window.electron.mcpServer.disconnectBearer(tokenHash);
+      await refreshActiveBearers();
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to disconnect client"));
+      logError("Failed to disconnect MCP client", err);
+    } finally {
+      setDisconnectingHash(null);
+    }
+  };
+
   const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
 
   // Rotation is the revoke-all primitive — it invalidates every external
@@ -435,6 +490,9 @@ export function McpServerSettingsTab() {
         onChange={handleToggle}
         ariaLabel="Enable MCP server"
         disabled={loading}
+        lifecycleBadge={
+          status.enabled && keptAliveByAssistant ? "Kept alive by Daintree Assistant" : undefined
+        }
       />
 
       {!status.enabled && !loading && !error && (
@@ -497,6 +555,58 @@ export function McpServerSettingsTab() {
                   Paste the copied config into your MCP client (e.g. Claude Code, Cursor).
                   {status.apiKey && " The config includes the authorization header."}
                 </p>
+
+                {activeBearers.length > 0 && (
+                  <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setBearersExpanded((v) => !v)}
+                      aria-expanded={bearersExpanded}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          bearersExpanded && "rotate-90"
+                        )}
+                      />
+                      <Plug className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                      External clients ({activeBearers.length})
+                    </button>
+
+                    {bearersExpanded && (
+                      <ul className="border-t border-daintree-border divide-y divide-daintree-border">
+                        {activeBearers.map((bearer) => (
+                          <li key={bearer.tokenHash} className="flex items-center gap-3 px-3 py-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs text-daintree-text/80">
+                                {bearer.userAgent}
+                              </div>
+                              <div className="text-[11px] text-daintree-text/50">
+                                <span className="font-mono">…{bearer.token4LastChars}</span>
+                                {" · "}
+                                {bearer.requestsSinceLaunch}{" "}
+                                {bearer.requestsSinceLaunch === 1 ? "session" : "sessions"}
+                                {" · active "}
+                                {formatRelativeTime(bearer.lastActiveAt)}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
+                              disabled={disconnectingHash !== null}
+                              className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                            >
+                              {disconnectingHash === bearer.tokenHash
+                                ? "Disconnecting…"
+                                : "Disconnect"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-xs text-daintree-text/50">Server is starting…</p>

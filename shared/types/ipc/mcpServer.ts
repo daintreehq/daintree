@@ -414,3 +414,33 @@ export interface McpActiveClientInfo {
   connectedAtMs: number;
   transport: "sse" | "streamable-http";
 }
+
+/**
+ * Live snapshot of one bearer token currently connected to the local MCP
+ * server, surfaced on the MCP Server settings tab. Tracked per-token in a
+ * register separate from the audit ring buffer — the audit log is an event
+ * history, this is the current-connection view.
+ *
+ * `tokenHash` is the SHA-256 of the full `Authorization` header and is the
+ * stable identity used to target {@link disconnectBearer}; the raw token is
+ * never exposed across IPC. `token4LastChars` is the display-only suffix.
+ * `requestsSinceLaunch` counts new session handshakes for this bearer since
+ * the server last started (reset on restart), not per-message traffic.
+ */
+export interface ActiveBearerRecord {
+  tokenHash: string;
+  token4LastChars: string;
+  userAgent: string;
+  lastActiveAt: number;
+  requestsSinceLaunch: number;
+}
+
+/**
+ * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true
+ * when a matching bearer entry existed and its sessions were revoked — false
+ * when the token hash was already absent (e.g. the client disconnected first).
+ */
+export interface DisconnectBearerResult {
+  tokenHash: string;
+  disconnected: boolean;
+}
