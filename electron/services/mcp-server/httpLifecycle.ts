@@ -40,8 +40,10 @@ import {
   RESTART_MAX_DELAY_MS,
   RESTART_JITTER_MS,
   RESTART_STABLE_RESET_MS,
+  MCP_STOP_DRAIN_TIMEOUT_MS,
   MCP_SERVER_KEY,
 } from "./shared.js";
+import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
 
 export interface HttpLifecycleDeps {
   sessionStore: SessionStore;
@@ -184,6 +186,13 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.helpSessionActionContextResolver(token);
+  }
+
+  /** Normalize a possibly-array request header to a trimmed string or null. */
+  private headerString(value: string | string[] | undefined): string | null {
+    const raw = Array.isArray(value) ? value[0] : value;
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : null;
   }
 
   private getConfig() {
@@ -426,19 +435,37 @@ export class HttpLifecycle {
 
         let wasRunning = false;
         if (this.httpServer) {
-          wasRunning = this.httpServer.listening;
-          this.httpServer.closeAllConnections();
+          const server = this.httpServer;
+          wasRunning = server.listening;
+          // Graceful drain (#8779): stop accepting new connections, then let
+          // in-flight requests finish naturally. `closeIdleConnections()`
+          // drops bare keep-alive sockets immediately so they don't hold
+          // `close()` open; active requests keep their socket until the
+          // response ends. The eager `closeAllConnections()` that used to
+          // run *here* force-destroyed in-flight tool calls before they
+          // could complete — it now fires only as the deadline fallback
+          // below so a hung external client can't block the toggle forever.
+          let drained = false;
           await Promise.race([
             new Promise<void>((resolve) => {
-              this.httpServer!.close(() => resolve());
+              server.close(() => {
+                drained = true;
+                resolve();
+              });
+              server.closeIdleConnections();
             }),
             new Promise<void>((resolve) => {
               setTimeout(() => {
-                console.warn("[MCP] server.close() timed out after 10s — force-clearing");
+                console.warn("[MCP] server.close() timed out after 3s — force-closing connections");
                 resolve();
-              }, 10_000).unref?.();
+              }, MCP_STOP_DRAIN_TIMEOUT_MS).unref?.();
             }),
           ]);
+          if (!drained) {
+            // Deadline hit with sockets still active — sever them so the
+            // listening port is released before the next start.
+            server.closeAllConnections();
+          }
           this.httpServer = null;
           this.port = null;
         }
@@ -563,6 +590,11 @@ export class HttpLifecycle {
       const sessionId = transport.sessionId;
       const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
       this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
+      this.deps.sessionStore.registerClientMetadata(
+        sessionId,
+        this.headerString(req.headers["user-agent"]),
+        "sse"
+      );
 
       const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
       if (pinnedWebContentsId !== null) {
@@ -676,6 +708,11 @@ export class HttpLifecycle {
     const authHeader = req.headers.authorization ?? "";
     const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
+    this.deps.sessionStore.registerClientMetadata(
+      newSessionId,
+      this.headerString(req.headers["user-agent"]),
+      "streamable-http"
+    );
 
     const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
     if (pinnedWebContentsId !== null) {
@@ -1015,6 +1052,15 @@ export class HttpLifecycle {
     }
     const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
     return { sessionId, revokedCount };
+  }
+
+  /**
+   * Snapshot the externally-connected clients for the disable-confirmation
+   * dialog (#8779). Empty when the server isn't listening.
+   */
+  listActiveClients(): McpActiveClientInfo[] {
+    if (!this.isRunning) return [];
+    return this.deps.sessionStore.listExternalActiveClients();
   }
 
   getStatus(): {

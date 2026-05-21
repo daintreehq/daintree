@@ -9,6 +9,7 @@ import { sanitizePath } from "../../utils/pathScrubber.js";
 import { scrubSecrets } from "../../utils/secretScrubber.js";
 import type {
   AssistantTurnRecord,
+  McpActiveClientInfo,
   McpAuditRecord,
   McpAuditStats,
   McpIssueGrantResult,
@@ -69,6 +70,13 @@ export const mcpServerNamespace = defineIpcNamespace({
       const svc = await getMcpServerService();
       return svc.getConfigSnippet();
     }),
+    listActiveClients: op(
+      MCP_SERVER_METHOD_CHANNELS.listActiveClients,
+      async (): Promise<McpActiveClientInfo[]> => {
+        const svc = await getMcpServerService();
+        return svc.listActiveClients();
+      }
+    ),
     getAuditRecords: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditRecords,
       async (): Promise<McpAuditRecord[]> => {

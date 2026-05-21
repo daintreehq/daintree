@@ -354,6 +354,10 @@ export class McpServerService {
     await this.httpLifecycle.stop();
   }
 
+  listActiveClients(): import("../../shared/types/ipc/mcpServer.js").McpActiveClientInfo[] {
+    return this.httpLifecycle.listActiveClients();
+  }
+
   getStatus(): {
     enabled: boolean;
     port: number | null;

@@ -23,9 +23,11 @@ import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
+  type McpActiveClientInfo,
   type McpAuditRecord,
   type AssistantTurnRecord,
   type McpAuditStats,
@@ -81,6 +83,12 @@ export function McpServerSettingsTab() {
 
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
+  // Tier-D2 disable confirmation (#8779): populated only when the user turns
+  // the server off while external clients are connected, so the dialog can
+  // name who's about to be severed before the stop fires.
+  const [disableClients, setDisableClients] = useState<McpActiveClientInfo[]>([]);
+  const [showDisableConfirm, setShowDisableConfirm] = useState(false);
+  const [isDisabling, setIsDisabling] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
@@ -180,15 +188,54 @@ export function McpServerSettingsTab() {
     };
   }, []);
 
+  const applyEnabled = async (enabled: boolean) => {
+    const newStatus = await window.electron.mcpServer.setEnabled(enabled);
+    setStatus(newStatus);
+  };
+
   const handleToggle = async () => {
     try {
       setError(null);
-      const newStatus = await window.electron.mcpServer.setEnabled(!status.enabled);
-      setStatus(newStatus);
+      // Enabling is always D0 — flip immediately. Disabling severs whatever
+      // external clients are connected, so gate it on a D2 confirm that names
+      // them. Zero external clients → reversible-local, no ceremony (#8779).
+      if (!status.enabled) {
+        await applyEnabled(true);
+        return;
+      }
+      const clients = await window.electron.mcpServer.listActiveClients();
+      if (clients.length === 0) {
+        await applyEnabled(false);
+        return;
+      }
+      setDisableClients(clients);
+      setShowDisableConfirm(true);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to update MCP server"));
       logError("Failed to update MCP server", err);
     }
+  };
+
+  const confirmDisable = async () => {
+    if (isDisabling) return;
+    setIsDisabling(true);
+    try {
+      setError(null);
+      await applyEnabled(false);
+      setShowDisableConfirm(false);
+      setDisableClients([]);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to update MCP server"));
+      logError("Failed to update MCP server", err);
+    } finally {
+      setIsDisabling(false);
+    }
+  };
+
+  const handleCancelDisable = () => {
+    if (isDisabling) return;
+    setShowDisableConfirm(false);
+    setDisableClients([]);
   };
 
   const handleCopyConfig = async () => {
@@ -663,6 +710,39 @@ export function McpServerSettingsTab() {
           <p className="text-xs text-status-danger">{error}</p>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={showDisableConfirm}
+        onClose={isDisabling ? undefined : handleCancelDisable}
+        title="Stop MCP server?"
+        description={
+          disableClients.length === 1
+            ? "Turning the server off disconnects the client below. Any tool call it has in flight is allowed to finish first."
+            : `Turning the server off disconnects the ${disableClients.length} clients below. Any tool calls they have in flight are allowed to finish first.`
+        }
+        confirmLabel="Stop sharing"
+        cancelLabel="Keep running"
+        onConfirm={confirmDisable}
+        isConfirmLoading={isDisabling}
+        variant="default"
+        zIndex="nested"
+      >
+        <ul className="space-y-1.5">
+          {disableClients.map((client) => (
+            <li
+              key={client.sessionId}
+              className="flex items-center justify-between gap-3 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+            >
+              <span className="text-xs text-daintree-text/80 truncate">
+                {client.userAgent ?? "Unknown client"}
+              </span>
+              <span className="text-[11px] text-daintree-text/50 shrink-0">
+                connected {formatRelativeTime(client.connectedAtMs)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={showRotateConfirm}

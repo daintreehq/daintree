@@ -24,6 +24,7 @@ type MockServer = any;
 function mockServer(port = 45454): MockServer {
   const s = new EventEmitter() as unknown as MockServer;
   s.closeAllConnections = vi.fn();
+  s.closeIdleConnections = vi.fn();
   s.close = vi.fn((cb?: () => void) => {
     cb?.();
     return s;
@@ -59,6 +60,8 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       armTierElevationTimer: vi.fn(),
       clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
+      registerClientMetadata: vi.fn(),
+      listExternalActiveClients: vi.fn(() => []),
     },
     auditService: {
       hydrate: vi.fn(),
@@ -201,13 +204,16 @@ describe("HttpLifecycle", () => {
   });
 
   describe("stop()", () => {
-    it("calls closeAllConnections before close", async () => {
+    it("drains gracefully: closeIdleConnections after close starts, no eager closeAllConnections (#8779)", async () => {
       const deps = fakeDeps();
       const s = mockServer();
       (s as MockServer & { listening: boolean }).listening = true;
       const callOrder: string[] = [];
       s.closeAllConnections.mockImplementation(() => {
         callOrder.push("closeAllConnections");
+      });
+      s.closeIdleConnections.mockImplementation(() => {
+        callOrder.push("closeIdleConnections");
       });
       s.close.mockImplementation((cb?: () => void) => {
         callOrder.push("close");
@@ -221,24 +227,33 @@ describe("HttpLifecycle", () => {
 
       await lc.stop();
 
-      expect(callOrder[0]).toBe("closeAllConnections");
-      expect(callOrder[1]).toBe("close");
+      // close() starts the drain; closeIdleConnections() drops bare keep-alive
+      // sockets immediately after. The eager force-kill is gone — when close
+      // completes within the deadline closeAllConnections is never called.
+      expect(callOrder[0]).toBe("close");
+      expect(callOrder).toContain("closeIdleConnections");
+      expect(s.closeAllConnections).not.toHaveBeenCalled();
     });
 
-    it("resolves after timeout when close hangs", async () => {
+    it("force-closes connections only after the 3s drain deadline (#8779)", async () => {
       const deps = fakeDeps();
       const s = mockServer();
       (s as MockServer & { listening: boolean }).listening = true;
-      s.close.mockImplementation(() => s); // never calls callback
+      s.close.mockImplementation(() => s); // never calls callback — close hangs
 
       const lc = new HttpLifecycle(deps);
       (lc as unknown as { httpServer: MockServer }).httpServer = s;
       (lc as unknown as { port: number }).port = 45454;
 
       const stopPromise = lc.stop();
-      await vi.advanceTimersByTimeAsync(11_000);
+      // Before the deadline the active sockets are left to drain.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(s.closeAllConnections).not.toHaveBeenCalled();
+      // Past the 3s deadline the remaining sockets are force-closed.
+      await vi.advanceTimersByTimeAsync(2_000);
 
       await expect(stopPromise).resolves.toBeUndefined();
+      expect(s.closeIdleConnections).toHaveBeenCalled();
       expect(s.closeAllConnections).toHaveBeenCalled();
       expect((lc as unknown as { httpServer: unknown }).httpServer).toBeNull();
     });

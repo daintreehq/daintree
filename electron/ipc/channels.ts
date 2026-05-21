@@ -537,6 +537,12 @@ export const CHANNELS = {
   MCP_SERVER_SET_PORT: "mcp-server:set-port",
   MCP_SERVER_ROTATE_API_KEY: "mcp-server:rotate-api-key",
   MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
+  /**
+   * Snapshot the externally-connected MCP clients (api-key / unauthenticated
+   * loopback sessions, excluding renderer-pinned help-assistant bearers) so
+   * the disable-confirmation can name who's about to be severed (#8779).
+   */
+  MCP_SERVER_LIST_ACTIVE_CLIENTS: "mcp-server:list-active-clients",
   MCP_SERVER_GET_AUDIT_RECORDS: "mcp-server:get-audit-records",
   MCP_SERVER_CLEAR_AUDIT_LOG: "mcp-server:clear-audit-log",
   MCP_SERVER_SET_AUDIT_ENABLED: "mcp-server:set-audit-enabled",

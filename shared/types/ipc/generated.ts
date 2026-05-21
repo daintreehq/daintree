@@ -395,6 +395,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
   };
+  "mcp-server:list-active-clients": {
+    args: [];
+    result: import("./mcpServer.js").McpActiveClientInfo[];
+  };
   "mcp-server:revoke-session-grants": {
     args: [payload: { sessionId: string }];
     result: import("./mcpServer.js").McpRevokeSessionGrantsResult;

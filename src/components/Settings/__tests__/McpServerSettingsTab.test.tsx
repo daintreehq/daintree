@@ -75,6 +75,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     }),
     setEnabled: vi.fn(),
     setPort: vi.fn(),
+    listActiveClients: vi.fn().mockResolvedValue([]),
     getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
     getAuditRecords: vi.fn().mockResolvedValue([]),
@@ -553,6 +554,109 @@ describe("McpServerSettingsTab", () => {
     await waitForContent(container, "toggle failed");
     expect(mockedNotify).not.toHaveBeenCalled();
     expect(mockedLogError).toHaveBeenCalledWith("Failed to update MCP server", expect.any(Error));
+  });
+
+  it("disabling with connected external clients opens a confirm dialog naming them before stopping (#8779)", async () => {
+    const setEnabledMock = vi.fn().mockResolvedValue({
+      enabled: false,
+      port: null,
+      configuredPort: 9020,
+      apiKey: "dnt-key-abc123",
+    });
+    installMcpApi({
+      setEnabled: setEnabledMock,
+      listActiveClients: vi.fn().mockResolvedValue([
+        {
+          sessionId: "s1",
+          userAgent: "Claude Code/1.2",
+          connectedAtMs: Date.now() - 120_000,
+          transport: "streamable-http",
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server");
+
+    fireEvent.click(screen.getByLabelText("Enable MCP server"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /stop mcp server\?/i })).toBeTruthy();
+    });
+    // The named client must appear; setEnabled must not have fired yet.
+    expect(screen.getByText("Claude Code/1.2")).toBeTruthy();
+    expect(setEnabledMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /^stop sharing$/i }));
+
+    await waitFor(() => {
+      expect(setEnabledMock).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it("Stop dialog can be canceled without disabling the server (#8779)", async () => {
+    const setEnabledMock = vi.fn();
+    installMcpApi({
+      setEnabled: setEnabledMock,
+      listActiveClients: vi.fn().mockResolvedValue([
+        {
+          sessionId: "s1",
+          userAgent: "Cursor/0.9",
+          connectedAtMs: Date.now(),
+          transport: "sse",
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server");
+
+    fireEvent.click(screen.getByLabelText("Enable MCP server"));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /stop mcp server\?/i })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^keep running$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /stop mcp server\?/i })).toBeNull();
+    });
+    expect(setEnabledMock).not.toHaveBeenCalled();
+  });
+
+  it("disabling with no connected clients stops immediately without a dialog (#8779)", async () => {
+    const setEnabledMock = vi.fn().mockResolvedValue({
+      enabled: false,
+      port: null,
+      configuredPort: 9020,
+      apiKey: "dnt-key-abc123",
+    });
+    installMcpApi({
+      setEnabled: setEnabledMock,
+      listActiveClients: vi.fn().mockResolvedValue([]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server");
+
+    fireEvent.click(screen.getByLabelText("Enable MCP server"));
+
+    await waitFor(() => {
+      expect(setEnabledMock).toHaveBeenCalledWith(false);
+    });
+    expect(screen.queryByRole("heading", { name: /stop mcp server\?/i })).toBeNull();
   });
 
   it("shows inline error for invalid audit max records instead of notifying", async () => {
