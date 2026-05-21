@@ -158,6 +158,7 @@ interface HelpAssistantApi {
 
 interface McpServerApi {
   getStatus: ReturnType<typeof vi.fn>;
+  getRuntimeState: ReturnType<typeof vi.fn>;
   setEnabled: ReturnType<typeof vi.fn>;
   rotateApiKey: ReturnType<typeof vi.fn>;
   getConfigSnippet: ReturnType<typeof vi.fn>;
@@ -189,6 +190,12 @@ function installApi(
       port: 45454,
       configuredPort: 45454,
       apiKey: "dnt-key-abc",
+    }),
+    getRuntimeState: vi.fn().mockResolvedValue({
+      enabled: true,
+      state: "ready",
+      port: 45454,
+      lastError: null,
     }),
     setEnabled: vi.fn().mockResolvedValue({
       enabled: true,
@@ -427,6 +434,12 @@ describe("DaintreeAssistantSettingsTab", () => {
           configuredPort: null,
           apiKey: "",
         }),
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: false,
+          state: "disabled",
+          port: null,
+          lastError: null,
+        }),
       }
     );
 
@@ -438,6 +451,50 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "MCP server is off");
 
     expect(screen.queryByRole("button", { name: /rotate mcp key/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /open mcp server settings/i })).toBeTruthy();
+  });
+
+  it("shows the local-server disclosure when Daintree control is on, and hides it when off", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Daintree control");
+
+    // daintreeControl defaults to true in the mocked settings.
+    expect(container.textContent).toContain("starts a local HTTP server on 127.0.0.1");
+
+    fireEvent.click(screen.getByLabelText("Allow the assistant to call Daintree control tools"));
+
+    await waitFor(() => {
+      expect(container.textContent).not.toContain("starts a local HTTP server on 127.0.0.1");
+    });
+  });
+
+  it("surfaces the runtime error and a recovery link when the MCP server failed to start", async () => {
+    installApi(
+      {},
+      {
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: "EADDRINUSE: port 45454 already in use",
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "MCP server failed to start");
+
+    expect(container.textContent).toContain("EADDRINUSE: port 45454 already in use");
+    expect(screen.getByRole("button", { name: /open mcp server settings/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /copy mcp config/i })).toBeNull();
   });
 
