@@ -116,14 +116,17 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           err && typeof err === "object" && "code" in err
             ? (err as Record<string, unknown>).code
             : undefined;
+        const servicesUnavailable =
+          code === "MCP_SERVER_NOT_STARTED" ||
+          code === "MCP_PROBE_FAILED" ||
+          code === "MCP_NOT_READY";
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: code === "MCP_NOT_READY" ? "Start MCP failed" : "Assistant launch failed",
-          message:
-            code === "MCP_NOT_READY"
-              ? "Daintree Assistant needs MCP, but the server didn't start."
-              : "Couldn't provision the Daintree Assistant session.",
+          title: "Assistant couldn't start",
+          message: servicesUnavailable
+            ? "Daintree's assistant services didn't start. Check assistant settings, then try again."
+            : "Couldn't start the Daintree Assistant session.",
         });
         return;
       }
@@ -132,8 +135,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: "Assistant launch failed",
-          message: "Couldn't provision the Daintree Assistant session.",
+          title: "Assistant couldn't start",
+          message: "Couldn't start the Daintree Assistant session.",
         });
         return;
       }

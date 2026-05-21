@@ -94,6 +94,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
 
 import { HelpSessionController } from "../HelpSessionController";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 
 function resetState() {
   helpPanelState.isOpen = false;
@@ -243,6 +244,7 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.preflightSnapshot).toBeNull();
     expect(snap.isApprovingTier).toBe(false);
     expect(snap.isCheckingVersion).toBe(false);
+    expect(snap.launchError).toBeNull();
   });
 
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
@@ -709,5 +711,105 @@ describe("HelpSessionController — checkVersionAgain", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("HelpSessionController — launch error routing", () => {
+  function primeInputs(ctrl: HelpSessionController, isOpen: boolean) {
+    ctrl["_lastInputs"] = {
+      isOpen,
+      isReadyToLaunch: true,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    };
+  }
+
+  const provisionMock = () =>
+    window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
+
+  it("surfaces a launch failure as a banner when the panel is open", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    provisionMock().mockRejectedValueOnce(
+      Object.assign(new Error("port collision"), { code: "MCP_SERVER_NOT_STARTED" })
+    );
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError).toEqual({
+        agentId: "claude",
+        kind: "mcp-server-not-started",
+      });
+    });
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("maps a probe failure to the probe-failed banner kind", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    provisionMock().mockRejectedValueOnce(
+      Object.assign(new Error("bad probe"), { code: "MCP_PROBE_FAILED" })
+    );
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("mcp-probe-failed");
+    });
+    ctrl.stop();
+  });
+
+  it("falls back to a toast when the panel is closed", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, false);
+    provisionMock().mockRejectedValueOnce(
+      Object.assign(new Error("port collision"), { code: "MCP_SERVER_NOT_STARTED" })
+    );
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Assistant couldn't start" })
+      );
+    });
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+
+  it("treats a null provision result as a generic spawn failure", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    provisionMock().mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("spawn-failed");
+    });
+    ctrl.stop();
+  });
+
+  it("dismissLaunchError clears the banner", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    provisionMock().mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+    await vi.waitFor(() => expect(ctrl.getSnapshot().launchError).not.toBeNull());
+
+    ctrl.dismissLaunchError();
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
   });
 });

@@ -536,7 +536,7 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     );
   });
 
-  it("notifies and does not commit terminal when result.ok is false", async () => {
+  it("shows the launch-error banner (not a toast) and skips commit when result.ok is false", async () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: false });
 
@@ -545,12 +545,13 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    // Panel is open, so the failure surfaces inline rather than as a toast.
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(screen.getByText("Assistant couldn't start")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("notifies when result.ok is true but terminalId is null", async () => {
+  it("shows the launch-error banner when result.ok is true but terminalId is null", async () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: null } });
 
@@ -559,12 +560,11 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("notifies and aborts when help folder is null", async () => {
+  it("shows the launch-error banner and aborts when help folder is null", async () => {
     mockGetFolderPath.mockResolvedValue(null);
 
     await act(async () => {
@@ -573,16 +573,15 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("surfaces a Start-MCP-failed toast and skips dispatch when provisionSession rejects with MCP_NOT_READY", async () => {
+  it("shows the services-unavailable banner with a settings shortcut when provisioning reports the server isn't started", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj" };
     mockGetFolderPath.mockResolvedValue("/help");
     const err = new Error("port collision") as Error & { code: string };
-    err.code = "MCP_NOT_READY";
+    err.code = "MCP_SERVER_NOT_STARTED";
     mockProvisionSession.mockRejectedValueOnce(err);
 
     await act(async () => {
@@ -591,19 +590,12 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Start MCP failed",
-        action: expect.objectContaining({
-          label: "Open settings",
-          actionId: "app.settings.openTab",
-        }),
-      })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(screen.getByText("Open settings")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("falls back to a generic launch-failed toast when provisionSession rejects without a typed code", async () => {
+  it("shows the launch-error banner when provisionSession rejects without a typed code", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj" };
     mockGetFolderPath.mockResolvedValue("/help");
     mockProvisionSession.mockRejectedValueOnce(new Error("ipc disconnected"));
@@ -613,12 +605,8 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(mockDispatch).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Assistant launch failed",
-      })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 });
 
@@ -691,9 +679,8 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("does not auto-launch when document.hidden is true (issue #7201 guard)", async () => {
@@ -757,7 +744,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("stale-term");
   });
 
-  it("notifies and does not commit terminal on launch failure", async () => {
+  it("shows the launch-error banner and does not commit terminal on launch failure", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: false });
@@ -767,9 +754,8 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("provisions and dispatches a Codex assistant launch when codex is the preferred agent", async () => {
@@ -1028,9 +1014,8 @@ describe("HelpPanel — handleRunAnyway", () => {
       null
     );
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("reserves the new help-terminal id BEFORE dispatch resolves (race fix for #6951)", async () => {
@@ -2013,9 +1998,8 @@ describe("HelpPanel — + New session destructive reset", () => {
     expect(setCalls.length).toBe(1);
     expect(setCalls[0]?.[2]).toBeNull();
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("reverts the reserved id when provisionHelpSession returns a non-ok outcome", async () => {
