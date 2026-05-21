@@ -103,7 +103,11 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     const input = (await screen.findByLabelText("API token")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "secret-token" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save credentials" }));
+    const saveButton = screen.getByRole("button", { name: "Save credentials" });
+    await waitFor(() => {
+      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(setCredential).toHaveBeenCalledWith("acme.gitea", { token: "secret-token" });
@@ -127,7 +131,11 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     const input = (await screen.findByLabelText("API token")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "nope" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save credentials" }));
+    const saveButton = screen.getByRole("button", { name: "Save credentials" });
+    await waitFor(() => {
+      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(setCredential).toHaveBeenCalled();

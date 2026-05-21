@@ -15,6 +15,7 @@ import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import {
   setPanelStoreAccessor,
+  setPanelStoreClearForSwitchAccessor,
   setWorktreeSelectionAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
@@ -43,6 +44,9 @@ export function initStoreOrchestrator(): () => void {
   setPanelStoreAccessor(() => {
     const s = usePanelStore.getState();
     return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
+  });
+  setPanelStoreClearForSwitchAccessor(() => {
+    usePanelStore.getState().clearTerminalStoreForSwitch();
   });
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,

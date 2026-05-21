@@ -12,6 +12,7 @@ export interface WorktreeSelectionSnapshot {
 
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
+let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
@@ -30,6 +31,14 @@ export function setWorktreeSelectionAccessor(getter: () => WorktreeSelectionSnap
 
 export function getWorktreeSelectionSnapshot(): WorktreeSelectionSnapshot | null {
   return _getWorktreeSelectionState?.() ?? null;
+}
+
+export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
+  _clearPanelStoreForSwitch = callback;
+}
+
+export function clearPanelStoreForSwitchThroughAccessor(): void {
+  _clearPanelStoreForSwitch?.();
 }
 
 export function setFleetArmingClearAccessor(callback: () => void): void {
@@ -59,6 +68,7 @@ export function getFleetLastArmedId(): string | null {
 export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
+  _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;

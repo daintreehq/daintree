@@ -41,6 +41,7 @@ const projectClientMock = vi.hoisted(() => ({
 const notifyMock = vi.hoisted(() => vi.fn());
 const logErrorWithContextMock = vi.hoisted(() => vi.fn());
 const setProjectIdGetterMock = vi.hoisted(() => vi.fn());
+const panelPersistenceCancelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
@@ -61,6 +62,7 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: setProjectIdGetterMock,
+    cancel: panelPersistenceCancelMock,
   },
   panelToSnapshot: vi.fn((panel: { id: string; kind: string }) => ({
     id: panel.id,
@@ -188,6 +190,7 @@ describe("projectStore adversarial", () => {
     projectClientMock.getCurrent.mockResolvedValue(null);
     projectClientMock.switch.mockResolvedValue(undefined);
     projectClientMock.reopen.mockResolvedValue(undefined);
+    projectClientMock.close.mockResolvedValue({ processesKilled: 0, terminalsKilled: 0 });
     projectClientMock.checkMissing.mockResolvedValue(undefined);
   });
 
@@ -356,5 +359,34 @@ describe("projectStore adversarial", () => {
 
     expect(useProjectStore.getState().projects).toEqual([projectB]);
     expect(useProjectStore.getState().currentProject).toEqual(projectB);
+  });
+
+  it("clears active project renderer state without resurrecting persisted panels", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    const closeResult = { processesKilled: 2, terminalsKilled: 2 };
+    const clearPanelStoreForSwitch = vi.fn();
+    projectClientMock.close.mockResolvedValueOnce(closeResult);
+
+    const { useProjectStore } = await import("../projectStore");
+    const { setPanelStoreClearForSwitchAccessor } = await import("../storeAccessors");
+    setPanelStoreClearForSwitchAccessor(clearPanelStoreForSwitch);
+
+    useProjectStore.setState({
+      projects: [projectA],
+      currentProject: projectA,
+      worktreeLoadError: "stale worktree error",
+    });
+
+    await expect(useProjectStore.getState().closeActiveProject(projectA.id)).resolves.toEqual(
+      closeResult
+    );
+
+    expect(projectClientMock.close).toHaveBeenCalledWith(projectA.id, { killTerminals: true });
+    expect(panelPersistenceCancelMock).toHaveBeenCalledTimes(2);
+    expect(clearPanelStoreForSwitch).toHaveBeenCalledTimes(1);
+    expect(useProjectStore.getState().currentProject).toBeNull();
+    expect(useProjectStore.getState().worktreeLoadError).toBeNull();
+    expect(projectClientMock.getAll).toHaveBeenCalled();
   });
 });

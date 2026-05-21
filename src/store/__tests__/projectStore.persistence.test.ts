@@ -64,6 +64,7 @@ vi.mock("../slices", () => ({
 vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
+    cancel: vi.fn(),
   },
   panelToSnapshot: vi.fn(),
 }));

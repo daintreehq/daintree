@@ -15,6 +15,7 @@ import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import {
+  clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
   getWorktreeSelectionSnapshot,
@@ -557,13 +558,20 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
 
     try {
+      // Closing the active project deletes its persisted panel state in main.
+      // Drop any queued renderer-side saves so a debounce cannot rewrite the
+      // just-deleted state while terminals are being killed.
+      panelPersistence.cancel();
       const result = await projectClient.close(projectId, { killTerminals: true });
+      panelPersistence.cancel();
 
       logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
         projectId,
       });
 
-      set({ currentProject: null });
+      clearFleetArmingThroughAccessor();
+      set({ currentProject: null, worktreeLoadError: null });
+      clearPanelStoreForSwitchThroughAccessor();
       await get().loadProjects();
 
       return result;

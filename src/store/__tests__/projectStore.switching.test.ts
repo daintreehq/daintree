@@ -72,6 +72,7 @@ vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
     getPreviousSnapshotMap: vi.fn(() => undefined),
+    cancel: vi.fn(),
   },
   panelToSnapshot: vi.fn((t: { id: string; kind: string }) => ({
     id: t.id,

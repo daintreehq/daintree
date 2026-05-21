@@ -430,6 +430,24 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.removeConfirmProject).toBeNull();
     });
 
+    it("stop confirmation closes the active project so the renderer leaves project view", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        await result.current.stopProject("project-1");
+      });
+
+      expect(result.current.stopConfirmProjectId).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmStopProject();
+      });
+
+      expect(projectState.closeActiveProject).toHaveBeenCalledWith("project-1");
+      expect(projectState.closeProject).not.toHaveBeenCalled();
+      expect(result.current.stopConfirmProjectId).toBeNull();
+    });
+
     it("confirm calls removeProject for non-active project, not closeActiveProject", async () => {
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
