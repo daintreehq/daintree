@@ -304,16 +304,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             } catch (err) {
               console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
             }
-            // Disarm the POSIX crash-safe supervisor before tearing down the
-            // PTY client. The cooperative graceful-kill above already handled
-            // the help sessions, so DISARM tells the supervisor this is a clean
-            // quit and it should not SIGKILL on pipe close. No-op on Windows /
-            // when no supervisor was started.
-            try {
-              helpSessionJobService.dispose();
-            } catch (err) {
-              console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
-            }
             if (ptyClient) {
               try {
                 ptyClient.dispose();
@@ -326,6 +316,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               disposePtyClient();
             } catch (err) {
               console.warn("[MAIN] disposePtyClient failed:", err);
+            }
+            // Disarm the POSIX crash-safe supervisor only after PTY teardown.
+            // DISARM tells the supervisor this is a clean quit and it should not
+            // SIGKILL on pipe close — but if we disarmed before the PTYs were
+            // actually gone (e.g. the graceful-kill above timed out), a crash in
+            // the intervening window would leave them orphaned. Disarming last
+            // guarantees the cooperative kill has run first. No-op on Windows /
+            // when no supervisor was started.
+            try {
+              helpSessionJobService.dispose();
+            } catch (err) {
+              console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
             }
             try {
               disposeWorkspaceClient();

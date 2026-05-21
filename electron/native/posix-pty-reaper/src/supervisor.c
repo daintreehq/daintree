@@ -45,8 +45,56 @@
 #define MAX_PIDS 8192
 
 static pid_t g_roots[MAX_PIDS];
+static unsigned long long g_root_starttimes[MAX_PIDS];
+static int g_root_has_starttime[MAX_PIDS];
 static int g_root_count = 0;
 static int g_disarmed = 0;
+
+/* Read a process's start time — a stable per-process identity anchor — so a
+ * reused PID can't trick the supervisor into reaping an unrelated tree. Returns
+ * 1 and sets *out on success, 0 if the process is gone or unreadable. */
+static int get_starttime(pid_t pid, unsigned long long *out) {
+#if defined(__linux__)
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+  FILE *f = fopen(path, "r");
+  if (!f) return 0;
+  char buf[1024];
+  size_t r = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  if (r == 0) return 0;
+  buf[r] = '\0';
+  char *rparen = strrchr(buf, ')');
+  if (!rparen) return 0;
+  /* Tokens after comm: state(0) ppid(1) … starttime is /proc stat field 22,
+   * i.e. index 19 counting from state. */
+  const char *p = rparen + 1;
+  int idx = 0;
+  while (*p) {
+    while (*p == ' ') p++;
+    if (!*p) break;
+    if (idx == 19) {
+      *out = strtoull(p, NULL, 10);
+      return 1;
+    }
+    while (*p && *p != ' ') p++;
+    idx++;
+  }
+  return 0;
+#elif defined(__APPLE__)
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)pid};
+  struct kinfo_proc kp;
+  size_t len = sizeof(kp);
+  if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0 || len == 0) return 0;
+  *out = (unsigned long long)kp.kp_proc.p_starttime.tv_sec * 1000000ULL +
+         (unsigned long long)kp.kp_proc.p_starttime.tv_usec;
+  return 1;
+#else
+  (void)pid;
+  (void)out;
+  return 0;
+#endif
+}
 
 static void register_pid(long pid) {
   if (pid <= 1 || pid > 0x7fffffff) return;
@@ -54,7 +102,11 @@ static void register_pid(long pid) {
   for (int i = 0; i < g_root_count; i++) {
     if (g_roots[i] == (pid_t)pid) return;
   }
-  g_roots[g_root_count++] = (pid_t)pid;
+  int idx = g_root_count++;
+  g_roots[idx] = (pid_t)pid;
+  /* Captured while the PTY is still alive (the ADD arrives right after spawn),
+   * so this is the true start time of the process we mean to reap. */
+  g_root_has_starttime[idx] = get_starttime((pid_t)pid, &g_root_starttimes[idx]);
 }
 
 typedef struct {
@@ -153,6 +205,13 @@ static void reap_all(void) {
   static pid_t tree[MAX_PIDS];
   int nprocs = snapshot_procs(procs, MAX_PIDS);
   for (int i = 0; i < g_root_count; i++) {
+    /* Skip a root whose PID was reused (start time no longer matches) or that
+     * is already gone — never SIGKILL a tree we can't confirm is ours. When no
+     * anchor was captured at registration, fall back to best-effort reaping. */
+    if (g_root_has_starttime[i]) {
+      unsigned long long now;
+      if (!get_starttime(g_roots[i], &now) || now != g_root_starttimes[i]) continue;
+    }
     int n = collect_tree(g_roots[i], procs, nprocs, tree, MAX_PIDS);
     /* Kill leaves-first so killing a parent can't reparent a not-yet-killed
      * child onto init and let it escape. */

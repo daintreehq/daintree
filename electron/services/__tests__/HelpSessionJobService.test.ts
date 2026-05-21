@@ -306,6 +306,14 @@ describe("HelpSessionJobService (#7526, #8769)", () => {
           expect(stdin.end).toHaveBeenCalledTimes(1);
         });
 
+        it("dispose() swallows a stdin write failure", () => {
+          const { spawn, reaper } = makePosix({ stdinWriteThrows: true });
+          const svc = new HelpSessionJobService(null, { reaper, spawn });
+
+          svc.attachHelpSessionPid(4242); // ADD write throws, caught
+          expect(() => svc.dispose()).not.toThrow(); // DISARM write throws, caught
+        });
+
         it("dispose() before any attach does not throw", () => {
           const { spawn, reaper } = makePosix();
           const svc = new HelpSessionJobService(null, { reaper, spawn });
