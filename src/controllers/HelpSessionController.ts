@@ -707,7 +707,25 @@ export class HelpSessionController {
     );
   }
 
+  /**
+   * Abort an in-flight launch from the loading-state Cancel affordance.
+   * Bumps the launch generation so the in-flight async checkpoints bail at
+   * their next gen-check (cleaning up via `_abandonInFlightLaunch`), clears
+   * the reentrancy guard synchronously so a subsequent user-initiated launch
+   * isn't silently dropped, and drops the phase back to idle so the panel
+   * returns to its empty state immediately.
+   */
+  cancelLaunch(): void {
+    this._launchGen++;
+    this._isLaunching = false;
+    this._resetPhase();
+  }
+
   // --- internal ---
+
+  private _resetPhase(): void {
+    this._patch({ phase: "idle" });
+  }
 
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
     // Spread-merge first, then structurally compare per-field. Reusing the
@@ -950,6 +968,13 @@ export class HelpSessionController {
       return;
     }
 
+    // Past the active-agent recheck — hibernation will actually run now, so
+    // surface it. The panel is closed during the gracefulKill window, so this
+    // is only visible if the user reopens mid-teardown (handled below); the
+    // teardown completion resets the phase so a later reopen lands on a clean
+    // empty state rather than a stuck "Saving session…".
+    this._patch({ phase: "hibernating" });
+
     // Use the projectId captured at arm time, not the live currentProject.
     // The user may have switched projects between panel close and timer
     // fire — writing project A's session into project B's hibernate slot
@@ -969,7 +994,10 @@ export class HelpSessionController {
           // in flight. Terminal is still live — don't tear it down out
           // from under them. The captured session ID is also discarded;
           // the next hibernation cycle will capture a fresh one.
-          if (after.isOpen) return;
+          if (after.isOpen) {
+            this._patch({ phase: "live" });
+            return;
+          }
           if (capturedSessionId && projectId && liveAgentId && cwd) {
             after.setHibernateSession(projectId, {
               sessionId: capturedSessionId,
@@ -997,10 +1025,16 @@ export class HelpSessionController {
           usePanelStore.getState().removePanel(initialTerminalId);
           revokeHelpSession(sessionToRevoke);
           useHelpPanelStore.getState().clearTerminal();
+          this._resetPhase();
         })
         .catch((err) => {
           const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId || after.isOpen) return;
+          if (after.terminalId !== initialTerminalId || after.isOpen) {
+            if (after.isOpen && after.terminalId === initialTerminalId) {
+              this._patch({ phase: "live" });
+            }
+            return;
+          }
           logError("HelpPanel: gracefulKill during hibernate failed", err);
           if (projectId) {
             useHelpPanelStore.getState().clearHibernateSession(projectId);
@@ -1008,6 +1042,7 @@ export class HelpSessionController {
           usePanelStore.getState().removePanel(initialTerminalId);
           revokeHelpSession(sessionToRevoke);
           useHelpPanelStore.getState().clearTerminal();
+          this._resetPhase();
         }),
       { context: "HelpPanel:hibernate gracefulKill" }
     );
@@ -1084,7 +1119,13 @@ export class HelpSessionController {
     launchContext?: ActionContext
   ): Promise<void> {
     let session: HelpSessionRef | null = null;
+    // Tracks whether the launch reached its terminal-bound success state. The
+    // finally resets the phase to idle on any non-success exit (error, bail)
+    // that is still the current generation, so the loading skeleton never
+    // sticks; a superseded generation leaves the phase to its new owner.
+    let reached = false;
     try {
+      this._patch({ phase: "version-checking" });
       const folderPath = await window.electron.help.getFolderPath();
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
@@ -1121,7 +1162,7 @@ export class HelpSessionController {
         return;
       }
       this._hasBlockedThisSession = false;
-      this._patch({ assistantVersionTooOld: null });
+      this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
 
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
       if (gen !== this._launchGen) {
@@ -1140,6 +1181,7 @@ export class HelpSessionController {
       }
       session = outcome.session;
       this._pendingSessionId = session.sessionId;
+      this._patch({ phase: "launching" });
       const cwd = session.sessionPath;
       const env = buildHelpEnv(session, launchProject.id, launchAgentId);
 
@@ -1177,7 +1219,8 @@ export class HelpSessionController {
           window.electron.help.markTerminal(resumedId).catch((err) => {
             logError("Failed to mark help terminal", err);
           });
-          this._patch({ showResumeBanner: true });
+          reached = true;
+          this._patch({ phase: "live", showResumeBanner: true });
           this._armResumeBannerAutoDismiss();
           return;
         }
@@ -1223,6 +1266,13 @@ export class HelpSessionController {
         revokeHelpSession(session?.sessionId ?? null);
         this._pendingSessionId = null;
         this._hasAutoLaunched = false;
+        // The preference changed mid-launch, so re-evaluate against the
+        // current inputs rather than waiting on an incidental re-render to
+        // re-fire the effect — the new preferred agent should auto-launch
+        // now. Earlier this was driven solely by the next syncInputs render,
+        // which a transient phase re-render could consume before this reset
+        // landed, swallowing the relaunch.
+        if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
         return;
       }
 
@@ -1246,12 +1296,16 @@ export class HelpSessionController {
         .getState()
         .setTerminal(result.result.terminalId, launchAgentId, session?.sessionId ?? null);
       this._pendingSessionId = null;
+      reached = true;
+      this._patch({ phase: "live" });
       window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
         logError("Failed to mark help terminal", err);
       });
     } catch (err) {
       logError("HelpPanel: auto-launch threw", err);
       this._hasAutoLaunched = false;
+    } finally {
+      if (gen === this._launchGen && !reached) this._resetPhase();
     }
   }
 
@@ -1266,7 +1320,14 @@ export class HelpSessionController {
     const reservedId = options.requestedId ?? null;
     const resetAutoLaunch = options.isAutoLaunch === true;
     let session: HelpSessionRef | null = null;
+    // See `_executeAutoLaunch`: the finally drops the phase back to idle on a
+    // non-success exit that's still the current generation.
+    let reached = false;
     try {
+      // reservedId paths (newSession/runAnyway) skip the version gate, so they
+      // open straight at "provisioning"; the empty-state flow starts at the
+      // version probe.
+      this._patch({ phase: reservedId ? "provisioning" : "version-checking" });
       const folderPath = await window.electron.help.getFolderPath();
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -1305,7 +1366,7 @@ export class HelpSessionController {
           return;
         }
         this._hasBlockedThisSession = false;
-        this._patch({ assistantVersionTooOld: null });
+        this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
       }
 
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
@@ -1332,6 +1393,7 @@ export class HelpSessionController {
       if (!reservedId) {
         this._pendingSessionId = session.sessionId;
       }
+      this._patch({ phase: "launching" });
       const cwd = session.sessionPath;
       const helpEnv = buildHelpEnv(session, launchProject.id, launchAgentId);
       const env: Record<string, string> | undefined =
@@ -1374,7 +1436,8 @@ export class HelpSessionController {
             window.electron.help.markTerminal(resumedId).catch((err) => {
               logError("Failed to mark help terminal", err);
             });
-            this._patch({ showResumeBanner: true });
+            reached = true;
+            this._patch({ phase: "live", showResumeBanner: true });
             this._armResumeBannerAutoDismiss();
             return;
           }
@@ -1455,6 +1518,8 @@ export class HelpSessionController {
           .setTerminal(finalTerminalId, launchAgentId, session?.sessionId ?? null);
         this._pendingSessionId = null;
       }
+      reached = true;
+      this._patch({ phase: "live" });
       window.electron.help.markTerminal(finalTerminalId).catch((err) => {
         logError("Failed to mark help terminal", err);
       });
@@ -1473,6 +1538,7 @@ export class HelpSessionController {
       notifyLaunchFailed(launchAgentId, "The agent didn't start. Try again.");
     } finally {
       this._isLaunching = false;
+      if (gen === this._launchGen && !reached) this._resetPhase();
     }
   }
 }

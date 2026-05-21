@@ -23,6 +23,7 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
+import { HelpLaunchingState } from "./HelpLaunchingState";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -555,6 +556,7 @@ export function HelpPanel({
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
+  const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
   // running PTY when the assistant terminal has focus; the .cm-editor check
@@ -700,6 +702,8 @@ export function HelpPanel({
             versionTooOld={session.assistantVersionTooOld}
             onOpenSettings={handleOpenSettings}
           />
+        ) : session.phase !== "idle" && session.phase !== "live" ? (
+          <HelpLaunchingState phase={session.phase} isLoading onCancel={cancelLaunch} />
         ) : (
           <div className="flex-1 flex flex-col">
             {droppedPreferredAgentId && (
