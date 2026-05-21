@@ -355,7 +355,7 @@ describe("worktree IPC adversarial", () => {
       const attachDirectPort = vi.fn();
       const host = { hostId: "h1" };
       const getHostForProject = vi.fn().mockReturnValue(host);
-      const brokerPort = vi.fn();
+      const brokerPort = vi.fn().mockReturnValue(true);
       registerRetryHandlers({ loadProject, attachDirectPort, getHostForProject, brokerPort });
 
       const event = eventWithSender();
@@ -366,9 +366,22 @@ describe("worktree IPC adversarial", () => {
       expect(brokerPort).toHaveBeenCalledWith(host, event.sender);
     });
 
+    it("rejects when the reload succeeds but the worktree port can't be brokered", async () => {
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort: vi.fn().mockReturnValue(false),
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).rejects.toThrow(/couldn't connect to the worktree service/);
+    });
+
     it("skips brokering when no workspace host is available, without throwing", async () => {
       const attachDirectPort = vi.fn();
-      const brokerPort = vi.fn();
+      const brokerPort = vi.fn().mockReturnValue(true);
       registerRetryHandlers({
         loadProject: vi.fn().mockResolvedValue(undefined),
         attachDirectPort,

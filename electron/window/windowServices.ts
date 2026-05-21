@@ -421,7 +421,12 @@ export async function setupWindowServices(
       // still loading — messages sent before the renderer wires its
       // ipcRenderer listener are silently dropped.
       const failedProjectId = restoreProject?.id;
-      const statusTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
+      // Prefer the project view's webContents, but fall through to the
+      // window's app webContents if it's already destroyed — selecting a
+      // destroyed target would silently drop the message and re-hang.
+      const initialViewWc = opts.initialAppView?.webContents;
+      const statusTarget =
+        initialViewWc && !initialViewWc.isDestroyed() ? initialViewWc : getAppWebContents(win);
       if (failedProjectId && statusTarget) {
         const worktreeLoadError = formatErrorMessage(error, "Failed to load worktrees");
         const sendLoadStatus = (): void => {

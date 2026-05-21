@@ -32,6 +32,20 @@ function makeWebContents(opts: { loading: boolean; destroyed?: boolean }): FakeW
   };
 }
 
+/**
+ * Replicates the status-target selection from windowServices.ts (#8796):
+ * prefer the project view's webContents, but fall through to the window's
+ * app webContents when it's already destroyed — selecting a destroyed
+ * target would silently drop the message.
+ */
+function selectStatusTarget(
+  initialAppViewWc: FakeWebContents | null,
+  fallbackWc: FakeWebContents | null
+): FakeWebContents | null {
+  if (initialAppViewWc && !initialAppViewWc.destroyed) return initialAppViewWc;
+  return fallbackWc;
+}
+
 /** Replicates the windowServices.ts worktree-load catch block (#8796). */
 function simulateStartupWorktreeLoadFailure(
   failedProjectId: string | undefined,
@@ -105,9 +119,35 @@ describe("windowServices startup worktree-load failure (#8796)", () => {
     expect(wc.sent).toHaveLength(0);
   });
 
+  it("does not send when the target webContents is already destroyed at call time", () => {
+    const wc = makeWebContents({ loading: false, destroyed: true });
+    simulateStartupWorktreeLoadFailure("proj-a", wc, new Error("folder is gone"));
+
+    expect(wc.sent).toHaveLength(0);
+  });
+
   it("does not throw when the target webContents is missing", () => {
     expect(() =>
       simulateStartupWorktreeLoadFailure("proj-a", null, new Error("folder is gone"))
     ).not.toThrow();
+  });
+
+  describe("status-target selection", () => {
+    it("prefers the project view's webContents when it is alive", () => {
+      const viewWc = makeWebContents({ loading: false });
+      const fallbackWc = makeWebContents({ loading: false });
+      expect(selectStatusTarget(viewWc, fallbackWc)).toBe(viewWc);
+    });
+
+    it("falls through to the app webContents when the project view is destroyed", () => {
+      const viewWc = makeWebContents({ loading: false, destroyed: true });
+      const fallbackWc = makeWebContents({ loading: false });
+      expect(selectStatusTarget(viewWc, fallbackWc)).toBe(fallbackWc);
+    });
+
+    it("uses the app webContents when there is no project view", () => {
+      const fallbackWc = makeWebContents({ loading: false });
+      expect(selectStatusTarget(null, fallbackWc)).toBe(fallbackWc);
+    });
   });
 });

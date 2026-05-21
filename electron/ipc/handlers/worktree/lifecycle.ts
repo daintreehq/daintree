@@ -131,7 +131,14 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
         deps.worktreeService.attachDirectPort(windowId, sender);
         const host = deps.worktreeService.getHostForProject(project.path);
         if (host && deps.worktreePortBroker) {
-          deps.worktreePortBroker.brokerPort(host, sender);
+          const brokered = deps.worktreePortBroker.brokerPort(host, sender);
+          if (!brokered) {
+            // The reload succeeded but the worktree MessagePort never
+            // connected, so the renderer's worktree store can't fetch its
+            // state. Throw so the error banner stays and Retry remains
+            // available, rather than leaving the sidebar silently stuck.
+            throw new Error("Reloaded the project but couldn't connect to the worktree service");
+          }
         }
       }
     } catch (error) {
