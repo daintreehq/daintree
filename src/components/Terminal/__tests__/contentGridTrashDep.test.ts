@@ -31,7 +31,8 @@ describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibi
     const content = await readFile(CONTEXT_PATH, "utf-8");
     // Find the tabGroups memo block and verify trashedTerminals is in its dep array
     const tabGroupsBlock = content.slice(content.indexOf("const tabGroups = useMemo("));
-    const depsArrayMatch = tabGroupsBlock.match(/\[([^\]]+)\]/s);
+    // Match the dependency array: }, [deps]) — the bracket after "}, "
+    const depsArrayMatch = tabGroupsBlock.match(/\},\s*\[([^\]]+)\]/s);
     expect(depsArrayMatch).not.toBeNull();
     expect(depsArrayMatch![1]).toContain("trashedTerminals");
   });

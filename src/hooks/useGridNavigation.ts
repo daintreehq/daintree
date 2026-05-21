@@ -1,5 +1,10 @@
-import { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
+import type { TabGroup } from "@shared/types/panel";
+import {
+  subscribeOptimisticClose,
+  getClosingIdsSnapshot,
+} from "@/services/terminal/optimisticPanelClose";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useShallow } from "zustand/react/shallow";
@@ -55,6 +60,11 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
+  // Panels optimistically closing are gone from the grid render, so the
+  // keyboard-nav model must drop them too — otherwise arrow keys could target
+  // a cell that is no longer on screen.
+  const closingIds = useSyncExternalStore(subscribeOptimisticClose, getClosingIdsSnapshot);
+
   const gridTerminals = useMemo(
     () =>
       panelIds
@@ -63,9 +73,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
           (t) =>
             t &&
             (t.location === "grid" || t.location === undefined) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
+            !closingIds.has(t.id)
         ),
-    [panelIds, panelsById, activeWorktreeId]
+    [panelIds, panelsById, activeWorktreeId, closingIds]
   );
 
   const dockTerminals = useMemo(
@@ -167,8 +178,35 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     void panelIds;
     void panelsById;
     const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    return groups.length <= maxGridCapacity ? groups : groups.slice(0, maxGridCapacity);
-  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById, maxGridCapacity]);
+    const visible =
+      closingIds.size === 0
+        ? groups
+        : groups.reduce<TabGroup[]>((acc, group) => {
+            const kept = group.panelIds.filter((id) => !closingIds.has(id));
+            if (kept.length === 0) return acc;
+            acc.push(
+              kept.length === group.panelIds.length
+                ? group
+                : {
+                    ...group,
+                    panelIds: kept,
+                    activeTabId: kept.includes(group.activeTabId)
+                      ? group.activeTabId
+                      : (kept[0] ?? ""),
+                  }
+            );
+            return acc;
+          }, []);
+    return visible.length <= maxGridCapacity ? visible : visible.slice(0, maxGridCapacity);
+  }, [
+    getTabGroups,
+    activeWorktreeId,
+    tabGroups,
+    panelIds,
+    panelsById,
+    maxGridCapacity,
+    closingIds,
+  ]);
 
   // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
   // track the visual grid through the same sticky boundaries, otherwise arrow

@@ -74,13 +74,13 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     expect(content).toContain("GRID_PLACEHOLDER_ID");
   });
 
-  it("fits grid terminals in a pre-paint layout effect, not a deferred timer", async () => {
+  it("schedules a coalesced grid resize off the synchronous open/close path", async () => {
     const content = await readFile(CONTEXT_PATH, "utf-8");
-    // Resizing in useLayoutEffect lands xterm at the correct size on the first
-    // painted frame — no wrong-size window, no whole-grid snap on close.
-    expect(content).toContain("useLayoutEffect");
-    expect(content).toContain("runGridBatchFit()");
-    // The old deferred-fit timer must not come back.
+    // Sibling resizes are coalesced via scheduleBatchResize so the close click
+    // never waits on N xterm resizes. The hook must not call the synchronous
+    // batchResize directly, and the old deferred-fit timer must not return.
+    expect(content).toContain("scheduleBatchResize");
+    expect(content).not.toMatch(/terminalInstanceService\.batchResize\(/);
     expect(content).not.toContain("GRID_FIT_DELAY_MS");
     expect(content).not.toContain("startBatchFit");
   });

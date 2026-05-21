@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDroppable } from "@dnd-kit/core";
@@ -28,6 +29,10 @@ import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGrid
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  subscribeOptimisticClose,
+  getClosingIdsSnapshot,
+} from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
@@ -181,7 +186,7 @@ export function useContentGridContext({
     storeTabGroups,
     trashedTerminals,
     focusedId,
-    maximizedId,
+    maximizedId: rawMaximizedId,
     maximizeTarget,
     preMaximizeLayout,
     clearPreMaximizeLayout,
@@ -205,6 +210,16 @@ export function useContentGridContext({
       setFocused: state.setFocused,
     }))
   );
+
+  // Panels the user just clicked to close. They are filtered out of every grid
+  // derivation below so the panel disappears in the same frame as the click;
+  // the canonical trash commit runs ~one debounce later (see optimisticPanelClose).
+  const closingIds = useSyncExternalStore(subscribeOptimisticClose, getClosingIdsSnapshot);
+
+  // Closing the maximized panel un-maximizes instantly; the canonical commit
+  // clears the store's `maximizedId` ~one debounce later.
+  const maximizedId =
+    rawMaximizedId !== null && closingIds.has(rawMaximizedId) ? null : rawMaximizedId;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
@@ -270,11 +285,12 @@ export function useContentGridContext({
     const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of gridPanelIds) {
+      if (closingIds.has(id)) continue;
       const t = byId[id];
       if (t) result.push(t);
     }
-    return result;
-  }, [gridPanelIds]);
+    return result.length === 0 ? EMPTY_TERMINALS : result;
+  }, [gridPanelIds, closingIds]);
 
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
@@ -298,8 +314,26 @@ export function useContentGridContext({
     void gridPanelIds;
     void storeTabGroups;
     void trashedTerminals;
-    return getTabGroups("grid", activeWorktreeId ?? undefined);
-  }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals]);
+    const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
+    if (closingIds.size === 0) return groups;
+    // Drop optimistically-closing panels so the grid reflows the instant X is
+    // clicked — before the canonical trash commit lands in the store.
+    const filtered: TabGroup[] = [];
+    for (const group of groups) {
+      const kept = group.panelIds.filter((id) => !closingIds.has(id));
+      if (kept.length === 0) continue;
+      if (kept.length === group.panelIds.length) {
+        filtered.push(group);
+      } else {
+        filtered.push({
+          ...group,
+          panelIds: kept,
+          activeTabId: kept.includes(group.activeTabId) ? group.activeTabId : (kept[0] ?? ""),
+        });
+      }
+    }
+    return filtered.length === 0 ? EMPTY_TAB_GROUPS : filtered;
+  }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals, closingIds]);
 
   const handleAddTabForPanel = useCallback(
     async (panel: TerminalInstance) => {
@@ -639,11 +673,12 @@ export function useContentGridContext({
     const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of fleetPanelIds) {
+      if (closingIds.has(id)) continue;
       const t = byId[id];
       if (t) result.push(t);
     }
-    return result;
-  }, [fleetPanelIds]);
+    return result.length === 0 ? EMPTY_TERMINALS : result;
+  }, [fleetPanelIds, closingIds]);
 
   const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
@@ -689,11 +724,9 @@ export function useContentGridContext({
 
     if (isDraggingRef.current || ids.length === 0) return;
 
-    // Fit every fleet pane synchronously, before the browser paints the
-    // reflowed grid, so xterm content lands at the correct size on the first
-    // painted frame — no deferred whole-grid snap. The FLIP wrapper animates
-    // position only (`layout="position"`), so each cell box is already final.
-    terminalInstanceService.batchResize(ids);
+    // Schedule a coalesced fleet-pane resize off the open/close path — one
+    // pass once the burst settles (see scheduleBatchResize).
+    terminalInstanceService.scheduleBatchResize(ids);
 
     // A column-count change shifts cell widths, so the per-host ResizeObserver
     // would otherwise fire an uncoordinated second resize through the 200ms
@@ -713,7 +746,7 @@ export function useContentGridContext({
     if (isDraggingRef.current) return;
     const ids = gridTerminals.map((t) => t.id);
     if (ids.length > 0) {
-      terminalInstanceService.batchResize(ids);
+      terminalInstanceService.scheduleBatchResize(ids);
     }
   });
   const prevGridColsRef = useRef(gridCols);
@@ -729,11 +762,9 @@ export function useContentGridContext({
 
     if (isProjectSwitching || isDraggingRef.current) return;
 
-    // Fit every grid terminal synchronously, before the browser paints the
-    // reflowed grid, so xterm content lands at the correct size on the first
-    // painted frame — no 250ms wrong-size window, no whole-grid snap. The FLIP
-    // wrapper animates position only (`layout="position"`), so each cell box is
-    // already at its final size at this point.
+    // Schedule a coalesced sibling resize off the open/close path — the click
+    // never waits on N xterm resizes, and a burst of opens/closes collapses
+    // into a single pass once it settles (see scheduleBatchResize).
     runGridBatchFit();
 
     // A column-count change shifts cell widths, so the per-host ResizeObserver

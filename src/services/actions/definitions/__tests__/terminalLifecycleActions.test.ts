@@ -45,6 +45,14 @@ vi.mock("@/store/terminalPendingDestructiveActionStore", () => ({
   useTerminalPendingDestructiveActionStore: { getState: () => pendingDestructiveStoreMock.state },
 }));
 
+// Run the optimistic-close commit synchronously so these tests assert the
+// canonical trash outcome directly; the deferral is covered by
+// optimisticPanelClose.test.ts.
+vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+  requestPanelClose: vi.fn((req: { commit: () => void }) => req.commit()),
+  flushOptimisticCloses: vi.fn(),
+}));
+
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 
 type MockPanel = { id: string; location: "grid" | "dock" | "trash" };
@@ -92,8 +100,11 @@ beforeEach(() => {
   pendingDestructiveStoreMock.reset();
 });
 
-describe("terminal.close DOM focus handoff", () => {
-  it("focuses the next panel after trashing the focused panel", async () => {
+// terminal.close routes through the optimistic-close coordinator (mocked here
+// to run its commit synchronously). Focus handoff is the coordinator's job now
+// and is covered by optimisticPanelClose.test.ts.
+describe("terminal.close", () => {
+  it("trashes the focused panel", async () => {
     const { trashPanel } = setPanelState({
       focusedId: "p1",
       panels: [
@@ -107,24 +118,9 @@ describe("terminal.close DOM focus handoff", () => {
     await run("terminal.close");
 
     expect(trashPanel).toHaveBeenCalledWith("p1");
-    expect(terminalInstanceServiceMock.focus).toHaveBeenCalledWith("p2");
-    expect(terminalInstanceServiceMock.focus).toHaveBeenCalledTimes(1);
   });
 
-  it("does not focus anything when the last grid panel is closed", async () => {
-    setPanelState({
-      focusedId: "p1",
-      panels: [{ id: "p1", location: "grid" }],
-      postTrashFocusedId: null,
-    });
-    const run = setupActions();
-
-    await run("terminal.close");
-
-    expect(terminalInstanceServiceMock.focus).not.toHaveBeenCalled();
-  });
-
-  it("focuses the post-trash panel when called with an explicit terminalId", async () => {
+  it("trashes an explicit terminalId when provided", async () => {
     const { trashPanel } = setPanelState({
       focusedId: "p2",
       panels: [
@@ -138,10 +134,9 @@ describe("terminal.close DOM focus handoff", () => {
     await run("terminal.close", { terminalId: "p1" });
 
     expect(trashPanel).toHaveBeenCalledWith("p1");
-    expect(terminalInstanceServiceMock.focus).toHaveBeenCalledWith("p2");
   });
 
-  it("does not call trashPanel or focus when no targetable panel exists", async () => {
+  it("no-ops when no targetable panel exists", async () => {
     const { trashPanel } = setPanelState({
       focusedId: null,
       panels: [{ id: "p1", location: "trash" }],
@@ -152,7 +147,6 @@ describe("terminal.close DOM focus handoff", () => {
     await run("terminal.close");
 
     expect(trashPanel).not.toHaveBeenCalled();
-    expect(terminalInstanceServiceMock.focus).not.toHaveBeenCalled();
   });
 });
 

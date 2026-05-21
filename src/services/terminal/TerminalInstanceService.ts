@@ -61,6 +61,11 @@ const WEBGL_RESTORE_DEBOUNCE_MS = 100;
 // demotion, destroy, hibernation) cancel this timer and release immediately.
 const WEBGL_HIDE_DWELL_MS = 500;
 
+// Trailing-edge window for `scheduleBatchResize`. A burst of grid open/close
+// resizes within this gap collapses into one pass — long enough to coalesce a
+// rapid close stream, short enough that survivors settle promptly after it.
+const GRID_RESIZE_COALESCE_MS = 120;
+
 function canAutoInitializeTerminalIngest(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -1482,6 +1487,29 @@ class TerminalInstanceService {
     for (const { id, width, height } of pending) {
       this.resizeController.resize(id, width, height);
     }
+  }
+
+  private gridResizeTimer: number | undefined;
+  private readonly gridResizePendingIds = new Set<string>();
+
+  /**
+   * Coalesced variant of `batchResize`. A burst of grid open/close events each
+   * union their ids and reset a trailing-edge timer; the actual resize runs
+   * once the burst settles, on the next frame — so it never lands on the
+   * synchronous open/close path the user is waiting on.
+   */
+  scheduleBatchResize(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) this.gridResizePendingIds.add(id);
+    if (this.gridResizeTimer !== undefined) {
+      clearTimeout(this.gridResizeTimer);
+    }
+    this.gridResizeTimer = window.setTimeout(() => {
+      this.gridResizeTimer = undefined;
+      const pendingIds = [...this.gridResizePendingIds];
+      this.gridResizePendingIds.clear();
+      requestAnimationFrame(() => this.batchResize(pendingIds));
+    }, GRID_RESIZE_COALESCE_MS);
   }
 
   scrollToBottom(id: string): void {

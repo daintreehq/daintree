@@ -31,6 +31,7 @@ export function DockedPanel({
   const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({
     terminalId: terminal.id,
     onAfterClose: onPopoverClose,
+    surface: "dock",
   });
 
   const handleRestore = useCallback(() => {
