@@ -116,17 +116,19 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           err && typeof err === "object" && "code" in err
             ? (err as Record<string, unknown>).code
             : undefined;
-        const servicesUnavailable =
-          code === "MCP_SERVER_NOT_STARTED" ||
-          code === "MCP_PROBE_FAILED" ||
-          code === "MCP_NOT_READY";
+        let message = "Couldn't start the Daintree Assistant session.";
+        if (code === "MCP_PROBE_FAILED") {
+          message =
+            "Daintree's assistant services didn't respond in time. Check assistant settings, then try again.";
+        } else if (code === "MCP_SERVER_NOT_STARTED" || code === "MCP_NOT_READY") {
+          message =
+            "Daintree's assistant services didn't start. Check assistant settings, then try again.";
+        }
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Assistant couldn't start",
-          message: servicesUnavailable
-            ? "Daintree's assistant services didn't start. Check assistant settings, then try again."
-            : "Couldn't start the Daintree Assistant session.",
+          message,
         });
         return;
       }

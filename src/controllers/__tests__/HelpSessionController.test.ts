@@ -812,4 +812,75 @@ describe("HelpSessionController — launch error routing", () => {
     expect(ctrl.getSnapshot().launchError).toBeNull();
     ctrl.stop();
   });
+
+  it("uses probe-failure copy on the closed-panel fallback toast", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, false);
+    provisionMock().mockRejectedValueOnce(
+      Object.assign(new Error("slow probe"), { code: "MCP_PROBE_FAILED" })
+    );
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringContaining("didn't respond in time"),
+        })
+      );
+    });
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+
+  it("revokes the session and surfaces an error when auto-launch throws after provisioning", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_launchGen"] = 7;
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-x",
+      sessionPath: "/s/x",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
+
+    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-x");
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+    expect(ctrl.getSnapshot().launchError).toEqual({ agentId: "claude", kind: "spawn-failed" });
+    ctrl.stop();
+  });
+
+  it("clears the launch-error banner when the preferred agent changes", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // isReadyToLaunch:false keeps auto-launch from firing and clearing the
+    // banner out from under the assertion.
+    const inputs = (preferredAgentId: string) => ({
+      isOpen: true,
+      isReadyToLaunch: false,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId,
+      supportedInstalledAgentIds: ["claude", "codex"],
+      visibilityEpoch: 0,
+    });
+    ctrl.syncInputs(inputs("claude"));
+    ctrl["_patch"]({ launchError: { agentId: "claude", kind: "spawn-failed" } });
+    expect(ctrl.getSnapshot().launchError).not.toBeNull();
+
+    ctrl.syncInputs(inputs("codex"));
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
 });

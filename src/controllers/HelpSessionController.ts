@@ -345,12 +345,18 @@ function notifyLaunchFailed(agentId: string, reason: string): void {
   });
 }
 
-function notifyAssistantServicesUnavailable(): void {
+function notifyAssistantServicesUnavailable(
+  kind: "mcp-server-not-started" | "mcp-probe-failed"
+): void {
   notify({
     type: "error",
     title: "Assistant couldn't start",
+    // Mirror the inline banner's per-kind discrimination on the closed-panel
+    // fallback so the two failure modes read differently here too.
     message:
-      "Daintree's assistant services didn't start. Check assistant settings, then try again.",
+      kind === "mcp-probe-failed"
+        ? "Daintree's assistant services didn't respond in time. Check assistant settings, then try again."
+        : "Daintree's assistant services didn't start. Check assistant settings, then try again.",
     action: {
       label: "Open settings",
       actionId: "app.settings.openTab",
@@ -515,15 +521,20 @@ export class HelpSessionController {
 
     // Clear the version block when the preferred agent changes — the stale
     // block belongs to the previous agent and would otherwise paint over
-    // the new agent's empty state. The in-flight launch's stale-agent
-    // post-dispatch check handles its own cleanup, so we don't bump
-    // `_launchGen` here.
+    // the new agent's empty state. The launch-error banner is cleared for the
+    // same reason: its `agentId` (and Retry target) belongs to the old agent.
+    // The in-flight launch's stale-agent post-dispatch check handles its own
+    // cleanup, so we don't bump `_launchGen` here.
     if (prev && prev.preferredAgentId !== inputs.preferredAgentId) {
       // Drop any in-flight "Check again" cooldown too — it belongs to the
       // previous agent's gate; leaving it would disable the new gate's
       // button until the stale probe settles.
       this._clearCheckAgainCooldownTimer();
-      this._patch({ assistantVersionTooOld: null, isCheckingVersion: false });
+      this._patch({
+        assistantVersionTooOld: null,
+        isCheckingVersion: false,
+        launchError: null,
+      });
     }
 
     // Reset auto-launch guard when the panel closes so the next open can
@@ -931,7 +942,7 @@ export class HelpSessionController {
       return;
     }
     if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
-      notifyAssistantServicesUnavailable();
+      notifyAssistantServicesUnavailable(kind);
     } else if (kind === "folder-unavailable") {
       notifyLaunchFailed(agentId, "Help folder is not available.");
     } else {
@@ -1535,10 +1546,13 @@ export class HelpSessionController {
     } catch (err) {
       logError("HelpPanel: auto-launch threw", err);
       this._hasAutoLaunched = false;
-      // A throw after provisioning (e.g. agent.launch rejecting) would
-      // otherwise strand the minted MCP session token.
+      // Mirror _executeLaunch's catch: an unexpected throw past the
+      // provision step (e.g. agent.launch rejecting) leaves a live session
+      // token with no bound terminal. Revoke it, clear the pending-session
+      // guard, and surface the failure so the panel isn't left silently empty.
       revokeHelpSession(session?.sessionId ?? null);
       this._pendingSessionId = null;
+      this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       if (gen === this._launchGen && !reached) this._resetPhase();
     }
