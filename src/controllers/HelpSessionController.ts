@@ -33,6 +33,10 @@ const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 const RESUME_BANNER_AUTO_DISMISS_MS = 10_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 
+// Minimum disabled period after a manual "Check again" click — keeps the
+// button from being hammered while a fresh (cache-bypassing) probe runs.
+const CHECK_AGAIN_COOLDOWN_MS = 5_000;
+
 export type HelpSessionPhase =
   | "idle"
   | "version-checking"
@@ -68,6 +72,12 @@ export interface HelpSessionSnapshot {
   tierMismatch: TierMismatchState | null;
   preflightSnapshot: SnapshotInfo | null;
   isApprovingTier: boolean;
+  /**
+   * True while a manual "Check again" version re-probe is in flight or its
+   * 5s cooldown is still running. Disables the gate's secondary button to
+   * prevent probe hammering.
+   */
+  isCheckingVersion: boolean;
 }
 
 export interface HelpProjectRef {
@@ -283,6 +293,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   tierMismatch: null,
   preflightSnapshot: null,
   isApprovingTier: false,
+  isCheckingVersion: false,
 });
 
 /**
@@ -318,6 +329,16 @@ export class HelpSessionController {
    * for the 12h AgentVersionService cache TTL. Cleared once a probe passes.
    */
   private _hasBlockedThisSession = false;
+  /**
+   * Backs the manual "Check again" cooldown. `isCheckingVersion` only clears
+   * once BOTH the probe has settled (`_checkAgainProbeSettled`) and the 5s
+   * minimum-disabled floor has elapsed (`_checkAgainCooldownFired`), so a
+   * fast probe can't re-enable the button before the cooldown is up and a
+   * slow probe can't be re-enabled by the timer while still in flight.
+   */
+  private _checkAgainCooldownTimer: ReturnType<typeof setTimeout> | null = null;
+  private _checkAgainCooldownFired = false;
+  private _checkAgainProbeSettled = false;
   /**
    * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
    * terminal id we last took a snapshot for so React 19 StrictMode's
@@ -393,6 +414,7 @@ export class HelpSessionController {
     this._clearHibernateTimer();
     this._clearResumeBannerTimer();
     this._clearSnapshotBannerTimer();
+    this._clearCheckAgainCooldownTimer();
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
     // synthetic unmount doesn't tear down the user's session; explicit
@@ -721,10 +743,87 @@ export class HelpSessionController {
     this._resetPhase();
   }
 
+  /**
+   * Manual "Check again" from the version gate. Re-probes the installed CLI
+   * version with `refresh=true` so a user who updated the CLI while the gate
+   * was visible recovers without reopening the panel (the version probe is
+   * otherwise cached for 12h). On a passing probe the gate clears and the
+   * normal auto-launch flow resumes; on a still-too-old result the gate
+   * refreshes with the latest versions. A 5s minimum cooldown keeps the
+   * button disabled to prevent probe hammering.
+   */
+  checkVersionAgain(): void {
+    if (this._snapshot.isCheckingVersion) return;
+    const block = this._snapshot.assistantVersionTooOld;
+    if (!block) return;
+
+    const { agentId, agentName } = block;
+    this._checkAgainCooldownFired = false;
+    this._checkAgainProbeSettled = false;
+    this._patch({ isCheckingVersion: true });
+    this._armCheckAgainCooldownTimer();
+
+    safeFireAndForget(
+      checkAssistantVersion(agentId, agentName, true)
+        .then((versionBlock) => {
+          // Stale-agent guard: the user may have switched preferred agents
+          // while the probe was in flight — don't act on a result that no
+          // longer matches what's blocking.
+          if (this._snapshot.assistantVersionTooOld?.agentId !== agentId) return;
+          if (versionBlock) {
+            this._patch({ assistantVersionTooOld: versionBlock });
+            return;
+          }
+          // Probe passed — clear the gate and let the normal idle→launch
+          // path re-evaluate. Resetting `_hasAutoLaunched` is required or
+          // `_maybeAutoLaunch` returns early.
+          this._hasBlockedThisSession = false;
+          this._hasAutoLaunched = false;
+          this._patch({ assistantVersionTooOld: null });
+          if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
+        })
+        .catch((err) => {
+          // checkAssistantVersion already swallows probe failures and returns
+          // null; this guards against unexpected throws. The gate stays
+          // visible as its own retry surface, so no toast.
+          logError("HelpPanel: check-again version probe threw", err);
+        })
+        .finally(() => {
+          this._checkAgainProbeSettled = true;
+          this._maybeClearCheckingVersion();
+        }),
+      { context: "HelpPanel:checkVersionAgain" }
+    );
+  }
+
   // --- internal ---
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  private _armCheckAgainCooldownTimer(): void {
+    this._clearCheckAgainCooldownTimer();
+    this._checkAgainCooldownTimer = setTimeout(() => {
+      this._checkAgainCooldownTimer = null;
+      this._checkAgainCooldownFired = true;
+      this._maybeClearCheckingVersion();
+    }, CHECK_AGAIN_COOLDOWN_MS);
+  }
+
+  private _clearCheckAgainCooldownTimer(): void {
+    if (this._checkAgainCooldownTimer) {
+      clearTimeout(this._checkAgainCooldownTimer);
+      this._checkAgainCooldownTimer = null;
+    }
+  }
+
+  // Re-enables the "Check again" button only once both the probe has settled
+  // and the 5s cooldown floor has elapsed.
+  private _maybeClearCheckingVersion(): void {
+    if (this._checkAgainProbeSettled && this._checkAgainCooldownFired) {
+      this._patch({ isCheckingVersion: false });
+    }
   }
 
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
@@ -738,7 +837,8 @@ export class HelpSessionController {
       next.assistantVersionTooOld === this._snapshot.assistantVersionTooOld &&
       next.tierMismatch === this._snapshot.tierMismatch &&
       next.preflightSnapshot === this._snapshot.preflightSnapshot &&
-      next.isApprovingTier === this._snapshot.isApprovingTier
+      next.isApprovingTier === this._snapshot.isApprovingTier &&
+      next.isCheckingVersion === this._snapshot.isCheckingVersion
     ) {
       return;
     }

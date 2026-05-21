@@ -242,6 +242,7 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.tierMismatch).toBeNull();
     expect(snap.preflightSnapshot).toBeNull();
     expect(snap.isApprovingTier).toBe(false);
+    expect(snap.isCheckingVersion).toBe(false);
   });
 
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
@@ -536,5 +537,120 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     ctrl.dismissTierMismatch();
     expect(ctrl.getSnapshot().tierMismatch).toBeNull();
     ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — checkVersionAgain", () => {
+  const block = {
+    agentId: "claude",
+    agentName: "Claude",
+    installedVersion: "0.9.0",
+    requiredVersion: "1.0.0",
+  };
+
+  function setBlock(ctrl: HelpSessionController) {
+    ctrl["_patch"]({ assistantVersionTooOld: { ...block } });
+  }
+
+  function getAgentVersionMock() {
+    return window.electron.system.getAgentVersion as ReturnType<typeof vi.fn>;
+  }
+
+  it("is a no-op when the version gate is not showing", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.checkVersionAgain();
+    expect(getAgentVersionMock()).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("is a no-op while a re-probe is already in flight", () => {
+    const ctrl = new HelpSessionController();
+    setBlock(ctrl);
+    ctrl["_patch"]({ isCheckingVersion: true });
+    ctrl.checkVersionAgain();
+    expect(getAgentVersionMock()).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("re-probes with refresh=true and clears the gate when the CLI is now current", async () => {
+    const ctrl = new HelpSessionController();
+    getAgentVersionMock().mockResolvedValue({ installedVersion: "1.2.0", latestVersion: "1.2.0" });
+    setBlock(ctrl);
+
+    ctrl.checkVersionAgain();
+    expect(getAgentVersionMock()).toHaveBeenCalledWith("claude", true);
+    expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
+    });
+    ctrl.stop();
+  });
+
+  it("keeps the gate with refreshed versions when the CLI is still too old", async () => {
+    const ctrl = new HelpSessionController();
+    getAgentVersionMock().mockResolvedValue({ installedVersion: "0.9.5", latestVersion: "1.2.0" });
+    setBlock(ctrl);
+
+    ctrl.checkVersionAgain();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().assistantVersionTooOld?.installedVersion).toBe("0.9.5");
+    });
+    ctrl.stop();
+  });
+
+  it("ignores a duplicate click while the first probe is still in flight", () => {
+    const ctrl = new HelpSessionController();
+    getAgentVersionMock().mockReturnValue(new Promise(() => {}));
+    setBlock(ctrl);
+
+    ctrl.checkVersionAgain();
+    ctrl.checkVersionAgain();
+    expect(getAgentVersionMock()).toHaveBeenCalledTimes(1);
+    ctrl.stop();
+  });
+
+  it("holds isCheckingVersion until both the probe settles and the 5s cooldown elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const ctrl = new HelpSessionController();
+      ctrl.start();
+      getAgentVersionMock().mockResolvedValue({
+        installedVersion: "1.2.0",
+        latestVersion: "1.2.0",
+      });
+      setBlock(ctrl);
+
+      ctrl.checkVersionAgain();
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+
+      // Probe resolves but the cooldown floor hasn't elapsed yet.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+
+      // Cooldown elapses → button re-enables.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(false);
+      ctrl.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stop() clears the pending cooldown timer", () => {
+    vi.useFakeTimers();
+    try {
+      const ctrl = new HelpSessionController();
+      ctrl.start();
+      getAgentVersionMock().mockReturnValue(new Promise(() => {}));
+      setBlock(ctrl);
+      ctrl.checkVersionAgain();
+      expect(ctrl.getSnapshot().isCheckingVersion).toBe(true);
+      ctrl.stop();
+      // No pending timers should remain after stop().
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

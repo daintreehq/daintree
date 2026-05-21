@@ -557,6 +557,7 @@ export function HelpPanel({
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
+  const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
   // running PTY when the assistant terminal has focus; the .cm-editor check
@@ -701,6 +702,8 @@ export function HelpPanel({
           <HelpPanelVersionGate
             versionTooOld={session.assistantVersionTooOld}
             onOpenSettings={handleOpenSettings}
+            onCheckAgain={checkVersionAgain}
+            isCheckingVersion={session.isCheckingVersion}
           />
         ) : session.phase !== "idle" && session.phase !== "live" ? (
           <HelpLaunchingState phase={session.phase} isLoading onCancel={cancelLaunch} />
