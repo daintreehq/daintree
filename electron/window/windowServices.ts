@@ -15,6 +15,7 @@ import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isSmokeTest, smokeTestStart } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E, shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
@@ -410,6 +411,32 @@ export async function setupWindowServices(
       }
     } catch (error) {
       console.error("[MAIN] Failed to load worktrees:", error);
+
+      // Surface the failure to the renderer so the sidebar shows the
+      // WorktreeLoadErrorBanner instead of an infinite loading skeleton
+      // (#8796). Without this, the worktree port is never brokered, the
+      // renderer's worktree store stays `isLoading: true`, and the sidebar
+      // hangs. Mirrors the project-switch path (projectCrud/switch.ts).
+      // The send is deferred until `did-finish-load` while the renderer is
+      // still loading — messages sent before the renderer wires its
+      // ipcRenderer listener are silently dropped.
+      const failedProjectId = restoreProject?.id;
+      const statusTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
+      if (failedProjectId && statusTarget) {
+        const worktreeLoadError = formatErrorMessage(error, "Failed to load worktrees");
+        const sendLoadStatus = (): void => {
+          if (statusTarget.isDestroyed()) return;
+          statusTarget.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+            projectId: failedProjectId,
+            worktreeLoadError,
+          });
+        };
+        if (statusTarget.isLoading()) {
+          statusTarget.once("did-finish-load", sendLoadStatus);
+        } else {
+          sendLoadStatus();
+        }
+      }
     }
   } else if (projectPathForWorktrees && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");

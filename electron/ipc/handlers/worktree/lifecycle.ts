@@ -120,6 +120,20 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     }
     try {
       await deps.worktreeService.loadProject(project.path, windowId);
+
+      // Re-establish the worktree MessagePort after a successful reload.
+      // `loadProject()` alone reloads the host but does not re-broker the
+      // port, so the renderer's worktree store never re-runs
+      // `fetchInitialState()` and the sidebar stays stuck on the loading
+      // skeleton even after a successful retry (#8796). Mirrors switch.ts.
+      const sender = ctx.event.sender;
+      if (!sender.isDestroyed()) {
+        deps.worktreeService.attachDirectPort(windowId, sender);
+        const host = deps.worktreeService.getHostForProject(project.path);
+        if (host && deps.worktreePortBroker) {
+          deps.worktreePortBroker.brokerPort(host, sender);
+        }
+      }
     } catch (error) {
       throw new Error(formatErrorMessage(error, "Failed to load worktrees"), { cause: error });
     }
