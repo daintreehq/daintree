@@ -1,4 +1,12 @@
-import { useMemo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  useMemo,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
@@ -26,7 +34,6 @@ import {
   computeGridColumns,
   getMaxGridCapacity,
   GRID_TRANSITION_DURATION_MS,
-  GRID_FIT_DELAY_MS,
   ABSOLUTE_MAX_GRID_TERMINALS,
 } from "@/lib/terminalLayout";
 import {
@@ -664,7 +671,7 @@ export function useContentGridContext({
   }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth, hysteresisFleetCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const writeFleetHysteresis =
       isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
@@ -679,30 +686,38 @@ export function useContentGridContext({
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
     setHysteresisFleetCols(writeFleetHysteresis);
-    if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
+
+    if (isDraggingRef.current || ids.length === 0) return;
+
+    // Fit every fleet pane synchronously, before the browser paints the
+    // reflowed grid, so xterm content lands at the correct size on the first
+    // painted frame — no deferred whole-grid snap. The FLIP wrapper animates
+    // position only (`layout="position"`), so each cell box is already final.
+    terminalInstanceService.batchResize(ids);
+
+    // A column-count change shifts cell widths, so the per-host ResizeObserver
+    // would otherwise fire an uncoordinated second resize through the 200ms
+    // FLIP. Lock those panes for the transition window; the lock's unlock pass
+    // doubles as the corrective backstop.
+    if (fleetColsChanged) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
         GRID_TRANSITION_DURATION_MS
       );
     }
-    const timeoutId = window.setTimeout(() => {
-      if (isDraggingRef.current) return;
-      terminalInstanceService.batchResize(ids);
-    }, GRID_FIT_DELAY_MS);
-    return () => {
-      clearTimeout(timeoutId);
-    };
   }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
 
-  const startBatchFit = useEffectEvent(() => {
+  // Reads fresh `gridTerminals` without making it an effect dependency — it
+  // changes on agent-state ticks that must not retrigger a resize pass.
+  const runGridBatchFit = useEffectEvent(() => {
+    if (isDraggingRef.current) return;
     const ids = gridTerminals.map((t) => t.id);
-    return window.setTimeout(() => {
-      if (isDraggingRef.current) return;
+    if (ids.length > 0) {
       terminalInstanceService.batchResize(ids);
-    }, GRID_FIT_DELAY_MS);
+    }
   });
   const prevGridColsRef = useRef(gridCols);
-  useEffect(() => {
+  useLayoutEffect(() => {
     void gridCols;
     void panelIds;
 
@@ -712,7 +727,20 @@ export function useContentGridContext({
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
 
-    if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
+    if (isProjectSwitching || isDraggingRef.current) return;
+
+    // Fit every grid terminal synchronously, before the browser paints the
+    // reflowed grid, so xterm content lands at the correct size on the first
+    // painted frame — no 250ms wrong-size window, no whole-grid snap. The FLIP
+    // wrapper animates position only (`layout="position"`), so each cell box is
+    // already at its final size at this point.
+    runGridBatchFit();
+
+    // A column-count change shifts cell widths, so the per-host ResizeObserver
+    // would otherwise fire an uncoordinated second resize through the 200ms
+    // FLIP. Lock those panels for the transition window; the lock's unlock pass
+    // doubles as the corrective backstop for any panel not yet laid out here.
+    if (colsChanged) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(
@@ -721,12 +749,6 @@ export function useContentGridContext({
         );
       }
     }
-
-    const timeoutId = startBatchFit();
-
-    return () => {
-      clearTimeout(timeoutId);
-    };
   }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
 
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;

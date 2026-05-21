@@ -7,7 +7,6 @@ import {
   MIN_TERMINAL_HEIGHT_PX,
   ABSOLUTE_MAX_GRID_TERMINALS,
   GRID_TRANSITION_DURATION_MS,
-  GRID_FIT_DELAY_MS,
 } from "../terminalLayout";
 
 describe("getAutoGridCols", () => {
@@ -277,11 +276,6 @@ describe("getMaxGridCapacity", () => {
 describe("grid transition timing constants", () => {
   it("GRID_TRANSITION_DURATION_MS is 200", () => {
     expect(GRID_TRANSITION_DURATION_MS).toBe(200);
-  });
-
-  it("GRID_FIT_DELAY_MS is GRID_TRANSITION_DURATION_MS + 50", () => {
-    expect(GRID_FIT_DELAY_MS).toBe(GRID_TRANSITION_DURATION_MS + 50);
-    expect(GRID_FIT_DELAY_MS).toBeGreaterThan(GRID_TRANSITION_DURATION_MS);
   });
 });
 

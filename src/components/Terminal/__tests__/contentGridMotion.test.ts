@@ -67,8 +67,22 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toContain("prevGridColsRef");
     expect(content).toContain("suppressResizesDuringLayoutTransition");
-    expect(content).toMatch(/colsChanged\s*&&\s*!isProjectSwitching/);
+    // The pass is skipped entirely while switching projects or dragging, and
+    // the resize-lock is only armed on an actual column-count change.
+    expect(content).toMatch(/if\s*\(isProjectSwitching\s*\|\|\s*isDraggingRef\.current\)\s*return/);
+    expect(content).toMatch(/if\s*\(colsChanged\)\s*\{/);
     expect(content).toContain("GRID_PLACEHOLDER_ID");
+  });
+
+  it("fits grid terminals in a pre-paint layout effect, not a deferred timer", async () => {
+    const content = await readFile(CONTEXT_PATH, "utf-8");
+    // Resizing in useLayoutEffect lands xterm at the correct size on the first
+    // painted frame — no wrong-size window, no whole-grid snap on close.
+    expect(content).toContain("useLayoutEffect");
+    expect(content).toContain("runGridBatchFit()");
+    // The old deferred-fit timer must not come back.
+    expect(content).not.toContain("GRID_FIT_DELAY_MS");
+    expect(content).not.toContain("startBatchFit");
   });
 
   it("wraps fleet panels in AnimatePresence with initial={false}", async () => {
