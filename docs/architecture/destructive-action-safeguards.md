@@ -214,6 +214,22 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/components/Settings/McpServerSettingsTab.tsx` | `mcpServer.setEnabled(false)` (server toggle) | **Yes** — `ConfirmDialog` naming each connected external client; fires only when `listActiveClients()` is non-empty, else disables immediately (#8779) |
 | `src/components/Settings/DaintreeAssistantSettingsTab.tsx` | `helpAssistant.setSettings({ daintreeControl: false })` (assistant toggle) | **No** — disabling Daintree control has no MCP stop side-effect, so no external clients are severed; D0, no confirm needed (#8779) |
 
+## Palette pre-warn layers
+
+The action palette renders confirm-tier rows (`danger:"confirm"`) with a non-chromatic pre-warn so the destructive classification is visible before the user presses Enter. These signals supplement the `ConfirmDialog` wired at the call site — they do not replace it. The accent color stays reserved for the 2px selection bar; pre-warn relies on shape, position, and opacity only.
+
+Five layers ride on the existing manifest data (`danger`, `dangerRationale`); no per-action wiring is required:
+
+1. **Title ellipsis** — render-time `…` (`…`) suffix on the title text node. The action definition's `title` is never mutated. Apple HIG convention: an ellipsis on a label means activation requires further input or confirmation.
+2. **`TriangleAlert` icon** — monochrome Lucide glyph right-aligned next to the keybinding hint, at `text-daintree-text/40 group-aria-selected:text-daintree-text/50`. Parallels the keybinding hint opacity so it reads as secondary metadata, not as an alert chrome.
+3. **`dangerRationale` second line** — dimmed italic span inside the row's content column. CSS-hidden by default (`hidden group-aria-selected:block`) so unselected rows stay single-line; expands inline when the row is the active selection. The span carries a stable `id` (`${item.id}-danger-rationale`) so `aria-describedby` can point at a real DOM node.
+4. **`aria-haspopup="dialog"`** — set on every confirm-tier row regardless of selection state, so assistive tech announces that activation opens a dialog.
+5. **`aria-describedby`** — set on the row element only when the row is the active selection AND a rationale is present, so screen readers read title → rationale on the selected row without leaking unrelated rationale text on other rows.
+
+Implementation lives in `src/components/ActionPalette/ActionPaletteItem.tsx`; the data plumbing is in `src/hooks/useActionPalette.ts` (`ActionPaletteItem` interface + `toActionPaletteItem` mapper copy `dangerRationale` through from the manifest entry).
+
+This is a separate signal from the MRU exclusion documented in Hard rule #2 — confirm-tier actions are simultaneously excluded from the "Recently used" rail and from `ActionService.repeatLast`, and surfaced with pre-warn chrome when they appear via search.
+
 ## Maintenance
 
 - This document is the source of truth for which actions are considered destructive and what tier they belong to. Updates are part of any PR that adds a new destructive action, changes an `ActionDanger` value, or wires a new `ConfirmDialog`.

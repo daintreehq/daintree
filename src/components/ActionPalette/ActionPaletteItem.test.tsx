@@ -334,4 +334,111 @@ describe("ActionPaletteItem", () => {
       expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
     });
   });
+
+  describe("confirm-tier rows", () => {
+    function confirmItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPaletteItemType {
+      return makeItem({
+        id: "worktree-delete",
+        title: "Delete worktree",
+        danger: "confirm",
+        dangerRationale: "Removes the working tree and branch from disk",
+        ...overrides,
+      });
+    }
+
+    it("appends a HIG ellipsis suffix on confirm-tier titles", () => {
+      render(
+        <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(screen.getByText("Delete worktree …")).toBeTruthy();
+      expect(screen.queryByText("Delete worktree")).toBeNull();
+    });
+
+    it("does not append the ellipsis on safe-tier titles", () => {
+      render(
+        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(screen.getByText("Test Action")).toBeTruthy();
+      expect(screen.queryByText(/…/)).toBeNull();
+    });
+
+    it('sets aria-haspopup="dialog" on confirm-tier rows', () => {
+      const { container } = render(
+        <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(container.querySelector("button")?.getAttribute("aria-haspopup")).toBe("dialog");
+    });
+
+    it("does not set aria-haspopup on safe-tier rows", () => {
+      const { container } = render(
+        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(container.querySelector("button")?.getAttribute("aria-haspopup")).toBeNull();
+    });
+
+    it("renders a TriangleAlert icon on confirm-tier rows", () => {
+      const { container } = render(
+        <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      const icon = container.querySelector('svg[aria-hidden="true"]');
+      expect(icon).toBeTruthy();
+      expect(icon?.getAttribute("class") ?? "").toContain("text-daintree-text/40");
+    });
+
+    it("does not render the alert icon on safe-tier rows", () => {
+      const { container } = render(
+        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(container.querySelector('svg[aria-hidden="true"]')).toBeNull();
+    });
+
+    it("links selected confirm-tier rows to their rationale via aria-describedby", () => {
+      const item = confirmItem();
+      const { container } = render(
+        <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
+      );
+
+      const button = container.querySelector("button");
+      const expectedId = `${item.id}-danger-rationale`;
+      expect(button?.getAttribute("aria-describedby")).toBe(expectedId);
+
+      const rationale = container.querySelector(`#${expectedId}`);
+      expect(rationale).toBeTruthy();
+      expect(rationale?.textContent).toBe("Removes the working tree and branch from disk");
+      expect(rationale?.className).toContain("hidden");
+      expect(rationale?.className).toContain("group-aria-selected:block");
+      expect(rationale?.className).toContain("italic");
+    });
+
+    it("omits aria-describedby on unselected confirm-tier rows", () => {
+      const item = confirmItem();
+      const { container } = render(
+        <ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />
+      );
+
+      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBeNull();
+      // Rationale node still in DOM (CSS-hidden) so the id target is stable across renders.
+      expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeTruthy();
+    });
+
+    it("omits rationale node and aria-describedby when dangerRationale is missing", () => {
+      const item = confirmItem({ dangerRationale: undefined });
+      const { container } = render(
+        <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
+      );
+
+      const button = container.querySelector("button");
+      expect(button?.getAttribute("aria-describedby")).toBeNull();
+      expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeNull();
+      // Suffix and icon still render — they gate on `danger === "confirm"`, not on rationale.
+      expect(screen.getByText("Delete worktree …")).toBeTruthy();
+      expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    });
+  });
 });
