@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getCompileCacheMeta, markHostPerformance } from "./utils/hostPerformance.js";
+import { installBootstrapErrorGuard } from "./utils/bootstrapErrorGuard.js";
 
 const userData = process.env.DAINTREE_USER_DATA;
 if (userData) {
@@ -30,4 +31,21 @@ if (userData) {
 // `ready`.
 markHostPerformance(PERF_MARKS.WORKSPACE_HOST_MODULE_EVAL_COMPLETE, getCompileCacheMeta());
 
+// Guard the dynamic import below: a native-load failure (e.g. better-sqlite3 or
+// @parcel/watcher dlopen) would otherwise hang the parent's waitForReady()
+// forever, since Electron 37+ only warns on unhandled rejections in utility
+// processes.
+const removeBootstrapGuard = installBootstrapErrorGuard({
+  label: "[WorkspaceHostBootstrap]",
+  postError: (error) => {
+    // Shape must match the `error` variant of WorkspaceHostEvent (shared/types/workspace-host.ts).
+    const port = process.parentPort as unknown as MessagePort | undefined;
+    port?.postMessage({ type: "error", error });
+  },
+});
+
 await import("./workspace-host.js");
+
+// Import succeeded — workspace-host.ts installed its own handlers during
+// evaluation, so drop the bootstrap guard to avoid double-reporting later crashes.
+removeBootstrapGuard();

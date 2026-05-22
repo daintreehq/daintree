@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getCompileCacheMeta, markHostPerformance } from "./utils/hostPerformance.js";
+import { installBootstrapErrorGuard } from "./utils/bootstrapErrorGuard.js";
 
 const userData = process.env.DAINTREE_USER_DATA;
 if (userData) {
@@ -24,4 +25,20 @@ if (userData) {
 // after `await import()` the host has already posted `ready`.
 markHostPerformance(PERF_MARKS.PTY_HOST_MODULE_EVAL_COMPLETE, getCompileCacheMeta());
 
+// Guard the dynamic import below: a native-load failure (e.g. node-pty
+// ERR_DLOPEN_FAILED) would otherwise hang the parent's waitForReady() forever,
+// since Electron 37+ only warns on unhandled rejections in utility processes.
+const removeBootstrapGuard = installBootstrapErrorGuard({
+  label: "[PtyHostBootstrap]",
+  postError: (error) => {
+    // Shape must match the `error` variant of PtyHostEvent (shared/types/pty-host.ts).
+    const port = process.parentPort as unknown as MessagePort | undefined;
+    port?.postMessage({ type: "error", id: "system", error });
+  },
+});
+
 await import("./pty-host.js");
+
+// Import succeeded — pty-host.ts installed its own handlers during evaluation,
+// so drop the bootstrap guard to avoid double-reporting later crashes.
+removeBootstrapGuard();
