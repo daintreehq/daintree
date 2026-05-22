@@ -4,6 +4,13 @@
   "version": "0.12.1",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
+  "sideEffects": [
+    "**/*.css",
+    "./src/main.tsx",
+    "./src/lib/trustedTypesPolicy.ts",
+    "./src/config/terminalFont.ts",
+    "./src/components/Fleet/fleetRawInputBroadcast.ts"
+  ],
   "author": {
     "name": "Greg Priday",
     "email": "greg@siteorigin.com"
