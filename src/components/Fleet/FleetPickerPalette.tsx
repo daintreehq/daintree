@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from "re
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
-import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
+import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
@@ -117,6 +117,49 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
     });
   }, [agentVisibleIds, picker]);
 
+  // Bulk-selection helpers live in the list's search section, not the commit
+  // footer — they act on the list, and the footer is reserved for commit
+  // controls (mode toggle + Cancel + Arm). Passed to `FleetPickerContent` as a
+  // slot so the layer-agnostic component stays unaware of palette concerns.
+  const selectionHelpers = (
+    <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5 pt-2">
+      <button
+        type="button"
+        onClick={handleToggleAllVisible}
+        disabled={picker.visibleIds.length === 0}
+        data-testid="fleet-picker-cold-start-select-all"
+        className={cn(
+          "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
+          "hover:bg-tint/[0.08] hover:text-daintree-text",
+          "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        )}
+      >
+        {selectAllLabel}
+      </button>
+      <button
+        type="button"
+        onClick={handleSelectAgents}
+        disabled={agentVisibleIds.length === 0}
+        data-testid="fleet-picker-cold-start-select-agents"
+        className={cn(
+          "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
+          "hover:bg-tint/[0.08] hover:text-daintree-text",
+          "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        )}
+      >
+        Select agents
+      </button>
+    </div>
+  );
+
+  // `FleetPickerFooterHint` collapses to nothing when the list is empty and
+  // nothing has drifted — skip the bordered strip entirely in that case so
+  // there's no empty bar between the list and the footer.
+  const hasVisibleRows = picker.visibleTerminals.length > 0;
+  const showFooterHint = hasVisibleRows || picker.driftCount > 0;
+
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Select terminals to arm">
       <div className="flex flex-col">
@@ -137,90 +180,61 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                 picker={picker}
                 testIdPrefix="fleet-picker-cold-start"
                 autoFocusSearch
+                headerSlot={selectionHelpers}
               />
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-daintree-border px-3 py-2">
-              <div className="flex items-center gap-1.5">
-                <span
-                  role="status"
-                  className="text-[11px] tabular-nums text-daintree-text/55"
-                  data-testid="fleet-picker-cold-start-status"
-                >
-                  {hasQuery
-                    ? `Matches ${picker.visibleTerminals.length} of ${picker.eligibleTerminals.length}`
-                    : "Select terminals to arm"}
-                  {picker.driftCount > 0 ? ` · ${picker.driftCount} ineligible` : ""}
-                </span>
+            {showFooterHint && (
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-daintree-border/50 px-3 py-1.5 text-[11px] text-daintree-text/55">
+                <FleetPickerFooterHint
+                  confirmedCount={picker.confirmedIds.length}
+                  driftCount={picker.driftCount}
+                  hasVisibleRows={hasVisibleRows}
+                />
+              </div>
+            )}
+
+            <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-daintree-border px-3 py-2">
+              <div
+                className="flex gap-1 text-[11px]"
+                role="radiogroup"
+                aria-label="Commit mode"
+                data-testid="fleet-picker-cold-start-commit-mode"
+              >
                 <button
                   type="button"
-                  onClick={handleToggleAllVisible}
-                  disabled={picker.visibleIds.length === 0}
-                  data-testid="fleet-picker-cold-start-select-all"
+                  role="radio"
+                  aria-checked={commitMode === "replace"}
+                  onClick={() => setCommitMode("replace")}
+                  data-testid="fleet-picker-cold-start-commit-mode-replace"
                   className={cn(
-                    "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
-                    "hover:bg-tint/[0.08] hover:text-daintree-text",
-                    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "rounded px-2 py-1 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                    commitMode === "replace"
+                      ? "bg-tint/[0.14] text-daintree-text"
+                      : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
                   )}
                 >
-                  {selectAllLabel}
+                  Replace
                 </button>
                 <button
                   type="button"
-                  onClick={handleSelectAgents}
-                  disabled={agentVisibleIds.length === 0}
-                  data-testid="fleet-picker-cold-start-select-agents"
+                  role="radio"
+                  aria-checked={commitMode === "append"}
+                  onClick={() => setCommitMode("append")}
+                  data-testid="fleet-picker-cold-start-commit-mode-append"
                   className={cn(
-                    "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
-                    "hover:bg-tint/[0.08] hover:text-daintree-text",
-                    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "rounded px-2 py-1 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                    commitMode === "append"
+                      ? "bg-tint/[0.14] text-daintree-text"
+                      : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
                   )}
                 >
-                  Select agents
+                  Append
                 </button>
               </div>
               <div className="flex items-center gap-1.5">
-                <div
-                  className="flex gap-1 text-[11px]"
-                  role="radiogroup"
-                  aria-label="Commit mode"
-                  data-testid="fleet-picker-cold-start-commit-mode"
-                >
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={commitMode === "replace"}
-                    onClick={() => setCommitMode("replace")}
-                    data-testid="fleet-picker-cold-start-commit-mode-replace"
-                    className={cn(
-                      "rounded px-2 py-1 transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-                      commitMode === "replace"
-                        ? "bg-tint/[0.14] text-daintree-text"
-                        : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
-                    )}
-                  >
-                    Replace
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={commitMode === "append"}
-                    onClick={() => setCommitMode("append")}
-                    data-testid="fleet-picker-cold-start-commit-mode-append"
-                    className={cn(
-                      "rounded px-2 py-1 transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-                      commitMode === "append"
-                        ? "bg-tint/[0.14] text-daintree-text"
-                        : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
-                    )}
-                  >
-                    Append
-                  </button>
-                </div>
                 <button
                   type="button"
                   onClick={onClose}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import { render, fireEvent, screen, act, within } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -119,8 +119,7 @@ describe("FleetPickerPalette", () => {
     seedTerminals([makeTerminal("t1")]);
     renderPalette([makeWorktreeSnap("wt-1", "main")]);
     await act(async () => {});
-    // "Select terminals to arm" appears in both the h2 header and the footer
-    // status span (which is now a persistent prompt), so scope to the heading.
+    // The dialog title renders as the h2 heading.
     expect(screen.getByRole("heading", { name: "Select terminals to arm" })).toBeTruthy();
     expect(screen.getByTestId("fleet-picker-cold-start-root")).toBeTruthy();
   });
@@ -274,7 +273,7 @@ describe("FleetPickerPalette", () => {
     expect(confirm.disabled).toBe(true);
   });
 
-  describe("Select all / Select agents footer buttons", () => {
+  describe("Select all / Select agents helper buttons", () => {
     it("renders 'Select all' and selects all visible terminals on click", async () => {
       // No active worktree → no preselection, so the Arm button starts at 0
       // and clicking "Select all" must populate the selection.
@@ -541,30 +540,42 @@ describe("FleetPickerPalette", () => {
       expect(confirm.textContent).toContain("Arm selected");
     });
 
-    it("footer status reads as a persistent prompt with role='status'", async () => {
-      seedTerminals([makeTerminal("t1")]);
+    it("footer holds only commit controls — bulk-selection helpers sit above the list", async () => {
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
       renderPalette([makeWorktreeSnap("wt-1", "main")]);
       await act(async () => {});
 
-      const status = screen.getByTestId("fleet-picker-cold-start-status");
-      expect(status.getAttribute("role")).toBe("status");
-      expect(status.textContent).toBe("Select terminals to arm");
+      // The commit footer is the row that hosts the Replace/Append toggle.
+      const footer = screen.getByTestId("fleet-picker-cold-start-commit-mode")
+        .parentElement as HTMLElement;
+      const inFooter = within(footer);
+      expect(inFooter.getByTestId("fleet-picker-cold-start-confirm")).toBeTruthy();
+      expect(inFooter.getByText("Cancel")).toBeTruthy();
+      // The decluttered footer must not carry the bulk-selection helpers or
+      // the dropped status text — that's the whole point of #8802.
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-select-all")).toBeNull();
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-select-agents")).toBeNull();
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-status")).toBeNull();
+
+      // The helpers still exist — relocated into the list's search section.
+      expect(screen.getByTestId("fleet-picker-cold-start-select-all")).toBeTruthy();
+      expect(screen.getByTestId("fleet-picker-cold-start-select-agents")).toBeTruthy();
     });
 
-    it("footer status shows 'Matches N of M' when a query narrows the list", async () => {
-      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
-      seedTerminals([makeTerminal("alpha"), makeTerminal("beta"), makeTerminal("gamma")]);
+    it("surfaces the drift count as a live region when a selected terminal drifts out", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
       renderPalette([makeWorktreeSnap("wt-1", "main")]);
       await act(async () => {});
 
-      const search = screen.getByTestId("fleet-picker-cold-start-search") as HTMLInputElement;
-      await act(async () => {
-        fireEvent.change(search, { target: { value: "alpha" } });
-      });
+      // Both terminals start pre-selected; drift t2 out of the panel store.
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
       await act(async () => {});
 
-      const status = screen.getByTestId("fleet-picker-cold-start-status");
-      expect(status.textContent).toContain("Matches 1 of 3");
+      const drift = screen.getByText("1 became ineligible");
+      expect(drift.getAttribute("role")).toBe("status");
     });
   });
 
