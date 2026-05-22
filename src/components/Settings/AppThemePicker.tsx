@@ -127,7 +127,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   // Warn — non-blocking — when an accent override drops below WCAG AA 4.5:1 against the
   // active theme, either as button-label text or as accent-tinted text on the theme surfaces.
   const accentContrastFail = useMemo(() => {
-    if (accentColorOverride === null) return false;
+    if (!accentColorOverride) return false;
     return accentOverrideHasLowContrast(
       applyAccentOverrideToScheme(selectedScheme, accentColorOverride)
     );

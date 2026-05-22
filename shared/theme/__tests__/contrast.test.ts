@@ -321,18 +321,33 @@ describe("accentOverrideHasLowContrast", () => {
   });
 
   it("flags via the accent-foreground/accent-primary pair when surfaces are fine", () => {
-    // accent-primary is high-contrast against white surfaces, but accent-foreground
-    // is a near-match on the accent itself — isolates the button-label branch.
+    // Light accent on black surfaces passes the surface check (~9:1), but the near-match
+    // accent-foreground fails on the accent itself — isolates the button-label branch.
     const scheme = makeScheme({
-      "accent-primary": "#777777" as AppColorSchemeTokens["accent-primary"],
-      "accent-foreground": "#6f6f6f" as AppColorSchemeTokens["accent-foreground"],
-      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
-      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
-      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
-      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
-      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+      "accent-primary": "#aaaaaa" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#a4a4a4" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#000000" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#000000" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#000000" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
     });
     expect(accentOverrideHasLowContrast(scheme)).toBe(true);
+  });
+
+  it("skips the foreground pair when accent-foreground is non-hex but still checks surfaces", () => {
+    // Non-hex accent-foreground must not throw; the surface check still governs.
+    const scheme = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#000000" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#000000" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#000000" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    // White accent on black surfaces is high-contrast → no warning despite non-hex fg.
+    expect(accentOverrideHasLowContrast(scheme)).toBe(false);
   });
 
   it("does not flag when a non-hex accent-primary cannot be evaluated", () => {
