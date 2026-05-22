@@ -65,6 +65,25 @@ export interface TierMismatchState {
   projectId: string | null;
 }
 
+/**
+ * Why a launch attempt failed, surfaced in the Help Panel as an inline banner
+ * (the lower-restriction recovery surface) when the panel is open, instead of
+ * a generic action-free toast. `kind` drives the banner's recovery copy — the
+ * same discriminant pattern as `TierMismatchState.targetTier`. No raw error
+ * text rides along: user-facing copy is keyed off `kind` so it stays free of
+ * "MCP" / "token" / "bearer" jargon.
+ */
+export type LaunchErrorKind =
+  | "mcp-server-not-started"
+  | "mcp-probe-failed"
+  | "spawn-failed"
+  | "folder-unavailable";
+
+export interface LaunchErrorState {
+  agentId: string;
+  kind: LaunchErrorKind;
+}
+
 export interface HelpSessionSnapshot {
   phase: HelpSessionPhase;
   showResumeBanner: boolean;
@@ -78,6 +97,7 @@ export interface HelpSessionSnapshot {
    * prevent probe hammering.
    */
   isCheckingVersion: boolean;
+  launchError: LaunchErrorState | null;
 }
 
 export interface HelpProjectRef {
@@ -141,10 +161,15 @@ function agentSpawnEnv(_agentId: string, _sessionPath: string): Record<string, s
   return {};
 }
 
+type ProvisionFailureCode =
+  | "MCP_NOT_READY"
+  | "MCP_SERVER_NOT_STARTED"
+  | "MCP_PROBE_FAILED"
+  | "UNKNOWN";
+
 type ProvisionOutcome =
   | { ok: true; session: HelpSessionRef }
-  | { ok: false; code: "MCP_NOT_READY"; message: string }
-  | { ok: false; code: "UNKNOWN"; message: string };
+  | { ok: false; code: ProvisionFailureCode; message: string };
 
 async function provisionHelpSession(
   project: HelpProjectRef,
@@ -173,8 +198,12 @@ async function provisionHelpSession(
         ? (err as Record<string, unknown>).code
         : undefined;
     const message = formatErrorMessage(err, "Couldn't provision help session");
-    if (code === "MCP_NOT_READY") {
-      return { ok: false, code: "MCP_NOT_READY", message };
+    if (
+      code === "MCP_SERVER_NOT_STARTED" ||
+      code === "MCP_PROBE_FAILED" ||
+      code === "MCP_NOT_READY"
+    ) {
+      return { ok: false, code, message };
     }
     return { ok: false, code: "UNKNOWN", message };
   }
@@ -196,6 +225,20 @@ type VersionProbeResult =
   | { status: "ok" }
   | { status: "indeterminate" }
   | { status: "too-old"; block: VersionTooOld };
+
+function provisionFailureKind(code: ProvisionFailureCode): LaunchErrorKind {
+  switch (code) {
+    case "MCP_SERVER_NOT_STARTED":
+      return "mcp-server-not-started";
+    // Legacy `MCP_NOT_READY` errors fall through to the probe-failed shape —
+    // the "server responded badly" copy is the closer fit.
+    case "MCP_PROBE_FAILED":
+    case "MCP_NOT_READY":
+      return "mcp-probe-failed";
+    default:
+      return "spawn-failed";
+  }
+}
 
 // `refresh=true` bypasses the 12h AgentVersionService cache — pass on retry
 // so a user who manually updates the CLI outside Daintree's update flow can
@@ -302,11 +345,18 @@ function notifyLaunchFailed(agentId: string, reason: string): void {
   });
 }
 
-function notifyMcpNotReady(reason: string): void {
+function notifyAssistantServicesUnavailable(
+  kind: "mcp-server-not-started" | "mcp-probe-failed"
+): void {
   notify({
     type: "error",
-    title: "Start MCP failed",
-    message: `Daintree Assistant needs MCP, but the server didn't start. ${reason}`,
+    title: "Assistant couldn't start",
+    // Mirror the inline banner's per-kind discrimination on the closed-panel
+    // fallback so the two failure modes read differently here too.
+    message:
+      kind === "mcp-probe-failed"
+        ? "Daintree's assistant services didn't respond in time. Check assistant settings, then try again."
+        : "Daintree's assistant services didn't start. Check assistant settings, then try again.",
     action: {
       label: "Open settings",
       actionId: "app.settings.openTab",
@@ -326,6 +376,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   preflightSnapshot: null,
   isApprovingTier: false,
   isCheckingVersion: false,
+  launchError: null,
 });
 
 /**
@@ -470,15 +521,20 @@ export class HelpSessionController {
 
     // Clear the version block when the preferred agent changes — the stale
     // block belongs to the previous agent and would otherwise paint over
-    // the new agent's empty state. The in-flight launch's stale-agent
-    // post-dispatch check handles its own cleanup, so we don't bump
-    // `_launchGen` here.
+    // the new agent's empty state. The launch-error banner is cleared for the
+    // same reason: its `agentId` (and Retry target) belongs to the old agent.
+    // The in-flight launch's stale-agent post-dispatch check handles its own
+    // cleanup, so we don't bump `_launchGen` here.
     if (prev && prev.preferredAgentId !== inputs.preferredAgentId) {
       // Drop any in-flight "Check again" cooldown too — it belongs to the
       // previous agent's gate; leaving it would disable the new gate's
       // button until the stale probe settles.
       this._clearCheckAgainCooldownTimer();
-      this._patch({ assistantVersionTooOld: null, isCheckingVersion: false });
+      this._patch({
+        assistantVersionTooOld: null,
+        isCheckingVersion: false,
+        launchError: null,
+      });
     }
 
     // Reset auto-launch guard when the panel closes so the next open can
@@ -692,6 +748,10 @@ export class HelpSessionController {
     this._patch({ tierMismatch: null });
   }
 
+  dismissLaunchError(): void {
+    this._patch({ launchError: null });
+  }
+
   approveTierOnce(): void {
     const current = this._snapshot.tierMismatch;
     if (!current?.targetTier || this._snapshot.isApprovingTier) return;
@@ -868,6 +928,28 @@ export class HelpSessionController {
     }
   }
 
+  /**
+   * Route a launch failure to the least-restricted surface that conveys it.
+   * When the panel is open, the failure becomes an inline banner the user can
+   * retry from in place; when it's closed, we fall back to a toast so the
+   * failure isn't lost. The MCP failure kinds keep the settings-routing toast
+   * (a real recovery action); everything else uses the plain launch-failed
+   * toast.
+   */
+  private _surfaceLaunchError(agentId: string, kind: LaunchErrorKind): void {
+    if (this._lastInputs?.isOpen) {
+      this._patch({ launchError: Object.freeze({ agentId, kind }) });
+      return;
+    }
+    if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
+      notifyAssistantServicesUnavailable(kind);
+    } else if (kind === "folder-unavailable") {
+      notifyLaunchFailed(agentId, "Help folder is not available.");
+    } else {
+      notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
+    }
+  }
+
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
     // Spread-merge first, then structurally compare per-field. Reusing the
     // same snapshot reference when nothing changed keeps Object.is stable
@@ -880,7 +962,8 @@ export class HelpSessionController {
       next.tierMismatch === this._snapshot.tierMismatch &&
       next.preflightSnapshot === this._snapshot.preflightSnapshot &&
       next.isApprovingTier === this._snapshot.isApprovingTier &&
-      next.isCheckingVersion === this._snapshot.isCheckingVersion
+      next.isCheckingVersion === this._snapshot.isCheckingVersion &&
+      next.launchError === this._snapshot.launchError
     ) {
       return;
     }
@@ -1279,6 +1362,9 @@ export class HelpSessionController {
     // that is still the current generation, so the loading skeleton never
     // sticks; a superseded generation leaves the phase to its new owner.
     let reached = false;
+    // Clear any prior failure banner up front so a retry immediately drops the
+    // stale error while the new attempt is in flight.
+    this._patch({ launchError: null });
     try {
       this._patch({ phase: "version-checking" });
       const folderPath = await window.electron.help.getFolderPath();
@@ -1288,7 +1374,7 @@ export class HelpSessionController {
       }
       if (!folderPath) {
         this._hasAutoLaunched = false;
-        notifyLaunchFailed(launchAgentId, "Help folder is not available.");
+        this._surfaceLaunchError(launchAgentId, "folder-unavailable");
         return;
       }
 
@@ -1327,11 +1413,7 @@ export class HelpSessionController {
       }
       if (!outcome.ok) {
         this._hasAutoLaunched = false;
-        if (outcome.code === "MCP_NOT_READY") {
-          notifyMcpNotReady(outcome.message);
-        } else {
-          notifyLaunchFailed(launchAgentId, outcome.message);
-        }
+        this._surfaceLaunchError(launchAgentId, provisionFailureKind(outcome.code));
         return;
       }
       session = outcome.session;
@@ -1441,7 +1523,7 @@ export class HelpSessionController {
         revokeHelpSession(session?.sessionId ?? null);
         this._pendingSessionId = null;
         logError("Help auto-launch failed", { agentId: launchAgentId, result });
-        notifyLaunchFailed(launchAgentId, "The agent didn't start. Try again.");
+        this._surfaceLaunchError(launchAgentId, "spawn-failed");
         return;
       }
 
@@ -1464,10 +1546,13 @@ export class HelpSessionController {
     } catch (err) {
       logError("HelpPanel: auto-launch threw", err);
       this._hasAutoLaunched = false;
-      // A throw after provisioning (e.g. agent.launch rejecting) would
-      // otherwise strand the minted MCP session token.
+      // Mirror _executeLaunch's catch: an unexpected throw past the
+      // provision step (e.g. agent.launch rejecting) leaves a live session
+      // token with no bound terminal. Revoke it, clear the pending-session
+      // guard, and surface the failure so the panel isn't left silently empty.
       revokeHelpSession(session?.sessionId ?? null);
       this._pendingSessionId = null;
+      this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       if (gen === this._launchGen && !reached) this._resetPhase();
     }
@@ -1487,6 +1572,9 @@ export class HelpSessionController {
     // See `_executeAutoLaunch`: the finally drops the phase back to idle on a
     // non-success exit that's still the current generation.
     let reached = false;
+    // Clear any prior failure banner up front so a retry immediately drops the
+    // stale error while the new attempt is in flight.
+    this._patch({ launchError: null });
     try {
       // reservedId paths (newSession/runAnyway) skip the version gate, so they
       // open straight at "provisioning"; the empty-state flow starts at the
@@ -1503,7 +1591,7 @@ export class HelpSessionController {
       // terminal context so the folder path isn't strictly required.
       if (!reservedId && !folderPath) {
         if (options.isAutoLaunch) this._hasAutoLaunched = false;
-        notifyLaunchFailed(launchAgentId, "Help folder is not available.");
+        this._surfaceLaunchError(launchAgentId, "folder-unavailable");
         return;
       }
 
@@ -1546,11 +1634,7 @@ export class HelpSessionController {
         } else {
           this._hasAutoLaunched = false;
         }
-        if (outcome.code === "MCP_NOT_READY") {
-          notifyMcpNotReady(outcome.message);
-        } else {
-          notifyLaunchFailed(launchAgentId, outcome.message);
-        }
+        this._surfaceLaunchError(launchAgentId, provisionFailureKind(outcome.code));
         return;
       }
       session = outcome.session;
@@ -1658,7 +1742,7 @@ export class HelpSessionController {
           this._pendingSessionId = null;
           logError("Help launch failed", { agentId: launchAgentId, result });
         }
-        notifyLaunchFailed(launchAgentId, "The agent didn't start. Try again.");
+        this._surfaceLaunchError(launchAgentId, "spawn-failed");
         return;
       }
 
@@ -1699,7 +1783,7 @@ export class HelpSessionController {
         this._pendingSessionId = null;
         logError("Help select-agent launch failed", error);
       }
-      notifyLaunchFailed(launchAgentId, "The agent didn't start. Try again.");
+      this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       this._isLaunching = false;
       if (gen === this._launchGen && !reached) this._resetPhase();

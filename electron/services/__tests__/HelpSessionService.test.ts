@@ -713,7 +713,7 @@ describe("HelpSessionService", () => {
     expect(result?.mcpUrl).toBe("http://127.0.0.1:45454/sse");
   });
 
-  it("throws MCP_NOT_READY when the MCP server cannot be wired", async () => {
+  it("throws MCP_SERVER_NOT_STARTED when the MCP server cannot be wired", async () => {
     mockMcpServerService.isRunning = false;
     // setEnabled appears to succeed but isRunning stays false — models a
     // failed bind (port exhaustion, etc).
@@ -729,7 +729,7 @@ describe("HelpSessionService", () => {
 
     await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
       name: "HelpSessionError",
-      code: "MCP_NOT_READY",
+      code: "MCP_SERVER_NOT_STARTED",
     });
   });
 
@@ -756,15 +756,17 @@ describe("HelpSessionService", () => {
     expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
   });
 
-  it("throws MCP_NOT_READY when the active probe fails — passive socket-bound state isn't enough", async () => {
+  it("throws MCP_SERVER_NOT_STARTED when the active probe fails — passive socket-bound state isn't enough", async () => {
     // Models the exact bug behind #6898: socket is bound (`isRunning` true)
     // but the HTTP/MCP handler hasn't actually serviced a real request yet.
+    // The failing probe here is the ensureMcpServerReady self-probe, so the
+    // server itself is judged not started.
     mockProbeMcpServer.mockRejectedValueOnce(
       new Error("MCP readiness probe failed after 3 attempt(s) on port 45454: status 500")
     );
     await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
       name: "HelpSessionError",
-      code: "MCP_NOT_READY",
+      code: "MCP_SERVER_NOT_STARTED",
     });
   });
 
@@ -784,12 +786,12 @@ describe("HelpSessionService", () => {
     expect(entries).toEqual([]);
   });
 
-  it("throws MCP_NOT_READY and strips the daintree entry when the assistant SSE bearer probe fails", async () => {
+  it("throws MCP_PROBE_FAILED and strips the daintree entry when the assistant SSE bearer probe fails", async () => {
     mockProbeMcpSseServer.mockRejectedValueOnce(new Error("SSE returned status 401"));
 
     await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
       name: "HelpSessionError",
-      code: "MCP_NOT_READY",
+      code: "MCP_PROBE_FAILED",
     });
 
     const token = mockProbeMcpSseServer.mock.calls[0]?.[1];
@@ -1344,13 +1346,13 @@ describe("HelpSessionService", () => {
       expect(bArgs!.length).toBeGreaterThan(0);
     });
 
-    it("throws MCP_NOT_READY when the post-provision /mcp probe fails", async () => {
+    it("throws MCP_PROBE_FAILED when the post-provision /mcp probe fails", async () => {
       mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
       mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 500"));
 
       await expect(service.provisionSession(codexInput())).rejects.toMatchObject({
         name: "HelpSessionError",
-        code: "MCP_NOT_READY",
+        code: "MCP_PROBE_FAILED",
       });
     });
   });
@@ -1620,7 +1622,7 @@ describe("HelpSessionService", () => {
       expect(geminiSettings.mcpServers.daintree.httpUrl).toBe("http://127.0.0.1:45454/mcp");
     });
 
-    it("throws MCP_NOT_READY and strips the daintree entry when the Gemini /mcp probe fails", async () => {
+    it("throws MCP_PROBE_FAILED and strips the daintree entry when the Gemini /mcp probe fails", async () => {
       // First probe call (ensureMcpServerReady) succeeds; second (session
       // token probe) fails.
       mockProbeMcpServer.mockResolvedValueOnce(undefined);
@@ -1628,7 +1630,7 @@ describe("HelpSessionService", () => {
 
       await expect(service.provisionSession(geminiInput())).rejects.toMatchObject({
         name: "HelpSessionError",
-        code: "MCP_NOT_READY",
+        code: "MCP_PROBE_FAILED",
       });
 
       // Session dir survives — but the daintree entry must be gone.
@@ -1786,13 +1788,13 @@ describe("HelpSessionService", () => {
       expect(after.mcpServers["daintree-docs"]).toBeDefined();
     });
 
-    it("throws MCP_NOT_READY and strips the daintree entry when the Copilot /mcp probe fails", async () => {
+    it("throws MCP_PROBE_FAILED and strips the daintree entry when the Copilot /mcp probe fails", async () => {
       mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
       mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 401"));
 
       await expect(service.provisionSession(copilotInput())).rejects.toMatchObject({
         name: "HelpSessionError",
-        code: "MCP_NOT_READY",
+        code: "MCP_PROBE_FAILED",
       });
 
       const sessionsRoot = path.join(userData, "help-sessions");
@@ -2100,7 +2102,7 @@ describe("HelpSessionService", () => {
       } satisfies McpRuntimeSnapshot);
 
       await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
-        code: "MCP_NOT_READY",
+        code: "MCP_SERVER_NOT_STARTED",
       });
 
       expect(mockMcpServerService.recordTurnOutcome).toHaveBeenCalledWith(
@@ -2111,7 +2113,7 @@ describe("HelpSessionService", () => {
     it("records mcp-not-ready when the post-provision SSE probe fails", async () => {
       mockProbeMcpSseServer.mockRejectedValueOnce(new Error("sse probe 500"));
       await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
-        code: "MCP_NOT_READY",
+        code: "MCP_PROBE_FAILED",
       });
       expect(mockMcpServerService.recordTurnOutcome).toHaveBeenCalledWith(
         expect.objectContaining({ outcome: "mcp-not-ready" })

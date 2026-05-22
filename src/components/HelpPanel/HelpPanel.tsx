@@ -558,6 +558,11 @@ export function HelpPanel({
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
+  const dismissLaunchError = useCallback(() => controller.dismissLaunchError(), [controller]);
+  const retryLaunch = useCallback(() => {
+    const agentId = session.launchError?.agentId;
+    if (agentId) controller.launch({ agentId });
+  }, [controller, session.launchError]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
   // running PTY when the assistant terminal has focus; the .cm-editor check
@@ -634,6 +639,25 @@ export function HelpPanel({
 
       {/* Content */}
       <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+        {/* Banners render above every content state — the launch-error banner
+            must stay visible in the empty state a failed launch falls back to.
+            The other banners are null unless a session is live, so this mount
+            position is behaviorally identical for them. */}
+        <HelpPanelBanners
+          showResumeBanner={session.showResumeBanner}
+          preflightSnapshot={session.preflightSnapshot}
+          tierMismatch={session.tierMismatch}
+          launchError={session.launchError}
+          isApprovingTier={session.isApprovingTier}
+          onDismissResume={dismissResume}
+          onDismissSnapshot={dismissSnapshot}
+          onDismissTierMismatch={dismissTierMismatch}
+          onApproveOnce={approveTierOnce}
+          onAlwaysAllow={alwaysAllowTier}
+          onRetryLaunch={retryLaunch}
+          onDismissLaunchError={dismissLaunchError}
+          onOpenAssistantSettings={handleOpenSettings}
+        />
         {showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate
@@ -646,17 +670,6 @@ export function HelpPanel({
               {!introDismissed && !hasEverLaunchedAgent && (
                 <HelpIntroBanner onDismiss={dismissIntro} />
               )}
-              <HelpPanelBanners
-                showResumeBanner={session.showResumeBanner}
-                preflightSnapshot={session.preflightSnapshot}
-                tierMismatch={session.tierMismatch}
-                isApprovingTier={session.isApprovingTier}
-                onDismissResume={dismissResume}
-                onDismissSnapshot={dismissSnapshot}
-                onDismissTierMismatch={dismissTierMismatch}
-                onApproveOnce={approveTierOnce}
-                onAlwaysAllow={alwaysAllowTier}
-              />
               <div className="flex-1 relative min-h-0">
                 <Suspense fallback={null}>
                   <XtermAdapter
