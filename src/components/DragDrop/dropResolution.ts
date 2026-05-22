@@ -96,39 +96,6 @@ export function resolveTargetIndex(
 }
 
 /**
- * Check whether the grid container is at capacity for a given worktree.
- * Counts explicit TabGroups + ungrouped terminals against maxGridCapacity.
- */
-export function isGridFull(
-  terminalsById: Record<string, TerminalInstance | undefined>,
-  panelIds: readonly string[],
-  worktreeId: string | null | undefined,
-  tabGroups: Map<string, TabGroup>,
-  maxGridCapacity: number
-): boolean {
-  const gridTerminals = filterTerminalsByContainer(terminalsById, panelIds, "grid", worktreeId);
-
-  const panelsInGroups = new Set<string>();
-  let explicitGroupCount = 0;
-  for (const group of tabGroups.values()) {
-    if (
-      group.location === "grid" &&
-      (group.worktreeId ?? undefined) === (worktreeId ?? undefined)
-    ) {
-      explicitGroupCount++;
-      for (const pid of group.panelIds) panelsInGroups.add(pid);
-    }
-  }
-
-  let ungroupedCount = 0;
-  for (const t of gridTerminals) {
-    if (!panelsInGroups.has(t.id)) ungroupedCount++;
-  }
-
-  return explicitGroupCount + ungroupedCount >= maxGridCapacity;
-}
-
-/**
  * Find the insertion index for a group among tabGroups.
  * Linear search for group ID or panel membership; falls back to clamped
  * sortableIndex, then last position.

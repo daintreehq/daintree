@@ -4,7 +4,6 @@ import {
   filterTerminalsByContainer,
   detectTargetContainer,
   resolveTargetIndex,
-  isGridFull,
   resolveGroupPlacementIndex,
   findGroupIndex,
 } from "../dropResolution";
@@ -229,72 +228,8 @@ describe("resolveTargetIndex", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// isGridFull
-// ---------------------------------------------------------------------------
-describe("isGridFull", () => {
-  it("returns true when count meets capacity", () => {
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tB = makeTerminal("b", "grid", "wt1");
-    const terminalsById = { a: tA, b: tB };
-    expect(isGridFull(terminalsById, ["a", "b"], "wt1", new Map(), 2)).toBe(true);
-  });
-
-  it("returns false when count is below capacity", () => {
-    const tA = makeTerminal("a", "grid", "wt1");
-    expect(isGridFull({ a: tA }, ["a"], "wt1", new Map(), 2)).toBe(false);
-  });
-
-  it("counts explicit tab groups", () => {
-    const group = makeTabGroup("g1", "grid", ["a", "b"], "wt1");
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tB = makeTerminal("b", "grid", "wt1");
-    const tabGroups = new Map([["g1", group]]);
-    // 2-panel group counts as 1 slot; capacity=2 means NOT full (proves panels aren't double-counted)
-    expect(isGridFull({ a: tA, b: tB }, ["a", "b"], "wt1", tabGroups, 2)).toBe(false);
-  });
-
-  it("counts ungrouped panels separately from grouped panels", () => {
-    const group = makeTabGroup("g1", "grid", ["a"], "wt1");
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tB = makeTerminal("b", "grid", "wt1"); // ungrouped
-    const tabGroups = new Map([["g1", group]]);
-    // 1 group + 1 ungrouped = 2, capacity = 2 => full
-    expect(isGridFull({ a: tA, b: tB }, ["a", "b"], "wt1", tabGroups, 2)).toBe(true);
-  });
-
-  it("ignores dock-location groups in grid check", () => {
-    const group = makeTabGroup("g1", "dock", ["a"], "wt1");
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tB = makeTerminal("b", "grid", "wt1");
-    const tabGroups = new Map([["g1", group]]);
-    // group is dock, doesn't count; 2 grid terminals = 2 slots, capacity=2 => full
-    expect(isGridFull({ a: tA, b: tB }, ["a", "b"], "wt1", tabGroups, 2)).toBe(true);
-  });
-
-  it("filters by worktreeId for groups", () => {
-    const group = makeTabGroup("g1", "grid", ["a"], "wt2");
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tabGroups = new Map([["g1", group]]);
-    // wt2 group excluded; only 1 wt1 terminal counted; capacity=2 => not full
-    expect(isGridFull({ a: tA }, ["a"], "wt1", tabGroups, 2)).toBe(false);
-  });
-
-  it("multiple groups fill independent slots", () => {
-    const g1 = makeTabGroup("g1", "grid", ["a"], "wt1");
-    const g2 = makeTabGroup("g2", "grid", ["b"], "wt1");
-    const map = new Map([
-      ["g1", g1],
-      ["g2", g2],
-    ]);
-    const tA = makeTerminal("a", "grid", "wt1");
-    const tB = makeTerminal("b", "grid", "wt1");
-    // 2 groups = 2 slots; capacity=2 => full
-    expect(isGridFull({ a: tA, b: tB }, ["a", "b"], "wt1", map, 2)).toBe(true);
-    // capacity=3 => not full (proves each group counts as 1, not double-counted with terminals)
-    expect(isGridFull({ a: tA, b: tB }, ["a", "b"], "wt1", map, 3)).toBe(false);
-  });
-});
+// `isGridFull` was removed in #8805 — the scrollable grid no longer rejects
+// drops based on a screen-fit cap; the grid scrolls vertically instead.
 
 // ---------------------------------------------------------------------------
 // resolveGroupPlacementIndex

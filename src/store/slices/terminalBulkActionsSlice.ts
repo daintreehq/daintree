@@ -1,7 +1,6 @@
 import PQueue from "p-queue";
 import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./panelRegistrySlice";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import type { AgentState } from "@/types";
 import { isRuntimeAgentTerminal } from "../../utils/terminalType";
 import { validateTerminals, type ValidationResult } from "@/utils/terminalValidation";
@@ -186,15 +185,9 @@ export const createTerminalBulkActionsSlice = (
       );
       if (dockedTerminals.length === 0) return;
 
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const gridCount = terminals.filter(
-        (t) => (t.location === "grid" || t.location === undefined) && t.worktreeId === worktreeId
-      ).length;
-      const availableSlots = maxCapacity - gridCount;
-      if (availableSlots <= 0) return;
-
-      const terminalsToMove = dockedTerminals.slice(0, availableSlots);
-
+      // Scrollable grid (#8805): no per-grid screen-fit cap — move every
+      // docked terminal up to the grid; the grid scrolls if it exceeds the
+      // on-screen fit.
       const currentFocusId = getFocusedId();
       const currentFocusedTerminal = currentFocusId
         ? terminals.find((t) => t.id === currentFocusId)
@@ -204,7 +197,7 @@ export const createTerminalBulkActionsSlice = (
         (currentFocusedTerminal.location === "grid" ||
           currentFocusedTerminal.location === undefined);
 
-      terminalsToMove.forEach((t) => moveTerminalToGrid(t.id));
+      dockedTerminals.forEach((t) => moveTerminalToGrid(t.id));
 
       if (hasGridFocus && currentFocusId) {
         setFocusedId(currentFocusId);
@@ -279,20 +272,8 @@ export const createTerminalBulkActionsSlice = (
       );
       if (dockedTerminals.length === 0) return;
 
-      // Calculate available capacity (count both "grid" and undefined as grid)
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const gridCount = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ).length;
-      const availableSlots = maxCapacity - gridCount;
-      if (availableSlots <= 0) return;
-
-      // Only move terminals that fit
-      const terminalsToMove = dockedTerminals.slice(0, availableSlots);
-
-      // Preserve existing grid focus if one exists
+      // Scrollable grid (#8805): no screen-fit cap, so every docked terminal
+      // moves up to the grid; the grid scrolls if needed.
       const currentFocusId = getFocusedId();
       const currentFocusedTerminal = currentFocusId
         ? terminals.find((t) => t.id === currentFocusId)
@@ -302,9 +283,8 @@ export const createTerminalBulkActionsSlice = (
         (currentFocusedTerminal.location === "grid" ||
           currentFocusedTerminal.location === undefined);
 
-      terminalsToMove.forEach((t) => moveTerminalToGrid(t.id));
+      dockedTerminals.forEach((t) => moveTerminalToGrid(t.id));
 
-      // Restore the original grid focus if it existed
       if (hasGridFocus && currentFocusId) {
         setFocusedId(currentFocusId);
       }

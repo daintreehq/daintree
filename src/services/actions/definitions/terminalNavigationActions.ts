@@ -196,6 +196,54 @@ export function registerTerminalNavigationActions(
     },
   }));
 
+  actions.set("terminal.jumpToNextAttention", () => ({
+    id: "terminal.jumpToNextAttention",
+    title: "Jump to next agent needing attention",
+    description:
+      "Scroll the scrollable panel grid to the next agent that is waiting for input, directing, or errored",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["attention", "waiting", "next", "scroll", "jump"],
+    run: async () => {
+      const state = usePanelStore.getState();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const focusedId = state.focusedId;
+
+      // Order: walk the active worktree's grid panels starting just after
+      // `focusedId` so repeated invocations cycle through every attention
+      // panel before returning to the first.
+      const candidates: string[] = [];
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
+        if (!t) continue;
+        if (t.location !== "grid" && t.location !== undefined) continue;
+        if ((t.worktreeId ?? undefined) !== (activeWorktreeId ?? undefined)) continue;
+        const needsAttention =
+          t.agentState === "waiting" || t.agentState === "directing" || t.runtimeStatus === "error";
+        if (needsAttention) candidates.push(id);
+      }
+
+      if (candidates.length === 0) return;
+
+      const startIndex = focusedId ? candidates.indexOf(focusedId) : -1;
+      // If `focusedId` is itself in the list, advance past it. Otherwise start
+      // from the beginning.
+      const ordered =
+        startIndex === -1
+          ? candidates
+          : [...candidates.slice(startIndex + 1), ...candidates.slice(0, startIndex + 1)];
+      const target = ordered[0];
+      if (!target) return;
+
+      state.setFocused(target);
+      const element = document.querySelector<HTMLElement>(`[data-panel-id="${target}"]`);
+      element?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+    },
+  }));
+
   actions.set("terminal.scrollToLastActivity", () => ({
     id: "terminal.scrollToLastActivity",
     title: "Scroll to Last Activity",

@@ -16,8 +16,13 @@ export const MIN_TERMINAL_WIDTH_PX = 380;
 export const MIN_TERMINAL_HEIGHT_PX = 200;
 
 /**
- * Hard upper limit for grid terminals, regardless of screen size.
- * Even on very large screens, more than this becomes unmanageable.
+ * Hard upper limit retained for legacy callers that fall back to it when grid
+ * dimensions are unknown. Layout no longer caps panels at this number — the
+ * grid scrolls vertically once panels exceed what fits at the size floors.
+ * The real safety ceiling now lives in `panelLimitStore` (hardware-adaptive).
+ *
+ * @deprecated New code should rely on `panelLimitStore.hardLimit` for blocking
+ * panel creation and on `getGridFitMetrics` for layout fit math.
  */
 export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
@@ -31,21 +36,28 @@ export const GRID_TRANSITION_DURATION_MS = 200;
 export const SIDEBAR_TRANSITION_MS = 250;
 export const SIDEBAR_TOGGLE_LOCK_MS = SIDEBAR_TRANSITION_MS;
 
+export interface GridFitMetrics {
+  /** Max columns that fit at MIN_TERMINAL_WIDTH_PX, given the container width. */
+  maxCols: number;
+  /** Max rows that fit at MIN_TERMINAL_HEIGHT_PX without scrolling. */
+  maxRows: number;
+  /** Panels that fit on screen at the size floors (maxCols × maxRows). */
+  fitCount: number;
+}
+
 /**
- * Calculate the maximum number of panels that can fit in the grid
- * while maintaining readable dimensions.
+ * Pure helper describing how many panels fit on screen at the readability
+ * floors. Used by the scroll-aware grid layout for column targeting and by
+ * the IntersectionObserver pre-warm to size the rootMargin.
  *
- * Examples:
- * - 15" laptop (~1200x700 usable): 3 cols × 3 rows = 9 panels
- * - 27" monitor (~1800x1000 usable): 4 cols × 5 rows = 16 panels (capped)
- * - 32" monitor (~2200x1200 usable): 5 cols × 6 rows = 16 panels (capped)
- *
- * @param width - Grid container width in pixels
- * @param height - Grid container height in pixels
- * @returns Maximum number of panels that fit with readable dimensions
+ * Returns `null` when grid dimensions are not yet known so callers can pick
+ * sensible defaults instead of acting on bogus zero-derived metrics.
  */
-export function getMaxGridCapacity(width: number | null, height: number | null): number {
-  if (!width || !height) return ABSOLUTE_MAX_GRID_TERMINALS;
+export function getGridFitMetrics(
+  width: number | null,
+  height: number | null
+): GridFitMetrics | null {
+  if (!width || !height) return null;
 
   // Account for grid gap (4px between terminals) and padding (8px total)
   const gap = 4;
@@ -53,15 +65,24 @@ export function getMaxGridCapacity(width: number | null, height: number | null):
   const effectiveWidth = width - padding;
   const effectiveHeight = height - padding;
 
-  // Calculate max columns and rows that fit with readable dimensions
   const maxCols = Math.max(1, Math.floor((effectiveWidth + gap) / (MIN_TERMINAL_WIDTH_PX + gap)));
   const maxRows = Math.max(1, Math.floor((effectiveHeight + gap) / (MIN_TERMINAL_HEIGHT_PX + gap)));
+  return { maxCols, maxRows, fitCount: maxCols * maxRows };
+}
 
-  // Calculate capacity based on readable grid size
-  const capacity = maxCols * maxRows;
-
-  // Apply absolute limits
-  return Math.min(capacity, ABSOLUTE_MAX_GRID_TERMINALS);
+/**
+ * Number of panels that fit in the on-screen grid at the readability floors,
+ * before the grid scrolls vertically. Falls back to ABSOLUTE_MAX_GRID_TERMINALS
+ * when dimensions are not yet known.
+ *
+ * Historically used as a hard panel cap; now strictly a fit hint for layout
+ * calculations and the scroll-pre-warm margin. Panel creation gates on
+ * `panelLimitStore.hardLimit` instead.
+ */
+export function getMaxGridCapacity(width: number | null, height: number | null): number {
+  const fit = getGridFitMetrics(width, height);
+  if (!fit) return ABSOLUTE_MAX_GRID_TERMINALS;
+  return fit.fitCount;
 }
 
 /**
@@ -78,6 +99,8 @@ const HYSTERESIS_BANDS: ReadonlyArray<{
 }> = [
   { from: 2, to: 3, widenAt: 6, narrowAt: 4 },
   { from: 3, to: 4, widenAt: 12, narrowAt: 10 },
+  { from: 4, to: 5, widenAt: 20, narrowAt: 17 },
+  { from: 5, to: 6, widenAt: 30, narrowAt: 26 },
 ];
 
 /**
@@ -94,7 +117,9 @@ const HYSTERESIS_BANDS: ReadonlyArray<{
  * - 1 terminal: 1 column
  * - 2-5 terminals: 2 columns (stable for common use, max 3 rows)
  * - 6-11 terminals: 3 columns (prevents pancakes, max 4 rows)
- * - 12+ terminals: 4 columns (high density fleet, max 4 rows)
+ * - 12+ terminals: scales toward a near-square layout up to `maxFeasibleCols`,
+ *   so a 20-panel fleet on a wide screen widens to 5 columns instead of
+ *   capping at 4 and producing 5 long scrolling rows.
  *
  * Breakpoint hysteresis: when `previousCols` is supplied (the column count from
  * the prior render), the function holds the wider count through a buffer zone
@@ -115,18 +140,17 @@ export function getAutoGridCols(
   const containerWidth = width && width > 0 ? width : 800; // Fallback for SSR/initial render and transition frames
   const maxFeasibleCols = Math.max(1, Math.floor(containerWidth / MIN_TERMINAL_WIDTH_PX));
 
-  // Progressive column caps based on terminal count
-  // Goal: keep rows reasonable (2-4) to prevent pancake terminals
+  // Progressive column caps based on terminal count. The scrollable grid no
+  // longer hard-caps at 4 columns: for large fleets we widen toward a
+  // near-square layout (ceil(sqrt(count))) so vertical scrolling stays
+  // shallow and rows stay scannable.
   let targetCols: number;
   if (count <= 5) {
-    // 2-5 terminals: 2 columns (1-3 rows) - stable for common use
     targetCols = 2;
   } else if (count <= 11) {
-    // 6-11 terminals: 3 columns (2-4 rows) - prevents pancakes
     targetCols = 3;
   } else {
-    // 12-16 terminals: 4 columns (3-4 rows) - high density fleet
-    targetCols = 4;
+    targetCols = Math.max(4, Math.ceil(Math.sqrt(count)));
   }
 
   // Apply hysteresis: walk every band whose `to` is at or below `previousCols`,

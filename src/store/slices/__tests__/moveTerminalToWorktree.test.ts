@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
-import { MAX_GRID_TERMINALS, type TerminalInstance } from "../panelRegistrySlice";
+import { type TerminalInstance } from "../panelRegistrySlice";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -93,9 +93,12 @@ describe("moveTerminalToWorktree", () => {
     );
   });
 
-  it("forces terminal to dock when target worktree grid is full", () => {
+  it("keeps the terminal in grid when target worktree already has many grid panels", () => {
+    // Scrollable grid (#8805) — moving to another worktree's grid no longer
+    // forces dock when the target exceeds the legacy on-screen cap. The grid
+    // scrolls vertically; cross-worktree moves preserve the grid location.
     const source = createMockTerminal("t1", "wt-a", "grid");
-    const targetGridTerminals = Array.from({ length: MAX_GRID_TERMINALS }, (_, i) =>
+    const targetGridTerminals = Array.from({ length: 16 }, (_, i) =>
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );
 
@@ -105,10 +108,9 @@ describe("moveTerminalToWorktree", () => {
 
     const moved = usePanelStore.getState().panelsById["t1"];
     expect(moved?.worktreeId).toBe("wt-b");
-    expect(moved?.location).toBe("dock");
-    expect(moved?.isVisible).toBe(false);
+    expect(moved?.location).toBe("grid");
+    expect(moved?.isVisible).toBe(true);
     expect(panelPersistence.save).toHaveBeenCalledTimes(1);
-    // Dock terminals get VISIBLE tier (optimizeForDock)
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
       TerminalRefreshTier.VISIBLE

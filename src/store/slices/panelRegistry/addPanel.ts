@@ -13,7 +13,6 @@ import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrol
 import { getXtermOptions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { saveNormalized } from "./persistence";
@@ -46,20 +45,6 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
   let count = 0;
   for (const id of state.panelIds) {
     if (state.panelsById[id]?.location !== "trash") count++;
-  }
-  return count;
-}
-
-function countGridTerminals(state: PanelRegistrySlice, targetWorktreeId: string | null): number {
-  let count = 0;
-  for (const id of state.panelIds) {
-    const t = state.panelsById[id];
-    if (
-      t &&
-      (t.location === "grid" || t.location === undefined) &&
-      (t.worktreeId ?? null) === targetWorktreeId
-    )
-      count++;
   }
   return count;
 }
@@ -130,14 +115,10 @@ export const createAddPanelActions = (
       const id = options.requestedId || `${requestedKind}-${crypto.randomUUID()}`;
       const title = options.title || getDefaultTitle(requestedKind);
 
-      const targetWorktreeId = options.worktreeId ?? null;
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const currentGridCount = countGridTerminals(get(), targetWorktreeId);
-      const requestedLocation = options.location || "grid";
-      const location =
-        requestedLocation === "grid" && currentGridCount >= maxCapacity
-          ? "dock"
-          : requestedLocation;
+      // The scrollable grid (#8805) accepts every panel — there's no
+      // screen-fit cap any more. Honor the requested location directly; the
+      // hard ceiling has already been enforced upstream by `panelLimitStore`.
+      const location = options.location || "grid";
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
@@ -248,51 +229,10 @@ export const createAddPanelActions = (
       requestedKind === "dev-preview" ? "dev-preview" : "terminal";
     const title = options.title || getDefaultTitle(kind, { launchAgentId });
 
-    // Auto-dock if grid is full and user requested grid location
-    // Use dynamic capacity based on current viewport dimensions
-    const targetWorktreeId = options.worktreeId ?? null;
-    const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-    const currentGridGroupCount = (() => {
-      // Count unique groups in grid (each group = 1 slot)
-      // Groups come from two sources: explicit TabGroups and ungrouped panels
-      const state = get();
-      const gridTerminalIds: string[] = [];
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-        )
-          gridTerminalIds.push(tid);
-      }
-      const tabGroups = state.tabGroups;
-      const panelsInGroups = new Set<string>();
-      const explicitGroups = new Set<string>();
-
-      // Count explicit groups in this location/worktree
-      for (const group of tabGroups.values()) {
-        if (group.location === "grid" && (group.worktreeId ?? null) === targetWorktreeId) {
-          explicitGroups.add(group.id);
-          group.panelIds.forEach((gid) => panelsInGroups.add(gid));
-        }
-      }
-
-      // Count ungrouped panels (each is its own virtual group)
-      let ungroupedCount = 0;
-      for (const tid of gridTerminalIds) {
-        if (!panelsInGroups.has(tid)) {
-          ungroupedCount++;
-        }
-      }
-
-      return explicitGroups.size + ungroupedCount;
-    })();
-    const requestedLocation = options.location || "grid";
-    const location =
-      requestedLocation === "grid" && currentGridGroupCount >= maxCapacity
-        ? "dock"
-        : requestedLocation;
+    // The scrollable panel grid no longer caps panels at the screen-fit count
+    // (#8805). Honor the requested location directly; the hardware-adaptive
+    // hard ceiling is enforced upstream by `panelLimitStore`.
+    const location = options.location || "grid";
     const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
     // When activeWorktreeId is null (worktree store not yet hydrated — common during
     // project switch), treat the terminal as being in the active worktree to avoid

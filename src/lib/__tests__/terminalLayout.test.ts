@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   getAutoGridCols,
+  getGridFitMetrics,
   getMaxGridCapacity,
   computeGridColumns,
   MIN_TERMINAL_WIDTH_PX,
@@ -47,7 +48,7 @@ describe("getAutoGridCols", () => {
       expect(getAutoGridCols(11, wideWidth)).toBe(3);
     });
 
-    it("should return 4 columns for 12+ terminals (when width permits)", () => {
+    it("should return 4 columns for 12-16 terminals (when width permits)", () => {
       expect(getAutoGridCols(12, wideWidth)).toBe(4);
       expect(getAutoGridCols(13, wideWidth)).toBe(4);
       expect(getAutoGridCols(14, wideWidth)).toBe(4);
@@ -55,9 +56,17 @@ describe("getAutoGridCols", () => {
       expect(getAutoGridCols(16, wideWidth)).toBe(4);
     });
 
-    it("should never exceed 4 columns even with many terminals", () => {
-      expect(getAutoGridCols(20, wideWidth)).toBe(4);
-      expect(getAutoGridCols(100, wideWidth)).toBe(4);
+    it("widens beyond 4 columns once the viewport allows it", () => {
+      // 5 cols of room (MIN_TERMINAL_WIDTH_PX * 5); 17 panels widens to 5×4.
+      // Replaces the previous "never exceed 4" rule — the scrollable grid
+      // prefers wider rows over deeper scrolling.
+      expect(getAutoGridCols(17, wideWidth)).toBe(5);
+      expect(getAutoGridCols(25, wideWidth)).toBe(5);
+    });
+
+    it("caps growth at maxFeasibleCols even for very large fleets", () => {
+      // Even 100 panels can't exceed the viewport's column fit.
+      expect(getAutoGridCols(100, wideWidth)).toBe(5);
     });
   });
 
@@ -130,6 +139,13 @@ describe("getAutoGridCols", () => {
       const cols16 = getAutoGridCols(16, wideWidth);
       expect(cols12).toBe(cols14);
       expect(cols14).toBe(cols16);
+    });
+
+    it("column count widens then plateaus once viewport limit is reached", () => {
+      // wideWidth fits 5 cols; once count drives target past 5, viewport caps it.
+      expect(getAutoGridCols(20, wideWidth)).toBe(5);
+      expect(getAutoGridCols(30, wideWidth)).toBe(5);
+      expect(getAutoGridCols(60, wideWidth)).toBe(5);
     });
   });
 
@@ -224,52 +240,55 @@ describe("getAutoGridCols", () => {
   });
 });
 
-describe("getMaxGridCapacity", () => {
-  describe("null dimensions", () => {
-    it("returns absolute max when dimensions are null", () => {
-      expect(getMaxGridCapacity(null, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(1000, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(null, 800)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
+describe("getGridFitMetrics", () => {
+  it("returns null when dimensions are unknown", () => {
+    expect(getGridFitMetrics(null, null)).toBeNull();
+    expect(getGridFitMetrics(1000, null)).toBeNull();
+    expect(getGridFitMetrics(null, 800)).toBeNull();
   });
 
-  describe("laptop screen (15-inch, ~1200x700)", () => {
-    it("calculates 3x3 = 9 terminals for typical laptop viewport", () => {
-      // Simulate a 15" laptop: ~1200px wide, ~700px tall usable grid area
-      const width = 1200;
-      const height = 700;
-      const capacity = getMaxGridCapacity(width, height);
-
-      // 1200px / 384px ≈ 3 cols, 700px / 204px ≈ 3 rows = 9 terminals
-      expect(capacity).toBeGreaterThanOrEqual(6);
-      expect(capacity).toBeLessThanOrEqual(9);
-    });
+  it("returns max cols, rows, and fit count for a known viewport", () => {
+    // 1200×700: ~3 cols × ~3 rows = 9 panels fit before scrolling.
+    const fit = getGridFitMetrics(1200, 700);
+    expect(fit).not.toBeNull();
+    expect(fit!.maxCols).toBeGreaterThanOrEqual(3);
+    expect(fit!.maxRows).toBeGreaterThanOrEqual(3);
+    expect(fit!.fitCount).toBe(fit!.maxCols * fit!.maxRows);
   });
 
-  describe("large monitor (32-inch, ~2200x1200)", () => {
-    it("calculates larger capacity for 32-inch monitor", () => {
-      // Simulate a 32" monitor: ~2200px wide, ~1200px tall usable grid area
-      const width = 2200;
-      const height = 1200;
-      const capacity = getMaxGridCapacity(width, height);
+  it("returns at least 1 col and 1 row even at the smallest valid viewport", () => {
+    const fit = getGridFitMetrics(MIN_TERMINAL_WIDTH_PX, MIN_TERMINAL_HEIGHT_PX);
+    expect(fit).not.toBeNull();
+    expect(fit!.maxCols).toBe(1);
+    expect(fit!.maxRows).toBe(1);
+    expect(fit!.fitCount).toBe(1);
+  });
+});
 
-      // Should be capped at ABSOLUTE_MAX_GRID_TERMINALS (16)
-      expect(capacity).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
+describe("getMaxGridCapacity (legacy fit hint, no longer a hard cap)", () => {
+  it("returns the ABSOLUTE_MAX_GRID_TERMINALS fallback when dimensions are unknown", () => {
+    expect(getMaxGridCapacity(null, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
+    expect(getMaxGridCapacity(1000, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
+    expect(getMaxGridCapacity(null, 800)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
   });
 
-  describe("respects absolute maximum", () => {
-    it("never exceeds ABSOLUTE_MAX_GRID_TERMINALS even on huge screens", () => {
-      expect(getMaxGridCapacity(5000, 3000)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(10000, 5000)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
+  it("reports the on-screen panel fit for a typical laptop viewport", () => {
+    const width = 1200;
+    const height = 700;
+    const capacity = getMaxGridCapacity(width, height);
+    expect(capacity).toBeGreaterThanOrEqual(6);
+    expect(capacity).toBeLessThanOrEqual(9);
   });
 
-  describe("very small viewports", () => {
-    it("returns at least 1 for any valid dimensions", () => {
-      expect(getMaxGridCapacity(400, 250)).toBeGreaterThanOrEqual(1);
-      expect(getMaxGridCapacity(MIN_TERMINAL_WIDTH_PX, MIN_TERMINAL_HEIGHT_PX)).toBe(1);
-    });
+  it("scales past the legacy 16-panel cap on large monitors", () => {
+    // 2200×1200 fits 5 cols × 5 rows = 25 on-screen panels — no longer clamped.
+    expect(getMaxGridCapacity(2200, 1200)).toBeGreaterThan(ABSOLUTE_MAX_GRID_TERMINALS);
+    expect(getMaxGridCapacity(5000, 3000)).toBeGreaterThan(ABSOLUTE_MAX_GRID_TERMINALS);
+  });
+
+  it("returns at least 1 for any valid dimensions", () => {
+    expect(getMaxGridCapacity(400, 250)).toBeGreaterThanOrEqual(1);
+    expect(getMaxGridCapacity(MIN_TERMINAL_WIDTH_PX, MIN_TERMINAL_HEIGHT_PX)).toBe(1);
   });
 });
 

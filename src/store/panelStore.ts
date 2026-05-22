@@ -64,12 +64,20 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
-  // Always use maximum refresh rate when agent is working to prevent render jitter
-  if (terminal.agentState === "working") {
+  if (isFocused) {
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
-  if (isFocused) {
+  // Hidden (scrolled out of viewport) panels cap at BACKGROUND regardless of
+  // agentState. Without this gate, a working agent scrolled off-screen in the
+  // scrollable grid would keep streaming at FOCUSED rate, defeating the whole
+  // throttling rationale of the BACKGROUND tier.
+  if (terminal.isVisible === false) {
+    return TerminalRefreshTierEnum.BACKGROUND;
+  }
+
+  // Working agents that ARE visible get max refresh to prevent render jitter.
+  if (terminal.agentState === "working") {
     return TerminalRefreshTierEnum.FOCUSED;
   }
 

@@ -4,7 +4,7 @@ import { getClosingIdsSnapshot } from "@/services/terminal/optimisticPanelClose"
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useShallow } from "zustand/react/shallow";
-import { computeGridColumns, getMaxGridCapacity } from "@/lib/terminalLayout";
+import { computeGridColumns } from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
   subscribeSidebarLayoutTransitionUnlock,
@@ -44,15 +44,6 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
   );
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
-  // Subscribe reactively to the capacity cap so the keyboard-nav model
-  // tracks viewport changes. Without this, arrow keys would cycle into cells
-  // that don't exist on screen after a sidebar toggle (#8702). Falls back to
-  // `Infinity` pre-measurement so nothing is incorrectly clipped before the
-  // ResizeObserver fires.
-  const maxGridCapacity = useLayoutConfigStore((state) => {
-    if (!state.gridDimensions) return Number.POSITIVE_INFINITY;
-    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
-  });
 
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
@@ -163,17 +154,14 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   // reference them so exhaustive-deps treats them as real deps without a
   // suppression (which would force the React Compiler to bail out).
   //
-  // Cap at `maxGridCapacity` so the nav model stays in sync with what
-  // ContentGridDefault actually renders — overflow panels live in the status
-  // strip, not the grid, and arrow keys must not cycle into cells that don't
-  // exist on screen (#8702).
+  // No capacity cap — the scrollable grid (#8805) keeps every group in the
+  // grid, and keyboard nav must reach scrolled-off cells just like the mouse.
   const gridGroups = useMemo(() => {
     void tabGroups;
     void panelIds;
     void panelsById;
-    const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    return groups.length <= maxGridCapacity ? groups : groups.slice(0, maxGridCapacity);
-  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById, maxGridCapacity]);
+    return getTabGroups("grid", activeWorktreeId ?? undefined);
+  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
 
   // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
   // track the visual grid through the same sticky boundaries, otherwise arrow
@@ -356,14 +344,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     if (isFleetScopeRender) {
       return fleetPanels.map((t) => t.id);
     }
-    // Same overflow cap as `gridGroups` — Cmd+N maps to visible cells only,
-    // never into the overflow status strip where panels can't take focus.
+    // Scrollable grid (#8805): all groups participate in nav order; Cmd+N
+    // reaches every grid cell, including scrolled-off ones.
     const orderedGroups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    const cappedGroups =
-      orderedGroups.length <= maxGridCapacity
-        ? orderedGroups
-        : orderedGroups.slice(0, maxGridCapacity);
-    return cappedGroups.flatMap((group) => {
+    return orderedGroups.flatMap((group) => {
       const resolvedId = group.panelIds.includes(group.activeTabId)
         ? group.activeTabId
         : group.panelIds[0];
@@ -377,7 +361,6 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     tabGroups,
     panelIds,
     panelsById,
-    maxGridCapacity,
   ]);
 
   const findByIndex = useCallback(
@@ -411,6 +394,17 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     const terminal = panelsById[focusedId];
     if (!terminal) return null;
     return terminal.location === "dock" ? "dock" : "grid";
+  }, [focusedId, panelsById]);
+
+  // Scrollable grid (#8805): when keyboard navigation lands focus on a panel
+  // that's currently scrolled out of the viewport, bring it into view so the
+  // user can see what they just focused. Cheap no-op for already-visible cells.
+  useEffect(() => {
+    if (!focusedId) return;
+    const terminal = panelsById[focusedId];
+    if (!terminal || terminal.location === "dock") return;
+    const element = document.querySelector<HTMLElement>(`[data-panel-id="${focusedId}"]`);
+    element?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
   }, [focusedId, panelsById]);
 
   return {
