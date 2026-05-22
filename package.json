@@ -9,7 +9,8 @@
     "./src/main.tsx",
     "./src/lib/trustedTypesPolicy.ts",
     "./src/config/terminalFont.ts",
-    "./src/components/Fleet/fleetRawInputBroadcast.ts"
+    "./src/components/Fleet/fleetRawInputBroadcast.ts",
+    "./src/clients/terminalClient.ts"
   ],
   "author": {
     "name": "Greg Priday",

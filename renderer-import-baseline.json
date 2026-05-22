@@ -63,5 +63,7 @@
     "vendor-react",
     "vendor-xterm",
     "vendor-zod"
-  ]
+  ],
+  "eagerRaw": 2813580,
+  "eagerGzip": 843951
 }

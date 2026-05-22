@@ -227,4 +227,50 @@ describe("compareReport", () => {
     expect(result.added).toEqual(["Z"]);
     expect(result.removed).toEqual(["Y"]);
   });
+
+  describe("eager byte gate (#8819)", () => {
+    it("ignores bytes when the baseline has no eagerGzip (back-compat)", () => {
+      const report = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 999999 };
+      const baseline = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"] };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(true);
+      expect(result.grewBytes).toBeUndefined();
+      expect(result.byteRatio).toBeUndefined();
+    });
+
+    it("passes when eager gzip shrinks even though chunk count holds", () => {
+      const report = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 800 };
+      const baseline = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1000 };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(true);
+      expect(result.grewBytes).toBeUndefined();
+      expect(result.byteRatio).toBeCloseTo(-0.2);
+    });
+
+    it("fails when eager gzip grows past the threshold despite stable count", () => {
+      const report = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1100 };
+      const baseline = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1000 };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.grewBytes).toBe(true);
+      expect(result.grew).toBeUndefined(); // count did not grow
+    });
+
+    it("allows byte growth within the threshold", () => {
+      const report = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1040 };
+      const baseline = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1000 };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(true);
+      expect(result.grewBytes).toBeUndefined();
+    });
+
+    it("fails on byte growth even when chunk count shrinks", () => {
+      const report = { eagerChunkCount: 2, eagerChunks: ["a", "b"], eagerGzip: 2000 };
+      const baseline = { eagerChunkCount: 3, eagerChunks: ["a", "b", "c"], eagerGzip: 1000 };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.grewBytes).toBe(true);
+      expect(result.shrank).toBe(true); // count shrank but bytes regressed
+    });
+  });
 });
