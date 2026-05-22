@@ -1,8 +1,10 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Pin, PinOff, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
+
+const PIN_REJECT_DURATION_MS = 2500;
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -36,6 +38,19 @@ function ActionPaletteItemInner({
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
   const [pinRejected, setPinRejected] = useState(false);
+  const rejectTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Cleanup the pin-rejection auto-dismiss timer on unmount so a row that's
+    // unmounted between pin-click and the 2.5s timeout doesn't fire setState
+    // on a torn-down component.
+    return () => {
+      if (rejectTimerRef.current !== null) {
+        window.clearTimeout(rejectTimerRef.current);
+        rejectTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleHover = useCallback(() => {
     onHoverIndex?.(index);
@@ -53,9 +68,13 @@ function ActionPaletteItemInner({
       const ok = onPin?.(item) ?? false;
       if (!ok) {
         setPinRejected(true);
-        // Auto-clear the rejection tooltip after a brief moment so the user
-        // can re-attempt without the message lingering forever.
-        window.setTimeout(() => setPinRejected(false), 2500);
+        if (rejectTimerRef.current !== null) {
+          window.clearTimeout(rejectTimerRef.current);
+        }
+        rejectTimerRef.current = window.setTimeout(() => {
+          setPinRejected(false);
+          rejectTimerRef.current = null;
+        }, PIN_REJECT_DURATION_MS);
       }
     },
     [isPinned, onPin, onUnpin, item]
@@ -70,82 +89,103 @@ function ActionPaletteItemInner({
     [onHide, item]
   );
 
+  const handleSelectClick = useCallback(() => {
+    if (!item.enabled) {
+      // Mirror the previous `disabled` behavior — disabled actions still
+      // dispatch (so ActionService surfaces the disabled-reason toast), but
+      // the click only fires if the user explicitly hits the row body. The
+      // pin/hide buttons live in a sibling element so they remain reachable
+      // even when the row is disabled.
+      onSelect(item);
+      return;
+    }
+    onSelect(item);
+  }, [item, onSelect]);
+
   const canShowPin = Boolean(onPin || (isPinned && onUnpin));
   const canShowHide = Boolean(onHide) && !isPinned && item.danger !== "confirm";
 
   return (
-    <button
-      id={`action-option-${item.id}`}
-      tabIndex={-1}
-      onPointerDown={(e) => e.preventDefault()}
-      onPointerMove={handleHover}
-      role="option"
-      aria-selected={isSelected}
-      aria-disabled={!item.enabled}
-      disabled={!item.enabled}
+    <div
       className={cn(
-        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
+        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] transition-colors",
         "border border-transparent text-daintree-text/70",
         "hover:bg-overlay-subtle hover:text-daintree-text",
         "aria-selected:bg-overlay-soft aria-selected:border-overlay aria-selected:text-daintree-text",
         "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2",
         "aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
-        !item.enabled && "opacity-40 cursor-not-allowed"
+        !item.enabled && "opacity-40"
       )}
-      onClick={() => onSelect(item)}
+      id={`action-option-${item.id}`}
+      role="option"
+      aria-selected={isSelected}
+      aria-disabled={!item.enabled}
+      onPointerDown={(e) => e.preventDefault()}
+      onPointerMove={handleHover}
     >
-      <span
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={item.title}
+        onClick={handleSelectClick}
         className={cn(
-          "shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium leading-tight",
-          categoryColor
+          "flex-1 min-w-0 flex items-center gap-3 text-left bg-transparent border-0 p-0",
+          !item.enabled && "cursor-not-allowed"
         )}
       >
-        {item.category}
-      </span>
+        <span
+          className={cn(
+            "shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium leading-tight",
+            categoryColor
+          )}
+        >
+          {item.category}
+        </span>
 
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{item.title}</div>
-        {item.description && (
-          <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
-        )}
-        {!item.enabled && item.disabledReason && (
-          <div className="text-[10px] text-daintree-text/40 italic truncate">
-            {item.disabledReason}
-          </div>
-        )}
-        {pinRejected && (
-          <div
-            className="text-[10px] text-status-error mt-0.5 truncate"
-            role="status"
-            aria-live="polite"
-          >
-            Can't pin destructive actions
-          </div>
-        )}
-      </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium truncate">{item.title}</div>
+          {item.description && (
+            <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
+          )}
+          {!item.enabled && item.disabledReason && (
+            <div className="text-[10px] text-daintree-text/40 italic truncate">
+              {item.disabledReason}
+            </div>
+          )}
+          {pinRejected && (
+            <div
+              className="text-[10px] text-status-error mt-0.5 truncate"
+              role="status"
+              aria-live="polite"
+            >
+              Can't pin destructive actions
+            </div>
+          )}
+        </div>
+      </button>
 
       <div className="shrink-0 flex items-center gap-1">
         {canShowHide && (
-          <span
-            role="button"
+          <button
+            type="button"
             tabIndex={-1}
             aria-label={`Hide '${item.title}' from Recently used`}
             title="Hide from Recently used"
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleHideClick}
             className={cn(
-              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)]",
+              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
               "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
               "hover:bg-overlay-soft hover:text-daintree-text transition-colors",
               "focus-visible:opacity-100"
             )}
           >
             <EyeOff className="w-3.5 h-3.5" aria-hidden />
-          </span>
+          </button>
         )}
         {canShowPin && (
-          <span
-            role="button"
+          <button
+            type="button"
             tabIndex={-1}
             aria-label={isPinned ? `Unpin '${item.title}'` : `Pin '${item.title}' to Favorites`}
             aria-pressed={isPinned}
@@ -153,7 +193,7 @@ function ActionPaletteItemInner({
             onPointerDown={(e) => e.preventDefault()}
             onClick={handlePinClick}
             className={cn(
-              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)]",
+              "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
               "transition-colors hover:bg-overlay-soft",
               isPinned
                 ? "text-daintree-text/70 opacity-100"
@@ -166,7 +206,7 @@ function ActionPaletteItemInner({
             ) : (
               <Pin className="w-3.5 h-3.5" aria-hidden />
             )}
-          </span>
+          </button>
         )}
 
         {item.keybinding && (
@@ -175,7 +215,7 @@ function ActionPaletteItemInner({
           </span>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 

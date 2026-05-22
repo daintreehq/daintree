@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { ActionPaletteItem } from "./ActionPaletteItem";
@@ -121,34 +122,37 @@ export function ActionPalette({
     const pinnedRows = results.slice(0, pinnedCount);
     const recentRows = results.slice(pinnedCount);
     return (
-      <div
-        ref={sectionedListRef}
-        id="action-palette-list"
-        role="listbox"
-        aria-label="Actions"
-        className={isStale ? "palette-results-stale" : undefined}
-        data-stale={isStale ? "true" : undefined}
-        aria-busy={isStale || undefined}
-      >
-        {pinnedRows.length > 0 && (
-          <>
-            <div className={SECTION_HEADER_CLASS} role="presentation">
-              Favorites
-            </div>
-            {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
-          </>
-        )}
-        {recentRows.length > 0 && (
-          <>
-            <div className={SECTION_HEADER_CLASS} role="presentation">
-              Recently used
-            </div>
-            {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
-          </>
-        )}
-      </div>
+      <>
+        <div
+          ref={sectionedListRef}
+          id="action-palette-list"
+          role="listbox"
+          aria-label="Actions"
+          className={isStale ? "palette-results-stale" : undefined}
+          data-stale={isStale ? "true" : undefined}
+          aria-busy={isStale || undefined}
+        >
+          {pinnedRows.length > 0 && (
+            <>
+              <div className={SECTION_HEADER_CLASS} role="presentation">
+                Favorites
+              </div>
+              {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
+            </>
+          )}
+          {recentRows.length > 0 && (
+            <>
+              <div className={SECTION_HEADER_CLASS} role="presentation">
+                Recently used
+              </div>
+              {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
+            </>
+          )}
+        </div>
+        <PaletteOverflowNotice shown={results.length} total={totalResults} />
+      </>
     );
-  }, [results, pinnedCount, isStale, renderActionRow]);
+  }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
 
   return (
     <SearchablePalette<ActionPaletteItemType>

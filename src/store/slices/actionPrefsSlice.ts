@@ -43,7 +43,16 @@ export const createActionPrefsSlice: StateCreator<ActionPrefsSlice, [], [], Acti
     set((state) => {
       if (state.pinnedActionIds.includes(id)) return state;
       if (state.pinnedActionIds.length >= MAX_PINNED) return state;
-      return { pinnedActionIds: [...state.pinnedActionIds, id] };
+      // Pinning supersedes hiding — an action can't simultaneously be promoted
+      // to Favorites and evicted from Recently used. If the user pins a
+      // previously-hidden action via the search flow, restore visibility.
+      const wasHidden = state.hiddenActionIds.includes(id);
+      return {
+        pinnedActionIds: [...state.pinnedActionIds, id],
+        hiddenActionIds: wasHidden
+          ? state.hiddenActionIds.filter((hid) => hid !== id)
+          : state.hiddenActionIds,
+      };
     });
   },
 
@@ -74,10 +83,15 @@ export const createActionPrefsSlice: StateCreator<ActionPrefsSlice, [], [], Acti
   },
 
   hydrateActionPrefs: ({ pinnedIds, hiddenIds }) => {
-    set({
-      pinnedActionIds: pinnedIds ? dedupe(pinnedIds, MAX_PINNED) : [],
-      hiddenActionIds: hiddenIds ? dedupe(hiddenIds, MAX_HIDDEN) : [],
-    });
+    const pinned = pinnedIds ? dedupe(pinnedIds, MAX_PINNED) : [];
+    const pinnedSet = new Set(pinned);
+    // An ID can't simultaneously be pinned (Favorites) and hidden (Recently used
+    // eviction). If a stale persisted state has both, pin wins and we strip
+    // the duplicate from `hiddenActionIds` so unpinning later doesn't silently
+    // leave the action vanished.
+    const hiddenRaw = hiddenIds ? dedupe(hiddenIds, MAX_HIDDEN) : [];
+    const hidden = hiddenRaw.filter((id) => !pinnedSet.has(id));
+    set({ pinnedActionIds: pinned, hiddenActionIds: hidden });
   },
 
   isActionPinned: (id) => get().pinnedActionIds.includes(id),
