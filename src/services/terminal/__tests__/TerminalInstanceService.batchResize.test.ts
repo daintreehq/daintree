@@ -303,7 +303,7 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
     document.body.innerHTML = "";
   });
 
-  it("does not call fit() on unlock — the batchResize call replaces it (#8597)", () => {
+  it("does not call fit() on unlock — the resize pass replaces it (#8597)", () => {
     const a = makeManaged({ id: "a" });
     service.instances.set("a", a);
     const fitSpy = vi.spyOn(service.resizeController, "fit").mockReturnValue(null);
@@ -311,13 +311,15 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
 
     service.suppressResizesDuringLayoutTransition(["a"], 200);
 
-    // Fire the 200ms transition timer; batchResize runs synchronously inside.
+    // Fire the 200ms transition timer. The unlock runs runResizePass; with a
+    // single panel its first (and only) chunk resizes before any yield, so the
+    // resize is observable synchronously here.
     vi.advanceTimersByTime(200);
 
     expect(fitSpy).not.toHaveBeenCalled();
   });
 
-  it("releases the resize lock and runs a batchResize after the transition", () => {
+  it("releases the resize lock and runs a resize pass after the transition", () => {
     const a = makeManaged({ id: "a", rect: { width: 800, height: 600 } });
     service.instances.set("a", a);
     const resizeSpy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
@@ -328,7 +330,8 @@ describe("TerminalInstanceService suppressResizesDuringLayoutTransition", () => 
     expect(service.resizeController.isResizeLocked("a")).toBe(true);
     expect(resizeSpy).not.toHaveBeenCalled();
 
-    // Fire the 200ms transition timer; batchResize runs synchronously inside.
+    // Fire the 200ms transition timer. The unlock runs runResizePass; with a
+    // single panel the resize lands synchronously (first chunk, no yield).
     vi.advanceTimersByTime(200);
 
     expect(service.resizeController.isResizeLocked("a")).toBe(false);
