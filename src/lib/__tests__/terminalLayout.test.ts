@@ -53,10 +53,22 @@ describe("getAutoGridCols", () => {
       expect(getAutoGridCols(many, 3 * C)).toBe(3); // 2400 → 3
     });
 
-    it("hard-caps at AUTO_GRID_MAX_COLS regardless of width", () => {
-      expect(getAutoGridCols(many, 4 * C)).toBe(AUTO_GRID_MAX_COLS);
-      expect(getAutoGridCols(many, 10 * C)).toBe(AUTO_GRID_MAX_COLS);
-      expect(getAutoGridCols(100, 99999)).toBe(AUTO_GRID_MAX_COLS);
+    it("hard-caps at 3 columns regardless of width", () => {
+      // Literal 3 (not AUTO_GRID_MAX_COLS) so a silent constant bump is caught —
+      // the issue treats the 3-column ceiling as a researched design contract.
+      expect(getAutoGridCols(many, 4 * C)).toBe(3);
+      expect(getAutoGridCols(many, 10 * C)).toBe(3);
+      expect(getAutoGridCols(100, 99999)).toBe(3);
+    });
+
+    it("pins AUTO_GRID_MAX_COLS to the 3-column design contract", () => {
+      expect(AUTO_GRID_MAX_COLS).toBe(3);
+    });
+
+    it("places the 1→2 column boundary at 1600px (1080p/1440p land on 2)", () => {
+      // Literal pixels (not C) to verify the product-facing breakpoint directly.
+      expect(getAutoGridCols(many, 1599)).toBe(1);
+      expect(getAutoGridCols(many, 1600)).toBe(2);
     });
 
     it("is driven by width, not panel count, at a fixed width", () => {
@@ -264,6 +276,12 @@ describe("computeGridColumns", () => {
       expect(computeGridColumns(2, sideBySideMin - 1, "automatic")).toBe(1);
     });
 
+    it("preserves the 2-column preference for transient non-positive widths", () => {
+      // A 0/negative measurement mid-transition must not collapse 2 panes to 1.
+      expect(computeGridColumns(2, 0, "automatic")).toBe(2);
+      expect(computeGridColumns(2, -50, "automatic")).toBe(2);
+    });
+
     it("keeps the unconditional 2x1 invariant for fixed strategies (unchanged)", () => {
       expect(computeGridColumns(2, 300, "fixed-rows", 3)).toBe(2);
       expect(computeGridColumns(2, 500, "fixed-rows", 3)).toBe(2);
@@ -303,6 +321,12 @@ describe("computeGridColumns", () => {
     it("calculates columns from fixed-rows for 3+ panes", () => {
       expect(computeGridColumns(6, wide, "fixed-rows", 2)).toBe(3);
       expect(computeGridColumns(6, wide, "fixed-rows", 3)).toBe(2);
+    });
+
+    it("forwards previousCols to the automatic hysteresis path", () => {
+      // 2320 = 3×C − buffer: a sticky 3 holds, a fresh measurement narrows to 2.
+      expect(computeGridColumns(12, 2320, "automatic", undefined, 3)).toBe(3);
+      expect(computeGridColumns(12, 2319, "automatic", undefined, 3)).toBe(2);
     });
   });
 

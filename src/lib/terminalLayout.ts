@@ -216,10 +216,14 @@ export function computeGridColumns(
   // container can fit two readable panes side by side (≥ MIN_TERMINAL_WIDTH_PX
   // each). On a narrower window it falls through to the size-driven formula,
   // which stacks them into 1 column. `gridWidth === null` (first paint) keeps
-  // the 2-column preference.
+  // the 2-column preference, as do transient non-positive measurements during
+  // layout transitions.
   if (
     count === 2 &&
-    (strategy !== "automatic" || gridWidth === null || gridWidth >= MIN_TERMINAL_WIDTH_PX * 2)
+    (strategy !== "automatic" ||
+      gridWidth === null ||
+      gridWidth <= 0 ||
+      gridWidth >= MIN_TERMINAL_WIDTH_PX * 2)
   ) {
     return 2;
   }
