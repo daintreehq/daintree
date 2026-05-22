@@ -1,5 +1,11 @@
 export const PERF_MARKS = {
   APP_BOOT_START: "app_boot_start",
+  /**
+   * Renderer fired the `app:boot` IPC at module-eval time (before `createRoot`),
+   * so the round-trip overlaps React parse and the first commit (#8820).
+   * Distinct from the main-process `APP_BOOT_START`, which marks `app.ready`.
+   */
+  RENDERER_APP_BOOT_IPC_SENT: "renderer_app_boot_ipc_sent",
   EARLY_PATH_REFRESH_START: "early_path_refresh_start",
   EARLY_PATH_REFRESH_COMPLETE: "early_path_refresh_complete",
   MAIN_WINDOW_CREATED: "main_window_created",
