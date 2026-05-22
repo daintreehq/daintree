@@ -35,7 +35,11 @@ import {
 } from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
-import { computeGridColumns, GRID_TRANSITION_DURATION_MS } from "@/lib/terminalLayout";
+import {
+  computeGridColumns,
+  computeScrollRowHeight,
+  GRID_TRANSITION_DURATION_MS,
+} from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
   subscribeSidebarLayoutTransitionUnlock,
@@ -95,6 +99,10 @@ export interface ContentGridContext {
   maximizedGroupFocusTarget: string | null;
   gridCols: number;
   fleetGridCols: number;
+  /** True once the grid becomes a vertical scroll surface (5+ panels / 3+ rows). */
+  isScrollMode: boolean;
+  /** Fixed row height (px) used in scroll mode; ignored in non-scroll quad mode. */
+  scrollRowHeight: number;
   layoutTransition: Transition;
   layoutConfig: ReturnType<typeof useLayoutConfigStore.getState>["layoutConfig"];
   gridWidth: number | null;
@@ -368,6 +376,7 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
+  const gridDimensions = useLayoutConfigStore((state) => state.gridDimensions);
 
   // The scroll container that hosts the panel grid. Held as state (not a ref)
   // so `TerminalPane`'s IntersectionObserver effect can depend on its identity
@@ -587,6 +596,18 @@ export function useContentGridContext({
     activeWorktreeId,
     hysteresisGridCols,
   ]);
+
+  // Scroll mode: once the grid would need more than two rows (or holds 5+
+  // panels) it stops trying to fit everything and becomes a vertical scan
+  // surface with fixed-height rows. Fixed rows — rather than a `1fr` stretch —
+  // are what keep closing a panel cheap: a close never restretches and
+  // resizes every surviving terminal.
+  const gridRows = gridCols > 0 ? Math.ceil(gridItemCount / gridCols) : gridItemCount;
+  const isScrollMode = gridItemCount >= 5 || gridRows > 2;
+  const scrollRowHeight = useMemo(
+    () => computeScrollRowHeight(gridDimensions?.height ?? null),
+    [gridDimensions?.height]
+  );
 
   const layoutTransition: Transition = useMemo(
     () => ({
@@ -972,6 +993,8 @@ export function useContentGridContext({
     maximizedGroupFocusTarget,
     gridCols,
     fleetGridCols,
+    isScrollMode,
+    scrollRowHeight,
     layoutTransition,
     layoutConfig,
     gridWidth,

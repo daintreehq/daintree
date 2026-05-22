@@ -807,9 +807,12 @@ code.hljs {
   #panel-grid::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     background-clip: padding-box;
-    border: 3px solid var(--color-grid-bg);
+    /* A 2px inset leaves a ~10px visible thumb in the 14px gutter — a meaty,
+       clearly-visible grab target so the grid's own scroll is unmistakable
+       and distinct from the thinner xterm viewport scrollbar. */
+    border: 2px solid var(--color-grid-bg);
     border-radius: 7px;
-    min-height: 40px;
+    min-height: 48px;
   }
 
   #panel-grid::-webkit-scrollbar-thumb:hover {

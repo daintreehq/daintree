@@ -76,11 +76,17 @@ export function ContentGridDefault({
                 style={{
                   display: "grid",
                   gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
-                  gridAutoRows: `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
+                  gridAutoRows: ctx.isScrollMode
+                    ? `${ctx.scrollRowHeight}px`
+                    : `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
                   overflowX: "hidden",
-                  overflowY: "auto",
+                  // Scroll mode shows the dedicated grid scrollbar at all
+                  // times (`scroll`) so the user can always see the grid
+                  // itself scrolls; non-scroll mode only scrolls if a short
+                  // window genuinely clips the quad (`auto`).
+                  overflowY: ctx.isScrollMode ? "scroll" : "auto",
                   // Prevent Chromium's scroll-anchor algorithm from fighting
                   // framer-motion's `LayoutGroup` layout-projection when panels
                   // are added or removed above the viewport — Chromium 146
