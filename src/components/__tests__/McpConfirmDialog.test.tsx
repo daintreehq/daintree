@@ -47,6 +47,23 @@ function enqueue(
   });
 }
 
+const PENDING_PROBE_MS = 20;
+
+// Assert a confirmation promise has NOT settled: race it against a short
+// fake-timer probe and require the probe to win. Used to prove a queued item
+// was never approved by a click meant for a different modal.
+async function expectStillPending(promise: Promise<unknown>) {
+  const sentinel = Symbol("pending");
+  const race = Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(sentinel), PENDING_PROBE_MS)),
+  ]);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(PENDING_PROBE_MS);
+  });
+  expect(await race).toBe(sentinel);
+}
+
 describe("McpConfirmDialog", () => {
   beforeEach(() => {
     __resetMcpConfirmStoreForTesting();
@@ -113,15 +130,7 @@ describe("McpConfirmDialog", () => {
 
       await expect(pA).resolves.toBe("approved");
 
-      const sentinel = Symbol("pending");
-      const race = Promise.race([
-        pB,
-        new Promise((resolve) => setTimeout(() => resolve(sentinel), 20)),
-      ]);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(20);
-      });
-      expect(await race).toBe(sentinel);
+      await expectStillPending(pB);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -169,7 +178,7 @@ describe("McpConfirmDialog", () => {
     vi.useFakeTimers();
     try {
       const pA = enqueue({ requestId: "A", actionTitle: "Delete worktree", danger: "confirm" });
-      enqueue({ requestId: "B", actionTitle: "Reset branch", danger: "confirm" });
+      void enqueue({ requestId: "B", actionTitle: "Reset branch", danger: "confirm" });
 
       render(<McpConfirmDialog />);
 
@@ -248,15 +257,7 @@ describe("McpConfirmDialog", () => {
         bBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
-      const sentinel = Symbol("pending");
-      const race = Promise.race([
-        pB,
-        new Promise((resolve) => setTimeout(() => resolve(sentinel), 20)),
-      ]);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(20);
-      });
-      expect(await race).toBe(sentinel);
+      await expectStillPending(pB);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
