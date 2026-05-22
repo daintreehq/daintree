@@ -596,9 +596,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           }>) {
             if (entry == null) continue;
             const id = entry.id;
-            const score = typeof entry.score === "number" ? entry.score : 0;
-            const lastAccessedAt =
+            const rawScore = typeof entry.score === "number" ? entry.score : 0;
+            const score = Number.isFinite(rawScore) ? rawScore : 0;
+            const rawLastAccessedAt =
               typeof entry.lastAccessedAt === "number" ? entry.lastAccessedAt : 0;
+            const lastAccessedAt = Number.isFinite(rawLastAccessedAt) ? rawLastAccessedAt : 0;
 
             if (
               typeof id === "string" &&

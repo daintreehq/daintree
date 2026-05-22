@@ -184,6 +184,23 @@ describe("rankActionMatches", () => {
     expect(results[0]!.id).toBe("warm");
   });
 
+  it("caps MRU bonus below CONTEXT_BOOST even for unbounded scores", () => {
+    // Pin the invariant: tanh saturates at 1, so the MRU bonus can never reach
+    // MRU_BONUS_CAP (50), let alone CONTEXT_BOOST (80). A context match must
+    // still outrank a maximally-frecent item.
+    const items = [
+      makeAction({ id: "ctx", title: "Open Terminal", category: "terminal" }),
+      makeAction({ id: "frecent", title: "Open Browser", category: "browser" }),
+    ];
+    const results = rankActionMatches(
+      "open",
+      items,
+      [mru("frecent", Number.POSITIVE_INFINITY)],
+      { focusedTerminalKind: "terminal" }
+    );
+    expect(results[0]!.id).toBe("ctx");
+  });
+
   it("returns the original item references", () => {
     const alpha = makeAction({ id: "a", title: "Alpha" });
     const bravo = makeAction({ id: "b", title: "Bravo" });
