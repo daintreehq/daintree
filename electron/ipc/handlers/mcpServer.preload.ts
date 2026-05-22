@@ -6,6 +6,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setPort: "mcp-server:set-port",
   rotateApiKey: "mcp-server:rotate-api-key",
   getConfigSnippet: "mcp-server:get-config-snippet",
+  listActiveClients: "mcp-server:list-active-clients",
   getAuditRecords: "mcp-server:get-audit-records",
   getAuditConfig: "mcp-server:get-audit-config",
   getAuditStats: "mcp-server:get-audit-stats",

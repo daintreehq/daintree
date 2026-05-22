@@ -116,6 +116,15 @@ export const RESTART_MAX_DELAY_MS = 15_000;
 export const RESTART_JITTER_MS = 250;
 export const RESTART_STABLE_RESET_MS = 30_000;
 
+/**
+ * Deadline for the graceful stop drain (#8779). `server.close()` lets
+ * in-flight requests finish; if they don't complete within this window the
+ * remaining sockets are force-closed so the listening port is released for
+ * the next start. Short by design — a settings toggle shouldn't hang on a
+ * stuck external client, and well-behaved tool calls finish well inside 3s.
+ */
+export const MCP_STOP_DRAIN_TIMEOUT_MS = 3_000;
+
 export function mapAgentStateToBusyState(state: AgentState | undefined): "working" | "idle" {
   return state === "working" ? "working" : "idle";
 }

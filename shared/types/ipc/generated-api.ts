@@ -192,6 +192,9 @@ export interface GeneratedElectronAPI {
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
+    listActiveClients(
+      ...args: IpcInvokeMap["mcp-server:list-active-clients"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-active-clients"]["result"]>;
     revokeSessionGrants(
       ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;

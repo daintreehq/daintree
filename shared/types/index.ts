@@ -330,6 +330,7 @@ export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
 
 // MCP server audit log + runtime state + turn outcomes
 export type {
+  McpActiveClientInfo,
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,

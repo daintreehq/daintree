@@ -393,3 +393,24 @@ export interface McpServerStatusSnapshot {
   configuredPort: number | null;
   apiKey: string;
 }
+
+/**
+ * Descriptor for one externally-connected MCP client, returned by
+ * `mcp-server:list-active-clients`. Powers the Tier-D2 confirmation that
+ * names the clients about to be severed when the user disables the server
+ * (#8779). Only sessions classified as `external` (api-key bearer or
+ * unauthenticated loopback) are listed — renderer-pinned help-session
+ * bearers and pane tokens are Daintree's own internal consumers and would
+ * be recursive to name in a dialog the user is using to turn them off.
+ *
+ * `userAgent` is the raw `User-Agent` header captured at handshake (Claude
+ * Code, Cursor, a custom script…), or `null` when the client sent none.
+ * `connectedAtMs` is the wall-clock epoch the session handshook so the
+ * renderer can render a relative "connected N minutes ago".
+ */
+export interface McpActiveClientInfo {
+  sessionId: string;
+  userAgent: string | null;
+  connectedAtMs: number;
+  transport: "sse" | "streamable-http";
+}

@@ -217,8 +217,8 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
   });
 
-  it("cleanup removes all eighteen registered handlers", () => {
-    expect(ipcHandlers.size).toBe(18);
+  it("cleanup removes all nineteen registered handlers", () => {
+    expect(ipcHandlers.size).toBe(19);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });
