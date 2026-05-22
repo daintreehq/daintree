@@ -30,6 +30,12 @@ import {
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
+import { getBootPromise } from "./lib/bootPromise";
+
+// Fire `app:boot` at module-eval time, before `bootstrap()` imports App and
+// calls `createRoot`. The IPC round-trip then overlaps React parse and the
+// first commit; `App` reads the cached promise via `use()` (#8820).
+void getBootPromise();
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;

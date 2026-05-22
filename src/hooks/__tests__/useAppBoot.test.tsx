@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { renderHook, act } from "@testing-library/react";
+import { Suspense } from "react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useAppBoot } from "../app/useAppBoot";
+import { getBootPromise, getSafeBootPromise, resetBootPromiseForTests } from "@/lib/bootPromise";
 import type { BootResult } from "@shared/types/ipc/app";
 
 function makeBootResult(): BootResult {
@@ -34,78 +36,123 @@ function installElectron(boot: () => Promise<BootResult>) {
   return bootFn;
 }
 
+function clearElectron() {
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: undefined,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetBootPromiseForTests();
 });
 
-describe("useAppBoot", () => {
-  it("starts unsettled and transitions to ready", async () => {
+// The hook is a thin `use(getSafeBootPromise())` wrapper; the boot logic
+// (caching, sentinel wrapping, Electron-unavailable, thenable annotation) lives
+// in `bootPromise.ts` and is exercised directly here, free of Suspense timing.
+describe("bootPromise", () => {
+  it("caches the in-flight promise across calls and fires boot() once", () => {
+    const bootFn = installElectron(async () => makeBootResult());
+
+    const first = getBootPromise();
+    const second = getBootPromise();
+
+    expect(first).toBe(second);
+    expect(bootFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves getSafeBootPromise to an ok sentinel on success", async () => {
     const result = makeBootResult();
     installElectron(async () => result);
 
-    const { result: hook } = renderHook(() => useAppBoot());
-    expect(hook.current.settled).toBe(false);
-    expect(hook.current.result).toBeNull();
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(hook.current.settled).toBe(true);
-    expect(hook.current.result).toBe(result);
-    expect(hook.current.error).toBeNull();
+    await expect(getSafeBootPromise()).resolves.toEqual({ ok: true, result });
   });
 
-  it("settles with error when boot rejects", async () => {
+  it("resolves getSafeBootPromise to an error sentinel when boot rejects", async () => {
     installElectron(async () => {
       throw new Error("boom");
     });
 
-    const { result: hook } = renderHook(() => useAppBoot());
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(hook.current.settled).toBe(true);
-    expect(hook.current.result).toBeNull();
-    expect(hook.current.error).toBeInstanceOf(Error);
-    expect(hook.current.error?.message).toBe("boom");
+    const safe = await getSafeBootPromise();
+    expect(safe.ok).toBe(false);
+    if (!safe.ok) {
+      expect(safe.error).toBeInstanceOf(Error);
+      expect(safe.error.message).toBe("boom");
+    }
   });
 
-  it("fires boot() exactly once across rerenders", async () => {
-    const bootFn = installElectron(async () => makeBootResult());
+  it("resolves getSafeBootPromise to an error sentinel when Electron is unavailable", async () => {
+    clearElectron();
 
-    const { rerender } = renderHook(() => useAppBoot());
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    rerender();
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(bootFn).toHaveBeenCalledTimes(1);
+    const safe = await getSafeBootPromise();
+    expect(safe.ok).toBe(false);
+    if (!safe.ok) {
+      expect(safe.error.message).toBe("Electron unavailable");
+    }
   });
 
-  it("fires boot() exactly once under React StrictMode double-mount", async () => {
+  it("annotates the settled promise so use() can read it synchronously", async () => {
+    const result = makeBootResult();
+    installElectron(async () => result);
+
+    const promise = getSafeBootPromise() as Promise<unknown> & {
+      status?: string;
+      value?: unknown;
+    };
+    // Pending until the IPC settles, then annotated with the React Suspense
+    // fields use() reads without suspending for a microtask.
+    expect(promise.status).toBe("pending");
+    await promise;
+    expect(promise.status).toBe("fulfilled");
+    expect(promise.value).toEqual({ ok: true, result });
+  });
+
+  it("re-fires boot() after resetBootPromiseForTests clears the cache", () => {
     const bootFn = installElectron(async () => makeBootResult());
 
-    // Strict mode mounts the component twice in dev. Simulate by rendering
-    // inside <StrictMode>. The hook's useRef guard must survive the unmount
-    // /remount caused by Strict Mode's intentional double invocation of the
-    // effect setup phase.
-    const { StrictMode } = await import("react");
-    renderHook(() => useAppBoot(), { wrapper: StrictMode });
+    getBootPromise();
+    resetBootPromiseForTests();
+    getBootPromise();
 
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+    expect(bootFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useAppBoot", () => {
+  function Probe() {
+    const safe = useAppBoot();
+    return <div>{safe.ok ? "boot-ok" : `boot-err:${safe.error.message}`}</div>;
+  }
+
+  it("reads the ok sentinel synchronously when the boot promise is already settled", async () => {
+    installElectron(async () => makeBootResult());
+    // Settle (and annotate) the cached promise first; `use()` then reads
+    // status="fulfilled" synchronously and renders without a Suspense tick.
+    await getSafeBootPromise();
+
+    render(
+      <Suspense fallback={<div>boot-loading</div>}>
+        <Probe />
+      </Suspense>
+    );
+
+    expect(screen.getByText("boot-ok")).toBeTruthy();
+  });
+
+  it("reads the error sentinel without throwing into an error boundary", async () => {
+    installElectron(async () => {
+      throw new Error("boom");
     });
+    await getSafeBootPromise();
 
-    expect(bootFn).toHaveBeenCalledTimes(1);
+    render(
+      <Suspense fallback={<div>boot-loading</div>}>
+        <Probe />
+      </Suspense>
+    );
+
+    expect(screen.getByText("boot-err:boom")).toBeTruthy();
   });
 });

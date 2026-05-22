@@ -331,7 +331,7 @@ import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./co
 
 const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
-function App() {
+function AppInner() {
   useErrors();
   useHibernationNotifications();
   useIdleTerminalNotifications();
@@ -466,27 +466,30 @@ function App() {
 
   // Batched cold-start payload — replaces the legacy fan-out of
   // crash-recovery:get-pending + crash-recovery:get-config + app:hydrate +
-  // terminal-config:get into a single IPC round-trip (#8620).
-  const boot = useAppBoot();
+  // terminal-config:get into a single IPC round-trip (#8620). The IPC is fired
+  // at module-eval time and read here via `use()` (#8820); a boot failure
+  // resolves to `{ ok: false }` so the app still renders its cold-start chrome.
+  const safeBoot = useAppBoot();
+  const bootResult = safeBoot.ok ? safeBoot.result : null;
 
   // Crash recovery gate — must resolve before hydration runs
   const {
     state: crashState,
     resolve: resolveCrash,
     updateConfig: updateCrashConfig,
-  } = useCrashRecoveryGate(boot);
+  } = useCrashRecoveryGate(bootResult);
 
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
   // When crash recovery was pending at boot, the resolve path (`restoreBackup`
   // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
-  // `boot.result` was captured. Passing the stale prefetched payload would
+  // `bootResult` was captured. Passing the stale prefetched payload would
   // hydrate from the pre-resolution terminal list and skip the one-shot
   // `consumePanelFilter` the restore path queued. Force the live IPC path in
   // that case so hydration reads the post-resolution store.
-  const hadPendingCrash = boot.result?.crashPending != null;
+  const hadPendingCrash = bootResult?.crashPending != null;
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : boot.result);
+  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : bootResult);
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
@@ -665,7 +668,7 @@ function App() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  usePanelStoreBootstrap(boot.result?.terminalConfig ?? null);
+  usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
   useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
   useAccessibilityAnnouncements();
@@ -1395,6 +1398,19 @@ function App() {
         </ErrorBoundary>
       </MotionConfig>
     </LazyMotion>
+  );
+}
+
+// `AppInner` suspends on the module-scope `app:boot` promise via `use()`. The
+// Suspense boundary lives here rather than in `main.tsx` so the boot read has a
+// fallback if the IPC hasn't settled by first render. `fallback={null}` keeps
+// the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
+// flight — it's removed by `removeStartupSkeleton()` once hydration completes.
+function App() {
+  return (
+    <Suspense fallback={null}>
+      <AppInner />
+    </Suspense>
   );
 }
 

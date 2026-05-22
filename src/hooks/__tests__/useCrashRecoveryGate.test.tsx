@@ -5,7 +5,6 @@ import { useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import type { PendingCrash, CrashRecoveryConfig, CrashRecoveryAction } from "@shared/types/ipc";
 import type { BootResult } from "@shared/types/ipc/app";
-import type { AppBootState } from "../app/useAppBoot";
 
 const mockPanels = [
   { id: "t1", kind: "terminal", title: "Shell", location: "grid" as const, isSuspect: false },
@@ -50,15 +49,6 @@ function makeBootResult(overrides?: Partial<BootResult>): BootResult {
   };
 }
 
-function makeBoot(state: Partial<AppBootState>): AppBootState {
-  return {
-    result: null,
-    error: null,
-    settled: false,
-    ...state,
-  };
-}
-
 function installElectronStub(overrides?: {
   resolve?: (action: CrashRecoveryAction) => Promise<void>;
   setConfig?: (patch: Partial<CrashRecoveryConfig>) => Promise<CrashRecoveryConfig>;
@@ -87,22 +77,12 @@ beforeEach(() => {
 });
 
 describe("useCrashRecoveryGate", () => {
-  it("starts in loading state while boot is unsettled", () => {
-    const { result } = renderHook(() => useCrashRecoveryGate(makeBoot({ settled: false })));
-    expect(result.current.state.status).toBe("loading");
-  });
-
-  it("transitions to none when boot settles with no pending crash", async () => {
-    const { result, rerender } = renderHook(
-      ({ boot }: { boot: AppBootState }) => useCrashRecoveryGate(boot),
-      { initialProps: { boot: makeBoot({ settled: false }) } }
+  it("transitions to none when boot carries no pending crash", async () => {
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(makeBootResult({ crashPending: null }))
     );
-    expect(result.current.state.status).toBe("loading");
 
     await act(async () => {
-      rerender({
-        boot: makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) }),
-      });
       await Promise.resolve();
     });
 
@@ -111,9 +91,7 @@ describe("useCrashRecoveryGate", () => {
 
   it("transitions to pending when boot carries a crash", async () => {
     const { result } = renderHook(() =>
-      useCrashRecoveryGate(
-        makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
-      )
+      useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash }))
     );
 
     await act(async () => {
@@ -132,12 +110,9 @@ describe("useCrashRecoveryGate", () => {
 
     const { result } = renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: mockCrash,
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: mockCrash,
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -157,12 +132,9 @@ describe("useCrashRecoveryGate", () => {
 
     const { result } = renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, crashCount: 2 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 2 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -182,12 +154,9 @@ describe("useCrashRecoveryGate", () => {
 
     const { result } = renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, crashCount: 1 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -207,12 +176,9 @@ describe("useCrashRecoveryGate", () => {
 
     const { result } = renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, hasBackup: false },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, hasBackup: false },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -233,12 +199,9 @@ describe("useCrashRecoveryGate", () => {
 
     const { result } = renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: crashNoPanels,
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: crashNoPanels,
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -254,9 +217,7 @@ describe("useCrashRecoveryGate", () => {
 
   it("resolve sets state to none", async () => {
     const { result } = renderHook(() =>
-      useCrashRecoveryGate(
-        makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
-      )
+      useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash }))
     );
 
     await act(async () => {
@@ -274,9 +235,7 @@ describe("useCrashRecoveryGate", () => {
 
   it("updateConfig updates config in pending state", async () => {
     const { result } = renderHook(() =>
-      useCrashRecoveryGate(
-        makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
-      )
+      useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash }))
     );
 
     await act(async () => {
@@ -293,10 +252,8 @@ describe("useCrashRecoveryGate", () => {
     }
   });
 
-  it("falls back to none when boot errors out", async () => {
-    const { result } = renderHook(() =>
-      useCrashRecoveryGate(makeBoot({ settled: true, error: new Error("Boot IPC failed") }))
-    );
+  it("falls back to none when boot failed (null result)", async () => {
+    const { result } = renderHook(() => useCrashRecoveryGate(null));
 
     await act(async () => {
       await Promise.resolve();
@@ -316,12 +273,9 @@ describe("useCrashRecoveryGate", () => {
 
     renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, panels: suspectPanels, crashCount: 1 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, panels: suspectPanels, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -344,12 +298,9 @@ describe("useCrashRecoveryGate", () => {
 
     renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, crashCount: 1 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -372,12 +323,9 @@ describe("useCrashRecoveryGate", () => {
 
     renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, panels: undefined, crashCount: 0 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, panels: undefined, crashCount: 0 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -395,11 +343,7 @@ describe("useCrashRecoveryGate", () => {
   });
 
   it("does not signal restore confirmation on explicit dialog path", async () => {
-    renderHook(() =>
-      useCrashRecoveryGate(
-        makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
-      )
-    );
+    renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash })));
 
     await act(async () => {
       await Promise.resolve();
@@ -418,12 +362,9 @@ describe("useCrashRecoveryGate", () => {
 
     renderHook(() =>
       useCrashRecoveryGate(
-        makeBoot({
-          settled: true,
-          result: makeBootResult({
-            crashPending: { ...mockCrash, crashCount: 1 },
-            crashConfig: { autoRestoreOnCrash: true },
-          }),
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
         })
       )
     );
@@ -455,11 +396,7 @@ describe("useCrashRecoveryGate", () => {
     }
 
     it("emits crash_recovery_gate start/end on no-crash path", async () => {
-      renderHook(() =>
-        useCrashRecoveryGate(
-          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
-        )
-      );
+      renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: null })));
 
       await act(async () => {
         await Promise.resolve();
@@ -475,12 +412,9 @@ describe("useCrashRecoveryGate", () => {
 
       renderHook(() =>
         useCrashRecoveryGate(
-          makeBoot({
-            settled: true,
-            result: makeBootResult({
-              crashPending: { ...mockCrash, crashCount: 1 },
-              crashConfig: { autoRestoreOnCrash: true },
-            }),
+          makeBootResult({
+            crashPending: { ...mockCrash, crashCount: 1 },
+            crashConfig: { autoRestoreOnCrash: true },
           })
         )
       );
@@ -495,11 +429,7 @@ describe("useCrashRecoveryGate", () => {
     });
 
     it("emits crash_recovery_gate start/end on manual dialog path", async () => {
-      renderHook(() =>
-        useCrashRecoveryGate(
-          makeBoot({ settled: true, result: makeBootResult({ crashPending: mockCrash }) })
-        )
-      );
+      renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash })));
 
       await act(async () => {
         await Promise.resolve();
@@ -517,12 +447,9 @@ describe("useCrashRecoveryGate", () => {
 
       renderHook(() =>
         useCrashRecoveryGate(
-          makeBoot({
-            settled: true,
-            result: makeBootResult({
-              crashPending: { ...mockCrash, crashCount: 1 },
-              crashConfig: { autoRestoreOnCrash: true },
-            }),
+          makeBootResult({
+            crashPending: { ...mockCrash, crashCount: 1 },
+            crashConfig: { autoRestoreOnCrash: true },
           })
         )
       );
@@ -537,10 +464,8 @@ describe("useCrashRecoveryGate", () => {
       expect(gateMarks()).toEqual(["crash_recovery_gate:start", "crash_recovery_gate:end"]);
     });
 
-    it("emits crash_recovery_gate start/end when boot settles with an error result", async () => {
-      renderHook(() =>
-        useCrashRecoveryGate(makeBoot({ settled: true, error: new Error("Boot IPC failed") }))
-      );
+    it("emits crash_recovery_gate start/end when boot failed (null result)", async () => {
+      renderHook(() => useCrashRecoveryGate(null));
 
       await act(async () => {
         await Promise.resolve();
@@ -557,11 +482,7 @@ describe("useCrashRecoveryGate", () => {
         value: undefined,
       });
 
-      renderHook(() =>
-        useCrashRecoveryGate(
-          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
-        )
-      );
+      renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: null })));
 
       await act(async () => {
         await Promise.resolve();
@@ -571,11 +492,7 @@ describe("useCrashRecoveryGate", () => {
     });
 
     it("records a finite, non-negative durationMs on the end mark", async () => {
-      renderHook(() =>
-        useCrashRecoveryGate(
-          makeBoot({ settled: true, result: makeBootResult({ crashPending: null }) })
-        )
-      );
+      renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: null })));
 
       await act(async () => {
         await Promise.resolve();
@@ -610,12 +527,9 @@ describe("useCrashRecoveryGate", () => {
 
       renderHook(() =>
         useCrashRecoveryGate(
-          makeBoot({
-            settled: true,
-            result: makeBootResult({
-              crashPending: { ...mockCrash, crashCount: 1 },
-              crashConfig: { autoRestoreOnCrash: true },
-            }),
+          makeBootResult({
+            crashPending: { ...mockCrash, crashCount: 1 },
+            crashConfig: { autoRestoreOnCrash: true },
           })
         )
       );
