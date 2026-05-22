@@ -48,6 +48,11 @@ describe("FileDiffModal", () => {
     await waitFor(() => {
       expect(capturedProps.diff).toBe("diff text");
     });
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "git.getFileDiff",
+      { cwd: "/repo", filePath: "src/index.ts", status: "modified" },
+      { source: "user" }
+    );
   });
 
   it("maps empty content to the NO_CHANGES sentinel", async () => {
