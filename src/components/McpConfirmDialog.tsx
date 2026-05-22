@@ -14,6 +14,14 @@ import { useMcpConfirmStore } from "@/store/mcpConfirmStore";
 const CONFIRMATION_TIMEOUT_MS = 28_000;
 
 /**
+ * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
+ * the second click; this disables the primary button briefly after each item
+ * is promoted so a click meant for the previous modal can't silently approve a
+ * freshly-promoted destructive write before the user has read it.
+ */
+const CONFIRM_COOLDOWN_MS = 1_200;
+
+/**
  * Singleton dialog driven by the MCP confirmation queue. Mounted once near
  * the top of `App.tsx`. Reads `current` from `useMcpConfirmStore` and
  * surfaces one `ConfirmDialog` at a time — concurrent agent calls queue
@@ -48,7 +56,14 @@ export function McpConfirmDialog() {
     // queued item could outlive main's 30s deadline and degrade to a generic
     // timeout error instead of `CONFIRMATION_TIMEOUT`.
     const elapsed = Date.now() - enqueuedAt;
-    const remaining = Math.max(500, CONFIRMATION_TIMEOUT_MS - elapsed);
+    // Destructive dispatches disable the confirm button for CONFIRM_COOLDOWN_MS
+    // after promotion. A deeply-queued item could otherwise have less budget
+    // left than the cooldown and auto-time-out before the user can ever click —
+    // so floor the window above the cooldown for those. The floor still lands
+    // under main's 30s deadline (28s budget + ~1.5s), preserving the clean
+    // CONFIRMATION_TIMEOUT outcome.
+    const floor = current.danger === "confirm" ? CONFIRM_COOLDOWN_MS + 300 : 500;
+    const remaining = Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed);
     const timer = setTimeout(() => {
       resolveOnce(requestId, "timeout");
     }, remaining);
@@ -72,7 +87,8 @@ export function McpConfirmDialog() {
   // Severity follows the action's registry classification, not the fact that
   // an MCP client dispatched it. Provenance is already conveyed by the
   // "Run '…'?" framing; only genuinely destructive dispatches earn red.
-  const variant = current.danger === "confirm" ? "destructive" : "default";
+  const isDestructive = current.danger === "confirm";
+  const variant = isDestructive ? "destructive" : "default";
 
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
@@ -85,6 +101,8 @@ export function McpConfirmDialog() {
         cancelLabel="Cancel"
         onConfirm={() => resolveOnce(current.requestId, "approved")}
         variant={variant}
+        confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
+        cooldownKey={current.requestId}
       >
         <div className="space-y-2">
           <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>

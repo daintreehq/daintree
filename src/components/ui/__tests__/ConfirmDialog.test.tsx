@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, __devWarnedKeys } from "../ConfirmDialog";
 import { TypedNameConfirmInput } from "../TypedNameConfirmInput";
@@ -1022,5 +1022,172 @@ describe("TypedNameConfirmInput preamble prop", () => {
 
     const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
     expect(input.getAttribute("aria-invalid")).not.toBe("true");
+  });
+});
+
+describe("ConfirmDialog confirmCooldownMs gate", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __devWarnedKeys.clear();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function getConfirm() {
+    return screen.getByRole("button", { name: "Delete worktree" }) as HTMLButtonElement;
+  }
+
+  it("disables the primary button on open and re-enables it after the cooldown", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+        confirmCooldownMs={1200}
+      />
+    );
+
+    expect(getConfirm().disabled).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1199);
+    });
+    expect(getConfirm().disabled).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(getConfirm().disabled).toBe(false);
+  });
+
+  it("does not gate the button when confirmCooldownMs is absent", () => {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+      />
+    );
+
+    expect(getConfirm().disabled).toBe(false);
+  });
+
+  it("treats zero and negative cooldowns as no cooldown", () => {
+    const { rerender } = render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+        confirmCooldownMs={0}
+      />
+    );
+    expect(getConfirm().disabled).toBe(false);
+
+    rerender(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={() => {}}
+        variant="destructive"
+        confirmCooldownMs={-5}
+      />
+    );
+    expect(getConfirm().disabled).toBe(false);
+  });
+
+  it("ignores a click while the cooldown is active, then fires after it elapses", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={onConfirm}
+        variant="destructive"
+        confirmCooldownMs={1200}
+      />
+    );
+
+    fireEvent.click(getConfirm());
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    fireEvent.click(getConfirm());
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the typed-name Enter submit while the cooldown is active", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={onConfirm}
+        variant="destructive"
+        typedNameTarget="my-thing"
+        confirmCooldownMs={1200}
+      />
+    );
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    fireEvent.change(input, { target: { value: "my-thing" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts the cooldown when cooldownKey changes while staying open", () => {
+    const props = {
+      isOpen: true as const,
+      onClose: () => {},
+      title: "Delete it?",
+      confirmLabel: "Delete worktree",
+      onConfirm: () => {},
+      variant: "destructive" as const,
+      confirmCooldownMs: 1200,
+    };
+    const { rerender } = render(<ConfirmDialog {...props} cooldownKey="A" />);
+
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    expect(getConfirm().disabled).toBe(false);
+
+    // A new item is promoted into the same mounted dialog — the clock restarts.
+    rerender(<ConfirmDialog {...props} cooldownKey="B" />);
+    expect(getConfirm().disabled).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    expect(getConfirm().disabled).toBe(false);
   });
 });
