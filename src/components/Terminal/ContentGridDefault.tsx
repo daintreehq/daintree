@@ -7,7 +7,7 @@ import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridScrollRootContext } from "./GridScrollRootContext";
-import { PanelScrollRuler } from "./PanelScrollRuler";
+import { GridAttentionStrip } from "./GridAttentionStrip";
 import {
   SortableTerminal,
   GRID_PLACEHOLDER_ID,
@@ -34,7 +34,7 @@ export function ContentGridDefault({
   // Compose the dnd droppable binding, the grid container ref, and the
   // scroll-root state setter into a single ref callback so the grid div is the
   // canonical scroll container for IntersectionObserver, scrollIntoView, and
-  // the ruler.
+  // attention-jump targeting.
   const { setGridScrollRoot } = ctx;
   const bindGridScrollContainer = useCallback(
     (node: HTMLDivElement | null) => {
@@ -190,13 +190,8 @@ export function ContentGridDefault({
               </div>
             </GridShell>
           </SortableContext>
-
-          <PanelScrollRuler
-            scrollRoot={ctx.gridScrollRoot}
-            tabGroups={ctx.tabGroups}
-            focusedId={ctx.focusedId}
-          />
         </div>
+        <GridAttentionStrip tabGroups={ctx.tabGroups} className="mx-1 mb-1 shrink-0" />
       </div>
     </GridScrollRootContext.Provider>
   );

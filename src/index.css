@@ -780,6 +780,43 @@ code.hljs {
     background: var(--scrollbar-track);
   }
 
+  /* The scrollable agent grid uses a wider, more visible scrollbar so users
+     can tell at a glance that the grid itself scrolls (separate from xterm's
+     own viewport). Chromium 146 ignores all `::-webkit-scrollbar-*` rules
+     when `scrollbar-width` is set to any non-`auto` keyword on a matched
+     element — Tailwind v4's global `* { scrollbar-width: thin }` would
+     otherwise mask everything below. Reset it to `auto` first. The thumb
+     uses `background-clip: padding-box` plus a grid-bg-coloured border so
+     the visible thumb is narrower than the 14px gutter; the inset gap
+     blends into the grid background instead of showing a transparent
+     stripe. xterm scrollbars are isolated by `.xterm .xterm-viewport`
+     specificity and are unaffected. */
+  #panel-grid {
+    scrollbar-width: auto;
+  }
+
+  #panel-grid::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+  }
+
+  #panel-grid::-webkit-scrollbar-track {
+    background: var(--color-grid-bg);
+  }
+
+  #panel-grid::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+    border: 3px solid var(--color-grid-bg);
+    border-radius: 7px;
+    min-height: 40px;
+  }
+
+  #panel-grid::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+  }
+
   /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */
   html[data-colorblind="red-green"] {
     --theme-status-success: #009e73;
