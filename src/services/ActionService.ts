@@ -417,6 +417,14 @@ export class ActionService {
     const context = ctx ?? this.getActionContext();
     return Array.from(this.registry.values())
       .filter((def) => def.danger !== "restricted")
+      .filter((def) => {
+        try {
+          return def.isVisible?.(context) ?? true;
+        } catch (err) {
+          logWarn("Action isVisible threw", { actionId: def.id, error: err });
+          return true;
+        }
+      })
       .map((def) => this.toManifestEntry(def, context));
   }
 
