@@ -364,12 +364,12 @@
     },
     {
       "file": "electron/main.ts",
-      "line": 150,
+      "line": 151,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/main.ts",
-      "line": 223,
+      "line": 232,
       "pattern": "sync-store-get"
     },
     {

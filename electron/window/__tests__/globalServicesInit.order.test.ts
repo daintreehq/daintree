@@ -132,6 +132,10 @@ vi.mock("../../services/AssistantScratchService.js", () => ({
   startAssistantScratchCleanup: vi.fn(async () => {}),
 }));
 
+// GpuCrashMonitorService is NOT a deferred task — it stays eager pre-window in
+// main.ts so the `child-process-gone` listener installs before GPU spawn.
+// Mock kept defensively to short-circuit any transitive import via mocked
+// neighbors (e.g. CrashRecoveryService → GpuCrashMonitorService).
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
   initializeGpuCrashMonitor: vi.fn(),
   getGpuCrashMonitorService: vi.fn(() => ({ dispose: vi.fn() })),
@@ -341,35 +345,71 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("prune-old-logs");
   });
 
-  it("registers cleanup/monitor services migrated out of main.ts as deferred tasks (#8817)", async () => {
+  it("registers cleanup services migrated out of main.ts as deferred tasks (#8817)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
-    expect(registeredTaskNames).toContain("gpu-crash-monitor");
+    // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
+    // eager in main.ts so the child-process-gone listener installs before
+    // GPU process spawn. Deferring it would silently drop startup-window
+    // GPU crashes.
+    expect(registeredTaskNames).not.toContain("gpu-crash-monitor");
   });
 
-  it("deferred cleanup/monitor tasks invoke their service initializers when run (#8817)", async () => {
+  it("does not invoke cleanup service initializers eagerly during initGlobalServices() (#8817)", async () => {
     const { initializeTrashedPidCleanup } = await import("../../services/TrashedPidTracker.js");
     const { initializeScratchCleanup } = await import("../../services/ScratchCleanupService.js");
     const { startAssistantScratchCleanup } =
       await import("../../services/AssistantScratchService.js");
-    const { initializeGpuCrashMonitor } = await import("../../services/GpuCrashMonitorService.js");
+    const trashedSpy = initializeTrashedPidCleanup as ReturnType<typeof vi.fn>;
+    const scratchSpy = initializeScratchCleanup as ReturnType<typeof vi.fn>;
+    const assistantSpy = startAssistantScratchCleanup as ReturnType<typeof vi.fn>;
+    trashedSpy.mockClear();
+    scratchSpy.mockClear();
+    assistantSpy.mockClear();
 
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
-    await registeredTaskRuns.get("trashed-pid-cleanup")?.();
-    await registeredTaskRuns.get("scratch-cleanup")?.();
-    await registeredTaskRuns.get("assistant-scratch-cleanup")?.();
-    await registeredTaskRuns.get("gpu-crash-monitor")?.();
+    expect(trashedSpy).not.toHaveBeenCalled();
+    expect(scratchSpy).not.toHaveBeenCalled();
+    expect(assistantSpy).not.toHaveBeenCalled();
+  });
 
-    expect(initializeTrashedPidCleanup).toHaveBeenCalled();
-    expect(initializeScratchCleanup).toHaveBeenCalled();
-    expect(startAssistantScratchCleanup).toHaveBeenCalled();
-    expect(initializeGpuCrashMonitor).toHaveBeenCalled();
+  it("deferred cleanup tasks invoke their service initializers when run (#8817)", async () => {
+    const { initializeTrashedPidCleanup } = await import("../../services/TrashedPidTracker.js");
+    const { initializeScratchCleanup } = await import("../../services/ScratchCleanupService.js");
+    const { startAssistantScratchCleanup } =
+      await import("../../services/AssistantScratchService.js");
+    const trashedSpy = initializeTrashedPidCleanup as ReturnType<typeof vi.fn>;
+    const scratchSpy = initializeScratchCleanup as ReturnType<typeof vi.fn>;
+    const assistantSpy = startAssistantScratchCleanup as ReturnType<typeof vi.fn>;
+    trashedSpy.mockClear();
+    scratchSpy.mockClear();
+    assistantSpy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // Resolve runs explicitly so a missing-registration regression surfaces
+    // as "task not registered" instead of "initializer not called".
+    const trashedRun = registeredTaskRuns.get("trashed-pid-cleanup");
+    const scratchRun = registeredTaskRuns.get("scratch-cleanup");
+    const assistantRun = registeredTaskRuns.get("assistant-scratch-cleanup");
+    expect(trashedRun).toBeDefined();
+    expect(scratchRun).toBeDefined();
+    expect(assistantRun).toBeDefined();
+
+    await trashedRun!();
+    await scratchRun!();
+    await assistantRun!();
+
+    expect(trashedSpy).toHaveBeenCalled();
+    expect(scratchSpy).toHaveBeenCalled();
+    expect(assistantSpy).toHaveBeenCalled();
   });
 
   it("prune-old-logs task invokes pruneOldLogs with retentionDays from privacy settings", async () => {
