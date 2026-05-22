@@ -60,7 +60,7 @@ export function GridAttentionStrip({ tabGroups, className }: GridAttentionStripP
         className
       )}
     >
-      <div className="flex min-w-0 items-center gap-3 text-daintree-text/80">
+      <div className="flex min-w-0 items-center gap-3 overflow-hidden text-daintree-text/80">
         {waitingCount > 0 && (
           <span className="inline-flex items-center gap-1.5">
             <HollowCircle className="h-3 w-3 text-state-waiting" aria-hidden="true" />

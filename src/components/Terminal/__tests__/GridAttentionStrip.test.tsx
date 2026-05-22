@@ -45,8 +45,7 @@ function makeGroup(panelIds: string[], activeTabId?: string): TabGroup {
     location: "grid",
     panelIds,
     activeTabId: activeTabId ?? panelIds[0] ?? "",
-    worktreeId: null,
-  } as unknown as TabGroup;
+  };
 }
 
 beforeEach(() => {
@@ -157,5 +156,22 @@ describe("GridAttentionStrip", () => {
     expect(button.className).toContain("focus-visible:outline");
     expect(button.className).toContain("focus-visible:outline-daintree-accent");
     expect(button.className).not.toMatch(/(^|\s)focus:ring-/);
+  });
+
+  it("unmounts when agents transition away from attention states", () => {
+    panelState.panelsById = {
+      a: { id: "a", agentState: "waiting", runtimeStatus: "ok" },
+    };
+    const groups = [makeGroup(["a"])];
+    const { container, rerender } = render(<GridAttentionStrip tabGroups={groups} />);
+
+    expect(container.firstChild).not.toBeNull();
+
+    panelState.panelsById = {
+      a: { id: "a", agentState: "idle", runtimeStatus: "ok" },
+    };
+    rerender(<GridAttentionStrip tabGroups={groups} />);
+
+    expect(container.firstChild).toBeNull();
   });
 });
