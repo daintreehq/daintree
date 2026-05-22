@@ -153,6 +153,23 @@ export function GridScrollbar({
     [scrollRoot, geometry]
   );
 
+  const onWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      // The scrollbar overlays the grid's gutter, so a wheel over it would
+      // otherwise land on dead space. Forward the delta to the grid so the
+      // wheel scrolls the grid no matter where the cursor sits.
+      if (!scrollRoot) return;
+      const px =
+        e.deltaMode === 2
+          ? e.deltaY * scrollRoot.clientHeight
+          : e.deltaMode === 1
+            ? e.deltaY * 16
+            : e.deltaY;
+      scrollRoot.scrollBy({ top: px });
+    },
+    [scrollRoot]
+  );
+
   if (!scrollRoot || !geometry) return null;
 
   const maxScroll = metrics.scrollHeight - metrics.clientHeight;
@@ -163,6 +180,7 @@ export function GridScrollbar({
       ref={trackRef}
       data-no-dnd
       onPointerDown={onTrackPointerDown}
+      onWheel={onWheel}
       className="absolute z-20"
       style={{
         right: BAR_INSET_PX,

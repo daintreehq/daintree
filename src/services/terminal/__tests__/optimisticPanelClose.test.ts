@@ -145,7 +145,12 @@ describe("optimisticPanelClose", () => {
 
     requestPanelClose({ hideIds: ["p1"], commit: vi.fn() });
 
+    // The logical focus retarget is synchronous — a rapid Cmd+W stream relies
+    // on it — but the xterm DOM focus is deferred past the close paint.
     expect(setFocusedMock).toHaveBeenCalledWith("p2");
+    expect(focusMock).not.toHaveBeenCalled();
+
+    vi.runAllTimers();
     expect(focusMock).toHaveBeenCalledWith("p2");
   });
 

@@ -19,12 +19,26 @@ import { panelStoreApi } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logError } from "@/utils/logger";
 
-// A burst of closes within this gap collapses into one deferred flush. Short
-// enough that canonical state (and undo) stays responsive, long enough that the
-// optimistic removal has reliably painted first.
-const FLUSH_DEBOUNCE_MS = 48;
-// Hard ceiling so a sustained close stream still commits promptly.
+// The canonical teardown runs in idle time — after the optimistic removal has
+// painted — so it never competes with the close interaction or a burst of
+// closes. `FLUSH_MAX_WAIT_MS` caps the wait so undo and canonical state stay
+// responsive even if the main thread never goes idle.
 const FLUSH_MAX_WAIT_MS = 160;
+
+const supportsIdleCallback =
+  typeof window !== "undefined" && typeof window.requestIdleCallback === "function";
+
+/** Schedule `cb` for the next idle slot, or `FLUSH_MAX_WAIT_MS` at the latest. */
+function scheduleIdle(cb: () => void): number {
+  return supportsIdleCallback
+    ? window.requestIdleCallback(cb, { timeout: FLUSH_MAX_WAIT_MS })
+    : window.setTimeout(cb, FLUSH_MAX_WAIT_MS);
+}
+
+function cancelIdle(handle: number): void {
+  if (supportsIdleCallback) window.cancelIdleCallback(handle);
+  else window.clearTimeout(handle);
+}
 
 export interface PanelCloseRequest {
   /** Panel ids to hide from the grid immediately. */
@@ -37,7 +51,6 @@ const EMPTY: ReadonlySet<string> = new Set<string>();
 let closingIds: ReadonlySet<string> = EMPTY;
 let pending: PanelCloseRequest[] = [];
 let flushTimer: number | undefined;
-let firstRequestAt: number | undefined;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -100,23 +113,24 @@ function advanceFocusPastClosing(hideIds: string[]): void {
   state.setFocused(next);
   if (next) {
     // Move DOM focus too — the closed pane's xterm textarea is unmounting, so
-    // without this keyboard focus falls to <body> until the user clicks.
-    terminalInstanceService.focus(next);
+    // without this keyboard focus falls to <body> until the user clicks. Defer
+    // it past paint: xterm `.focus()` restores the viewport scroll position,
+    // real work that must not block the close frame. The logical `setFocused`
+    // above already retargets a rapid Cmd+W stream synchronously.
+    const focusTarget = next;
+    requestAnimationFrame(() => terminalInstanceService.focus(focusTarget));
   }
 }
 
 function scheduleFlush(): void {
-  const now = Date.now();
-  if (firstRequestAt === undefined) firstRequestAt = now;
-  if (flushTimer !== undefined) clearTimeout(flushTimer);
-  const elapsed = now - firstRequestAt;
-  const delay = Math.max(0, Math.min(FLUSH_DEBOUNCE_MS, FLUSH_MAX_WAIT_MS - elapsed));
-  flushTimer = window.setTimeout(runFlush, delay);
+  // A burst of closes coalesces: the first schedules the flush, the rest just
+  // queue into `pending` — `runFlush` drains every queued request at once.
+  if (flushTimer !== undefined) return;
+  flushTimer = scheduleIdle(runFlush);
 }
 
 function runFlush(): void {
   flushTimer = undefined;
-  firstRequestAt = undefined;
   if (pending.length === 0) return;
 
   const batch = pending;
@@ -147,10 +161,9 @@ function runFlush(): void {
  */
 export function flushOptimisticCloses(): void {
   if (flushTimer !== undefined) {
-    clearTimeout(flushTimer);
+    cancelIdle(flushTimer);
     flushTimer = undefined;
   }
-  firstRequestAt = undefined;
   runFlush();
 }
 
@@ -173,10 +186,9 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 
 export function __resetOptimisticPanelCloseForTests(): void {
   if (flushTimer !== undefined) {
-    clearTimeout(flushTimer);
+    cancelIdle(flushTimer);
     flushTimer = undefined;
   }
-  firstRequestAt = undefined;
   pending = [];
   closingIds = EMPTY;
   listeners.clear();
