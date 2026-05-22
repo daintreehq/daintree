@@ -116,9 +116,9 @@ export function useActionPalette(): UseActionPaletteReturn {
       );
       const hiddenSet = new Set(hiddenActionIds);
       const pinnedSet = new Set(pinnedActionIds);
-      const actionMruList = getSortedActionMruList()
-        .map(({ id }) => id)
-        .filter((id) => !confirmDangerIds.has(id));
+      // Keep the full frecency entries (id + score) so `rankActionMatches` can
+      // derive the MRU bonus from the frecency score, not list position (#8823).
+      const actionMruList = getSortedActionMruList().filter(({ id }) => !confirmDangerIds.has(id));
 
       if (!query.trim()) {
         const itemById = new Map(items.map((item) => [item.id, item]));
@@ -136,7 +136,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         // sections) and hidden ids (eviction).
         const enabled: ActionPaletteItem[] = [];
         const disabled: ActionPaletteItem[] = [];
-        for (const id of actionMruList) {
+        for (const { id } of actionMruList) {
           if (pinnedSet.has(id) || hiddenSet.has(id)) continue;
           const item = itemById.get(id);
           if (!item) continue;
