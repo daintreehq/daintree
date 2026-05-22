@@ -112,6 +112,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     setFatalError: () => {},
     setReconnecting: () => {},
     setWatcherDegraded: () => {},
+    applyIssueNotFound: () => {},
   }));
   setCurrentViewStore(store);
 }

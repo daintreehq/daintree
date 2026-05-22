@@ -757,4 +757,73 @@ describe("PullRequestService", () => {
 
     pullRequestService.destroy();
   });
+
+  describe("issueTitle retry after PR resolved (#8851)", () => {
+    it("retries getIssue on subsequent checkForPRs runs after a resolved PR's first issue fetch returns null", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      const mockImpl = mockForgeProviderResolved();
+      const getIssue = vi
+        .fn<() => Promise<{ number: number; title: string } | null>>()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({
+          number: 88,
+          title: "Eventually fetched title",
+          state: "open",
+          rawState: "OPEN",
+          url: "https://github.com/o/r/issues/88",
+          rawData: null,
+        } as unknown as { number: number; title: string });
+      // Override the default null with our staged sequence.
+      mockImpl.getIssue = getIssue as unknown as typeof mockImpl.getIssue;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detected: DaintreeEventMap["sys:issue:detected"][] = [];
+      const unsubscribe = events.on("sys:issue:detected", (payload) => detected.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({
+          worktreeId: "wt-1",
+          branch: "feature/issue-88-thing",
+          issueNumber: 88,
+        })
+      );
+
+      // First pass: resolve the provider + PR via refresh() (clears throttle).
+      // The first getIssue returns null, so no fetched marker is written.
+      await pullRequestService.refresh();
+      expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(detected).toHaveLength(0);
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        lastCheckAt: number;
+      };
+
+      // Second pass: bypass the 5s throttle, then trigger another check.
+      // The worktree is in resolvedWorktrees but NOT in
+      // issueTitleFetchedWorktrees, so the issue lookup must run again.
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      expect(detected).toHaveLength(1);
+      expect(detected[0]).toMatchObject({
+        worktreeId: "wt-1",
+        issueNumber: 88,
+        issueTitle: "Eventually fetched title",
+      });
+
+      // Third pass: the marker is now set; no further getIssue calls.
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+  });
 });

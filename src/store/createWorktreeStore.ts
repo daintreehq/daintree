@@ -216,6 +216,15 @@ export interface WorktreeViewActions {
     associations?: Record<string, ManualIssueAssociation>
   ): void;
   applyUpdate(state: WorktreeSnapshot, version: WorktreeEventVersion): void;
+  /**
+   * Clear forge-issue overlay without going through `mergeIssueState`, which
+   * would restore the previous `issueTitle` whenever `issueNumber` is
+   * unchanged (the manual-association preservation path). Used by the
+   * `issue-not-found` event handler so a 404 actually clears the title while
+   * keeping the branch-parsed `issueNumber` and the `branchDerivedTitle`
+   * fallback intact (#8851).
+   */
+  applyIssueNotFound(worktreeId: string, issueNumber: number): void;
   applyRemove(worktreeId: string, version: WorktreeEventVersion): void;
   setManualAssociation(worktreeId: string, assoc: ManualIssueAssociation): void;
   clearManualAssociation(worktreeId: string): void;
@@ -377,6 +386,26 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const next = new Map(prev);
       next.set(state.id, merged);
       set({ worktrees: next, version, ...(tombstonesChanged ? { tombstones } : {}) });
+    },
+
+    applyIssueNotFound(worktreeId: string, issueNumber: number) {
+      const prev = get();
+      const existing = prev.worktrees.get(worktreeId);
+      if (!existing) return;
+      if (existing.issueNumber !== issueNumber) return;
+      // Direct mutation: bypasses mergeIssueState's title-restoration rule so
+      // the not-found response actually clears the title. issueNumber is the
+      // branch-parsed local fact and stays put.
+      const next = new Map(prev.worktrees);
+      next.set(worktreeId, {
+        ...existing,
+        issueTitle: undefined,
+        issueLastUpdatedAt: undefined,
+        linked: existing.linked?.pr
+          ? { providerId: existing.linked.providerId, pr: existing.linked.pr }
+          : null,
+      });
+      set({ worktrees: next });
     },
 
     setManualAssociation(worktreeId: string, assoc: ManualIssueAssociation) {
@@ -1028,6 +1057,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.prTitle === b.prTitle &&
     a.issueNumber === b.issueNumber &&
     a.issueTitle === b.issueTitle &&
+    a.branchDerivedTitle === b.branchDerivedTitle &&
     a.prLastUpdatedAt === b.prLastUpdatedAt &&
     a.issueLastUpdatedAt === b.issueLastUpdatedAt &&
     a.hasPlanFile === b.hasPlanFile &&

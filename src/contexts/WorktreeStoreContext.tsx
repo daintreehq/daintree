@@ -486,25 +486,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     cleanups.push(
       worktreePort.onEvent("issue-not-found", (data) => {
         const event = data as IssueNotFoundEvent;
-        const { worktrees } = store.getState();
-        const existing = worktrees.get(event.worktreeId);
-        if (!existing) return;
-        if (existing.issueNumber !== event.issueNumber) return;
-        // `linked` is the source of truth (#8452): clearing the issue must
-        // drop linked.issue too, mirroring the host's onIssueNotFound and the
-        // pr-cleared handler above. Preserve any PR linkage that's present.
-        store.getState().applyUpdate(
-          {
-            ...existing,
-            issueNumber: undefined,
-            issueTitle: undefined,
-            issueLastUpdatedAt: undefined,
-            linked: existing.linked?.pr
-              ? { providerId: existing.linked.providerId, pr: existing.linked.pr }
-              : null,
-          },
-          overlayVersion(store.getState().version)
-        );
+        // `applyIssueNotFound` bypasses `mergeIssueState`'s title-restoration
+        // rule (which would resurrect the old title because issueNumber stays
+        // unchanged) and preserves the branch-parsed issueNumber + the
+        // `branchDerivedTitle` fallback alongside clearing linked.issue (#8851).
+        store.getState().applyIssueNotFound(event.worktreeId, event.issueNumber);
       })
     );
 

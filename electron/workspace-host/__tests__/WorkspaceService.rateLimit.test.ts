@@ -50,6 +50,7 @@ vi.mock("../../services/worktree/mood.js", () => ({
 vi.mock("../../services/issueExtractor.js", () => ({
   extractIssueNumberSync: vi.fn().mockReturnValue(null),
   extractIssueNumber: vi.fn().mockResolvedValue(null),
+  deriveIssueTitleFromBranch: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("../../services/worktree/index.js", () => ({

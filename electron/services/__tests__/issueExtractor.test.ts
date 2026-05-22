@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractIssueNumber, extractIssueNumberSync } from "../issueExtractor.js";
+import {
+  deriveIssueTitleFromBranch,
+  extractIssueNumber,
+  extractIssueNumberSync,
+} from "../issueExtractor.js";
 
 let seed = 0;
 function unique(value: string): string {
@@ -76,5 +80,55 @@ describe("issueExtractor", () => {
     await expect(extractIssueNumber(branch, folder)).resolves.toBe(
       extractIssueNumberSync(branch, folder)
     );
+  });
+});
+
+describe("deriveIssueTitleFromBranch", () => {
+  it("returns undefined for invalid or empty branch names", () => {
+    expect(deriveIssueTitleFromBranch("")).toBeUndefined();
+    expect(deriveIssueTitleFromBranch("   ")).toBeUndefined();
+    expect(deriveIssueTitleFromBranch(null as unknown as string)).toBeUndefined();
+    expect(deriveIssueTitleFromBranch(undefined as unknown as string)).toBeUndefined();
+  });
+
+  it("returns undefined when the branch has no issue-<n>-<slug> pattern", () => {
+    expect(deriveIssueTitleFromBranch("main")).toBeUndefined();
+    expect(deriveIssueTitleFromBranch("feature/my-work")).toBeUndefined();
+    expect(deriveIssueTitleFromBranch("issue-123")).toBeUndefined(); // no slug
+    expect(deriveIssueTitleFromBranch("issue-123-")).toBeUndefined(); // empty slug
+  });
+
+  it("derives a sentence-cased title from issue-<n>-<slug>", () => {
+    expect(deriveIssueTitleFromBranch("issue-8773-surface-assistant-launch")).toBe(
+      "Surface assistant launch"
+    );
+  });
+
+  it("strips a single branch prefix segment before parsing", () => {
+    expect(deriveIssueTitleFromBranch("feature/issue-8773-surface-assistant-launch")).toBe(
+      "Surface assistant launch"
+    );
+    expect(deriveIssueTitleFromBranch("bugfix/issue-42-fix-edge-case")).toBe("Fix edge case");
+  });
+
+  it("supports the slug-style prefix without a path separator", () => {
+    expect(deriveIssueTitleFromBranch("feature-123-add-tests")).toBe("Add tests");
+  });
+
+  it("leaves non-leading words lowercase (sentence case, not title case)", () => {
+    expect(deriveIssueTitleFromBranch("issue-7-add-oauth-support")).toBe("Add oauth support");
+    expect(deriveIssueTitleFromBranch("issue-9-fix-api-rate-limit")).toBe("Fix api rate limit");
+  });
+
+  it("collapses multiple separator characters into single spaces", () => {
+    expect(deriveIssueTitleFromBranch("issue-1-a--b--c")).toBe("A b c");
+  });
+
+  it("uses only the last path segment to find the slug", () => {
+    expect(deriveIssueTitleFromBranch("user/feature/issue-99-deep-nested")).toBe("Deep nested");
+  });
+
+  it("trims surrounding whitespace before parsing", () => {
+    expect(deriveIssueTitleFromBranch("  issue-1-hello-world  ")).toBe("Hello world");
   });
 });

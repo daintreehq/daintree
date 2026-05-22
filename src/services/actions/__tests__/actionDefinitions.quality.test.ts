@@ -468,6 +468,7 @@ describe("destructive-action danger metadata", () => {
       setFatalError: () => {},
       setReconnecting: () => {},
       setWatcherDegraded: () => {},
+      applyIssueNotFound: () => {},
     }));
     setCurrentViewStore(viewStore);
     const contextOverride = {

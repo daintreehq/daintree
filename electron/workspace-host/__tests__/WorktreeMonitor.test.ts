@@ -52,6 +52,7 @@ vi.mock("../../services/worktree/mood.js", () => ({
 vi.mock("../../services/issueExtractor.js", () => ({
   extractIssueNumberSync: vi.fn().mockReturnValue(null),
   extractIssueNumber: vi.fn().mockResolvedValue(null),
+  deriveIssueTitleFromBranch: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("../../utils/gitUtils.js", () => ({
@@ -492,6 +493,54 @@ describe("WorktreeMonitor", () => {
     monitor.clearPRInfo();
 
     expect(monitor.getSnapshot().prCiStatus).toBeUndefined();
+  });
+
+  describe("branchDerivedTitle in snapshot (#8851)", () => {
+    it("populates branchDerivedTitle from the worktree's initial branch", async () => {
+      const { deriveIssueTitleFromBranch } = await import("../../services/issueExtractor.js");
+      vi.mocked(deriveIssueTitleFromBranch).mockReturnValue("Surface assistant launch");
+
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, branch: "feature/issue-8773-surface-assistant-launch" },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+
+      expect(monitor.getSnapshot().branchDerivedTitle).toBe("Surface assistant launch");
+    });
+
+    it("recomputes branchDerivedTitle when branch is replaced via the setter", async () => {
+      const { deriveIssueTitleFromBranch } = await import("../../services/issueExtractor.js");
+      vi.mocked(deriveIssueTitleFromBranch)
+        .mockReturnValueOnce("First title")
+        .mockReturnValueOnce("Second title");
+
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, branch: "feature/issue-1-first" },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+      expect(monitor.getSnapshot().branchDerivedTitle).toBe("First title");
+
+      monitor.branch = "feature/issue-2-second";
+      expect(monitor.getSnapshot().branchDerivedTitle).toBe("Second title");
+    });
+
+    it("leaves branchDerivedTitle undefined when the branch lacks an issue-<n>-<slug> pattern", async () => {
+      const { deriveIssueTitleFromBranch } = await import("../../services/issueExtractor.js");
+      vi.mocked(deriveIssueTitleFromBranch).mockReturnValue(undefined);
+
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, branch: "main" },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+
+      expect(monitor.getSnapshot().branchDerivedTitle).toBeUndefined();
+    });
   });
 
   describe("linked is the source of truth (#8452)", () => {

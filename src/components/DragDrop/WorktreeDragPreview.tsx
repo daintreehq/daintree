@@ -8,7 +8,8 @@ interface WorktreeDragPreviewProps {
 
 export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
   const branchLabel = worktree.isMainWorktree ? worktree.name : (worktree.branch ?? worktree.name);
-  const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
+  const displayTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
+  const hasDisplayTitle = !!(worktree.issueNumber && displayTitle);
 
   return (
     <div
@@ -25,7 +26,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
         gap: 4,
       }}
     >
-      {hasIssueTitle ? (
+      {hasDisplayTitle ? (
         <>
           <div
             style={{
@@ -53,7 +54,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
                 textOverflow: "ellipsis",
               }}
             >
-              {worktree.issueTitle}
+              {displayTitle}
             </span>
           </div>
           <span
