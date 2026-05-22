@@ -186,20 +186,46 @@ export async function setupWindowServices(
   // are started on-demand when loadProject() is called, not at init time.
   const ptyClient = getPtyClient();
   if (!getWorkspaceClientRef()) {
-    console.log("[MAIN] Waiting for Pty Host to be ready before initializing Workspace Client...");
-    try {
-      await ptyClient!.waitForReady();
-      console.log("[MAIN] Pty Host ready, initializing Workspace Client...");
-      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
-    } catch (error) {
-      console.error("[MAIN] Pty Host failed to start:", error);
-    }
-
+    // Construct the workspace client and prewarm its per-project host
+    // concurrently with the PTY host fork. The two utility processes load
+    // native modules independently (node-pty vs better-sqlite3 + @parcel/watcher)
+    // and share no IPC/memory, so dispatching the workspace host fork while we
+    // await PTY-ready overlaps the two native loads instead of serializing them
+    // behind the PTY handshake (#8828).
     const workspaceClient = getWorkspaceClient({
       maxRestartAttempts: 3,
       healthCheckIntervalMs: 10000,
       showCrashDialog: false,
     });
+
+    // Resolve the project path this window will load so the workspace host can
+    // start forking now. getProjectById is a synchronous SQLite read on the
+    // already-open shared DB, so it's safe before projectStore.initialize().
+    const prewarmPath =
+      opts.initialProjectPath ??
+      (opts.initialProjectId
+        ? projectStore.getProjectById(opts.initialProjectId)?.path
+        : undefined);
+    if (prewarmPath) {
+      console.log("[MAIN] Prewarming workspace host concurrently with PTY host:", prewarmPath);
+      try {
+        // Fire-and-forget: prewarmProject sets up the host initPromise and a
+        // dormant-cleanup timer; async failure self-heals inside the pool.
+        workspaceClient.prewarmProject(prewarmPath);
+      } catch (error) {
+        console.warn("[MAIN] prewarmProject failed synchronously:", error);
+      }
+    }
+
+    console.log("[MAIN] Waiting for Pty Host to be ready...");
+    try {
+      await ptyClient!.waitForReady();
+      console.log("[MAIN] Pty Host ready");
+      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
+    } catch (error) {
+      console.error("[MAIN] Pty Host failed to start:", error);
+    }
+
     setWorkspaceClientRef(workspaceClient);
 
     // Give PluginService the WorkspaceClient reference now that it's ready.

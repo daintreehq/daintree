@@ -64,6 +64,39 @@ function simulateBootstrap(
   return actions;
 }
 
+/**
+ * Replicates the workspace-init ordering from windowServices.ts (#8828):
+ * the workspace client is constructed and the project host prewarmed BEFORE
+ * the PTY-ready await, so the two utility-process forks overlap. The IPC-visible
+ * ref must still only be set AFTER PTY-ready.
+ */
+function simulateWorkspaceInit(
+  opts: Opts,
+  projectStore: { getProjectById: (id: string) => Project | undefined },
+  prewarmThrows = false
+) {
+  const actions: { action: string; args?: Record<string, unknown> }[] = [];
+
+  actions.push({ action: "getWorkspaceClient" });
+
+  const prewarmPath =
+    opts.initialProjectPath ??
+    (opts.initialProjectId ? projectStore.getProjectById(opts.initialProjectId)?.path : undefined);
+  if (prewarmPath) {
+    try {
+      if (prewarmThrows) throw new Error("synchronous prewarm failure");
+      actions.push({ action: "prewarmProject", args: { path: prewarmPath } });
+    } catch {
+      actions.push({ action: "prewarmFailedSync" });
+    }
+  }
+
+  actions.push({ action: "ptyWaitForReady" });
+  actions.push({ action: "setWorkspaceClientRef" });
+
+  return actions;
+}
+
 const PROJECT_A: Project = { id: "proj-a", name: "Project A", path: "/projects/a" };
 
 const storeWithProjectA = {
@@ -212,5 +245,59 @@ describe("windowServices project binding (#5492)", () => {
       const actions = simulateBootstrap(opts, storeWithProjectA);
       expect(actions.find((a) => a.action === "initializeTaskQueue")).toBeUndefined();
     });
+  });
+});
+
+describe("windowServices workspace prewarm ordering (#8828)", () => {
+  const order = (actions: { action: string }[], name: string) =>
+    actions.findIndex((a) => a.action === name);
+
+  it("prewarms before awaiting PTY-ready for a restore window (initialProjectId)", () => {
+    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    expect(actions).toContainEqual({ action: "prewarmProject", args: { path: "/projects/a" } });
+    expect(order(actions, "prewarmProject")).toBeLessThan(order(actions, "ptyWaitForReady"));
+  });
+
+  it("prewarms before awaiting PTY-ready for an explicit-path window (initialProjectPath)", () => {
+    const actions = simulateWorkspaceInit({ initialProjectPath: "/cli/project" }, emptyStore);
+    expect(actions).toContainEqual({ action: "prewarmProject", args: { path: "/cli/project" } });
+    expect(order(actions, "prewarmProject")).toBeLessThan(order(actions, "ptyWaitForReady"));
+  });
+
+  it("prefers initialProjectPath over the store lookup when both are set", () => {
+    const actions = simulateWorkspaceInit(
+      { initialProjectId: "proj-a", initialProjectPath: "/override/path" },
+      storeWithProjectA
+    );
+    expect(actions).toContainEqual({ action: "prewarmProject", args: { path: "/override/path" } });
+  });
+
+  it("does NOT prewarm when no project path can be resolved (unbound window)", () => {
+    const actions = simulateWorkspaceInit({}, storeWithProjectA);
+    expect(actions.find((a) => a.action === "prewarmProject")).toBeUndefined();
+  });
+
+  it("does NOT prewarm when the store has no matching project", () => {
+    const actions = simulateWorkspaceInit({ initialProjectId: "proj-missing" }, emptyStore);
+    expect(actions.find((a) => a.action === "prewarmProject")).toBeUndefined();
+  });
+
+  it("constructs the workspace client before prewarming and PTY-ready", () => {
+    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    expect(order(actions, "getWorkspaceClient")).toBeLessThan(order(actions, "prewarmProject"));
+    expect(order(actions, "getWorkspaceClient")).toBeLessThan(order(actions, "ptyWaitForReady"));
+  });
+
+  it("only sets the IPC-visible ref after PTY-ready, never before", () => {
+    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    expect(order(actions, "setWorkspaceClientRef")).toBeGreaterThan(order(actions, "ptyWaitForReady"));
+  });
+
+  it("continues startup when prewarm throws synchronously (PTY-ready and ref still happen)", () => {
+    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA, true);
+    expect(actions.find((a) => a.action === "prewarmProject")).toBeUndefined();
+    expect(actions).toContainEqual({ action: "prewarmFailedSync" });
+    expect(actions.find((a) => a.action === "ptyWaitForReady")).toBeDefined();
+    expect(actions.find((a) => a.action === "setWorkspaceClientRef")).toBeDefined();
   });
 });
