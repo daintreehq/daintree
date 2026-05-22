@@ -17,6 +17,7 @@ build/icon.iconset/
 # IDE
 .idea/
 .vscode/
+.antigravitycli/
 *.swp
 *.swo
 *.sublime-project
