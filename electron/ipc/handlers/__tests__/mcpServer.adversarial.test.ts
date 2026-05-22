@@ -30,6 +30,8 @@ const serviceMock = vi.hoisted(() => ({
     lastError: null,
   })),
   onRuntimeStateChange: vi.fn(() => () => {}),
+  listActiveBearers: vi.fn(() => []),
+  disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
 }));
 
 vi.mock("electron", () => ({
@@ -217,8 +219,29 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
   });
 
-  it("cleanup removes all nineteen registered handlers", () => {
-    expect(ipcHandlers.size).toBe(19);
+  const DISCONNECT_BEARER_CHANNEL = "mcp-server:disconnect-bearer";
+
+  it("disconnectBearer rejects a non-hex / wrong-length tokenHash", async () => {
+    const bad = ["", "xyz", "a".repeat(63), "a".repeat(65), "A".repeat(64), 42, null];
+    for (const value of bad) {
+      await expect(getHandler(DISCONNECT_BEARER_CHANNEL)(fakeEvent(), value)).rejects.toThrow(
+        /Invalid tokenHash/
+      );
+    }
+    expect(serviceMock.disconnectBearer).not.toHaveBeenCalled();
+  });
+
+  it("disconnectBearer forwards a valid 64-char lowercase hex hash to the service", async () => {
+    const valid = "a".repeat(64);
+    await expect(getHandler(DISCONNECT_BEARER_CHANNEL)(fakeEvent(), valid)).resolves.toEqual({
+      tokenHash: valid,
+      disconnected: true,
+    });
+    expect(serviceMock.disconnectBearer).toHaveBeenCalledWith(valid);
+  });
+
+  it("cleanup removes all twenty-one registered handlers", () => {
+    expect(ipcHandlers.size).toBe(21);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

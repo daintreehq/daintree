@@ -367,6 +367,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "mcp-server:disconnect-bearer": {
+    args: [tokenHash: string];
+    result: import("./mcpServer.js").DisconnectBearerResult;
+  };
   "mcp-server:export-audit-log": {
     args: [records: import("./mcpServer.js").McpAuditRecord[]];
     result: boolean;
@@ -402,6 +406,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:issue-grant": {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
+  };
+  "mcp-server:list-active-bearers": {
+    args: [];
+    result: import("./mcpServer.js").ActiveBearerRecord[];
   };
   "mcp-server:list-active-clients": {
     args: [];

@@ -566,6 +566,58 @@ describe("SessionStore dropAbuseState wiring (#8467)", () => {
   });
 });
 
+describe("SessionStore dropBearerState wiring (#8778)", () => {
+  let dropBearerSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    dropBearerSpy = vi.fn<(sessionId: string) => void>();
+    store = new SessionStore(() => {}, { dropBearerState: dropBearerSpy });
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("invokes dropBearerState on SSE idle expiry", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("s1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("invokes dropBearerState on Streamable-HTTP idle expiry", () => {
+    const session = fakeHttpSession();
+    store.httpSessions.set("h1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("h1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("h1");
+  });
+
+  it("invokes dropBearerState on explicit revokeSession", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+
+    store.revokeSession("s1");
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not fire dropBearerState when revokeSession returns false (unknown session)", () => {
+    expect(store.revokeSession("ghost")).toBe(false);
+    expect(dropBearerSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("SessionStore tier-elevation decay (#8462)", () => {
   let store: SessionStore;
   let decayed: string[];

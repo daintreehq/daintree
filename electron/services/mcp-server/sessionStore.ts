@@ -29,6 +29,16 @@ export interface SessionStoreOptions {
    */
   dropAbuseState?: (sessionId: string) => void;
   /**
+   * Fired alongside the other per-session cleanup hooks so the live
+   * bearer-connection register in `httpLifecycle` drops this session from
+   * its owning bearer entry (and the entry itself once its last session
+   * closes). Mirrors {@link dropAbuseState} — the register is owned by
+   * `HttpLifecycle`, so the store reaches it through this callback rather
+   * than holding a reference. Optional so bare test fixtures construct
+   * without one.
+   */
+  dropBearerState?: (sessionId: string) => void;
+  /**
    * Fired when a session's renderer-approved tier elevation expires and the
    * session is silently decayed back to the `workbench` baseline (#8462).
    * `httpLifecycle` wires this to `server.sendToolListChanged()` on the
@@ -151,6 +161,7 @@ export class SessionStore {
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
   private readonly dropAbuseStateFn: (sessionId: string) => void;
+  private readonly dropBearerStateFn: (sessionId: string) => void;
   private readonly onTierDecayedFn: (sessionId: string) => void;
 
   constructor(
@@ -159,6 +170,7 @@ export class SessionStore {
   ) {
     this.cleanupResourceSubscriptionsFn = cleanupResourceSubscriptions;
     this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
+    this.dropBearerStateFn = options.dropBearerState ?? (() => {});
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
   }
@@ -268,6 +280,7 @@ export class SessionStore {
     this.idleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -323,6 +336,7 @@ export class SessionStore {
     this.httpIdleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -569,6 +583,7 @@ export class SessionStore {
     this.clearClientMetadata(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     return true;
   }

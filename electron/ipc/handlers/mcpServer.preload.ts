@@ -20,6 +20,8 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setSessionTier: "mcp-server:set-session-tier",
   issueGrant: "mcp-server:issue-grant",
   revokeSessionGrants: "mcp-server:revoke-session-grants",
+  listActiveBearers: "mcp-server:list-active-bearers",
+  disconnectBearer: "mcp-server:disconnect-bearer",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MCP_SERVER_METHOD_CHANNELS;

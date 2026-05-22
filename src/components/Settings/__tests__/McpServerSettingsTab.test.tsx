@@ -92,15 +92,25 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     clearTurnOutcomeLog: vi.fn().mockResolvedValue(undefined),
     onRuntimeStateChanged: vi.fn().mockReturnValue(vi.fn()),
+    listActiveBearers: vi.fn().mockResolvedValue([]),
+    disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
     ...overrides,
   };
 }
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 
-function installMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {}) {
+function installMcpApi(
+  overrides: Partial<typeof window.electron.mcpServer> = {},
+  helpAssistantOverrides: Partial<typeof window.electron.helpAssistant> = {}
+) {
   window.electron = {
     mcpServer: createMcpApi(overrides),
+    helpAssistant: {
+      getSettings: vi.fn().mockResolvedValue({ daintreeControl: false }),
+      setSettings: vi.fn().mockResolvedValue(undefined),
+      ...helpAssistantOverrides,
+    },
   } as unknown as typeof window.electron;
 }
 
@@ -1181,6 +1191,99 @@ describe("McpServerSettingsTab", () => {
     await waitFor(() => {
       const copiedEls = screen.getAllByText("Copied!");
       expect(copiedEls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("external clients (#8778)", () => {
+    const bearer = {
+      tokenHash: "a".repeat(64),
+      token4LastChars: "wxyz",
+      userAgent: "Claude Code/1.2.3",
+      lastActiveAt: Date.now() - 5000,
+      requestsSinceLaunch: 3,
+    };
+
+    it("hides the external-clients row when no bearers are connected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("External clients");
+    });
+
+    it("shows connected clients and disconnects one on demand", async () => {
+      const disconnectBearer = vi
+        .fn()
+        .mockResolvedValue({ tokenHash: bearer.tokenHash, disconnected: true });
+      const listActiveBearers = vi.fn().mockResolvedValueOnce([bearer]).mockResolvedValue([]);
+      installMcpApi({ listActiveBearers, disconnectBearer });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "External clients (1)");
+
+      fireEvent.click(screen.getByRole("button", { name: /external clients/i }));
+      await waitFor(() => {
+        expect(container.textContent).toContain("Claude Code/1.2.3");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+      await waitFor(() => {
+        expect(disconnectBearer).toHaveBeenCalledWith(bearer.tokenHash);
+      });
+      await waitFor(() => {
+        expect(container.textContent).not.toContain("External clients");
+      });
+    });
+
+    it("populates the clients row when a runtime-state change fires after mount", async () => {
+      let runtimeCb: (() => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: () => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      const listActiveBearers = vi
+        .fn()
+        .mockResolvedValueOnce([]) // initial mount: nothing connected
+        .mockResolvedValue([bearer]); // after the push: one client
+      installMcpApi({ onRuntimeStateChanged, listActiveBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("External clients");
+
+      runtimeCb?.();
+      await waitForContent(container, "External clients (1)");
+    });
+
+    it("shows the assistant-attribution pill only when daintreeControl is on", async () => {
+      installMcpApi({}, { getSettings: vi.fn().mockResolvedValue({ daintreeControl: true }) });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Kept alive by Daintree Assistant");
+    });
+
+    it("omits the attribution pill when daintreeControl is off", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("Kept alive by Daintree Assistant");
     });
   });
 });

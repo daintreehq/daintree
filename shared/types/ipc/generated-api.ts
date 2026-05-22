@@ -171,6 +171,9 @@ export interface GeneratedElectronAPI {
     clearTurnOutcomeLog(
       ...args: IpcInvokeMap["mcp-server:clear-turn-outcome-log"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:clear-turn-outcome-log"]["result"]>;
+    disconnectBearer(
+      ...args: IpcInvokeMap["mcp-server:disconnect-bearer"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:disconnect-bearer"]["result"]>;
     exportAuditLog(
       ...args: IpcInvokeMap["mcp-server:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:export-audit-log"]["result"]>;
@@ -198,6 +201,9 @@ export interface GeneratedElectronAPI {
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
+    listActiveBearers(
+      ...args: IpcInvokeMap["mcp-server:list-active-bearers"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-active-bearers"]["result"]>;
     listActiveClients(
       ...args: IpcInvokeMap["mcp-server:list-active-clients"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-active-clients"]["result"]>;
