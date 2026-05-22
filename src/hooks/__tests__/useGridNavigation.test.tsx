@@ -7,7 +7,6 @@ interface GridPosition {
   terminalId: string;
   row: number;
   col: number;
-  center: { x: number; y: number };
 }
 
 const createRowMajor = (positions: GridPosition[]) => {
@@ -102,7 +101,6 @@ describe("Grid Navigation Logic", () => {
       terminalId: pos.id,
       row: pos.row,
       col: pos.col,
-      center: { x: pos.col * 150, y: pos.row * 150 },
     }));
   };
 
@@ -275,7 +273,6 @@ describe("Grid Navigation Logic", () => {
                 terminalId: resolvedId,
                 row: Math.floor(index / cols),
                 col: index % cols,
-                center: { x: (index % cols) * 150, y: Math.floor(index / cols) * 150 },
               }
             : null;
         })
@@ -439,7 +436,6 @@ describe("Grid Navigation Logic", () => {
         terminalId: id,
         row: Math.floor(index / cols),
         col: index % cols,
-        center: { x: (index % cols) * 150, y: Math.floor(index / cols) * 150 },
       }));
     };
 
