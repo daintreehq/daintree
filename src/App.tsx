@@ -314,6 +314,11 @@ import {
   usePreferencesStore,
 } from "./store";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+// Eager side-effect import: registers the GitHub plugin's builtin view slots
+// (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
+// render. Must stay static — a deferred/idle import races the user, so
+// getBuiltinView returns null and the bulk-create dialog silently never opens.
+import "@github-renderer/index";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -550,7 +555,6 @@ function App() {
       void preloadRecoveryBannerCoordinator();
       void preloadGitHubTokenBanner();
       void preloadCloudSyncBanner();
-      import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
