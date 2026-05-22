@@ -28,6 +28,13 @@ export interface FleetPickerContentProps {
    * instead.
    */
   autoFocusSearch?: boolean;
+  /**
+   * Optional consumer-rendered controls placed below the search input, inside
+   * the same search section. Keeps layer-specific concerns (e.g. the
+   * cold-start palette's bulk-selection helpers) with the consumer — the
+   * ribbon-add popover passes nothing and gets no extra row.
+   */
+  headerSlot?: React.ReactNode;
 }
 
 /**
@@ -51,6 +58,7 @@ export function FleetPickerContent({
   picker,
   testIdPrefix,
   autoFocusSearch = true,
+  headerSlot,
 }: FleetPickerContentProps): ReactElement {
   const {
     query,
@@ -117,6 +125,7 @@ export function FleetPickerContent({
             data-testid={`${testIdPrefix}-search`}
           />
         </div>
+        {headerSlot}
       </div>
 
       <div
