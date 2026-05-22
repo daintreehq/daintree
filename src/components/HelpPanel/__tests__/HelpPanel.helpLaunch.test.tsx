@@ -2420,6 +2420,65 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     );
   });
 
+  it("'Check again' re-probes with refresh=true and clears the gate when the CLI is now current", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "0.9.0",
+      latestVersion: "1.0.0",
+      updateAvailable: true,
+      lastChecked: Date.now(),
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    const { findByTestId, findByRole, queryByTestId } = render(<HelpPanel width={380} />);
+    await findByTestId("help-version-too-old");
+
+    // User updates the CLI outside Daintree, then clicks "Check again".
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "1.2.0",
+      latestVersion: "1.2.0",
+      updateAvailable: false,
+      lastChecked: Date.now(),
+    });
+
+    const checkAgain = await findByRole("button", { name: /check again/i });
+    await act(async () => {
+      fireEvent.click(checkAgain);
+    });
+
+    // The re-probe must bypass the 12h cache (refresh=true).
+    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", true);
+    // Passing probe clears the gate.
+    expect(queryByTestId("help-version-too-old")).toBeNull();
+  });
+
+  it("'Check again' keeps the gate when the CLI is still too old", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "0.9.0",
+      latestVersion: "1.0.0",
+      updateAvailable: true,
+      lastChecked: Date.now(),
+    });
+
+    const { findByTestId, findByRole, getByTestId } = render(<HelpPanel width={380} />);
+    await findByTestId("help-version-too-old");
+
+    const checkAgain = await findByRole("button", { name: /check again/i });
+    await act(async () => {
+      fireEvent.click(checkAgain);
+    });
+
+    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", true);
+    // Still blocked — the gate stays visible.
+    expect(getByTestId("help-version-too-old")).toBeTruthy();
+  });
+
   it("passes through when installed version equals assistantMinVersion", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");

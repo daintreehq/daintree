@@ -33,6 +33,10 @@ const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 const RESUME_BANNER_AUTO_DISMISS_MS = 10_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 
+// Minimum disabled period after a manual "Check again" click — keeps the
+// button from being hammered while a fresh (cache-bypassing) probe runs.
+const CHECK_AGAIN_COOLDOWN_MS = 5_000;
+
 export type HelpSessionPhase =
   | "idle"
   | "version-checking"
@@ -68,6 +72,12 @@ export interface HelpSessionSnapshot {
   tierMismatch: TierMismatchState | null;
   preflightSnapshot: SnapshotInfo | null;
   isApprovingTier: boolean;
+  /**
+   * True while a manual "Check again" version re-probe is in flight or its
+   * 5s cooldown is still running. Disables the gate's secondary button to
+   * prevent probe hammering.
+   */
+  isCheckingVersion: boolean;
 }
 
 export interface HelpProjectRef {
@@ -170,38 +180,70 @@ async function provisionHelpSession(
   }
 }
 
+/**
+ * Three-state version probe.
+ * - `ok`: version meets the minimum (or no minimum is configured).
+ * - `indeterminate`: the probe couldn't get a definitive answer (IPC threw,
+ *   no installed version reported, or semver comparison failed).
+ * - `too-old`: a definitive too-old result, carrying the gate payload.
+ *
+ * The launch paths collapse `ok`/`indeterminate` into "proceed" (transient
+ * failure is permissive — see `checkAssistantVersion`). The manual
+ * "Check again" path keeps them distinct so a transient failure doesn't
+ * silently dismiss the gate and auto-launch an outdated CLI.
+ */
+type VersionProbeResult =
+  | { status: "ok" }
+  | { status: "indeterminate" }
+  | { status: "too-old"; block: VersionTooOld };
+
 // `refresh=true` bypasses the 12h AgentVersionService cache — pass on retry
 // so a user who manually updates the CLI outside Daintree's update flow can
 // recover within one panel reopen instead of waiting for cache expiry.
-async function checkAssistantVersion(
+async function probeAssistantVersion(
   agentId: string,
   agentName: string,
   refresh = false
-): Promise<VersionTooOld | null> {
+): Promise<VersionProbeResult> {
   const config = getAgentConfig(agentId);
   const required = config?.assistantMinVersion;
-  if (!required) return null;
+  if (!required) return { status: "ok" };
 
   let info;
   try {
     info = await window.electron.system.getAgentVersion(agentId, refresh);
   } catch (err) {
     logError("Failed to probe assistant CLI version", err);
-    return null;
+    return { status: "indeterminate" };
   }
 
   const installed = info?.installedVersion;
-  if (!installed) return null;
+  if (!installed) return { status: "indeterminate" };
 
   try {
     if (semver.lt(installed, required)) {
-      return { agentId, agentName, installedVersion: installed, requiredVersion: required };
+      return {
+        status: "too-old",
+        block: { agentId, agentName, installedVersion: installed, requiredVersion: required },
+      };
     }
   } catch (err) {
     logError("Failed to compare assistant CLI version", err);
-    return null;
+    return { status: "indeterminate" };
   }
-  return null;
+  return { status: "ok" };
+}
+
+// Launch-path wrapper preserving the original permissive contract: any
+// non-definitive result (ok or indeterminate) returns null so the launch
+// proceeds; only a definitive too-old result blocks.
+async function checkAssistantVersion(
+  agentId: string,
+  agentName: string,
+  refresh = false
+): Promise<VersionTooOld | null> {
+  const result = await probeAssistantVersion(agentId, agentName, refresh);
+  return result.status === "too-old" ? result.block : null;
 }
 
 async function loadCustomLaunchFlags(): Promise<string[]> {
@@ -283,6 +325,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   tierMismatch: null,
   preflightSnapshot: null,
   isApprovingTier: false,
+  isCheckingVersion: false,
 });
 
 /**
@@ -318,6 +361,16 @@ export class HelpSessionController {
    * for the 12h AgentVersionService cache TTL. Cleared once a probe passes.
    */
   private _hasBlockedThisSession = false;
+  /**
+   * Backs the manual "Check again" cooldown. `isCheckingVersion` only clears
+   * once BOTH the probe has settled (`_checkAgainProbeSettled`) and the 5s
+   * minimum-disabled floor has elapsed (`_checkAgainCooldownFired`), so a
+   * fast probe can't re-enable the button before the cooldown is up and a
+   * slow probe can't be re-enabled by the timer while still in flight.
+   */
+  private _checkAgainCooldownTimer: ReturnType<typeof setTimeout> | null = null;
+  private _checkAgainCooldownFired = false;
+  private _checkAgainProbeSettled = false;
   /**
    * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
    * terminal id we last took a snapshot for so React 19 StrictMode's
@@ -393,6 +446,7 @@ export class HelpSessionController {
     this._clearHibernateTimer();
     this._clearResumeBannerTimer();
     this._clearSnapshotBannerTimer();
+    this._clearCheckAgainCooldownTimer();
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
     // synthetic unmount doesn't tear down the user's session; explicit
@@ -420,7 +474,11 @@ export class HelpSessionController {
     // post-dispatch check handles its own cleanup, so we don't bump
     // `_launchGen` here.
     if (prev && prev.preferredAgentId !== inputs.preferredAgentId) {
-      this._patch({ assistantVersionTooOld: null });
+      // Drop any in-flight "Check again" cooldown too — it belongs to the
+      // previous agent's gate; leaving it would disable the new gate's
+      // button until the stale probe settles.
+      this._clearCheckAgainCooldownTimer();
+      this._patch({ assistantVersionTooOld: null, isCheckingVersion: false });
     }
 
     // Reset auto-launch guard when the panel closes so the next open can
@@ -721,10 +779,93 @@ export class HelpSessionController {
     this._resetPhase();
   }
 
+  /**
+   * Manual "Check again" from the version gate. Re-probes the installed CLI
+   * version with `refresh=true` so a user who updated the CLI while the gate
+   * was visible recovers without reopening the panel (the version probe is
+   * otherwise cached for 12h). On a passing probe the gate clears and the
+   * normal auto-launch flow resumes; on a still-too-old result the gate
+   * refreshes with the latest versions. A 5s minimum cooldown keeps the
+   * button disabled to prevent probe hammering.
+   */
+  checkVersionAgain(): void {
+    if (this._snapshot.isCheckingVersion) return;
+    const block = this._snapshot.assistantVersionTooOld;
+    if (!block) return;
+
+    const { agentId, agentName } = block;
+    this._checkAgainCooldownFired = false;
+    this._checkAgainProbeSettled = false;
+    this._patch({ isCheckingVersion: true });
+    this._armCheckAgainCooldownTimer();
+
+    safeFireAndForget(
+      probeAssistantVersion(agentId, agentName, true)
+        .then((result) => {
+          // Stale-agent guard: the user may have switched preferred agents
+          // while the probe was in flight — don't act on a result that no
+          // longer matches what's blocking.
+          if (this._snapshot.assistantVersionTooOld?.agentId !== agentId) return;
+          if (result.status === "too-old") {
+            this._patch({ assistantVersionTooOld: result.block });
+            return;
+          }
+          if (result.status === "indeterminate") {
+            // Couldn't get a definitive answer (transient probe failure).
+            // Keep the gate visible rather than dismissing it and
+            // auto-launching a CLI that may still be outdated.
+            return;
+          }
+          // status === "ok" — version is now current. Clear the gate and
+          // let the normal idle→launch path re-evaluate. Resetting
+          // `_hasAutoLaunched` is required or `_maybeAutoLaunch` bails.
+          this._hasBlockedThisSession = false;
+          this._hasAutoLaunched = false;
+          this._patch({ assistantVersionTooOld: null });
+          if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
+        })
+        .catch((err) => {
+          // probeAssistantVersion already swallows probe failures; this
+          // guards against unexpected throws. The gate stays visible as its
+          // own retry surface, so no toast.
+          logError("HelpPanel: check-again version probe threw", err);
+        })
+        .finally(() => {
+          this._checkAgainProbeSettled = true;
+          this._maybeClearCheckingVersion();
+        }),
+      { context: "HelpPanel:checkVersionAgain" }
+    );
+  }
+
   // --- internal ---
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  private _armCheckAgainCooldownTimer(): void {
+    this._clearCheckAgainCooldownTimer();
+    this._checkAgainCooldownTimer = setTimeout(() => {
+      this._checkAgainCooldownTimer = null;
+      this._checkAgainCooldownFired = true;
+      this._maybeClearCheckingVersion();
+    }, CHECK_AGAIN_COOLDOWN_MS);
+  }
+
+  private _clearCheckAgainCooldownTimer(): void {
+    if (this._checkAgainCooldownTimer) {
+      clearTimeout(this._checkAgainCooldownTimer);
+      this._checkAgainCooldownTimer = null;
+    }
+  }
+
+  // Re-enables the "Check again" button only once both the probe has settled
+  // and the 5s cooldown floor has elapsed.
+  private _maybeClearCheckingVersion(): void {
+    if (this._checkAgainProbeSettled && this._checkAgainCooldownFired) {
+      this._patch({ isCheckingVersion: false });
+    }
   }
 
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
@@ -738,7 +879,8 @@ export class HelpSessionController {
       next.assistantVersionTooOld === this._snapshot.assistantVersionTooOld &&
       next.tierMismatch === this._snapshot.tierMismatch &&
       next.preflightSnapshot === this._snapshot.preflightSnapshot &&
-      next.isApprovingTier === this._snapshot.isApprovingTier
+      next.isApprovingTier === this._snapshot.isApprovingTier &&
+      next.isCheckingVersion === this._snapshot.isCheckingVersion
     ) {
       return;
     }
