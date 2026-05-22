@@ -325,7 +325,7 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
-    it("should show warning toast when disabled action has disabledReason", async () => {
+    it("should NOT show warning toast when disabled action has disabledReason (#8814)", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
         title: "Test Action",
@@ -346,13 +346,9 @@ describe("ActionService", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe("DISABLED");
+        expect(result.error.message).toBe("No focused terminal");
       }
-      expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock).toHaveBeenCalledWith({
-        type: "warning",
-        title: "'Test Action' disabled",
-        message: "No focused terminal",
-      });
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("should NOT show toast when disabled action has no disabledReason", async () => {
@@ -376,7 +372,7 @@ describe("ActionService", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
-    it("should show toast for disabled action from non-agent sources", async () => {
+    it("should NOT show toast for disabled action from any source (#8814)", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
         title: "Test Action",
@@ -397,11 +393,11 @@ describe("ActionService", () => {
         notifyMock.mockClear();
         const result = await service.dispatch("actions.list", undefined, { source });
         expect(result.ok).toBe(false);
-        expect(notifyMock).toHaveBeenCalledWith({
-          type: "warning",
-          title: "'Test Action' disabled",
-          message: "Disabled for test",
-        });
+        if (!result.ok) {
+          expect(result.error.code).toBe("DISABLED");
+          expect(result.error.message).toBe("Disabled for test");
+        }
+        expect(notifyMock).not.toHaveBeenCalled();
       }
     });
 
