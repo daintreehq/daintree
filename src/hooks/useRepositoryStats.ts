@@ -162,16 +162,23 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       }
 
       // Apply preservation: use preserved counts only when data is stale/errored
+      // and the incoming count is either a failed-fetch null or a stale 0. A
+      // failed poll surfaces `issueCount: null`, which would otherwise erase a
+      // valid prior count and flash a `—` dash in the toolbar badge; a stale
+      // broadcast can surface `0`, which would flash a `0`. Both are preserved
+      // while a genuine fresh `0` (shouldPreserve === false) still shows `0`.
       const preservedStats: RepositoryStats = {
         ...repoStats,
         issueCount:
           shouldPreserve &&
-          repoStats.issueCount === 0 &&
+          (repoStats.issueCount === null || repoStats.issueCount === 0) &&
           lastKnownCountsRef.current.issueCount !== null
             ? lastKnownCountsRef.current.issueCount
             : repoStats.issueCount,
         prCount:
-          shouldPreserve && repoStats.prCount === 0 && lastKnownCountsRef.current.prCount !== null
+          shouldPreserve &&
+          (repoStats.prCount === null || repoStats.prCount === 0) &&
+          lastKnownCountsRef.current.prCount !== null
             ? lastKnownCountsRef.current.prCount
             : repoStats.prCount,
       };
