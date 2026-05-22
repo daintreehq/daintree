@@ -46,11 +46,6 @@ describe("optimisticPanelClose", () => {
     mockState.focusedId = null;
     mockState.panelIds = [];
     mockState.panelsById = {};
-    // The real store setter updates focusedId; mirror that so the deferred
-    // focus guard (`focusedId === target`) sees the committed value.
-    setFocusedMock.mockImplementation((id: string | null) => {
-      mockState.focusedId = id;
-    });
   });
 
   afterEach(() => {

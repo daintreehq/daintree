@@ -118,7 +118,7 @@ export const createTrashActions = (
     scheduleTrashExpiry(id, expiresAt);
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       return;
     }
   };
@@ -225,7 +225,7 @@ export const createTrashActions = (
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     }
   };
@@ -442,7 +442,7 @@ export const createTrashActions = (
       scheduleTrashExpiry(id, expiresAt);
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
 

@@ -13,7 +13,6 @@ import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplication
 import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -230,16 +229,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
           setFocused(nextPanel.id);
         }
       }
-      requestPanelClose({
-        hideIds: [tabId],
-        commit: () => {
-          try {
-            trashPanel(tabId);
-          } catch (error) {
-            logError("Failed to trash terminal tab", error);
-          }
-        },
-      });
+      trashPanel(tabId);
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );

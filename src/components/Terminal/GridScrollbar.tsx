@@ -159,7 +159,6 @@ export function GridScrollbar({
       // otherwise land on dead space. Forward the delta to the grid so the
       // wheel scrolls the grid no matter where the cursor sits.
       if (!scrollRoot) return;
-      e.stopPropagation();
       const px =
         e.deltaMode === 2
           ? e.deltaY * scrollRoot.clientHeight
@@ -202,7 +201,6 @@ export function GridScrollbar({
         onPointerMove={onThumbPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
         onPointerEnter={() => setPhase((p) => (p === "drag" ? p : "hover"))}
         onPointerLeave={() => setPhase((p) => (p === "drag" ? p : "idle"))}
         className={cn(

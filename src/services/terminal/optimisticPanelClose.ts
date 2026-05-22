@@ -118,14 +118,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
     // real work that must not block the close frame. The logical `setFocused`
     // above already retargets a rapid Cmd+W stream synchronously.
     const focusTarget = next;
-    requestAnimationFrame(() => {
-      // Re-check before the deferred focus lands: a rapid close burst or a
-      // click elsewhere may have moved focus on, or closed this target too.
-      const current = panelStoreApi.getState().focusedId;
-      if (current === focusTarget && !closingIds.has(focusTarget)) {
-        terminalInstanceService.focus(focusTarget);
-      }
-    });
+    requestAnimationFrame(() => terminalInstanceService.focus(focusTarget));
   }
 }
 

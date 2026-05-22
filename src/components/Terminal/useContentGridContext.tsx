@@ -785,7 +785,7 @@ export function useContentGridContext({
     }
   });
   const prevGridColsRef = useRef(gridCols);
-  const prevTerminalCountRef = useRef(gridTerminals.length);
+  const prevPanelCountRef = useRef(panelIds.length);
   const prevScrollGeoRef = useRef(`${isScrollMode}:${scrollRowHeight}`);
   useLayoutEffect(() => {
     void gridCols;
@@ -798,8 +798,8 @@ export function useContentGridContext({
     const scrollGeoChanged = prevScrollGeoRef.current !== scrollGeoKey;
     prevScrollGeoRef.current = scrollGeoKey;
 
-    const isPureClose = gridTerminals.length < prevTerminalCountRef.current;
-    prevTerminalCountRef.current = gridTerminals.length;
+    const isPureClose = panelIds.length < prevPanelCountRef.current;
+    prevPanelCountRef.current = panelIds.length;
 
     setHysteresisGridCols(
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
@@ -819,17 +819,15 @@ export function useContentGridContext({
       runGridBatchFit();
     }
 
-    // Any change to the survivors' boxes resizes every panel. Each panel's own
-    // ResizeObserver in XtermAdapter would otherwise fire an un-chunked resize
-    // on top of the coalesced pass above — a resize storm and the main cause
-    // of close-path lag. Lock the panels for the transition window so the
-    // single chunked pass is the only resize. Arm on a column change, a
-    // scroll-geometry flip (which can also land on the deferred-flush render,
-    // where `panelIds` is already settled so `isPureClose` is false), or a
-    // layout-changing close.
+    // A layout-changing close (or a column change) resizes every survivor's
+    // box. Each panel's own ResizeObserver in XtermAdapter would otherwise
+    // fire its own un-chunked resize on top of the coalesced pass above — a
+    // resize storm that is the main cause of close-path lag. Lock the panels
+    // for the transition window so the single chunked pass is the only resize;
+    // the lock's unlock pass is the corrective backstop.
     const layoutChangingClose = isPureClose && !survivorGeometryStable;
-    if (colsChanged || scrollGeoChanged || layoutChangingClose) {
-      const realPanelIds = gridTerminals.map((t) => t.id);
+    if (colsChanged || layoutChangingClose) {
+      const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(
           realPanelIds,
@@ -840,7 +838,6 @@ export function useContentGridContext({
   }, [
     gridCols,
     panelIds,
-    gridTerminals,
     isScrollMode,
     scrollRowHeight,
     isProjectSwitching,
