@@ -216,6 +216,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   // `isSaving`-derived check before the first commit. The ref flips
   // synchronously, closing that double-submit window.
   const savingRef = useRef(false);
+  const previousProviderIdRef = useRef(providerId);
 
   // Single effect keyed on providerId: reset form state and (re)load the
   // stored-credential status whenever the selected provider changes. Keeping
@@ -223,11 +224,15 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   // bug from #4958.
   useEffect(() => {
     let cancelled = false;
+    const providerChanged = previousProviderIdRef.current !== providerId;
+    previousProviderIdRef.current = providerId;
     savingRef.current = false;
-    setValues({});
-    setResult(null);
-    setErrorMessage(null);
-    setHasCredential(false);
+    if (providerChanged) {
+      setValues({});
+      setResult(null);
+      setErrorMessage(null);
+      setHasCredential(false);
+    }
 
     window.electron.forge
       .getCredentialStatus(providerId)

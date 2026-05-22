@@ -1,5 +1,6 @@
 import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useProjectStore } from "@/store/projectStore";
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import type {
@@ -180,6 +181,16 @@ export async function hydrateAppState(
     } = hydrateResult;
     const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
     if (!checkCurrent()) return;
+
+    useProjectStore.setState((state) => {
+      if (!currentProject) return { currentProject: null };
+      const projects = state.projects.some((project) => project.id === currentProject.id)
+        ? state.projects.map((project) =>
+            project.id === currentProject.id ? currentProject : project
+          )
+        : [...state.projects, currentProject];
+      return { projects, currentProject };
+    });
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 

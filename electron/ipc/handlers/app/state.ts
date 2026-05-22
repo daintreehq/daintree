@@ -37,6 +37,7 @@ import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
+import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
@@ -47,20 +48,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       return projectStore.getCurrentProject();
     }
 
-    const pvm =
-      (ctx.senderWindow &&
-        deps?.windowRegistry?.getByWindowId(ctx.senderWindow.id)?.services?.projectViewManager) ??
-      deps?.projectViewManager;
-
-    if (pvm) {
-      const viewProjectId = pvm.getProjectIdForWebContents(ctx.webContentsId);
-      return viewProjectId ? projectStore.getProjectById(viewProjectId) : null;
-    }
-
-    if (ctx.projectId) {
-      return projectStore.getProjectById(ctx.projectId);
-    }
-
+    const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
+    if (scopedProject) return scopedProject.project;
     return projectStore.getCurrentProject();
   };
 

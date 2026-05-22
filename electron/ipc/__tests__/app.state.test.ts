@@ -260,20 +260,26 @@ describe("shouldTriggerBackup", () => {
   });
 });
 
-function makeInvokeEvent(senderId = 1) {
+function makeInvokeEvent(senderId = 1, senderUrl = "") {
   return {
     sender: {
       id: senderId,
+      getURL: vi.fn(() => senderUrl),
     },
   } as unknown as Electron.IpcMainInvokeEvent;
 }
 
-async function invokeBoot(options: { deps?: HandlerDependencies; senderId?: number } = {}) {
+async function invokeBoot(
+  options: { deps?: HandlerDependencies; senderId?: number; senderUrl?: string } = {}
+) {
   ipcHandlers.clear();
   const cleanup = registerAppStateHandlers(options.deps);
   const handler = ipcHandlers.get("app:boot");
   if (!handler) throw new Error("app:boot handler not registered");
-  const result = (await handler(makeInvokeEvent(options.senderId))) as Record<string, unknown>;
+  const result = (await handler(makeInvokeEvent(options.senderId, options.senderUrl))) as Record<
+    string,
+    unknown
+  >;
   cleanup();
   return result;
 }
@@ -649,6 +655,103 @@ describe("app:boot handler", () => {
     } as unknown as HandlerDependencies;
 
     const result = await invokeBoot({ deps, senderId: 42 });
+
+    expect(result.project).toBeNull();
+    expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the URL project while a project view binding is still pending", async () => {
+    const urlProject = {
+      id: "proj-url",
+      name: "URL Project",
+      path: "/projects/url",
+    };
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.getProjectById).mockImplementation((projectId) =>
+      projectId === urlProject.id
+        ? (urlProject as unknown as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: {
+        projectId: urlProject.id,
+        sidebarWidth: 350,
+        terminals: [],
+      },
+      quarantinedPath: undefined,
+    });
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({
+      deps,
+      senderId: 42,
+      senderUrl: "app://daintree/index.html?projectId=proj-url",
+    });
+
+    expect(result.project).toEqual(urlProject);
+    expect(pvm.getProjectIdForWebContents).toHaveBeenCalledWith(42);
+    expect(projectStore.getProjectStateWithRecovery).toHaveBeenCalledWith(urlProject.id);
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("does not hydrate a closed URL project before the project view binding is ready", async () => {
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.getProjectById).mockReturnValue({
+      id: "proj-url-closed",
+      name: "Closed URL Project",
+      path: "/projects/url-closed",
+      status: "closed",
+    } as unknown as ReturnType<typeof projectStore.getProjectById>);
+
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({
+          services: {
+            projectViewManager: pvm,
+          },
+        }),
+      },
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({
+      deps,
+      senderId: 42,
+      senderUrl: "app://daintree/index.html?projectId=proj-url-closed",
+    });
 
     expect(result.project).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();

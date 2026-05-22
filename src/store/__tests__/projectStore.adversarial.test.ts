@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// @vitest-environment-options {"url":"http://localhost/"}
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ProjectShape = {
@@ -195,7 +196,9 @@ describe("projectStore adversarial", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     restoreLocalStorage();
+    window.history.replaceState(null, "", "/");
     Object.defineProperty(window, "electron", {
       value: originalWindowElectron,
       configurable: true,
@@ -314,6 +317,51 @@ describe("projectStore adversarial", () => {
     await Promise.resolve();
 
     expect(useProjectStore.getState().projects).toEqual([projectB]);
+  });
+
+  it("seeds the current project from the project-view URL when the project list loads", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    window.history.replaceState(null, "", "/?projectId=project-a");
+    projectClientMock.getAll.mockResolvedValueOnce([projectA]);
+
+    const { useProjectStore } = await import("../projectStore");
+
+    await useProjectStore.getState().loadProjects();
+
+    expect(useProjectStore.getState().currentProject).toEqual(projectA);
+  });
+
+  it("keeps the URL project when getCurrentProject races before main reports it current", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    window.history.replaceState(null, "", "/?projectId=project-a");
+    projectClientMock.getCurrent.mockResolvedValueOnce(null);
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: null });
+
+    await useProjectStore.getState().getCurrentProject();
+
+    expect(useProjectStore.getState().currentProject).toEqual(projectA);
+  });
+
+  it("retries the current project lookup while the project-view URL is still active", async () => {
+    vi.useFakeTimers();
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    window.history.replaceState(null, "", "/?projectId=project-a");
+    projectClientMock.getCurrent.mockResolvedValueOnce(null).mockResolvedValueOnce(projectA);
+
+    const { useProjectStore } = await import("../projectStore");
+    const currentProjectPromise = useProjectStore.getState().getCurrentProject();
+
+    await vi.advanceTimersByTimeAsync(100);
+    await currentProjectPromise;
+
+    expect(projectClientMock.getCurrent).toHaveBeenCalledTimes(2);
+    expect(useProjectStore.getState().currentProject).toEqual(projectA);
+    expect(useProjectStore.getState().isLoading).toBe(false);
   });
 
   it("applies onUpdated and onRemoved deterministically in either order", async () => {

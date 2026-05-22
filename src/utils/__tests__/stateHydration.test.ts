@@ -47,6 +47,7 @@ const setSpawnErrorMock = vi.fn();
 const terminalStoreState = {
   setSpawnError: setSpawnErrorMock,
 };
+const projectStoreSetStateMock = vi.fn();
 
 const initializeMock = vi.fn().mockResolvedValue(undefined);
 const loadOverridesMock = vi.fn().mockResolvedValue(undefined);
@@ -82,6 +83,12 @@ vi.mock("@/store", () => ({
   },
   usePanelStore: {
     getState: () => terminalStoreState,
+  },
+}));
+
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: {
+    setState: projectStoreSetStateMock,
   },
 }));
 
@@ -249,6 +256,38 @@ describe("hydrateAppState", () => {
     expect(addPanelArg.devServerUrl).toBeUndefined();
     expect(addPanelArg.devServerError).toBeUndefined();
     expect(addPanelArg.devServerTerminalId).toBeUndefined();
+  });
+
+  it("seeds the project store current project from the hydrate payload", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as
+      | ((state: { projects: (typeof project)[]; currentProject: typeof project | null }) => {
+          projects: (typeof project)[];
+          currentProject: typeof project | null;
+        })
+      | undefined;
+
+    expect(updater).toBeTypeOf("function");
+    expect(updater?.({ projects: [], currentProject: null })).toEqual({
+      projects: [project],
+      currentProject: project,
+    });
   });
 
   it("rehydrates multiple dev-preview panels in one worktree without leaking runtime state", async () => {

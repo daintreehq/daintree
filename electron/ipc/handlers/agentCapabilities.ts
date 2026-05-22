@@ -84,7 +84,7 @@ export const agentCapabilitiesNamespace = defineIpcNamespace({
     getCcrPresets: op(
       AGENT_CAPABILITIES_METHOD_CHANNELS.getCcrPresets,
       async (): Promise<AgentPreset[]> => {
-        return CcrConfigService.getInstance().getPresets();
+        return CcrConfigService.getInstance().loadAndApply();
       }
     ),
   },

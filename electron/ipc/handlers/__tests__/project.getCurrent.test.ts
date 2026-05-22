@@ -190,6 +190,130 @@ describe("project:get-current — unbound new window (#6015)", () => {
     expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
   });
 
+  it("returns the URL project when PVM binding is not ready yet", async () => {
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
+    const registry = makeWindowRegistry([ctx]);
+    mockGetWindowForWebContents.mockReturnValue({ id: 2, isDestroyed: () => false });
+
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-url",
+      name: "URL Project",
+      path: "/projects/url",
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    });
+
+    const worktreeService = { loadProject: vi.fn() };
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: registry,
+      projectViewManager: pvm,
+      worktreeService,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_GET_CURRENT);
+
+    const result = await handler({
+      sender: {
+        id: 20,
+        getURL: () => "app://daintree/index.html?projectId=proj-url",
+      },
+    });
+
+    expect(result).toEqual({
+      id: "proj-url",
+      name: "URL Project",
+      path: "/projects/url",
+    });
+    expect(pvm.getProjectIdForWebContents).toHaveBeenCalledWith(20);
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("proj-url");
+    expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
+    expect(worktreeService.loadProject).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the URL project has been closed before PVM binding is ready", async () => {
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue(null),
+    };
+    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
+    const registry = makeWindowRegistry([ctx]);
+    mockGetWindowForWebContents.mockReturnValue({ id: 2, isDestroyed: () => false });
+
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-url-closed",
+      name: "Closed URL Project",
+      path: "/projects/url-closed",
+      status: "closed",
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    });
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: registry,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_GET_CURRENT);
+
+    const result = await handler({
+      sender: {
+        id: 20,
+        getURL: () => "app://daintree/index.html?projectId=proj-url-closed",
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("proj-url-closed");
+    expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("returns null when a PVM-bound project has been closed", async () => {
+    const pvm = {
+      getProjectIdForWebContents: vi.fn().mockReturnValue("proj-closed"),
+    };
+    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
+    const registry = makeWindowRegistry([ctx]);
+    mockGetWindowForWebContents.mockReturnValue({ id: 2, isDestroyed: () => false });
+
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-closed",
+      name: "Closed Project",
+      path: "/projects/closed",
+      status: "closed",
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({
+      id: "proj-stale",
+      name: "Stale Project",
+      path: "/projects/stale",
+    });
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: registry,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_GET_CURRENT);
+
+    const result = await handler({ sender: { id: 20 } });
+
+    expect(result).toBeNull();
+    expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
+  });
+
   it("returns null when PVM has a binding but the project is missing from the store", async () => {
     // Defensive: a stale binding shouldn't fall through to the global project either.
     const pvm = {
