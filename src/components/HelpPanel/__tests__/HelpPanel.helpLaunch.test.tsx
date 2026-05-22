@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, fireEvent, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockDispatch,
@@ -420,6 +420,14 @@ function resetState() {
   });
 }
 
+afterEach(() => {
+  // Unmount any rendered HelpPanel so its controller's in-flight launch can't
+  // leak fire-and-forget state updates into the next test (#8771 added phase
+  // patches on the launch success/abandon paths, which surfaced this latent
+  // cross-test bleed).
+  cleanup();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetState();
@@ -721,6 +729,11 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
   it("does not commit terminal and cleans up if user navigated away (preferredAgentId cleared) during in-flight launch", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
+    // Two supported agents so clearing the preference doesn't trip the
+    // single-supported-agent auto-launch fallback — this test isolates the
+    // in-flight launch's cleanup, not the fallback path.
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
     let resolveDispatch: (v: unknown) => void = () => {};
     mockDispatch.mockReturnValue(
@@ -2793,5 +2806,54 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
 
     document.body.removeChild(editor);
+  });
+});
+
+describe("HelpPanel — launch loading state (issue #8771)", () => {
+  it("renders the phase-labeled launch skeleton once the Doherty gate elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      helpPanelState.preferredAgentId = "claude";
+      mockGetFolderPath.mockResolvedValue("/help");
+      // Hold dispatch so the launch parks at the "launching" phase.
+      let resolveDispatch: (value: unknown) => void = () => {};
+      mockDispatch.mockReturnValue(
+        new Promise((r) => {
+          resolveDispatch = r;
+        })
+      );
+
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+
+      // Drain the in-flight launch microtasks and open the 400ms gate.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(450);
+      });
+
+      // The label renders twice — once sr-only (Skeleton aria) and once visible.
+      expect(screen.getAllByText("Starting assistant…").length).toBeGreaterThan(0);
+      // The static empty-state value prop must not show while launching.
+      expect(screen.queryByText(/Use Daintree Assistant to configure/i)).toBeNull();
+
+      await act(async () => {
+        resolveDispatch({ ok: true, result: { terminalId: "term-1" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not render the launch skeleton on the idle multi-agent empty state", () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(screen.queryByText("Starting assistant…")).toBeNull();
+    expect(screen.queryByText("Provisioning session…")).toBeNull();
+    expect(screen.getByText(/Use Daintree Assistant to configure/i)).toBeTruthy();
   });
 });

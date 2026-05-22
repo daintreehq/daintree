@@ -93,6 +93,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
 }));
 
 import { HelpSessionController } from "../HelpSessionController";
+import { actionService } from "@/services/ActionService";
 
 function resetState() {
   helpPanelState.isOpen = false;
@@ -326,6 +327,156 @@ describe("HelpSessionController — syncInputs", () => {
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — launch phase FSM", () => {
+  it("cancelLaunch() resets phase to idle, clears the launching guard, and bumps the gen", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "provisioning" });
+    ctrl["_isLaunching"] = true;
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.cancelLaunch();
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_isLaunching"]).toBe(false);
+    expect(ctrl["_launchGen"]).toBe(genBefore + 1);
+  });
+
+  it("auto-launch enters version-checking synchronously and reaches live on success", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-1",
+      sessionPath: "/help",
+      token: "tok-1",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    vi.mocked(actionService.dispatch).mockResolvedValue({
+      ok: true,
+      result: { terminalId: "term-1" },
+    } as never);
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    });
+
+    // The first phase write happens synchronously, before the first await.
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("live");
+    });
+    ctrl.stop();
+  });
+
+  it("auto-launch resets the phase to idle when provisioning fails", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    // Default provisionSession resolves null → outcome not ok.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+    });
+    expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("_fireHibernate surfaces the hibernating phase, then resets to idle after teardown", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.isOpen = false;
+    panelStoreState.panelsById = { "term-1": { id: "term-1", cwd: "/p" } };
+    (window.electron.terminal.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "captured-sess"
+    );
+    ctrl["_hibernateArmedFor"] = { terminalId: "term-1", agentId: "claude", projectId: "proj" };
+
+    ctrl["_fireHibernate"]("term-1", "claude", "proj");
+    expect(ctrl.getSnapshot().phase).toBe("hibernating");
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+    });
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("_fireHibernate resets the phase to idle if terminalId is cleared mid-kill (no stuck skeleton)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.isOpen = false;
+    panelStoreState.panelsById = { "term-1": { id: "term-1", cwd: "/p" } };
+    let resolveKill: (v: string | null) => void = () => {};
+    (window.electron.terminal.gracefulKill as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((r) => {
+        resolveKill = r;
+      })
+    );
+    ctrl["_hibernateArmedFor"] = { terminalId: "term-1", agentId: "claude", projectId: "proj" };
+
+    ctrl["_fireHibernate"]("term-1", "claude", "proj");
+    expect(ctrl.getSnapshot().phase).toBe("hibernating");
+
+    // The panel disappears while the kill is in flight (handleTerminalPanelMissing).
+    helpPanelState.terminalId = null;
+    resolveKill("captured-sess");
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+    });
+    ctrl.stop();
+  });
+
+  it("revokes the provisioned session when agent.launch rejects after provisioning", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-leak",
+      sessionPath: "/help",
+      token: "tok-leak",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    vi.mocked(actionService.dispatch).mockRejectedValue(new Error("dispatch boom") as never);
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-leak");
+    });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
     ctrl.stop();
   });
 });
