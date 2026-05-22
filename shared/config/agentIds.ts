@@ -7,6 +7,7 @@ export const BUILT_IN_AGENT_IDS = [
   "opencode",
   "aider",
   "gemini",
+  "antigravity",
   "codex",
   "cursor",
   "copilot",
