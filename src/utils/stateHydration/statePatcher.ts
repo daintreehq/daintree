@@ -158,6 +158,7 @@ export function inferAgentIdFromTitle(
 
   const titleLower = (title ?? "").toLowerCase();
   if (titleLower.includes("claude")) return "claude";
+  if (titleLower.includes("antigravity")) return "antigravity";
   if (titleLower.includes("gemini")) return "gemini";
   if (titleLower.includes("codex")) return "codex";
   if (titleLower.includes("opencode")) return "opencode";

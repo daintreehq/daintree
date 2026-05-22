@@ -7,7 +7,8 @@ vi.mock("@/utils/logger", () => ({
 const getMergedPresetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/config/agents", () => ({
-  isRegisteredAgent: (type: string) => ["claude", "gemini", "codex", "opencode"].includes(type),
+  isRegisteredAgent: (type: string) =>
+    ["claude", "gemini", "antigravity", "codex", "opencode"].includes(type),
   getAgentConfig: (id: string) => ({
     command: id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -142,6 +143,12 @@ describe("inferAgentIdFromTitle", () => {
 
   it("infers gemini from title", () => {
     expect(inferAgentIdFromTitle("Gemini Pro", "agent", undefined, "t1", "test")).toBe("gemini");
+  });
+
+  it("infers antigravity from title", () => {
+    expect(inferAgentIdFromTitle("Antigravity", "agent", undefined, "t1", "test")).toBe(
+      "antigravity"
+    );
   });
 
   it("infers codex from title", () => {
