@@ -329,6 +329,57 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons).toContain("dev-server");
     });
 
+    it("includes command-palette in default right buttons before settings", async () => {
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("command-palette");
+      expect(right.indexOf("command-palette")).toBeLessThan(right.indexOf("settings"));
+    });
+
+    it("re-inserts command-palette for persisted state missing it via mergeButtonList", async () => {
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "settings"],
+            hiddenButtons: [],
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        7
+      );
+
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("command-palette");
+      // Visibility preserved (not implicitly hidden).
+      expect(store.getState().layout.pinnedButtons["command-palette"]).toBeUndefined();
+    });
+
+    it("preserves a hidden command-palette across v7→v8 migration when re-inserted by mergeButtonList", async () => {
+      // Defends the case where an early-adopter persisted state already hid
+      // the command-palette button before this feature shipped its current
+      // shape: the ordering array should still be auto-populated from
+      // defaults, but the explicit hide must round-trip into the
+      // pinnedButtons map.
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "settings"],
+            hiddenButtons: ["command-palette"],
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        7
+      );
+
+      const store = await loadStore();
+      const { layout } = store.getState();
+      expect(layout.rightButtons).toContain("command-palette");
+      expect(layout.pinnedButtons["command-palette"]).toBe(false);
+    });
+
     it("re-inserts dev-server for persisted state missing it via mergeButtonList", async () => {
       setStoredState({
         layout: {
