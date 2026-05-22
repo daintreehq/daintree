@@ -1,6 +1,6 @@
 {
   "entryName": "index",
-  "eagerChunkCount": 61,
+  "eagerChunkCount": 66,
   "eagerChunks": [
     "ActionService",
     "KeybindingService",
@@ -30,6 +30,7 @@
     "kbdShortcut",
     "logger",
     "logsClient",
+    "normalizeErrorMessage",
     "notificationSettingsStore",
     "notify",
     "panelKindRegistry",
@@ -58,12 +59,16 @@
     "vendor",
     "vendor-editor",
     "vendor-icons",
-    "vendor-motion",
+    "vendor-motion~index",
+    "vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi",
+    "vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Getti~bfe2l8g2",
+    "vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~f3gnuexl",
+    "vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~j1o0q54h",
     "vendor-radix-utils",
     "vendor-react",
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2813580,
-  "eagerGzip": 843951
+  "eagerRaw": 2730865,
+  "eagerGzip": 819174
 }
