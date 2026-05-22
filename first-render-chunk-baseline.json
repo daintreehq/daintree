@@ -7,32 +7,32 @@
     ],
     "missing": []
   },
-  "chunkCount": 49,
+  "chunkCount": 51,
   "chunks": {
-    "_ActionService-BD_IEB7I.js": {
-      "file": "assets/ActionService-BD_IEB7I.js",
+    "_ActionService-C2zQQkyA.js": {
+      "file": "assets/ActionService-C2zQQkyA.js",
       "raw": 47469,
-      "gzip": 11784
+      "gzip": 11783
     },
     "_DockPopoverChildContext-ChP2H22b.js": {
       "file": "assets/DockPopoverChildContext-ChP2H22b.js",
       "raw": 392,
       "gzip": 281
     },
-    "_Spinner-D0RG4ksY.js": {
-      "file": "assets/Spinner-D0RG4ksY.js",
+    "_Spinner-DCsWVOGB.js": {
+      "file": "assets/Spinner-DCsWVOGB.js",
       "raw": 580,
-      "gzip": 398
+      "gzip": 400
     },
-    "_TerminalInstanceService-Bcuef0iQ.js": {
-      "file": "assets/TerminalInstanceService-Bcuef0iQ.js",
-      "raw": 237500,
-      "gzip": 63859
+    "_TerminalInstanceService-D3ZoUZuC.js": {
+      "file": "assets/TerminalInstanceService-D3ZoUZuC.js",
+      "raw": 237462,
+      "gzip": 63834
     },
-    "_YarnIcon-d7ZowL7V.js": {
-      "file": "assets/YarnIcon-d7ZowL7V.js",
+    "_YarnIcon-DAoy-kiD.js": {
+      "file": "assets/YarnIcon-DAoy-kiD.js",
       "raw": 50371,
-      "gzip": 15761
+      "gzip": 15758
     },
     "_agentIds-BGUhMH1o.js": {
       "file": "assets/agentIds-BGUhMH1o.js",
@@ -44,15 +44,15 @@
       "raw": 40239,
       "gzip": 8862
     },
-    "_agentSettingsStore-Bq4sKao6.js": {
-      "file": "assets/agentSettingsStore-Bq4sKao6.js",
-      "raw": 18111,
-      "gzip": 5893
+    "_agentSettingsStore-BRZChoP2.js": {
+      "file": "assets/agentSettingsStore-BRZChoP2.js",
+      "raw": 18110,
+      "gzip": 5895
     },
-    "_agents-YDfwcmY-.js": {
-      "file": "assets/agents-YDfwcmY-.js",
+    "_agents-CdFHQRPD.js": {
+      "file": "assets/agents-CdFHQRPD.js",
       "raw": 5687,
-      "gzip": 2329
+      "gzip": 2328
     },
     "_animationUtils-gokF-ql-.js": {
       "file": "assets/animationUtils-gokF-ql-.js",
@@ -64,10 +64,10 @@
       "raw": 364,
       "gzip": 197
     },
-    "_appThemeStore-CZzlj9wZ.js": {
-      "file": "assets/appThemeStore-CZzlj9wZ.js",
+    "_appThemeStore-C4OSE8Oy.js": {
+      "file": "assets/appThemeStore-C4OSE8Oy.js",
       "raw": 4133,
-      "gzip": 1393
+      "gzip": 1392
     },
     "_clients-B46vBAnG.js": {
       "file": "assets/clients-B46vBAnG.js",
@@ -84,8 +84,8 @@
       "raw": 507,
       "gzip": 197
     },
-    "_devServerDetection-_LUh8wK_.js": {
-      "file": "assets/devServerDetection-_LUh8wK_.js",
+    "_devServerDetection-BpcXT5Td.js": {
+      "file": "assets/devServerDetection-BpcXT5Td.js",
       "raw": 692,
       "gzip": 405
     },
@@ -109,15 +109,15 @@
       "raw": 597,
       "gzip": 305
     },
-    "_notificationSettingsStore-DuyqMf-A.js": {
-      "file": "assets/notificationSettingsStore-DuyqMf-A.js",
+    "_notificationSettingsStore-CHREBWM9.js": {
+      "file": "assets/notificationSettingsStore-CHREBWM9.js",
       "raw": 1951,
-      "gzip": 600
+      "gzip": 598
     },
-    "_notify-SUPYAXKc.js": {
-      "file": "assets/notify-SUPYAXKc.js",
+    "_notify-DhvSVZ9l.js": {
+      "file": "assets/notify-DhvSVZ9l.js",
       "raw": 9274,
-      "gzip": 3536
+      "gzip": 3538
     },
     "_path-Z0ZMZY69.js": {
       "file": "assets/path-Z0ZMZY69.js",
@@ -134,20 +134,20 @@
       "raw": 1348,
       "gzip": 735
     },
-    "_projectSettingsStore-CbmsWjHb.js": {
-      "file": "assets/projectSettingsStore-CbmsWjHb.js",
+    "_projectSettingsStore-CFJO60YP.js": {
+      "file": "assets/projectSettingsStore-CFJO60YP.js",
       "raw": 1920,
-      "gzip": 830
+      "gzip": 828
     },
-    "_projectStore-DGJpEK1H.js": {
-      "file": "assets/projectStore-DGJpEK1H.js",
-      "raw": 15129,
-      "gzip": 5046
+    "_projectStore-Bwf7akYu.js": {
+      "file": "assets/projectStore-Bwf7akYu.js",
+      "raw": 15128,
+      "gzip": 5044
     },
-    "_radix-loader-CpBpwuzG.js": {
-      "file": "assets/radix-loader-CpBpwuzG.js",
+    "_radix-loader-DVaZuFjj.js": {
+      "file": "assets/radix-loader-DVaZuFjj.js",
       "raw": 1065,
-      "gzip": 584
+      "gzip": 585
     },
     "_rolldown-runtime-BYbx6iT9.js": {
       "file": "assets/rolldown-runtime-BYbx6iT9.js",
@@ -159,45 +159,45 @@
       "raw": 6339,
       "gzip": 2423
     },
-    "_store-ApmCYkgj.js": {
-      "file": "assets/store-ApmCYkgj.js",
+    "_store-CScacg51.js": {
+      "file": "assets/store-CScacg51.js",
       "raw": 34011,
-      "gzip": 9996
+      "gzip": 9998
     },
-    "_systemWakeStore-cgMoB5P5.js": {
-      "file": "assets/systemWakeStore-cgMoB5P5.js",
+    "_systemWakeStore-Bm8sjiAU.js": {
+      "file": "assets/systemWakeStore-Bm8sjiAU.js",
       "raw": 4126,
-      "gzip": 1506
+      "gzip": 1501
     },
-    "_terminalInputStore-DIpd-8Wf.js": {
-      "file": "assets/terminalInputStore-DIpd-8Wf.js",
-      "raw": 7242,
-      "gzip": 2462
+    "_terminalInputStore-CztmYWum.js": {
+      "file": "assets/terminalInputStore-CztmYWum.js",
+      "raw": 7209,
+      "gzip": 2447
     },
     "_theme-CWFyV7D3.js": {
       "file": "assets/theme-CWFyV7D3.js",
       "raw": 81761,
       "gzip": 18430
     },
-    "_uiStore-Dy0HlWJC.js": {
-      "file": "assets/uiStore-Dy0HlWJC.js",
+    "_uiStore-BD_C-l11.js": {
+      "file": "assets/uiStore-BD_C-l11.js",
       "raw": 3625,
-      "gzip": 1141
+      "gzip": 1140
     },
-    "_useFindInPage-B7xKypRA.js": {
-      "file": "assets/useFindInPage-B7xKypRA.js",
+    "_useFindInPage-BEL0W-LD.js": {
+      "file": "assets/useFindInPage-BEL0W-LD.js",
       "raw": 31583,
-      "gzip": 9889
+      "gzip": 9888
     },
-    "_utils-OKqyCzKx.js": {
-      "file": "assets/utils-OKqyCzKx.js",
+    "_utils-DcOT_bIO.js": {
+      "file": "assets/utils-DcOT_bIO.js",
       "raw": 218,
-      "gzip": 192
+      "gzip": 190
     },
-    "_vendor-DdKuKMwv.js": {
-      "file": "assets/vendor-DdKuKMwv.js",
-      "raw": 517312,
-      "gzip": 167045
+    "_vendor-C1evQpdv.js": {
+      "file": "assets/vendor-C1evQpdv.js",
+      "raw": 425479,
+      "gzip": 137355
     },
     "_vendor-editor-DCJ2nCoQ.js": {
       "file": "assets/vendor-editor-DCJ2nCoQ.js",
@@ -209,10 +209,20 @@
       "raw": 48930,
       "gzip": 14742
     },
-    "_vendor-motion-W5EkcZZp.js": {
-      "file": "assets/vendor-motion-W5EkcZZp.js",
-      "raw": 44157,
-      "gzip": 15892
+    "_vendor-motion~index-DR4T-X0K.js": {
+      "file": "assets/vendor-motion~index-DR4T-X0K.js",
+      "raw": 12980,
+      "gzip": 5372
+    },
+    "_vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~ReviewPane~Ap~f0jpa849-DrXG8GdX.js": {
+      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~ReviewPane~Ap~f0jpa849-DrXG8GdX.js",
+      "raw": 31563,
+      "gzip": 11377
+    },
+    "_vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~ReviewPane~Ap~k862lu9h-ByLiEPqR.js": {
+      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~ReviewPane~Ap~k862lu9h-ByLiEPqR.js",
+      "raw": 269,
+      "gzip": 201
     },
     "_vendor-radix-utils-B8hOEnPQ.js": {
       "file": "assets/vendor-radix-utils-B8hOEnPQ.js",
@@ -234,33 +244,33 @@
       "raw": 74222,
       "gzip": 19574
     },
-    "_viewportPresets-BR-485Wi.js": {
-      "file": "assets/viewportPresets-BR-485Wi.js",
+    "_viewportPresets-1tZgI4bj.js": {
+      "file": "assets/viewportPresets-1tZgI4bj.js",
       "raw": 1062,
       "gzip": 484
     },
     "index.html": {
-      "file": "assets/index-CJeJW1C4.js",
-      "raw": 537037,
-      "gzip": 168630
+      "file": "assets/index-cyXCmjqi.js",
+      "raw": 537326,
+      "gzip": 168780
     },
     "src/components/Browser/BrowserPane.tsx": {
-      "file": "assets/BrowserPane-amUEL9Ce.js",
+      "file": "assets/BrowserPane-BvC1Kr55.js",
       "raw": 21052,
-      "gzip": 7407
+      "gzip": 7405
     },
     "src/components/DevPreview/DevPreviewPane.tsx": {
-      "file": "assets/DevPreviewPane-s63N2QTK.js",
+      "file": "assets/DevPreviewPane-BpDwUnIW.js",
       "raw": 69736,
-      "gzip": 21113
+      "gzip": 21116
     }
   },
   "eagerTotals": {
-    "raw": 3089742,
-    "gzip": 928997
+    "raw": 2998780,
+    "gzip": 900464
   },
   "totals": {
-    "raw": 7221132,
-    "gzip": 2281011
+    "raw": 7224137,
+    "gzip": 2284548
   }
 }
