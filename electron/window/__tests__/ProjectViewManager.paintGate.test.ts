@@ -162,6 +162,7 @@ vi.mock("../../utils/logger.js", () => ({
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
 import { registerAppView } from "../webContentsRegistry.js";
+import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 
 function createMockWindow() {
   const children: unknown[] = [];
@@ -201,11 +202,13 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     vi.mocked(logInfo).mockClear();
     vi.mocked(logWarn).mockClear();
 
+    vi.mocked(unfreezeWebContents).mockClear();
+
     win = createMockWindow();
     // Use small, non-zero timeouts so tests can observe each phase:
     //  - soft (50 ms) fires the warning but keeps the outgoing view attached
     //  - hard (150 ms) is the last-resort fall-through that detaches
-    // Both must be set explicitly because the PVM defaults are 3 s / 8 s.
+    // Both must be set explicitly because the PVM defaults are 1.5 s / 4 s.
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 50,
@@ -499,7 +502,12 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
     // No timeout warning — gate resolved by signal.
     expect(
-      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.paintgate.timeout")
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([e]) =>
+            e === "projectview.paintgate.softtimeout" || e === "projectview.paintgate.hardtimeout"
+        )
     ).toHaveLength(0);
   });
 
@@ -643,5 +651,51 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // The switch may resolve or reject depending on subsequent code paths;
     // we just need it to settle, not hang.
     await Promise.race([switchPromise, new Promise((r) => setTimeout(r, 100))]);
+  });
+
+  it("calls unfreezeWebContents on the incoming view after did-finish-load", async () => {
+    // The incoming view is stacked behind the still-visible outgoing view,
+    // so Chromium marks it occluded and throttles rAF — which is exactly the
+    // signal the paint gate is waiting on. unfreezeWebContents pushes the
+    // renderer back to lifecycle "active" so rAF keeps firing during the
+    // swap window. Must run AFTER did-finish-load; calling earlier hangs the
+    // CDP session on an uninitialised frame host (Chromium 146).
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+
+    // Let waitForPaint arm and did-finish-load schedule, then signal paint
+    // so the full performSwitch chain settles before we inspect the mock.
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(unfreezeWebContents).mock.calls[0]?.[0]).toBe(incomingWc);
+  });
+
+  it("logs loadToPaintMs alongside projectview.coldstart", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    const coldstartCall = vi
+      .mocked(logInfo)
+      .mock.calls.find(([event]) => event === "projectview.coldstart");
+    expect(coldstartCall).toBeDefined();
+    const payload = coldstartCall?.[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      projectId: "proj-b",
+      paintGateOutcome: "signal",
+    });
+    expect(typeof payload.loadToPaintMs).toBe("number");
+    expect(payload.loadToPaintMs).toBeGreaterThanOrEqual(0);
   });
 });
