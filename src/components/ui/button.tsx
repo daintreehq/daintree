@@ -154,13 +154,22 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {asChild ? (
           <Slottable>{children}</Slottable>
         ) : (
+          // `display: contents` when not loading so the wrapper is transparent
+          // to layout — children are flex items of the <button> directly, which
+          // restores caller patterns like `w-full justify-between` + `truncate`.
+          // When loading, the wrapper becomes a real flex box so `opacity-30`
+          // can dim the label uniformly behind the absolute spinner overlay.
           <span
             data-slot="button-content"
-            className={cn(
-              "inline-flex items-center justify-center",
-              GAP_CLASS_MAP[resolvedSize],
-              loading && "opacity-30 transition-opacity duration-150 ease-out"
-            )}
+            className={
+              loading
+                ? cn(
+                    "inline-flex items-center justify-center",
+                    GAP_CLASS_MAP[resolvedSize],
+                    "opacity-30 transition-opacity duration-150 ease-out"
+                  )
+                : "contents"
+            }
           >
             {children}
           </span>
