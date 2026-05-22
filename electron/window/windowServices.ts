@@ -201,20 +201,23 @@ export async function setupWindowServices(
     // Resolve the project path this window will load so the workspace host can
     // start forking now. getProjectById is a synchronous SQLite read on the
     // already-open shared DB, so it's safe before projectStore.initialize().
-    const prewarmPath =
-      opts.initialProjectPath ??
-      (opts.initialProjectId
-        ? projectStore.getProjectById(opts.initialProjectId)?.path
-        : undefined);
-    if (prewarmPath) {
-      console.log("[MAIN] Prewarming workspace host concurrently with PTY host:", prewarmPath);
-      try {
+    // Derivation + dispatch are wrapped together: a failed lookup or a
+    // synchronous prewarm error must not abort startup — the host self-heals
+    // and loadProject() forks a fresh one later if needed.
+    try {
+      const prewarmPath =
+        opts.initialProjectPath ??
+        (opts.initialProjectId
+          ? projectStore.getProjectById(opts.initialProjectId)?.path
+          : undefined);
+      if (prewarmPath) {
+        console.log("[MAIN] Prewarming workspace host concurrently with PTY host:", prewarmPath);
         // Fire-and-forget: prewarmProject sets up the host initPromise and a
         // dormant-cleanup timer; async failure self-heals inside the pool.
         workspaceClient.prewarmProject(prewarmPath);
-      } catch (error) {
-        console.warn("[MAIN] prewarmProject failed synchronously:", error);
       }
+    } catch (error) {
+      console.warn("[MAIN] Workspace host prewarm failed; will fork on demand:", error);
     }
 
     console.log("[MAIN] Waiting for Pty Host to be ready...");
