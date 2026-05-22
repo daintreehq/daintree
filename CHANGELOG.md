@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.12.1] - 2026-05-22
+
+Patch release closing six issues found in 0.12.0 — the file diff viewer always failed to load, the workspace sidebar hung when a project folder was missing, and the Daintree Assistant silently dropped an unsupported saved agent preference. Also lands faster panel closing plus fleet-scope and picker-footer polish.
+
+### Bug Fixes
+
+- Daintree Assistant now explains when a saved preferred agent is unavailable instead of silently falling back to none (#8775)
+- File diff viewer no longer fails with "Failed to load diff" (#8800)
+- Workspace sidebar no longer hangs when a project folder no longer exists (#8796)
+- Fleet broadcast no longer auto-enters fleet scope on raw input (#8797)
+- Decluttered the footer in the cold-start arm-terminals picker (#8802)
+- Removed the accent color from the sidebar arm-matching button
+- Grid terminals now fit synchronously to avoid a layout flash on open
+
+### Performance
+
+- Closing a grid panel now feels instant — the panel hides immediately while teardown runs deferred and coalesced
+- Chunked the terminal resize pass to prevent a renderer freeze when closing panels with Cmd+W
+
 ## [0.12.0] - 2026-05-21
 
 A large release centered on cold-start and memory — the boot path was instrumented end to end and trimmed, and the memory-pressure mitigation ladder is now closed-loop. Fleet broadcast, crash recovery, and the worktree sidebar were each substantially reworked; forge integration was generalized off GitHub into a provider model, and the MCP server gained audit tooling and abuse caps.
