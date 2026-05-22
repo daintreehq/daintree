@@ -365,8 +365,16 @@ export default defineConfig(({ command, mode }) => {
                 priority: 60,
               },
               {
+                // `tags: ["$initial"]` restricts this group to framer-motion
+                // code statically reachable from an entry (LazyMotion,
+                // MotionConfig). The domMax feature set is reachable only
+                // through the dynamic import("./lib/motionFeatures") boundary,
+                // so it is NOT $initial-tagged and Rolldown keeps it in its own
+                // async chunk — preserving the LazyMotion deferral instead of
+                // sweeping ~43KB gzip into the eager first-paint closure (#8821).
                 name: "vendor-motion",
                 test: /node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/,
+                tags: ["$initial"],
                 priority: 50,
               },
               {

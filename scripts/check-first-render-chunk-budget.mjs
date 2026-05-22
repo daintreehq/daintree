@@ -18,7 +18,7 @@
 //   node scripts/check-first-render-chunk-budget.mjs --threshold 0.10  # 10% growth allowed
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -34,13 +34,24 @@ const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 // entries below are React.lazy boundaries in src/panels/registry.tsx that
 // resolve immediately when a persisted browser/dev-preview panel is restored
 // — i.e. on the first-render path even though they're nominally "lazy".
-const LAZY_FIRST_RENDER_SEEDS = [
+export const LAZY_FIRST_RENDER_SEEDS = [
   "src/components/Browser/BrowserPane.tsx",
   "src/components/DevPreview/DevPreviewPane.tsx",
 ];
 
 const DEFAULT_THRESHOLD = 0.05;
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
+
+// Pure shrink guard: returns an error message when the eager gzip would drop
+// more than `threshold` (fraction) below the prior baseline, else null. Kept
+// pure (no IO / no process.exit) so it's directly unit-testable, mirroring
+// check-renderer-import-budget.mjs.
+export function shrinkageGuardError(priorGzip, nextGzip, threshold) {
+  if (typeof priorGzip !== "number" || priorGzip <= 0) return null;
+  const drop = (priorGzip - nextGzip) / priorGzip;
+  if (drop <= threshold) return null;
+  return `eager first-render gzip would drop from ${priorGzip} to ${nextGzip} (${(drop * 100).toFixed(1)}% shrinkage > ${(threshold * 100).toFixed(0)}% threshold)`;
+}
 
 function parseArgs(argv) {
   const args = { isUpdate: false, force: false, override: false, threshold: DEFAULT_THRESHOLD };
@@ -81,11 +92,24 @@ function readManifest() {
 }
 
 // BFS the manifest graph. `imports[]` and `dynamicImports[]` reference other
-// manifest keys (source paths). Both contribute to the closure because once
-// any seed is hydrated the lazy panels load synchronously on the first paint.
-// Visiting by manifest key (not file name) avoids double-counting chunks
-// shared via Rolldown's `codeSplitting.groups` (vendor-react, vendor-xterm…).
-function collectClosure(manifest, seedKeys) {
+// manifest keys (source paths). Visiting by manifest key (not file name) avoids
+// double-counting chunks shared via Rolldown's `codeSplitting.groups`
+// (vendor-react, vendor-xterm…).
+//
+// `followDynamic` selects the closure semantics:
+//   • false (eager) — follow only `imports[]`. This is the true "download
+//     before interactive" cost: the entry plus everything statically reachable
+//     from it (and from the explicit first-render seeds). This is the GATED
+//     metric — the regression CI fails on.
+//   • true (total)  — follow both `imports[]` and `dynamicImports[]`, i.e. the
+//     entire reachable bundle. Report-only, retained as a coarse total-bundle
+//     regression signal.
+//
+// The seeds (renderer entry + LAZY_FIRST_RENDER_SEEDS) are always enqueued
+// explicitly regardless of `followDynamic` — they're first-paint paths by
+// definition (a persisted browser/dev-preview panel restores synchronously),
+// not edges discovered by walking `dynamicImports[]`.
+export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}) {
   const visited = new Set();
   const queue = [];
 
@@ -98,13 +122,17 @@ function collectClosure(manifest, seedKeys) {
   while (queue.length > 0) {
     const key = queue.shift();
     if (visited.has(key)) continue;
-    visited.add(key);
 
     const chunk = manifest[key];
+    // Skip keys not present in the manifest — the closure measures real
+    // chunks only, so a dangling import reference must not enter the set.
     if (!chunk) continue;
+    visited.add(key);
 
     for (const dep of chunk.imports ?? []) queue.push(dep);
-    for (const dep of chunk.dynamicImports ?? []) queue.push(dep);
+    if (followDynamic) {
+      for (const dep of chunk.dynamicImports ?? []) queue.push(dep);
+    }
   }
 
   return visited;
@@ -131,16 +159,10 @@ function gzipBytesFor(file) {
   return { ok: true, raw: buf.byteLength, gzip: gz };
 }
 
-function buildReport(manifest) {
-  const entryKey = findEntryKey(manifest);
-  if (!entryKey) {
-    console.error("::error::no entry chunk found in manifest (no chunk has isEntry: true)");
-    process.exit(1);
-  }
-
-  const seedKeys = [entryKey, ...LAZY_FIRST_RENDER_SEEDS];
-  const closure = collectClosure(manifest, seedKeys);
-
+// Size every chunk in a closure, returning the per-chunk map, summed
+// raw/gzip totals, and any missing-file errors. Pure given a manifest +
+// closure set, so the gzip work is shared between the eager and total walks.
+function sizeClosure(manifest, closure) {
   const chunks = {};
   let totalRaw = 0;
   let totalGzip = 0;
@@ -159,9 +181,28 @@ function buildReport(manifest) {
     totalGzip += sized.gzip;
   }
 
-  if (missing.length > 0) {
-    for (const m of missing) console.warn(`::warning::${m}`);
+  return { chunks, totals: { raw: totalRaw, gzip: totalGzip }, missing };
+}
+
+function buildReport(manifest) {
+  const entryKey = findEntryKey(manifest);
+  if (!entryKey) {
+    console.error("::error::no entry chunk found in manifest (no chunk has isEntry: true)");
+    process.exit(1);
   }
+
+  const seedKeys = [entryKey, ...LAZY_FIRST_RENDER_SEEDS];
+
+  // Eager walk (gated): the static first-render closure.
+  const eagerClosure = collectClosure(manifest, seedKeys, { followDynamic: false });
+  const eager = sizeClosure(manifest, eagerClosure);
+
+  // Total walk (report-only): the full reachable bundle, retained as a coarse
+  // total-bundle regression signal.
+  const totalClosure = collectClosure(manifest, seedKeys, { followDynamic: true });
+  const total = sizeClosure(manifest, totalClosure);
+
+  for (const m of [...eager.missing, ...total.missing]) console.warn(`::warning::${m}`);
 
   const seedsResolved = LAZY_FIRST_RENDER_SEEDS.filter((s) => Boolean(manifest[s]));
   const seedsMissing = LAZY_FIRST_RENDER_SEEDS.filter((s) => !manifest[s]);
@@ -174,9 +215,13 @@ function buildReport(manifest) {
   return {
     entryKey,
     seeds: { resolved: seedsResolved, missing: seedsMissing },
-    chunkCount: Object.keys(chunks).length,
-    chunks,
-    totals: { raw: totalRaw, gzip: totalGzip },
+    // `chunks`/`chunkCount` describe the eager first-render set — the purpose
+    // of this baseline file. `eagerTotals` is the gated metric; `totals` is the
+    // full-bundle figure kept for report-only regression visibility.
+    chunkCount: Object.keys(eager.chunks).length,
+    chunks: eager.chunks,
+    eagerTotals: eager.totals,
+    totals: total.totals,
   };
 }
 
@@ -184,16 +229,18 @@ function writeBaseline(report, { force }) {
   if (existsSync(BASELINE_FILE) && !force) {
     try {
       const prior = JSON.parse(readFileSync(BASELINE_FILE, "utf8"));
-      const priorGzip = prior?.totals?.gzip ?? 0;
-      if (priorGzip > 0) {
-        const drop = (priorGzip - report.totals.gzip) / priorGzip;
-        if (drop > UPDATE_SHRINKAGE_THRESHOLD) {
-          console.error(
-            `::error::refusing to update baseline — first-render gzip would drop from ${priorGzip} to ${report.totals.gzip} (${(drop * 100).toFixed(1)}% shrinkage > ${(UPDATE_SHRINKAGE_THRESHOLD * 100).toFixed(0)}% threshold).`
-          );
-          console.error("   If the shrinkage is intentional, re-run with --force.");
-          process.exit(1);
-        }
+      // Guard the gated metric (eager first-render gzip), not the report-only
+      // total — that's the figure CI fails on and the one --force is meant to
+      // re-baseline after an intentional shrink.
+      const guardError = shrinkageGuardError(
+        prior?.eagerTotals?.gzip,
+        report.eagerTotals.gzip,
+        UPDATE_SHRINKAGE_THRESHOLD
+      );
+      if (guardError) {
+        console.error(`::error::refusing to update baseline — ${guardError}.`);
+        console.error("   If the shrinkage is intentional, re-run with --force.");
+        process.exit(1);
       }
     } catch {
       // Unparseable prior — let the update proceed.
@@ -212,12 +259,13 @@ function writeBaseline(report, { force }) {
     seeds: report.seeds,
     chunkCount: report.chunkCount,
     chunks: sortedChunks,
+    eagerTotals: report.eagerTotals,
     totals: report.totals,
   };
 
   writeFileSync(BASELINE_FILE, JSON.stringify(out, null, 2) + "\n");
   console.log(
-    `[check-first-render-chunk-budget] baseline updated: ${report.chunkCount} chunks, total gzip=${report.totals.gzip}`
+    `[check-first-render-chunk-budget] baseline updated: ${report.chunkCount} eager chunks, eager gzip=${report.eagerTotals.gzip} (total bundle gzip=${report.totals.gzip})`
   );
 }
 
@@ -230,14 +278,33 @@ function compareToBaseline(report, threshold) {
   }
 
   const baseline = JSON.parse(readFileSync(BASELINE_FILE, "utf8"));
-  const baselineGzip = baseline?.totals?.gzip ?? 0;
-  const currentGzip = report.totals.gzip;
+
+  // The gate is the eager first-render closure. A baseline predating the
+  // eager/total split has no `eagerTotals` — there's nothing meaningful to
+  // compare against, so demand a refresh rather than silently passing.
+  if (typeof baseline?.eagerTotals?.gzip !== "number") {
+    console.error(
+      "::error::baseline is missing `eagerTotals` — it predates the eager/total split."
+    );
+    console.error("   Re-run `npm run first-render-chunk-budget:update -- --force` to refresh it.");
+    process.exit(1);
+  }
+
+  const baselineGzip = baseline.eagerTotals.gzip;
+  const currentGzip = report.eagerTotals.gzip;
   const delta = currentGzip - baselineGzip;
   const ratio = baselineGzip > 0 ? delta / baselineGzip : 0;
   const overBudget = ratio > threshold;
 
+  // Report-only: the full reachable bundle (eager + dynamic). Not gated.
+  const baselineTotalGzip = baseline?.totals?.gzip ?? 0;
+  const currentTotalGzip = report.totals.gzip;
+  const totalDelta = currentTotalGzip - baselineTotalGzip;
+
   const lines = [];
   lines.push("# First-render chunk gzip budget");
+  lines.push("");
+  lines.push("## Eager first-render closure (gated)");
   lines.push("");
   lines.push(`- baseline gzip: ${baselineGzip} bytes`);
   lines.push(`- current gzip:  ${currentGzip} bytes`);
@@ -245,8 +312,16 @@ function compareToBaseline(report, threshold) {
     `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`
   );
   lines.push(`- threshold:     +${(threshold * 100).toFixed(1)}%`);
-  lines.push(`- chunks:        ${report.chunkCount}`);
+  lines.push(`- eager chunks:  ${report.chunkCount}`);
   lines.push(`- result:        ${overBudget ? "OVER BUDGET" : "OK"}`);
+  lines.push("");
+  lines.push("## Total reachable bundle (report-only)");
+  lines.push("");
+  lines.push(`- baseline gzip: ${baselineTotalGzip} bytes`);
+  lines.push(`- current gzip:  ${currentTotalGzip} bytes`);
+  lines.push(
+    `- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`
+  );
 
   mkdirSync(path.dirname(SUMMARY_FILE), { recursive: true });
   writeFileSync(SUMMARY_FILE, lines.join("\n") + "\n");
@@ -288,4 +363,10 @@ function main() {
   process.exit(1);
 }
 
-main();
+// Only run main when invoked directly (not when imported by tests).
+// pathToFileURL percent-encodes paths with spaces/other non-URL characters so
+// the comparison against the already-encoded import.meta.url doesn't silently
+// mismatch (which would no-op the check).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
