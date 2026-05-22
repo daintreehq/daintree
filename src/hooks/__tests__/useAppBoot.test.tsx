@@ -112,11 +112,39 @@ describe("bootPromise", () => {
   it("re-fires boot() after resetBootPromiseForTests clears the cache", () => {
     const bootFn = installElectron(async () => makeBootResult());
 
-    getBootPromise();
+    void getBootPromise();
     resetBootPromiseForTests();
-    getBootPromise();
+    void getBootPromise();
 
     expect(bootFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a rejected promise instead of throwing when the bridge lacks app.boot", async () => {
+    // Truthy `window.electron` (so isElectronAvailable passes) but no `app` —
+    // calling `app.boot()` throws synchronously. getBootPromise must not let
+    // that escape its module-eval call site.
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {},
+    });
+
+    expect(() => getBootPromise()).not.toThrow();
+    const safe = await getSafeBootPromise();
+    expect(safe.ok).toBe(false);
+  });
+
+  it("serves a cached, already-fulfilled safe promise to later callers", async () => {
+    installElectron(async () => makeBootResult());
+
+    const first = getSafeBootPromise();
+    await first;
+
+    // A later caller (the App render) gets the same reference, already
+    // annotated fulfilled — `use()` reads it without suspending.
+    const second = getSafeBootPromise() as Promise<unknown> & { status?: string };
+    expect(second).toBe(first);
+    expect(second.status).toBe("fulfilled");
   });
 });
 

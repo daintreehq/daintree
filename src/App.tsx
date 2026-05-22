@@ -493,24 +493,6 @@ function AppInner() {
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
-  // Signal the main process that React has committed its first frame so
-  // ProjectViewManager can release the outgoing view of a cold project
-  // switch. Fires once per V8 context, before hydration completes — the
-  // inline app-shell skeleton has already painted by this point. Double
-  // rAF mirrors `removeStartupSkeleton`: first rAF lands after React's
-  // commit, second waits for Chromium to submit that frame. Cleanup only
-  // cancels the outer rAF — under React Strict Mode's intentional
-  // double-mount the inner rAF may still fire, but `notifyViewPainted`
-  // is idempotent (one-shot module-level guard) so the second call is a
-  // no-op.
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        notifyViewPainted();
-      });
-    });
-    return () => cancelAnimationFrame(id);
-  }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
   // listener is registered before `notifyViewPainted` fires, then defers the
   // local `agent.focusNextWaiting` dispatch until hydration completes (the
@@ -1407,6 +1389,25 @@ function AppInner() {
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.
 function App() {
+  // Signal the main process that React has committed its first frame so
+  // ProjectViewManager can release the outgoing view of a cold project switch.
+  // This lives in the Suspense *parent* (not `AppInner`) so it fires the moment
+  // the boundary commits — even while `AppInner` is suspended on `app:boot` —
+  // preserving the pre-#8820 guarantee that the paint signal lands before
+  // hydration regardless of IPC latency. Double rAF mirrors
+  // `removeStartupSkeleton`: first rAF lands after React's commit, second waits
+  // for Chromium to submit that frame. Cleanup only cancels the outer rAF —
+  // under Strict Mode's double-mount the inner rAF may still fire, but
+  // `notifyViewPainted` is idempotent (one-shot module-level guard).
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        notifyViewPainted();
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   return (
     <Suspense fallback={null}>
       <AppInner />

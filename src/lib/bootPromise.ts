@@ -2,6 +2,7 @@ import type { BootResult } from "@shared/types/ipc/app";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { markRendererPerformance } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
+import { logError } from "@/utils/logger";
 
 /**
  * React's `use()` hook reads these non-standard fields off a thenable
@@ -60,7 +61,16 @@ export function getBootPromise(): Promise<BootResult> {
   }
 
   markRendererPerformance(PERF_MARKS.RENDERER_APP_BOOT_IPC_SENT);
-  bootPromise = annotate(window.electron.app.boot());
+  try {
+    bootPromise = annotate(window.electron.app.boot());
+  } catch (error) {
+    // This runs at module-eval time, before `bootstrap().catch()` is wired and
+    // outside any React error boundary — a synchronous throw from a partially
+    // initialized bridge would otherwise be uncaught. Convert it to a rejected
+    // promise so `getSafeBootPromise` can degrade it to an `{ ok: false }`
+    // sentinel.
+    bootPromise = annotate(Promise.reject(toError(error)));
+  }
   return bootPromise;
 }
 
@@ -75,7 +85,15 @@ export function getSafeBootPromise(): Promise<SafeBootResult> {
   safeBootPromise = annotate(
     getBootPromise().then(
       (result): SafeBootResult => ({ ok: true, result }),
-      (error): SafeBootResult => ({ ok: false, error: toError(error) })
+      (error): SafeBootResult => {
+        const wrapped = toError(error);
+        // Tier 0 — silent log: boot failure degrades gracefully (the app still
+        // renders its cold-start chrome and falls back to live `app:hydrate`),
+        // so there is no user-facing action to surface, but the cause is worth
+        // a breadcrumb.
+        logError("Failed to fetch boot payload", wrapped);
+        return { ok: false, error: wrapped };
+      }
     )
   );
   return safeBootPromise;

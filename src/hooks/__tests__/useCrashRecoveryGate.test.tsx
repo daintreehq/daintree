@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
@@ -190,6 +191,31 @@ describe("useCrashRecoveryGate", () => {
 
     expect(resolve).not.toHaveBeenCalled();
     expect(result.current.state.status).toBe("pending");
+  });
+
+  it("fires crashRecovery.resolve exactly once under StrictMode double-mount", async () => {
+    const resolve = vi.fn(async () => {});
+    installElectronStub({ resolve });
+
+    // Strict Mode double-invokes the effect (mount→cleanup→mount). The
+    // `hasProcessed` ref is the sole guard against a duplicate auto-restore IPC.
+    renderHook(
+      () =>
+        useCrashRecoveryGate(
+          makeBootResult({
+            crashPending: { ...mockCrash, crashCount: 1 },
+            crashConfig: { autoRestoreOnCrash: true },
+          })
+        ),
+      { wrapper: StrictMode }
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 
   it("auto-restores with empty panelIds when no panels available", async () => {
