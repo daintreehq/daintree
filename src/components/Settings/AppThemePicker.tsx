@@ -12,7 +12,11 @@ import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
-import { applyAccentOverrideToScheme, resolveAppTheme } from "@shared/theme";
+import {
+  accentOverrideHasLowContrast,
+  applyAccentOverrideToScheme,
+  resolveAppTheme,
+} from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
@@ -118,6 +122,15 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const pickerValue = useMemo(() => {
     const candidate = accentColorOverride ?? selectedScheme.tokens["accent-primary"];
     return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toLowerCase() : "#000000";
+  }, [accentColorOverride, selectedScheme]);
+
+  // Warn — non-blocking — when an accent override drops below WCAG AA 4.5:1 against the
+  // active theme, either as button-label text or as accent-tinted text on the theme surfaces.
+  const accentContrastFail = useMemo(() => {
+    if (accentColorOverride === null) return false;
+    return accentOverrideHasLowContrast(
+      applyAccentOverrideToScheme(selectedScheme, accentColorOverride)
+    );
   }, [accentColorOverride, selectedScheme]);
 
   const handleAccentInput = (e: FormEvent<HTMLInputElement>) => {
@@ -393,6 +406,18 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           </button>
         )}
       </section>
+
+      {accentContrastFail && (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
+          <p className="min-w-0 text-xs text-daintree-text">
+            Low contrast on {selectedScheme.name}
+          </p>
+        </div>
+      )}
 
       <div className="flex items-center gap-3">
         <button

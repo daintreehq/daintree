@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { contrastRatio, getThemeContrastWarnings, isHexColor } from "../contrast.js";
-import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import {
+  accentOverrideHasLowContrast,
+  contrastRatio,
+  getThemeContrastWarnings,
+  isHexColor,
+} from "../contrast.js";
+import { applyAccentOverrideToScheme, BUILT_IN_APP_SCHEMES } from "../themes.js";
 import type { AppColorScheme, AppColorSchemeTokens, AppThemeTokenKey } from "./../types.js";
 
 function makeScheme(overrides: Partial<AppColorSchemeTokens>): AppColorScheme {
@@ -293,5 +298,47 @@ describe("getThemeContrastWarnings", () => {
     // (start with "Cannot evaluate" but mention the status token mid-string).
     const statusFailures = warnings.filter((w) => w.message.includes("status-"));
     expect(statusFailures).toHaveLength(0);
+  });
+});
+
+describe("accentOverrideHasLowContrast", () => {
+  const lightScheme = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light")!;
+  const darkScheme = BUILT_IN_APP_SCHEMES.find((s) => s.type !== "light")!;
+
+  it("flags a white accent override on a light theme (invisible on light surfaces)", () => {
+    const patched = applyAccentOverrideToScheme(lightScheme, "#ffffff");
+    expect(accentOverrideHasLowContrast(patched)).toBe(true);
+  });
+
+  it("does not flag a white accent override on a dark theme", () => {
+    const patched = applyAccentOverrideToScheme(darkScheme, "#ffffff");
+    expect(accentOverrideHasLowContrast(patched)).toBe(false);
+  });
+
+  it("does not flag a strong dark accent override on a light theme", () => {
+    const patched = applyAccentOverrideToScheme(lightScheme, "#1a1a1a");
+    expect(accentOverrideHasLowContrast(patched)).toBe(false);
+  });
+
+  it("flags via the accent-foreground/accent-primary pair when surfaces are fine", () => {
+    // accent-primary is high-contrast against white surfaces, but accent-foreground
+    // is a near-match on the accent itself — isolates the button-label branch.
+    const scheme = makeScheme({
+      "accent-primary": "#777777" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#6f6f6f" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    expect(accentOverrideHasLowContrast(scheme)).toBe(true);
+  });
+
+  it("does not flag when a non-hex accent-primary cannot be evaluated", () => {
+    const scheme = makeScheme({
+      "accent-primary": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-primary"],
+    });
+    expect(accentOverrideHasLowContrast(scheme)).toBe(false);
   });
 });
