@@ -60,6 +60,8 @@ function makeItem(id: string, title: string): ActionPaletteItemType {
 }
 
 const noop = () => {};
+const noopPin = () => true;
+const noopHide = () => {};
 
 describe("ActionPalette", () => {
   it("does not render the empty message when a typed query has zero matches", () => {
@@ -71,6 +73,7 @@ describe("ActionPalette", () => {
         totalResults={0}
         selectedIndex={0}
         isStale={false}
+        pinnedCount={0}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -78,6 +81,9 @@ describe("ActionPalette", () => {
         selectNext={noop}
         executeAction={noop}
         confirmSelection={noop}
+        pinAction={noopPin}
+        unpinAction={noop}
+        hideAction={noopHide}
       />
     );
 
@@ -93,6 +99,7 @@ describe("ActionPalette", () => {
         totalResults={0}
         selectedIndex={0}
         isStale={false}
+        pinnedCount={0}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -100,6 +107,9 @@ describe("ActionPalette", () => {
         selectNext={noop}
         executeAction={noop}
         confirmSelection={noop}
+        pinAction={noopPin}
+        unpinAction={noop}
+        hideAction={noopHide}
       />
     );
 
@@ -115,6 +125,7 @@ describe("ActionPalette", () => {
         totalResults={1}
         selectedIndex={0}
         isStale
+        pinnedCount={0}
         close={noop}
         setQuery={noop}
         setSelectedIndex={noop}
@@ -122,9 +133,64 @@ describe("ActionPalette", () => {
         selectNext={noop}
         executeAction={noop}
         confirmSelection={noop}
+        pinAction={noopPin}
+        unpinAction={noop}
+        hideAction={noopHide}
       />
     );
 
     expect(lastSearchablePaletteProps.current?.isFiltering).toBe(true);
+  });
+
+  it("passes a renderBody callback when on the empty-query rail with results", () => {
+    render(
+      <ActionPalette
+        isOpen
+        query=""
+        results={[makeItem("a.action", "Alpha")]}
+        totalResults={1}
+        selectedIndex={0}
+        isStale={false}
+        pinnedCount={0}
+        close={noop}
+        setQuery={noop}
+        setSelectedIndex={noop}
+        selectPrevious={noop}
+        selectNext={noop}
+        executeAction={noop}
+        confirmSelection={noop}
+        pinAction={noopPin}
+        unpinAction={noop}
+        hideAction={noopHide}
+      />
+    );
+
+    expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
+  });
+
+  it("does NOT pass a renderBody callback when a query is typed", () => {
+    render(
+      <ActionPalette
+        isOpen
+        query="al"
+        results={[makeItem("a.action", "Alpha")]}
+        totalResults={1}
+        selectedIndex={0}
+        isStale={false}
+        pinnedCount={0}
+        close={noop}
+        setQuery={noop}
+        setSelectedIndex={noop}
+        selectPrevious={noop}
+        selectNext={noop}
+        executeAction={noop}
+        confirmSelection={noop}
+        pinAction={noopPin}
+        unpinAction={noop}
+        hideAction={noopHide}
+      />
+    );
+
+    expect(lastSearchablePaletteProps.current?.renderBody).toBeUndefined();
   });
 });

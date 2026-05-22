@@ -31,6 +31,7 @@ vi.mock("@/clients/appClient", () => ({
 
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
+import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
 
 function makeEntry(
@@ -58,6 +59,7 @@ describe("useActionPalette", () => {
     getContextMock.mockReturnValue({});
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionFrecencyEntries: new Map() });
+    useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
   });
 
   it("tolerates malformed action manifest entries with missing title", async () => {
@@ -744,6 +746,160 @@ describe("useActionPalette", () => {
       // Enabled browser.close must appear before disabled terminal.close, context boost notwithstanding
       expect(result.current.results[0]!.id).toBe("browser.close");
       expect(result.current.results[1]!.id).toBe("terminal.close");
+    });
+  });
+
+  describe("pin & hide affordances", () => {
+    it("prepends pinned actions ahead of Recently used on the empty-query rail", async () => {
+      listMock.mockReturnValue([
+        makeEntry("a.action", "Alpha"),
+        makeEntry("b.action", "Bravo"),
+        makeEntry("c.action", "Charlie"),
+      ]);
+
+      useActionMruStore.getState().hydrateActionMru(["b.action", "c.action"]);
+      useActionPrefsStore.getState().pinAction("a.action");
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.length).toBe(3);
+      });
+
+      expect(result.current.results.map((r) => r.id)).toEqual(["a.action", "b.action", "c.action"]);
+      expect(result.current.pinnedCount).toBe(1);
+    });
+
+    it("does not duplicate a pinned id that also appears in MRU", async () => {
+      listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
+
+      useActionMruStore.getState().hydrateActionMru(["a.action", "b.action"]);
+      useActionPrefsStore.getState().pinAction("a.action");
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.results.length).toBe(2));
+
+      expect(result.current.results.map((r) => r.id)).toEqual(["a.action", "b.action"]);
+      expect(result.current.pinnedCount).toBe(1);
+    });
+
+    it("hides actions from the Recently used rail while keeping them in MRU", async () => {
+      listMock.mockReturnValue([
+        makeEntry("a.action", "Alpha"),
+        makeEntry("b.action", "Bravo"),
+        makeEntry("c.action", "Charlie"),
+      ]);
+
+      useActionMruStore.getState().hydrateActionMru(["a.action", "b.action", "c.action"]);
+      useActionPrefsStore.getState().hideAction("b.action");
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.results.length).toBe(2));
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids).not.toContain("b.action");
+      expect(ids).toEqual(["a.action", "c.action"]);
+    });
+
+    it("refuses to pin a danger:'confirm' action and returns false", async () => {
+      listMock.mockReturnValue([
+        makeEntry("worktree.delete", "Delete worktree", true, "worktree", "confirm"),
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.isOpen).toBe(true));
+
+      let returned = true;
+      act(() => {
+        returned = result.current.pinAction(
+          result.current.results[0] ?? {
+            id: "worktree.delete",
+            title: "Delete worktree",
+            description: "",
+            category: "worktree",
+            enabled: true,
+            danger: "confirm",
+            kind: "command",
+            titleLower: "delete worktree",
+            categoryLower: "worktree",
+            descriptionLower: "",
+            titleAcronym: "DW",
+            keywordsLower: [],
+          }
+        );
+      });
+
+      expect(returned).toBe(false);
+      expect(useActionPrefsStore.getState().pinnedActionIds).toEqual([]);
+    });
+
+    it("strips danger:'confirm' ids from pinned even when persisted from a pre-fix session", async () => {
+      listMock.mockReturnValue([
+        makeEntry("a.action", "Alpha"),
+        makeEntry("worktree.delete", "Delete worktree", true, "worktree", "confirm"),
+      ]);
+
+      // Simulate a stale persisted state file with a danger id pinned.
+      useActionPrefsStore
+        .getState()
+        .hydrateActionPrefs({ pinnedIds: ["worktree.delete", "a.action"] });
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.results.length).toBe(1));
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids).not.toContain("worktree.delete");
+      expect(ids).toEqual(["a.action"]);
+    });
+
+    it("ignores hidden ids during typed search (only the empty-query rail evicts)", async () => {
+      listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
+      useActionPrefsStore.getState().hideAction("a.action");
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+      act(() => result.current.setQuery("alpha"));
+
+      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+
+      // Hidden action still surfaces during search — the eviction only applies
+      // to the empty-query "Recently used" rail.
+      expect(result.current.results.map((r) => r.id)).toContain("a.action");
+    });
+
+    it("pinnedCount is 0 during typed search even when pinned items are in results", async () => {
+      listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
+      useActionPrefsStore.getState().pinAction("a.action");
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+      act(() => result.current.setQuery("alpha"));
+
+      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+
+      expect(result.current.pinnedCount).toBe(0);
     });
   });
 

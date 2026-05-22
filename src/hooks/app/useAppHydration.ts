@@ -6,7 +6,12 @@ import { logError } from "@/utils/logger";
 import { usePanelStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useDiagnosticsStore, useFocusStore, useActionMruStore } from "@/store";
+import {
+  useDiagnosticsStore,
+  useFocusStore,
+  useActionMruStore,
+  useActionPrefsStore,
+} from "@/store";
 import type { HydrateResult } from "@shared/types/ipc/app";
 
 export function useAppHydration(
@@ -28,6 +33,7 @@ export function useAppHydration(
   const openDiagnosticsDock = useDiagnosticsStore((s) => s.openDock);
   const setFocusMode = useFocusStore((s) => s.setFocusMode);
   const hydrateActionMru = useActionMruStore((s) => s.hydrateActionMru);
+  const hydrateActionPrefs = useActionPrefsStore((s) => s.hydrateActionPrefs);
 
   useEffect(() => {
     if (!isElectronAvailable() || hasRestoredState.current || !enabled) {
@@ -53,6 +59,7 @@ export function useAppHydration(
             restoreTerminalOrder,
             hydrateMru,
             hydrateActionMru,
+            hydrateActionPrefs,
             beginHydrationBatch,
             flushHydrationBatch,
           },
@@ -103,6 +110,7 @@ export function useAppHydration(
     restoreTerminalOrder,
     hydrateMru,
     hydrateActionMru,
+    hydrateActionPrefs,
     beginHydrationBatch,
     flushHydrationBatch,
   ]);

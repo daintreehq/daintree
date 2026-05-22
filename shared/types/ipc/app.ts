@@ -83,6 +83,10 @@ export interface AppState {
   mruList?: string[];
   /** Most-recently-used action frecency entries for the action palette (migrated from legacy string[] format) */
   actionMruList?: ActionFrecencyEntry[] | string[];
+  /** Action IDs pinned to the "Favorites" rail of the empty-query action palette. */
+  actionPinnedIds?: string[];
+  /** Action IDs the user has hidden from the "Recently used" rail of the action palette. */
+  actionHiddenIds?: string[];
   /** Whether Fleet scope primitive is active ("scoped") or feature is disabled ("legacy", default) */
   fleetScopeMode?: "legacy" | "scoped";
 }

@@ -1125,6 +1125,7 @@ function App() {
                     totalResults={actionPalette.totalResults}
                     selectedIndex={actionPalette.selectedIndex}
                     isStale={actionPalette.isStale}
+                    pinnedCount={actionPalette.pinnedCount}
                     close={actionPalette.close}
                     setQuery={actionPalette.setQuery}
                     setSelectedIndex={actionPalette.setSelectedIndex}
@@ -1132,6 +1133,9 @@ function App() {
                     selectNext={actionPalette.selectNext}
                     executeAction={actionPalette.executeAction}
                     confirmSelection={actionPalette.confirmSelection}
+                    pinAction={actionPalette.pinAction}
+                    unpinAction={actionPalette.unpinAction}
+                    hideAction={actionPalette.hideAction}
                   />
                 </Suspense>
               )}

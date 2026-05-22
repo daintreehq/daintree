@@ -1,11 +1,16 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { ActionPaletteItem } from "./ActionPaletteItem";
 import type {
   ActionPaletteItem as ActionPaletteItemType,
   UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
+
+const SECTION_HEADER_CLASS =
+  "px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none";
 
 // Module-level so SearchablePalette receives a stable reference and skips
 // re-renders driven only by a freshly-created callback identity.
@@ -23,6 +28,7 @@ type ActionPaletteProps = Pick<
   | "totalResults"
   | "selectedIndex"
   | "isStale"
+  | "pinnedCount"
   | "close"
   | "setQuery"
   | "setSelectedIndex"
@@ -30,6 +36,9 @@ type ActionPaletteProps = Pick<
   | "selectNext"
   | "executeAction"
   | "confirmSelection"
+  | "pinAction"
+  | "unpinAction"
+  | "hideAction"
 >;
 
 export function ActionPalette({
@@ -39,6 +48,7 @@ export function ActionPalette({
   totalResults,
   selectedIndex,
   isStale,
+  pinnedCount,
   close,
   setQuery,
   setSelectedIndex,
@@ -46,6 +56,9 @@ export function ActionPalette({
   selectNext,
   executeAction,
   confirmSelection,
+  pinAction,
+  unpinAction,
+  hideAction,
 }: ActionPaletteProps) {
   const handleSelect = useCallback(
     (item: ActionPaletteItemType) => {
@@ -55,6 +68,91 @@ export function ActionPalette({
   );
 
   const actionPaletteShortcut = useEffectiveCombo("action.palette.open");
+  const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
+
+  // The sectioned empty-query body renders headers as siblings of the row list,
+  // so the listbox children stay 1:1 with `results` for the parent's
+  // scroll-into-view logic. The custom scroll effect below scrolls within the
+  // sectioned listbox itself, keyed by `data-action-id` so the divider divs
+  // don't throw off the offset.
+  const sectionedListRef = useRef<HTMLDivElement>(null);
+  const showSections = !query.trim() && results.length > 0;
+
+  useEffect(() => {
+    if (!showSections) return;
+    const listEl = sectionedListRef.current;
+    if (!listEl || selectedIndex < 0 || selectedIndex >= results.length) return;
+    const selectedId = results[selectedIndex]?.id;
+    if (!selectedId) return;
+    const row = listEl.querySelector<HTMLElement>(`[data-action-id="${CSS.escape(selectedId)}"]`);
+    row?.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }, [showSections, selectedIndex, results]);
+
+  const renderActionRow = useCallback(
+    (item: ActionPaletteItemType, index: number) => {
+      const isPinned = pinnedActionIds.includes(item.id);
+      return (
+        <div key={item.id} data-action-id={item.id}>
+          <ActionPaletteItem
+            item={item}
+            index={index}
+            isSelected={index === selectedIndex}
+            onSelect={handleSelect}
+            onHoverIndex={setSelectedIndex}
+            isPinned={isPinned}
+            onPin={pinAction}
+            onUnpin={unpinAction}
+            onHide={hideAction}
+          />
+        </div>
+      );
+    },
+    [
+      pinnedActionIds,
+      selectedIndex,
+      handleSelect,
+      setSelectedIndex,
+      pinAction,
+      unpinAction,
+      hideAction,
+    ]
+  );
+
+  const renderSectionedBody = useCallback(() => {
+    const pinnedRows = results.slice(0, pinnedCount);
+    const recentRows = results.slice(pinnedCount);
+    return (
+      <>
+        <div
+          ref={sectionedListRef}
+          id="action-palette-list"
+          role="listbox"
+          aria-label="Actions"
+          className={isStale ? "palette-results-stale" : undefined}
+          data-stale={isStale ? "true" : undefined}
+          aria-busy={isStale || undefined}
+        >
+          {pinnedRows.length > 0 && (
+            <>
+              <div className={SECTION_HEADER_CLASS} role="presentation">
+                Favorites
+              </div>
+              {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
+            </>
+          )}
+          {recentRows.length > 0 && (
+            <>
+              <div className={SECTION_HEADER_CLASS} role="presentation">
+                Recently used
+              </div>
+              {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
+            </>
+          )}
+        </div>
+        <PaletteOverflowNotice shown={results.length} total={totalResults} />
+      </>
+    );
+  }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
 
   return (
     <SearchablePalette<ActionPaletteItemType>
@@ -71,16 +169,24 @@ export function ActionPalette({
       getItemId={getActionItemId}
       getActionLabel={getActionLabel}
       isFiltering={isStale}
-      renderItem={(item, index, isSelected, onHoverIndex) => (
-        <ActionPaletteItem
-          key={item.id}
-          item={item}
-          index={index}
-          isSelected={isSelected}
-          onSelect={handleSelect}
-          onHoverIndex={onHoverIndex}
-        />
-      )}
+      renderItem={(item, index, isSelected, onHoverIndex) => {
+        const isPinned = pinnedActionIds.includes(item.id);
+        return (
+          <ActionPaletteItem
+            key={item.id}
+            item={item}
+            index={index}
+            isSelected={isSelected}
+            onSelect={handleSelect}
+            onHoverIndex={onHoverIndex}
+            isPinned={isPinned}
+            onPin={pinAction}
+            onUnpin={unpinAction}
+            onHide={hideAction}
+          />
+        );
+      }}
+      renderBody={showSections ? renderSectionedBody : undefined}
       label="Actions"
       shortcut={actionPaletteShortcut}
       ariaLabel="Action palette"

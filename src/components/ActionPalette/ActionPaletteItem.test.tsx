@@ -70,7 +70,7 @@ describe("ActionPaletteItem", () => {
   });
 
   it("does not render disabled reason for disabled actions without a reason", () => {
-    const { container } = render(
+    render(
       <ActionPaletteItem
         item={makeItem({ enabled: false })}
         index={0}
@@ -81,11 +81,11 @@ describe("ActionPaletteItem", () => {
 
     expect(screen.getByText("Test Action")).toBeTruthy();
     expect(screen.getByText("Test description")).toBeTruthy();
-    expect(container.querySelector("button")?.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("option").getAttribute("aria-disabled")).toBe("true");
   });
 
   it("does not render disabled reason for enabled actions with disabledReason", () => {
-    const { container } = render(
+    render(
       <ActionPaletteItem
         item={makeItem({ enabled: true, disabledReason: "Should not show" })}
         index={0}
@@ -96,7 +96,7 @@ describe("ActionPaletteItem", () => {
 
     expect(screen.getByText("Test Action")).toBeTruthy();
     expect(screen.queryByText("Should not show")).toBeNull();
-    expect(container.querySelector("button")?.getAttribute("aria-disabled")).toBe("false");
+    expect(screen.getByRole("option").getAttribute("aria-disabled")).toBe("false");
   });
 
   it("renders keybinding when present", () => {
@@ -113,35 +113,31 @@ describe("ActionPaletteItem", () => {
   });
 
   it("applies selected styling with aria-selected and accent indicator", () => {
-    const { container } = render(
-      <ActionPaletteItem item={makeItem()} index={0} isSelected={true} onSelect={onSelect} />
-    );
+    render(<ActionPaletteItem item={makeItem()} index={0} isSelected={true} onSelect={onSelect} />);
 
-    const button = container.querySelector("button");
-    expect(button).toBeTruthy();
-    expect(button?.getAttribute("aria-selected")).toBe("true");
+    const row = screen.getByRole("option");
+    expect(row.getAttribute("aria-selected")).toBe("true");
     // Selected state is now CSS-driven via aria-selected: variants.
-    expect(button?.className).toContain("aria-selected:bg-overlay-soft");
-    expect(button?.className).toContain("aria-selected:before:bg-daintree-accent");
-    expect(button?.className).toContain("aria-selected:before:content-['']");
+    expect(row.className).toContain("aria-selected:bg-overlay-soft");
+    expect(row.className).toContain("aria-selected:before:bg-daintree-accent");
+    expect(row.className).toContain("aria-selected:before:content-['']");
   });
 
   it("does not branch styling on isSelected — selection is purely aria-driven", () => {
-    const { container: selectedContainer } = render(
+    const { rerender } = render(
       <ActionPaletteItem item={makeItem()} index={0} isSelected={true} onSelect={onSelect} />
     );
-    const { container: unselectedContainer } = render(
+    const selectedClass = screen.getByRole("option").className;
+    rerender(
       <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
     );
-
-    const selectedClass = selectedContainer.querySelector("button")?.className;
-    const unselectedClass = unselectedContainer.querySelector("button")?.className;
+    const unselectedClass = screen.getByRole("option").className;
     // Class lists must be identical — only aria-selected attribute differs.
     expect(selectedClass).toBe(unselectedClass);
   });
 
   it("lifts keybinding glyph contrast on selection via group-aria-selected", () => {
-    const { container } = render(
+    render(
       <ActionPaletteItem
         item={makeItem({ keybinding: "⌘K" })}
         index={0}
@@ -153,12 +149,12 @@ describe("ActionPaletteItem", () => {
     const kbd = screen.getByText("⌘K");
     expect(kbd.className).toContain("text-daintree-text/40");
     expect(kbd.className).toContain("group-aria-selected:text-daintree-text/60");
-    expect(container.querySelector("button")?.className).toContain("group");
+    expect(screen.getByRole("option").className).toContain("group");
   });
 
   it("calls onHoverIndex with index when pointer moves over the item", () => {
     const onHoverIndex = vi.fn();
-    const { container } = render(
+    render(
       <ActionPaletteItem
         item={makeItem()}
         index={3}
@@ -168,32 +164,174 @@ describe("ActionPaletteItem", () => {
       />
     );
 
-    const button = container.querySelector("button");
-    expect(button).toBeTruthy();
-    fireEvent.pointerMove(button!);
+    const row = screen.getByRole("option");
+    fireEvent.pointerMove(row);
     expect(onHoverIndex).toHaveBeenCalledTimes(1);
     expect(onHoverIndex).toHaveBeenCalledWith(3);
   });
 
   it("does not throw when onHoverIndex is omitted", () => {
-    const { container } = render(
+    render(
       <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
     );
 
-    const button = container.querySelector("button");
-    expect(() => fireEvent.pointerMove(button!)).not.toThrow();
+    const row = screen.getByRole("option");
+    expect(() => fireEvent.pointerMove(row)).not.toThrow();
   });
 
-  it("calls onSelect when an enabled item is clicked", () => {
+  it("calls onSelect when an enabled item's row body is clicked", () => {
     const item = makeItem({ enabled: true });
-    const { container } = render(
-      <ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />
-    );
+    render(<ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />);
 
-    const button = container.querySelector("button");
-    expect(button).toBeTruthy();
-    fireEvent.click(button!);
+    // The row body is the button labeled with the item's title (sibling of pin/hide buttons).
+    const rowButton = screen.getByRole("button", { name: item.title });
+    fireEvent.click(rowButton);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(item);
+  });
+
+  it("keeps pin/hide buttons clickable on a disabled MRU row (not nested in disabled button)", () => {
+    const item = makeItem({ enabled: false, disabledReason: "No focused terminal" });
+    const onHide = vi.fn();
+    const onPin = vi.fn(() => true);
+    render(
+      <ActionPaletteItem
+        item={item}
+        index={0}
+        isSelected={false}
+        onSelect={onSelect}
+        onPin={onPin}
+        onHide={onHide}
+      />
+    );
+
+    const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+    const hideButton = screen.getByRole("button", { name: /hide .* from recently used/i });
+    fireEvent.click(pinButton);
+    fireEvent.click(hideButton);
+    expect(onPin).toHaveBeenCalledTimes(1);
+    expect(onHide).toHaveBeenCalledTimes(1);
+  });
+
+  describe("pin & hide affordances", () => {
+    it("renders the pin button when onPin is provided", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /pin .* to favorites/i })).toBeTruthy();
+    });
+
+    it("renders the hide button when onHide is provided and the item is not pinned or destructive", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onHide={() => {}}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /hide .* from recently used/i })).toBeTruthy();
+    });
+
+    it("hides the hide button on destructive (danger:'confirm') items", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem({ danger: "confirm" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onHide={() => {}}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+    });
+
+    it("calls onPin and stops propagation when the pin button is clicked", () => {
+      const onPin = vi.fn(() => true);
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={onPin}
+        />
+      );
+
+      onSelect.mockClear();
+      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      fireEvent.click(pinButton);
+
+      expect(onPin).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a rejection message when onPin returns false (e.g., destructive action)", () => {
+      const onPin = vi.fn(() => false);
+      render(
+        <ActionPaletteItem
+          item={makeItem({ danger: "confirm" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={onPin}
+        />
+      );
+
+      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      fireEvent.click(pinButton);
+
+      expect(onPin).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Can't pin destructive actions")).toBeTruthy();
+    });
+
+    it("uses 'Unpin' label and routes click to onUnpin when isPinned", () => {
+      const onUnpin = vi.fn();
+      const item = makeItem();
+      render(
+        <ActionPaletteItem
+          item={item}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+          onUnpin={onUnpin}
+          isPinned
+        />
+      );
+
+      const unpinButton = screen.getByRole("button", { name: /unpin/i });
+      fireEvent.click(unpinButton);
+
+      expect(onUnpin).toHaveBeenCalledTimes(1);
+      expect(onUnpin).toHaveBeenCalledWith(item.id);
+    });
+
+    it("hides the hide button when the item is already pinned", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+          onUnpin={() => {}}
+          onHide={() => {}}
+          isPinned
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+    });
   });
 });

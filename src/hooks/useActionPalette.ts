@@ -6,6 +6,7 @@ import { notify } from "@/lib/notify";
 import type { ActionDanger, ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
+import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSearchablePalette } from "./useSearchablePalette";
@@ -35,6 +36,8 @@ export interface UseActionPaletteReturn {
   selectedIndex: number;
   isShowingRecentlyUsed: boolean;
   isStale: boolean;
+  /** Count of pinned items at the start of `results`. The remainder is "Recently used". */
+  pinnedCount: number;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -44,6 +47,11 @@ export interface UseActionPaletteReturn {
   selectNext: () => void;
   executeAction: (item: ActionPaletteItem) => void;
   confirmSelection: () => void;
+  /** Pin an action to Favorites. Returns false (and surfaces a toast) when the action is `danger:"confirm"`. */
+  pinAction: (item: ActionPaletteItem) => boolean;
+  unpinAction: (id: string) => void;
+  /** Hide an action from Recently used. Fires a 30-second undo toast. No-op for pinned actions. */
+  hideAction: (item: ActionPaletteItem) => void;
 }
 
 const MAX_RESULTS = 20;
@@ -83,6 +91,8 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
 export function useActionPalette(): UseActionPaletteReturn {
   const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
   const getSortedActionMruList = useActionMruStore((state) => state.getSortedActionMruList);
+  const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
+  const hiddenActionIds = useActionPrefsStore((state) => state.hiddenActionIds);
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];
@@ -92,29 +102,43 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
-      // Strip confirm-danger ids from the MRU list so destructive actions
+      // Strip confirm-danger ids from the MRU/Favorites lists so destructive actions
       // persisted from a pre-fix session don't keep surfacing in the
       // "Recently used" rail or get a search-rank bonus (issue #7481).
       const confirmDangerIds = new Set(
         items.filter((item) => item.danger === "confirm").map((item) => item.id)
       );
+      const hiddenSet = new Set(hiddenActionIds);
+      const pinnedSet = new Set(pinnedActionIds);
       const actionMruList = getSortedActionMruList()
         .map(({ id }) => id)
         .filter((id) => !confirmDangerIds.has(id));
 
       if (!query.trim()) {
-        if (actionMruList.length === 0) return [];
-
         const itemById = new Map(items.map((item) => [item.id, item]));
+
+        // Favorites: ordered by pin time (insertion order), strip danger:"confirm"
+        // and skip ids the action registry no longer exposes.
+        const pinnedItems: ActionPaletteItem[] = [];
+        for (const id of pinnedActionIds) {
+          if (confirmDangerIds.has(id)) continue;
+          const item = itemById.get(id);
+          if (item) pinnedItems.push(item);
+        }
+
+        // Recently used: filter out pinned ids (so they don't appear in both
+        // sections) and hidden ids (eviction).
         const enabled: ActionPaletteItem[] = [];
         const disabled: ActionPaletteItem[] = [];
         for (const id of actionMruList) {
+          if (pinnedSet.has(id) || hiddenSet.has(id)) continue;
           const item = itemById.get(id);
           if (!item) continue;
           if (item.enabled) enabled.push(item);
           else disabled.push(item);
         }
-        return [...enabled, ...disabled].slice(0, MAX_MRU_RESULTS);
+        const recentItems = [...enabled, ...disabled].slice(0, MAX_MRU_RESULTS);
+        return [...pinnedItems, ...recentItems];
       }
 
       const context = actionService.getContext();
@@ -124,7 +148,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         isSettingsOpen: context.isSettingsOpen,
       });
     },
-    [getSortedActionMruList]
+    [getSortedActionMruList, pinnedActionIds, hiddenActionIds]
   );
 
   const {
@@ -200,6 +224,63 @@ export function useActionPalette(): UseActionPaletteReturn {
     }
   }, [isStale, results, selectedIndex, executeAction]);
 
+  const pinAction = useCallback((item: ActionPaletteItem): boolean => {
+    if (item.danger === "confirm") {
+      // Mirrors the MRU strip in `filterFn` — destructive actions must
+      // round-trip through ConfirmDialog and never appear in the Favorites
+      // rail (issue #7481). The pin button surfaces an inline tooltip so the
+      // user understands why the click was rejected; we still emit a
+      // diagnostic-tier console warn for audit logs.
+      console.warn(
+        `[useActionPalette] Refusing to pin destructive action '${item.id}' — danger:"confirm" actions cannot be pinned.`
+      );
+      return false;
+    }
+    useActionPrefsStore.getState().pinAction(item.id);
+    return true;
+  }, []);
+
+  const unpinAction = useCallback((id: string) => {
+    useActionPrefsStore.getState().unpinAction(id);
+  }, []);
+
+  const hideAction = useCallback((item: ActionPaletteItem) => {
+    const store = useActionPrefsStore.getState();
+    if (store.isActionPinned(item.id)) {
+      // Pinned actions can't be hidden — they're explicitly promoted to
+      // Favorites. Unpin first if the user wants to evict them.
+      return;
+    }
+    store.hideAction(item.id);
+    notify({
+      type: "success",
+      title: "Hidden from Recently used",
+      message: `'${item.title}' won't appear in the empty-query rail.`,
+      duration: 30_000,
+      urgent: true,
+      transient: true,
+      action: {
+        label: "Show in Recently used",
+        onClick: () => useActionPrefsStore.getState().showAction(item.id),
+      },
+    });
+  }, []);
+
+  // When the query is non-empty, results come from `rankActionMatches` (search
+  // scoring) and the section split doesn't apply. The empty-query branch is the
+  // only path where the first N items are pinned — count them up so consumers
+  // can render the "Favorites" / "Recently used" divider at the right offset.
+  const pinnedCount = useMemo(() => {
+    if (query.trim()) return 0;
+    const pinnedSet = new Set(pinnedActionIds);
+    let count = 0;
+    for (const item of results) {
+      if (pinnedSet.has(item.id)) count++;
+      else break;
+    }
+    return count;
+  }, [query, results, pinnedActionIds]);
+
   const isShowingRecentlyUsed = query.trim() === "" && results.length > 0;
 
   return {
@@ -210,6 +291,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     selectedIndex,
     isShowingRecentlyUsed,
     isStale,
+    pinnedCount,
     open,
     close,
     toggle,
@@ -219,5 +301,8 @@ export function useActionPalette(): UseActionPaletteReturn {
     selectNext,
     executeAction,
     confirmSelection,
+    pinAction,
+    unpinAction,
+    hideAction,
   };
 }
