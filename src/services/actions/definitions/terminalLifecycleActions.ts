@@ -5,6 +5,7 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
+import { logError } from "@/utils/logger";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import {
   useTerminalPendingDestructiveActionStore,
@@ -73,7 +74,23 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.trashPanel(targetId);
+        const terminal = state.panelsById[targetId];
+        if (terminal) {
+          if (terminal.location === "dock") {
+            state.trashPanel(targetId);
+          } else {
+            requestPanelClose({
+              hideIds: [targetId],
+              commit: () => {
+                try {
+                  usePanelStore.getState().trashPanel(targetId);
+                } catch (error) {
+                  logError("Failed to trash terminal via terminal.trash", error);
+                }
+              },
+            });
+          }
+        }
       }
     },
   }));
@@ -443,7 +460,45 @@ export function registerTerminalLifecycleActions(
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
       });
-      idsToClose.forEach((id) => state.trashPanel(id));
+
+      const gridIds: string[] = [];
+      const dockIds: string[] = [];
+      for (const id of idsToClose) {
+        const t = state.panelsById[id];
+        if (t) {
+          if (t.location === "dock") {
+            dockIds.push(id);
+          } else {
+            gridIds.push(id);
+          }
+        }
+      }
+
+      // Process dock immediately
+      dockIds.forEach((id) => {
+        try {
+          state.trashPanel(id);
+        } catch (error) {
+          logError("Failed to trash dock terminal via terminal.closeAll", error);
+        }
+      });
+
+      // Process grid panels via optimistic close
+      if (gridIds.length > 0) {
+        requestPanelClose({
+          hideIds: gridIds,
+          commit: () => {
+            const trashPanel = usePanelStore.getState().trashPanel;
+            gridIds.forEach((id) => {
+              try {
+                trashPanel(id);
+              } catch (error) {
+                logError("Failed to trash grid terminal via terminal.closeAll", error);
+              }
+            });
+          },
+        });
+      }
     },
   }));
 

@@ -62,7 +62,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
-import { logWarn } from "@/utils/logger";
+import { logWarn, logError } from "@/utils/logger";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
@@ -80,7 +80,7 @@ import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
-
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type {};
@@ -803,7 +803,20 @@ function TerminalPaneComponent({
   };
 
   const handleTrash = () => {
-    trashPanel(id);
+    if (location === "dock") {
+      trashPanel(id);
+    } else {
+      requestPanelClose({
+        hideIds: [id],
+        commit: () => {
+          try {
+            trashPanel(id);
+          } catch (error) {
+            logError("Failed to trash terminal pane", error);
+          }
+        },
+      });
+    }
   };
 
   const handleDismissReconnectError = () => {

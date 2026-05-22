@@ -444,12 +444,14 @@ export function XtermAdapter({
       // doesn't background a terminal that has already been re-attached elsewhere.
       terminalInstanceService.setVisible(terminalId, false, attachGen);
 
-      // Flush pending resizes before unmount — but never for a panel the user
-      // just optimistically closed. That panel is being torn down; flushing
-      // its pending resize force-drains queued output and reflows scrollback
-      // synchronously inside the close click, which is exactly the blocking
-      // work the optimistic close exists to avoid.
-      if (!isOptimisticallyClosing(terminalId)) {
+      // Settle pending resizes before unmount. For a panel the user just
+      // optimistically closed, *cancel* the pending resize rather than flush
+      // it — flushing force-drains queued output and reflows scrollback
+      // synchronously inside the close click. Cancelling still clears the
+      // job/debounce so no stale resize fires after teardown or on undo.
+      if (isOptimisticallyClosing(terminalId)) {
+        terminalInstanceService.cancelPendingResize(terminalId);
+      } else {
         terminalInstanceService.flushResize(terminalId);
       }
 

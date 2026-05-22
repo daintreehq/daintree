@@ -1436,6 +1436,18 @@ class TerminalInstanceService {
     this.resizeController.flushResize(id);
   }
 
+  /**
+   * Cancel a panel's pending resize job and debounce timer *without* applying
+   * it. Used on optimistic close: `flushResize` would force-drain queued
+   * output and reflow scrollback synchronously inside the close click, but the
+   * pending job still has to be cleared so no stale resize fires after the
+   * panel is detached or restored from trash.
+   */
+  cancelPendingResize(id: string): void {
+    const managed = this.instances.get(id);
+    if (managed) this.resizeController.clearResizeJob(managed);
+  }
+
   sendPtyResize(id: string, cols: number, rows: number): void {
     this.resizeController.sendPtyResize(id, cols, rows);
   }

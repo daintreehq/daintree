@@ -5,6 +5,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { logError } from "@/utils/logger";
 
 interface TerminalCountWarningProps {
   className?: string;
@@ -79,6 +81,9 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       onOpenBulkActions();
     } else {
       const { panelsById, panelIds } = usePanelStore.getState();
+      const gridIds: string[] = [];
+      const dockIds: string[] = [];
+
       for (const id of panelIds) {
         const t = panelsById[id];
         if (
@@ -87,8 +92,39 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
           t.location !== "trash" &&
           t.ephemeral !== true
         ) {
-          usePanelStore.getState().trashPanel(t.id);
+          if (t.location === "dock") {
+            dockIds.push(t.id);
+          } else {
+            gridIds.push(t.id);
+          }
         }
+      }
+
+      // Process dock panels immediately
+      const trashPanel = usePanelStore.getState().trashPanel;
+      for (const id of dockIds) {
+        try {
+          trashPanel(id);
+        } catch (error) {
+          logError("Failed to trash dock terminal pane from warning cleanup", error);
+        }
+      }
+
+      // Process grid panels via optimistic close
+      if (gridIds.length > 0) {
+        requestPanelClose({
+          hideIds: gridIds,
+          commit: () => {
+            const currentTrashPanel = usePanelStore.getState().trashPanel;
+            for (const id of gridIds) {
+              try {
+                currentTrashPanel(id);
+              } catch (error) {
+                logError("Failed to trash grid terminal pane from warning cleanup", error);
+              }
+            }
+          },
+        });
       }
     }
   }, [onOpenBulkActions]);
