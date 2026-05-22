@@ -57,7 +57,7 @@ export function FileDiffModal({
     const requestId = ++requestRef.current;
     setDiff(undefined);
     try {
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<{ content: string }>(
         "git.getFileDiff",
         { cwd: worktreePath, filePath, status },
         { source: "user" }
@@ -67,8 +67,7 @@ export function FileDiffModal({
         setDiff("ERROR");
         return;
       }
-      const diffResult = result.result;
-      setDiff(typeof diffResult === "string" ? diffResult || "NO_CHANGES" : "ERROR");
+      setDiff(result.result.content || "NO_CHANGES");
     } catch {
       if (requestRef.current !== requestId) return;
       setDiff("ERROR");
