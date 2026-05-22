@@ -76,6 +76,13 @@ describe("getAutoGridCols", () => {
       expect(getAutoGridCols(many, 960)).toBe(2);
     });
 
+    it('keeps 13" MacBook Air-class widths on 2 columns (#8859)', () => {
+      // Issue #8859: typical usable grid width on a 13" MBA with sidebars
+      // visible is ~1100-1200px; that must stay at 2 columns, not collapse to 1.
+      expect(getAutoGridCols(many, 1100)).toBe(2);
+      expect(getAutoGridCols(many, 1200)).toBe(2);
+    });
+
     it("is driven by width, not panel count, at a fixed width", () => {
       // Same width → same column count whether 3 panels or 50 are open.
       const wide = 3 * C; // fits 3 columns
