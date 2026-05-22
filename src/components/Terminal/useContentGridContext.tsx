@@ -785,22 +785,39 @@ export function useContentGridContext({
     }
   });
   const prevGridColsRef = useRef(gridCols);
+  const prevPanelCountRef = useRef(panelIds.length);
+  const prevScrollGeoRef = useRef(`${isScrollMode}:${scrollRowHeight}`);
   useLayoutEffect(() => {
     void gridCols;
     void panelIds;
 
     const colsChanged = prevGridColsRef.current !== gridCols;
     prevGridColsRef.current = gridCols;
+
+    const scrollGeoKey = `${isScrollMode}:${scrollRowHeight}`;
+    const scrollGeoChanged = prevScrollGeoRef.current !== scrollGeoKey;
+    prevScrollGeoRef.current = scrollGeoKey;
+
+    const isPureClose = panelIds.length < prevPanelCountRef.current;
+    prevPanelCountRef.current = panelIds.length;
+
     setHysteresisGridCols(
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
 
     if (isProjectSwitching || isDraggingRef.current) return;
 
-    // Schedule a coalesced sibling resize off the open/close path — the click
-    // never waits on N xterm resizes, and a burst of opens/closes collapses
-    // into a single pass once it settles (see scheduleBatchResize).
-    runGridBatchFit();
+    // Closing a panel in scroll mode leaves every survivor at its exact size —
+    // fixed column tracks, fixed row height. Resizing them all on the close
+    // path is pure waste and a real source of close-path lag, so skip the
+    // batch fit when nothing about the survivors' geometry actually changed.
+    const survivorGeometryStable = isScrollMode && isPureClose && !colsChanged && !scrollGeoChanged;
+    if (!survivorGeometryStable) {
+      // Schedule a coalesced sibling resize off the open/close path — the click
+      // never waits on N xterm resizes, and a burst of opens/closes collapses
+      // into a single pass once it settles (see scheduleBatchResize).
+      runGridBatchFit();
+    }
 
     // A column-count change shifts cell widths, so the per-host ResizeObserver
     // would otherwise fire an uncoordinated second resize through the 200ms
@@ -815,7 +832,15 @@ export function useContentGridContext({
         );
       }
     }
-  }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
+  }, [
+    gridCols,
+    panelIds,
+    isScrollMode,
+    scrollRowHeight,
+    isProjectSwitching,
+    layoutConfig.strategy,
+    showPlaceholder,
+  ]);
 
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
   const useTwoPaneSplitMode =

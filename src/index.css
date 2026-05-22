@@ -780,44 +780,18 @@ code.hljs {
     background: var(--scrollbar-track);
   }
 
-  /* The scrollable agent grid uses a wider, more visible scrollbar so users
-     can tell at a glance that the grid itself scrolls (separate from xterm's
-     own viewport). Chromium 146 ignores all `::-webkit-scrollbar-*` rules
-     when `scrollbar-width` is set to any non-`auto` keyword on a matched
-     element — Tailwind v4's global `* { scrollbar-width: thin }` would
-     otherwise mask everything below. Reset it to `auto` first. The thumb
-     uses `background-clip: padding-box` plus a grid-bg-coloured border so
-     the visible thumb is narrower than the 14px gutter; the inset gap
-     blends into the grid background instead of showing a transparent
-     stripe. xterm scrollbars are isolated by `.xterm .xterm-viewport`
-     specificity and are unaffected. */
+  /* The agent grid draws its own scrollbar — the GridScrollbar component, a
+     chunky physical handle modelled on xterm's (VS Code's) slider, sitting in
+     a real reserved gutter. The native scrollbar is hidden entirely: the grid
+     still scrolls via wheel, keyboard and programmatic scroll; only the visual
+     bar is replaced. xterm's own viewport scrollbar is unaffected — it is
+     scoped by `.xterm .xterm-viewport`. */
   #panel-grid {
-    scrollbar-width: auto;
+    scrollbar-width: none;
   }
 
   #panel-grid::-webkit-scrollbar {
-    width: 14px;
-    height: 14px;
-  }
-
-  #panel-grid::-webkit-scrollbar-track {
-    background: var(--color-grid-bg);
-  }
-
-  #panel-grid::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb);
-    background-clip: padding-box;
-    /* A 2px inset leaves a ~10px visible thumb in the 14px gutter — a meaty,
-       clearly-visible grab target so the grid's own scroll is unmistakable
-       and distinct from the thinner xterm viewport scrollbar. */
-    border: 2px solid var(--color-grid-bg);
-    border-radius: 7px;
-    min-height: 48px;
-  }
-
-  #panel-grid::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
-    background-clip: padding-box;
+    display: none;
   }
 
   /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */

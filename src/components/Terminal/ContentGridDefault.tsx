@@ -13,6 +13,7 @@ import {
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
 import { GridShell } from "./GridShell";
+import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import type { ContentGridContext } from "./useContentGridContext";
@@ -98,12 +99,13 @@ export function ContentGridDefault({
                   // are added or removed above the viewport — Chromium 146
                   // reflow would otherwise produce visible stutter (#8805).
                   overflowAnchor: "none",
-                  // Reserve gutter width so a row of cells doesn't reflow when
-                  // the scrollbar appears mid-burst.
-                  scrollbarGutter: "stable",
                   // Stop xterm scrollback / overflow strip-of-history from
                   // chaining into the outer chrome via overscroll bounces.
                   overscrollBehavior: "contain",
+                  // Reserve a real gutter on the right for the custom
+                  // GridScrollbar so panels never sit under the handle. The
+                  // native scrollbar is hidden in CSS; this is the only gutter.
+                  paddingRight: ctx.isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
                 }}
                 id="panel-grid"
                 data-grid-container="true"
@@ -200,6 +202,10 @@ export function ContentGridDefault({
               </div>
             </GridShell>
           </SortableContext>
+          <GridScrollbar
+            scrollRoot={ctx.gridScrollRoot}
+            revision={`${ctx.gridItemCount}:${ctx.gridCols}:${ctx.isScrollMode}:${ctx.scrollRowHeight}`}
+          />
         </div>
       </div>
     </GridScrollRootContext.Provider>
