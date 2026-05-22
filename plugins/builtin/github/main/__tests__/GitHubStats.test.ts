@@ -266,42 +266,50 @@ describe("getRepoStatsAndPage — activity-probe gate (issue #8757)", () => {
     expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toEqual(goodSnapshot);
   });
 
-  it("re-stamps the durable disk + probe + snapshot caches on a probe-match hit (issue #8826)", async () => {
+  it("re-stamps the durable disk cache on a probe-match hit so the fallback can't age out (issue #8826)", async () => {
     mockClient.mockImplementation(async (query: string) => {
       if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");
       return statsResponse(5, 3);
     });
 
     await getRepoStatsAndPage("/test", false);
-    const firstSnapshot = repoStatsAndPageSnapshotCache.get(CACHE_KEY);
-    expect(firstSnapshot).toBeDefined();
 
     // Only the 60s memory caches expire; the durable caches survive so the
     // next call takes the probe-match fast path.
     expireMemoryCaches();
     mockStatsCache.set.mockClear();
 
-    const result = await getRepoStatsAndPage("/test", false);
+    await getRepoStatsAndPage("/test", false);
 
     // Optimization preserved — no second expensive stats query.
     expect(statsQueryCount()).toBe(1);
     // The durable disk cache is re-written on the fast path so it can't age out
-    // behind the in-memory caches and leave the badge with no fallback.
+    // behind the in-memory caches and leave the error-path fallback empty.
     expect(mockStatsCache.set).toHaveBeenCalledWith(
       CACHE_KEY,
       expect.objectContaining({ issueCount: 5, prCount: 3 }),
       "/test"
     );
-    // Probe + snapshot durable caches are re-stamped (TTLs advanced).
-    expect(repoActivityProbeCache.get(CACHE_KEY)).toEqual({
-      pushedAt: "p1",
-      issueUpdatedAt: "i1",
-      prUpdatedAt: "r1",
+  });
+
+  it("does not re-stamp the probe/snapshot TTLs on a probe-match hit (keeps the 10-min staleness cap)", async () => {
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");
+      return statsResponse(5, 3);
     });
-    const restamped = repoStatsAndPageSnapshotCache.get(CACHE_KEY);
-    expect(restamped).toBeDefined();
-    expect(restamped?.stats.issueCount).toBe(5);
-    expect(restamped?.stats.lastUpdated).toBe(result.stats?.lastUpdated);
+
+    await getRepoStatsAndPage("/test", false);
+    const probeBefore = repoActivityProbeCache.get(CACHE_KEY);
+    const snapshotBefore = repoStatsAndPageSnapshotCache.get(CACHE_KEY);
+
+    expireMemoryCaches();
+    await getRepoStatsAndPage("/test", false);
+
+    // Probe/snapshot caches are read, not rewritten — their original entries
+    // (and TTLs) are untouched so list content can't live indefinitely behind
+    // a continuously-matching probe.
+    expect(repoActivityProbeCache.get(CACHE_KEY)).toBe(probeBefore);
+    expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBe(snapshotBefore);
   });
 
   it("re-runs the full query after clearPRCaches invalidates the snapshot", async () => {

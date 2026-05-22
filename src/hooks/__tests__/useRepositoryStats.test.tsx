@@ -498,6 +498,58 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("preserves a confirmed 0 across a failed poll instead of flashing a dash", async () => {
+      const project = { id: "p", path: "/repo/preserve-zero" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      // Fresh poll confirms the repo genuinely has 0 open issues and 0 PRs.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 7,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(0);
+        expect(result.current.stats?.prCount).toBe(0);
+      });
+
+      // A failed poll surfaces null counts — the confirmed 0 must be preserved,
+      // not replaced with a `—` dash.
+      const failedPush: RepositoryStats = {
+        commitCount: 7,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+        stale: true,
+        ghError: "timeout",
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(makePushPayload(project.path, failedPush, 2000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+        expect(result.current.stats?.issueCount).toBe(0);
+        expect(result.current.stats?.prCount).toBe(0);
+      });
+    });
+
     it("shows a genuine 0 from a fresh fetch instead of a preserved count", async () => {
       const project = { id: "p", path: "/repo/confirmed-zero" };
       getCurrentMock.mockResolvedValue(project);
