@@ -18,6 +18,7 @@ export interface ActionPaletteItem {
   category: string;
   enabled: boolean;
   danger: ActionDanger;
+  dangerRationale?: string;
   disabledReason?: string;
   keybinding?: string;
   kind: string;
@@ -64,6 +65,10 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const category = typeof entry.category === "string" ? entry.category : "General";
   const disabledReason =
     typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
+  const dangerRationale =
+    typeof entry.dangerRationale === "string" && entry.dangerRationale.trim().length > 0
+      ? entry.dangerRationale
+      : undefined;
   const keywordsLower: readonly string[] = Array.isArray(entry.keywords)
     ? entry.keywords
         .filter((k): k is string => typeof k === "string" && k.length > 0)
@@ -77,6 +82,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     category,
     enabled: entry.enabled,
     danger: entry.danger,
+    dangerRationale,
     disabledReason,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Pin, PinOff, EyeOff } from "lucide-react";
+import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
@@ -105,6 +105,13 @@ function ActionPaletteItemInner({
   const canShowPin = Boolean(onPin || (isPinned && onUnpin));
   const canShowHide = Boolean(onHide) && !isPinned && item.danger !== "confirm";
 
+  const isConfirmTier = item.danger === "confirm";
+  const hasRationale = isConfirmTier && Boolean(item.dangerRationale);
+  const rationaleId = hasRationale ? `${item.id}-danger-rationale` : undefined;
+  // HIG ellipsis (U+2026) signals "activation requires further input or confirmation".
+  // Appended at render time; the action definition's title is never mutated.
+  const displayTitle = isConfirmTier ? `${item.title} …` : item.title;
+
   return (
     <div
       className={cn(
@@ -127,6 +134,8 @@ function ActionPaletteItemInner({
         type="button"
         tabIndex={-1}
         aria-label={item.title}
+        aria-haspopup={isConfirmTier ? "dialog" : undefined}
+        aria-describedby={isSelected && rationaleId ? rationaleId : undefined}
         onClick={handleSelectClick}
         className={cn(
           "flex-1 min-w-0 flex items-center gap-3 text-left bg-transparent border-0 p-0",
@@ -143,13 +152,21 @@ function ActionPaletteItemInner({
         </span>
 
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium truncate">{item.title}</div>
+          <div className="text-sm font-medium truncate">{displayTitle}</div>
           {item.description && (
             <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
           )}
           {!item.enabled && item.disabledReason && (
             <div className="text-[10px] text-daintree-text/40 italic truncate">
               {item.disabledReason}
+            </div>
+          )}
+          {hasRationale && (
+            <div
+              id={rationaleId}
+              className="hidden group-aria-selected:block text-xs text-daintree-text/50 italic truncate"
+            >
+              {item.dangerRationale}
             </div>
           )}
           {pinRejected && (
@@ -213,6 +230,13 @@ function ActionPaletteItemInner({
           <span className="text-[11px] font-mono text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/60">
             {item.keybinding}
           </span>
+        )}
+
+        {isConfirmTier && (
+          <TriangleAlert
+            aria-hidden="true"
+            className="shrink-0 size-3 text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/50"
+          />
         )}
       </div>
     </div>
