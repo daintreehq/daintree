@@ -30,7 +30,14 @@ function serializeReason(reason: unknown): string {
   return String(reason);
 }
 
-export function installBootstrapErrorGuard(options: BootstrapErrorGuardOptions): void {
+/**
+ * Returns a cleanup function that removes the installed handlers. Call it once
+ * the host module has been imported successfully: the host installs its own
+ * lifetime handlers during evaluation, so leaving the bootstrap guard in place
+ * would double-report every post-startup crash (once with a misleading
+ * `[…Bootstrap]` label).
+ */
+export function installBootstrapErrorGuard(options: BootstrapErrorGuardOptions): () => void {
   const { label, postError } = options;
   let exiting = false;
 
@@ -49,6 +56,14 @@ export function installBootstrapErrorGuard(options: BootstrapErrorGuardOptions):
     setImmediate(() => process.exit(1));
   };
 
-  process.on("uncaughtException", (err) => reportAndExit("Uncaught Exception", err));
-  process.on("unhandledRejection", (reason) => reportAndExit("Unhandled Rejection", reason));
+  const onUncaught = (err: unknown): void => reportAndExit("Uncaught Exception", err);
+  const onRejection = (reason: unknown): void => reportAndExit("Unhandled Rejection", reason);
+
+  process.on("uncaughtException", onUncaught as NodeJS.UncaughtExceptionListener);
+  process.on("unhandledRejection", onRejection as NodeJS.UnhandledRejectionListener);
+
+  return () => {
+    process.off("uncaughtException", onUncaught as NodeJS.UncaughtExceptionListener);
+    process.off("unhandledRejection", onRejection as NodeJS.UnhandledRejectionListener);
+  };
 }

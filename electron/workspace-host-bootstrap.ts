@@ -35,12 +35,17 @@ markHostPerformance(PERF_MARKS.WORKSPACE_HOST_MODULE_EVAL_COMPLETE, getCompileCa
 // @parcel/watcher dlopen) would otherwise hang the parent's waitForReady()
 // forever, since Electron 37+ only warns on unhandled rejections in utility
 // processes.
-installBootstrapErrorGuard({
+const removeBootstrapGuard = installBootstrapErrorGuard({
   label: "[WorkspaceHostBootstrap]",
   postError: (error) => {
+    // Shape must match the `error` variant of WorkspaceHostEvent (shared/types/workspace-host.ts).
     const port = process.parentPort as unknown as MessagePort | undefined;
     port?.postMessage({ type: "error", error });
   },
 });
 
 await import("./workspace-host.js");
+
+// Import succeeded — workspace-host.ts installed its own handlers during
+// evaluation, so drop the bootstrap guard to avoid double-reporting later crashes.
+removeBootstrapGuard();

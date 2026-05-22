@@ -9,11 +9,14 @@ function install(postError: (message: string) => void = vi.fn()) {
     handlers[event as string] = handler as Handler;
     return process;
   });
-  installBootstrapErrorGuard({ label: "[TestBootstrap]", postError });
+  const offSpy = vi.spyOn(process, "off").mockReturnValue(process);
+  const cleanup = installBootstrapErrorGuard({ label: "[TestBootstrap]", postError });
   onSpy.mockRestore();
   return {
     triggerUncaught: (reason: unknown) => handlers["uncaughtException"](reason),
     triggerRejection: (reason: unknown) => handlers["unhandledRejection"](reason),
+    cleanup,
+    offSpy,
     postError,
   };
 }
@@ -38,9 +41,12 @@ describe("installBootstrapErrorGuard", () => {
   });
 
   it("registers both process error handlers", () => {
-    const onSpy = vi.spyOn(process, "on");
+    // Capture without installing real listeners — a stale guard could otherwise
+    // kill the Vitest process once process.exit is restored.
+    const onSpy = vi.spyOn(process, "on").mockImplementation((() => process) as typeof process.on);
     installBootstrapErrorGuard({ label: "[TestBootstrap]", postError: vi.fn() });
     const events = onSpy.mock.calls.map((c) => c[0]);
+    onSpy.mockRestore();
     expect(events).toContain("uncaughtException");
     expect(events).toContain("unhandledRejection");
   });
@@ -90,6 +96,31 @@ describe("installBootstrapErrorGuard", () => {
     const { triggerRejection, postError } = install();
     triggerRejection(undefined);
     expect(postError).toHaveBeenCalledWith("undefined");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("cleanup removes both handlers", () => {
+    const { cleanup, offSpy } = install();
+    cleanup();
+    const events = offSpy.mock.calls.map((c) => c[0]);
+    expect(events).toContain("uncaughtException");
+    expect(events).toContain("unhandledRejection");
+  });
+
+  it("defers process.exit to the next tick", () => {
+    // setImmediate is mocked to run synchronously in beforeEach; capture the
+    // scheduled callback instead so we can assert exit happens only after defer.
+    (global.setImmediate as unknown as ReturnType<typeof vi.spyOn>).mockReset();
+    let scheduled: (() => void) | undefined;
+    vi.spyOn(global, "setImmediate").mockImplementation(((fn: () => void) => {
+      scheduled = fn;
+      return 0 as unknown as NodeJS.Immediate;
+    }) as typeof setImmediate);
+
+    const { triggerUncaught } = install();
+    triggerUncaught(new Error("boom"));
+    expect(exitSpy).not.toHaveBeenCalled();
+    scheduled?.();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
