@@ -25,7 +25,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { useGridScrollRoot } from "./GridScrollRootContext";
-import { MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
+import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { getRestartBannerVariant } from "./restartStatus";
@@ -575,11 +575,13 @@ function TerminalPaneComponent({
       },
       {
         // Grid-scoped root: when mounted inside the grid, the pre-warm margin
-        // upgrades panels that are one row away from the viewport from
-        // BACKGROUND → VISIBLE before they paint. Outside the grid we fall
-        // back to the document viewport with no margin.
+        // upgrades panels that are one comfortable row away from the viewport
+        // from BACKGROUND → VISIBLE before they paint. Sized to the comfortable
+        // row height so the pre-warm fires a full row ahead now that rows no
+        // longer shrink to the minimum. Outside the grid we fall back to the
+        // document viewport with no margin.
         root: gridScrollRoot ?? null,
-        rootMargin: gridScrollRoot ? `${MIN_TERMINAL_HEIGHT_PX}px 0px` : "0px",
+        rootMargin: gridScrollRoot ? `${COMFORTABLE_PANEL_HEIGHT_PX}px 0px` : "0px",
         threshold: 0.1,
       }
     );

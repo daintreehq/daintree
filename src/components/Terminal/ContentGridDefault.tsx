@@ -2,7 +2,7 @@ import React, { useCallback } from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { MIN_TERMINAL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
+import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
@@ -78,7 +78,7 @@ export function ContentGridDefault({
                 style={{
                   display: "grid",
                   gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
-                  gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
+                  gridAutoRows: `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
                   overflowX: "hidden",

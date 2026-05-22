@@ -16,6 +16,52 @@ export const MIN_TERMINAL_WIDTH_PX = 380;
 export const MIN_TERMINAL_HEIGHT_PX = 200;
 
 /**
+ * Comfortable panel width — the size-driven denominator for the automatic
+ * column count. A terminal needs ~624-672px for 80 columns and ~780-840px for
+ * 100 columns at typical monospace sizes; rich agent TUIs render diffs and
+ * tables best at 100-120 columns. ~720-800px gives a comfortable monitoring
+ * width plus panel chrome. Pinned at the top of that range so a typical
+ * 1080p/1440p grid lands on 2 columns (each panel ≥800px) and only a large
+ * display reaches 3 — favoring fewer, larger panels over more, smaller ones.
+ *
+ * Tunable in one place against the app's actual terminal font size.
+ */
+export const COMFORTABLE_PANEL_WIDTH_PX = 800;
+
+/**
+ * Comfortable panel height — the `gridAutoRows` minimum. Enough for ~24-30
+ * terminal rows plus the panel header. Rows stretch to fill spare vertical
+ * room (`1fr`) but never shrink below this; once stacked rows exceed the
+ * visible grid height, the container scrolls vertically (#8807).
+ */
+export const COMFORTABLE_PANEL_HEIGHT_PX = 520;
+
+/**
+ * Hard upper bound on automatic columns. A 4th column shrinks every panel and
+ * pushes the fleet past what a person can scan at a glance: multiple-object
+ * tracking and subitizing both cap around 4 items (dropping toward 3 under
+ * load), control-room standards (EEMUA 201, ISO 11064-5) cap an operator at a
+ * 2x2 quad, and dashboard convention puts the at-a-glance ceiling at 3 tiles
+ * per row. Beyond 3 columns' worth of panels, add rows and scroll — don't
+ * widen. The explicit `fixed-columns` strategy is the escape hatch for 4+.
+ */
+export const AUTO_GRID_MAX_COLS = 3;
+
+/**
+ * Breakpoint hysteresis buffer. Once the grid widens to N columns it holds N
+ * until the container narrows this far past the N-column threshold, so dragging
+ * the window across a boundary doesn't thrash the layout (Schmitt trigger).
+ */
+export const GRID_HYSTERESIS_BUFFER_PX = 80;
+
+/**
+ * Grid width assumed on the first paint, before the ResizeObserver reports a
+ * real measurement. Sits in the 2-column band so the common case doesn't flash
+ * from 1 → 2 columns on mount.
+ */
+const FALLBACK_GRID_WIDTH_PX = 1680;
+
+/**
  * Hard upper limit retained for legacy callers that fall back to it when grid
  * dimensions are unknown. Layout no longer caps panels at this number — the
  * grid scrolls vertically once panels exceed what fits at the size floors.
@@ -85,48 +131,35 @@ export function getMaxGridCapacity(width: number | null, height: number | null):
   return fit.fitCount;
 }
 
-/**
- * Schmitt-trigger boundaries for breakpoint hysteresis. Each entry promotes
- * `from`→`to` columns once `count` reaches `widenAt`, and only relaxes back
- * to `from` once `count` drops to `narrowAt`. The buffer between the two
- * thresholds prevents single-panel toggles from re-flowing the grid.
- */
-const HYSTERESIS_BANDS: ReadonlyArray<{
-  from: number;
-  to: number;
-  widenAt: number;
-  narrowAt: number;
-}> = [
-  { from: 2, to: 3, widenAt: 6, narrowAt: 4 },
-  { from: 3, to: 4, widenAt: 12, narrowAt: 10 },
-  { from: 4, to: 5, widenAt: 20, narrowAt: 17 },
-  { from: 5, to: 6, widenAt: 30, narrowAt: 26 },
-];
+/** Clamp a raw column count into the automatic layout's [1, AUTO_GRID_MAX_COLS] range. */
+function clampAutoCols(cols: number): number {
+  return Math.min(AUTO_GRID_MAX_COLS, Math.max(1, cols));
+}
 
 /**
  * Pure function to calculate optimal grid columns for automatic layout.
  *
- * Design principles:
- * - Spatial permanence: column count based on viewport width, not terminal count
- * - Progressive density: allow more columns as fleet grows to prevent pancakes
- * - Readable terminals: respect minimum width, prevent both noodles and pancakes
- * - Predictable: same inputs always produce same outputs
- * - Fleet monitoring: optimize for scanning status across multiple agents
+ * Size-driven, not count-driven: the column count comes from how many
+ * comfortably-sized panels fit the available container width, hard-capped at
+ * `AUTO_GRID_MAX_COLS`. Panel count never adds a column — only width does.
+ * Once panels exceed what fits at comfortable size, the grid scrolls
+ * vertically (handled by `gridAutoRows` + the scroll container).
  *
- * Column progression (when width permits):
- * - 1 terminal: 1 column
- * - 2-5 terminals: 2 columns (stable for common use, max 3 rows)
- * - 6-11 terminals: 3 columns (prevents pancakes, max 4 rows)
- * - 12+ terminals: scales toward a near-square layout up to `maxFeasibleCols`,
- *   so a 20-panel fleet on a wide screen widens to 5 columns instead of
- *   capping at 4 and producing 5 long scrolling rows.
+ *   columns = clamp(1, floor(containerWidth / COMFORTABLE_PANEL_WIDTH_PX), 3)
+ *
+ * Design principles:
+ * - Spatial permanence: column count tracks the container width, not the fleet
+ *   size — hiding the sidebar/assistant widens the grid and adds a column for
+ *   free, while opening more panels just adds scrollable rows.
+ * - Comfortable panels: each column targets `COMFORTABLE_PANEL_WIDTH_PX`, not a
+ *   minimum-readable floor. Favor fewer, larger panels over more, smaller ones.
+ * - Predictable: same inputs always produce same outputs.
  *
  * Breakpoint hysteresis: when `previousCols` is supplied (the column count from
- * the prior render), the function holds the wider count through a buffer zone
- * — e.g. once at 3 cols (count≥6), it stays at 3 down to count=5 and only
- * narrows back to 2 at count≤4. `maxFeasibleCols` still caps the result so a
- * narrowing viewport always overrides a sticky widen. Calling without
- * `previousCols` preserves the original symmetric behavior.
+ * the prior render), the function holds the wider count until the container
+ * narrows `GRID_HYSTERESIS_BUFFER_PX` past the N-column threshold, so dragging
+ * the window across a boundary doesn't thrash the layout. Calling without
+ * `previousCols` is pure width-driven with no stickiness.
  */
 export function getAutoGridCols(
   count: number,
@@ -135,45 +168,29 @@ export function getAutoGridCols(
 ): number {
   if (count <= 1) return 1;
 
-  // Calculate max feasible columns based on minimum terminal width
-  // Handle non-positive transient widths during layout transitions
-  const containerWidth = width && width > 0 ? width : 800; // Fallback for SSR/initial render and transition frames
-  const maxFeasibleCols = Math.max(1, Math.floor(containerWidth / MIN_TERMINAL_WIDTH_PX));
+  // Non-positive transient widths during layout transitions fall back to a
+  // first-paint default in the 2-column band.
+  const containerWidth = width && width > 0 ? width : FALLBACK_GRID_WIDTH_PX;
 
-  // Progressive column caps based on terminal count. The scrollable grid no
-  // longer hard-caps at 4 columns: for large fleets we widen toward a
-  // near-square layout (ceil(sqrt(count))) so vertical scrolling stays
-  // shallow and rows stay scannable.
-  let targetCols: number;
-  if (count <= 5) {
-    targetCols = 2;
-  } else if (count <= 11) {
-    targetCols = 3;
-  } else {
-    targetCols = Math.max(4, Math.ceil(Math.sqrt(count)));
-  }
+  // Size-driven target: how many comfortable panels fit, capped at the
+  // at-a-glance ceiling.
+  let targetCols = clampAutoCols(Math.floor(containerWidth / COMFORTABLE_PANEL_WIDTH_PX));
 
-  // Apply hysteresis: walk every band whose `to` is at or below `previousCols`,
-  // hold the highest one whose narrowAt has not yet been reached. Cascading
-  // through intermediate bands matters when count drops several tiers at once
-  // (e.g. previousCols=4 → count=5 should pass through 3 cols, not jump to 2).
+  // Hysteresis: once widened to N columns, hold N until the container narrows a
+  // buffer past the N-column threshold (N * COMFORTABLE_PANEL_WIDTH_PX). Walk
+  // highest → lowest so a sticky 3 isn't relaxed prematurely by the 2-column
+  // check; the first band that still has room wins.
   if (previousCols !== undefined) {
-    let stickyCols = targetCols;
-    for (const band of HYSTERESIS_BANDS) {
-      if (previousCols >= band.to && count > band.narrowAt && band.to > stickyCols) {
-        stickyCols = band.to;
+    for (let cols = clampAutoCols(previousCols); cols > targetCols; cols--) {
+      if (containerWidth >= cols * COMFORTABLE_PANEL_WIDTH_PX - GRID_HYSTERESIS_BUFFER_PX) {
+        targetCols = cols;
+        break;
       }
     }
-    targetCols = stickyCols;
   }
 
-  // Don't use more columns than we have terminals (no empty columns)
-  targetCols = Math.min(targetCols, count);
-
-  // Respect width constraints - never exceed what the viewport can fit.
-  // This is an unconditional override: a viewport that can't fit the sticky
-  // count must narrow regardless of hysteresis.
-  return Math.min(maxFeasibleCols, targetCols);
+  // Never show more columns than panels (no empty columns).
+  return Math.min(targetCols, count);
 }
 
 /**
@@ -192,9 +209,18 @@ export function computeGridColumns(
 ): number {
   if (count === 0) return 1;
 
-  // 2-pane invariant: always use 2 columns for exactly 2 panes
-  // This prevents the undesirable 1x2 (vertical stacking) layout
-  if (count === 2) {
+  // 2-pane invariant: prefer a 2x1 layout for exactly 2 panes, avoiding the
+  // undesirable 1x2 (vertical stacking) layout. The explicit fixed strategies
+  // keep this unconditionally (unchanged — they're a user opt-in). The
+  // automatic strategy gates it on width: force 2 columns only when the
+  // container can fit two readable panes side by side (≥ MIN_TERMINAL_WIDTH_PX
+  // each). On a narrower window it falls through to the size-driven formula,
+  // which stacks them into 1 column. `gridWidth === null` (first paint) keeps
+  // the 2-column preference.
+  if (
+    count === 2 &&
+    (strategy !== "automatic" || gridWidth === null || gridWidth >= MIN_TERMINAL_WIDTH_PX * 2)
+  ) {
     return 2;
   }
 
