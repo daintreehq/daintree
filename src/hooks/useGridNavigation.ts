@@ -399,13 +399,19 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   // Scrollable grid (#8805): when keyboard navigation lands focus on a panel
   // that's currently scrolled out of the viewport, bring it into view so the
   // user can see what they just focused. Cheap no-op for already-visible cells.
+  //
+  // `panelsById` is read non-reactively here. Including it in deps would
+  // re-fire this effect on every agent-state tick (which mutates the
+  // `panelsById` reference), snapping the user's scroll position back to the
+  // focused panel and overriding any manual scroll they did to inspect
+  // off-screen panels.
   useEffect(() => {
     if (!focusedId) return;
-    const terminal = panelsById[focusedId];
+    const terminal = usePanelStore.getState().panelsById[focusedId];
     if (!terminal || terminal.location === "dock") return;
     const element = document.querySelector<HTMLElement>(`[data-panel-id="${focusedId}"]`);
     element?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
-  }, [focusedId, panelsById]);
+  }, [focusedId]);
 
   return {
     gridLayout,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, screen, cleanup } from "@testing-library/react";
 import type { TabGroup } from "@shared/types/panel";
 
 vi.mock("@/lib/utils", () => ({
@@ -8,12 +8,21 @@ vi.mock("@/lib/utils", () => ({
 }));
 
 const { panelState, mockPanelStoreApi } = vi.hoisted(() => {
-  const state = { panelsById: {} as Record<string, unknown> };
+  const listeners = new Set<() => void>();
+  let snapshot: { panelsById: Record<string, unknown> } = { panelsById: {} };
+  const set = (next: Record<string, unknown>) => {
+    // New object identity ensures `useSyncExternalStore` re-renders.
+    snapshot = { panelsById: next };
+    listeners.forEach((fn) => fn());
+  };
   return {
-    panelState: state,
+    panelState: { set },
     mockPanelStoreApi: {
-      subscribe: (_: () => void) => () => undefined,
-      getState: () => state,
+      subscribe: (fn: () => void) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+      getState: () => snapshot,
     },
   };
 });
@@ -67,12 +76,12 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
-  panelState.panelsById = {};
+  panelState.set({});
 });
 
 describe("PanelScrollRuler", () => {
   it("returns null when scrollRoot is missing", () => {
-    panelState.panelsById = { a: makePanel("a"), b: makePanel("b") };
+    panelState.set({ a: makePanel("a"), b: makePanel("b") });
     const { container } = render(
       <PanelScrollRuler
         scrollRoot={null}
@@ -84,7 +93,7 @@ describe("PanelScrollRuler", () => {
   });
 
   it("returns null when only one grid panel exists (ruler is fleet-monitoring)", () => {
-    panelState.panelsById = { a: makePanel("a") };
+    panelState.set({ a: makePanel("a") });
     const { container } = render(
       <PanelScrollRuler scrollRoot={scrollRoot} tabGroups={[makeGroup(["a"])]} focusedId={null} />
     );
@@ -92,10 +101,10 @@ describe("PanelScrollRuler", () => {
   });
 
   it("renders one tick per grid panel with state and offscreen attributes", () => {
-    panelState.panelsById = {
+    panelState.set({
       a: makePanel("a", { agentState: "waiting", isVisible: false }),
       b: makePanel("b", { agentState: "working", isVisible: true }),
-    };
+    });
     render(
       <PanelScrollRuler
         scrollRoot={scrollRoot}
@@ -114,11 +123,40 @@ describe("PanelScrollRuler", () => {
     expect(ticks[1]!.getAttribute("data-offscreen")).toBeNull();
   });
 
+  it("updates tick state when the store mutates a panel's agentState", () => {
+    // Catches the stale-memo regression: useSyncExternalStore re-renders, but
+    // without the snapshot in the activePanels memo deps, the memo returns
+    // cached TerminalInstance objects and tick state never updates.
+    panelState.set({
+      a: makePanel("a", { agentState: "idle" }),
+      b: makePanel("b", { agentState: "idle" }),
+    });
+
+    render(
+      <PanelScrollRuler
+        scrollRoot={scrollRoot}
+        tabGroups={[makeGroup(["a"]), makeGroup(["b"])]}
+        focusedId={null}
+      />
+    );
+
+    expect(screen.getAllByRole("button")[0]!.getAttribute("data-state")).toBe("idle");
+
+    act(() => {
+      panelState.set({
+        a: makePanel("a", { agentState: "waiting" }),
+        b: makePanel("b", { agentState: "idle" }),
+      });
+    });
+
+    expect(screen.getAllByRole("button")[0]!.getAttribute("data-state")).toBe("waiting");
+  });
+
   it("clicking a tick scrolls the matching panel element into view", () => {
-    panelState.panelsById = {
+    panelState.set({
       a: makePanel("a"),
       b: makePanel("b"),
-    };
+    });
 
     const panelB = document.createElement("div");
     panelB.setAttribute("data-panel-id", "b");

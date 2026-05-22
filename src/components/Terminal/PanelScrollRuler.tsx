@@ -31,11 +31,14 @@ export interface PanelScrollRulerProps {
  */
 export function PanelScrollRuler({ scrollRoot, tabGroups, focusedId }: PanelScrollRulerProps) {
   // Re-render on any panel-store mutation so agent-state ticks update tick
-  // colours without forcing a global memo invalidation upstream.
-  useSyncExternalStore(panelStoreApi.subscribe, panelStoreApi.getState);
+  // colours without forcing a global memo invalidation upstream. The snapshot
+  // is fed back into `activePanels`' deps — otherwise `useMemo` returns a
+  // cached array of stale `TerminalInstance` objects, defeating the whole
+  // point of the subscription.
+  const storeSnapshot = useSyncExternalStore(panelStoreApi.subscribe, panelStoreApi.getState);
 
   const activePanels = useMemo(() => {
-    const byId = panelStoreApi.getState().panelsById;
+    const byId = storeSnapshot.panelsById;
     const result: TerminalInstance[] = [];
     for (const group of tabGroups) {
       const activeId = group.panelIds.includes(group.activeTabId)
@@ -46,7 +49,7 @@ export function PanelScrollRuler({ scrollRoot, tabGroups, focusedId }: PanelScro
       if (panel) result.push(panel);
     }
     return result;
-  }, [tabGroups]);
+  }, [tabGroups, storeSnapshot]);
 
   const handleJump = useCallback((panelId: string) => {
     const element = document.querySelector<HTMLElement>(`[data-panel-id="${panelId}"]`);

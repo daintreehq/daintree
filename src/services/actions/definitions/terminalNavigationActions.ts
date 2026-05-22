@@ -212,18 +212,24 @@ export function registerTerminalNavigationActions(
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const focusedId = state.focusedId;
 
-      // Order: walk the active worktree's grid panels starting just after
-      // `focusedId` so repeated invocations cycle through every attention
-      // panel before returning to the first.
+      // Only the active panel of each tab group has a rendered DOM element
+      // (its `data-panel-id` attribute); scrolling to an inactive tab would
+      // silently no-op. Resolve candidates from active-tab IDs so every jump
+      // produces a visible response. Repeated invocations cycle past
+      // `focusedId` through every attention panel before returning to the
+      // first.
+      const gridGroups = state.getTabGroups("grid", activeWorktreeId ?? undefined);
       const candidates: string[] = [];
-      for (const id of state.panelIds) {
-        const t = state.panelsById[id];
+      for (const group of gridGroups) {
+        const activeId = group.panelIds.includes(group.activeTabId)
+          ? group.activeTabId
+          : (group.panelIds[0] ?? null);
+        if (!activeId) continue;
+        const t = state.panelsById[activeId];
         if (!t) continue;
-        if (t.location !== "grid" && t.location !== undefined) continue;
-        if ((t.worktreeId ?? undefined) !== (activeWorktreeId ?? undefined)) continue;
         const needsAttention =
           t.agentState === "waiting" || t.agentState === "directing" || t.runtimeStatus === "error";
-        if (needsAttention) candidates.push(id);
+        if (needsAttention) candidates.push(activeId);
       }
 
       if (candidates.length === 0) return;
