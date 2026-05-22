@@ -186,9 +186,11 @@ describe("Button loading state", () => {
     expect(button.hasAttribute("aria-busy")).toBe(false);
     expect(button.hasAttribute("aria-disabled")).toBe(false);
     expect(button.hasAttribute("data-loading")).toBe(false);
-    expect(container.querySelector('[data-slot="button-content"]')!.className).not.toContain(
-      "opacity-30"
-    );
+    const content = container.querySelector('[data-slot="button-content"]')!;
+    expect(content.className).not.toContain("opacity-30");
+    // Wrapper must return to display:contents so caller layout (truncate,
+    // justify-between) keeps working after loading resolves.
+    expect(content.className).toBe("contents");
   });
 
   it("preserves the accessible name on an icon-only loading button", () => {
