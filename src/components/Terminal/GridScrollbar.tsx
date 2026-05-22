@@ -125,7 +125,9 @@ export function GridScrollbar({
       if (travel <= 0) return;
       const maxScroll = live.scrollHeight - live.clientHeight;
       const next = drag.startScrollTop + ((e.clientY - drag.startY) / travel) * maxScroll;
-      scrollRoot.scrollTop = Math.max(0, Math.min(maxScroll, next));
+      // `scrollTo` (a method call) rather than assigning `scrollRoot.scrollTop`:
+      // the React Compiler forbids writing to a prop's property.
+      scrollRoot.scrollTo({ top: Math.max(0, Math.min(maxScroll, next)) });
     },
     [scrollRoot]
   );
