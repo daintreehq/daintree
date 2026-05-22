@@ -361,17 +361,18 @@ describe("SidebarContent zero-worktrees taxonomy alignment — issue #6934", () 
   });
 });
 
-describe("SidebarContent initial loading skeleton — issue #7215", () => {
+describe("SidebarContent initial loading skeleton — issues #7215, #8804", () => {
   let source: string;
 
   beforeAll(async () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  it("imports Skeleton, SkeletonBone, SkeletonText, and SkeletonHint from the ui directory", () => {
+  it("imports Skeleton, SkeletonBone, and SkeletonHint from the ui directory (SkeletonText dropped in #8804)", () => {
     expect(source).toMatch(
-      /import \{ Skeleton, SkeletonBone, SkeletonText, SkeletonHint \} from "@\/components\/ui\/Skeleton"/
+      /import \{ Skeleton, SkeletonBone, SkeletonHint \} from "@\/components\/ui\/Skeleton"/
     );
+    expect(source).not.toContain("SkeletonText");
   });
 
   it("does not render the legacy 'Loading worktrees...' text in the loading branch", () => {
@@ -395,36 +396,44 @@ describe("SidebarContent initial loading skeleton — issue #7215", () => {
     expect(branch).toMatch(/<h2[^>]*>Worktrees<\/h2>/);
   });
 
-  it("uses SkeletonBone and SkeletonText without the immediate prop (400ms gate)", () => {
+  it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("<SkeletonBone");
-    expect(branch).toContain("<SkeletonText");
+    expect(branch).toContain("shimmer");
     expect(branch).not.toContain("immediate");
   });
 
-  it("marks the row wrapper aria-hidden and uses primitives that own inner aria-hidden", () => {
+  it("marks each card wrapper aria-hidden so the Skeleton primitive owns the live region", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain('aria-hidden="true"');
   });
 
-  it("defines SKELETON_ROW_HEIGHT_PX = 47 matching the collapsed worktree row height", () => {
-    expect(source).toContain("SKELETON_ROW_HEIGHT_PX = 47");
+  it("defines WORKTREE_SKELETON_CARDS metadata for fixed-count shimmer cards — #8804", () => {
+    // #8804 replaces the dynamic-height row count with 4 fixed shimmer cards
+    // mirroring the index.html startup ghost `.skel-card` design.
+    expect(source).toContain("WORKTREE_SKELETON_CARDS");
+    expect(source).not.toContain("SKELETON_ROW_HEIGHT_PX");
+    expect(source).not.toContain("MIN_SKELETON_ROWS");
   });
 
-  it("uses fixed-height row containers with SKELETON_ROW_HEIGHT_PX to prevent layout shift", () => {
+  it("renders the loading branch via WORKTREE_SKELETON_CARDS.map with no row borders — #8804", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain("SKELETON_ROW_HEIGHT_PX");
+    expect(branch).toContain("WORKTREE_SKELETON_CARDS.map");
+    expect(branch).not.toContain("border-b border-border-default");
   });
 
-  it("computes dynamic row count via useResizeObserverRaf with MIN_SKELETON_ROWS floor", () => {
-    expect(source).toContain("MIN_SKELETON_ROWS = 3");
-    expect(source).toContain("useResizeObserverRaf");
+  it("does not measure the skeleton container with useResizeObserverRaf — #8804", () => {
+    // The dynamic ResizeObserver-driven row count is replaced with a fixed
+    // 4-card layout. No measurement state should remain in the file.
+    expect(source).not.toContain("useResizeObserverRaf");
+    expect(source).not.toContain("skeletonContainerRef");
+    expect(source).not.toContain("skeletonRowCount");
   });
 
   it("renders SkeletonHint as sibling of Skeleton, not nested inside", () => {
