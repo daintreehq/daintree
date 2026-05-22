@@ -1,8 +1,18 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
+import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
+import {
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
 import { ActionPaletteItem } from "./ActionPaletteItem";
 import type {
   ActionPaletteItem as ActionPaletteItemType,
@@ -19,6 +29,65 @@ const getActionItemId = (item: ActionPaletteItemType): string => item.id;
 // Verb-noun derived from the highlighted action's title — empty selection
 // falls back to a generic "run action" so the chip never goes blank.
 const getActionLabel = (item: ActionPaletteItemType | null): string => item?.title ?? "Run action";
+
+type ActionPaletteMode = "commands";
+
+type PrefixRouteSpec = {
+  label: string;
+  // When `null`, the chip displays in-place (commands mode is already inside
+  // the action palette). Otherwise the action palette atomically hands off
+  // to the target palette via `paletteStore.openPalette`.
+  paletteId: PaletteId | null;
+  mode: ActionPaletteMode | null;
+};
+
+const PREFIX_MAP: Record<string, PrefixRouteSpec> = {
+  ">": { label: "Commands", paletteId: null, mode: "commands" },
+  "@": { label: "Worktrees", paletteId: "worktree", mode: null },
+  "#": { label: "Panels", paletteId: "panel", mode: null },
+  ":": { label: "Prompt history", paletteId: "prompt-history", mode: null },
+  "/": { label: "Projects", paletteId: "project-switcher", mode: null },
+};
+
+const COMMANDS_LABEL = PREFIX_MAP[">"]!.label;
+
+// A query that contains `/`, `\`, or a leading `.` / `~` looks like a path or
+// filename — surface the projects hint so users discover the prefix. Heuristic
+// is intentionally narrow; broader patterns produce noisy suggestions.
+function looksLikePath(query: string): boolean {
+  if (!query) return false;
+  return /[/\\]/.test(query) || /^[.~]/.test(query);
+}
+
+type ModeChipProps = {
+  label: string;
+  isVisible: boolean;
+  id?: string;
+};
+
+function ModeChip({ label, isVisible, id }: ModeChipProps) {
+  return (
+    <span
+      id={id}
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)]",
+        "bg-overlay-subtle text-xs text-daintree-text/70 select-none shrink-0 origin-left",
+        "transition-[opacity,transform] motion-reduce:transition-opacity motion-reduce:scale-100",
+        isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"
+      )}
+      style={{
+        transitionDuration: isVisible
+          ? `${UI_PALETTE_ENTER_DURATION}ms`
+          : `${UI_PALETTE_EXIT_DURATION}ms`,
+        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
 
 type ActionPaletteProps = Pick<
   UseActionPaletteReturn,
@@ -154,6 +223,91 @@ export function ActionPalette({
     );
   }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
 
+  const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
+
+  // Drive chip mount/unmount with the palette enter/exit tier (150ms / 100ms)
+  // so the chip doesn't pop in faster than the palette itself.
+  const { isVisible: chipVisible, shouldRender: chipShouldRender } = useAnimatedPresence({
+    isOpen: activeMode !== null,
+    animationDuration: UI_PALETTE_EXIT_DURATION,
+  });
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // Backspace at position 0 (no selection) pops the active chip and
+      // restores global action search. Mirrors the asymmetric Escape stack:
+      // first Backspace clears the mode, subsequent Backspace acts normally.
+      if (e.key === "Backspace" && activeMode !== null) {
+        const input = e.currentTarget;
+        if (input.selectionStart === 0 && input.selectionEnd === 0) {
+          e.preventDefault();
+          setActiveMode(null);
+          return;
+        }
+      }
+
+      // Mode-prefix routing only fires on an empty query with no modifier so
+      // typing `>` mid-search or with Cmd/Ctrl held doesn't hijack the input.
+      // Skip when a mode is already active — re-prefixing inside a mode is a
+      // literal char.
+      if (activeMode !== null) return;
+      if (query !== "") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.length !== 1) return;
+
+      const route = PREFIX_MAP[e.key];
+      if (!route) return;
+
+      e.preventDefault();
+      if (route.paletteId === null) {
+        if (route.mode) setActiveMode(route.mode);
+        return;
+      }
+      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly,
+      // so the action palette unmounts as the target mounts. No `close()`
+      // call needed; an explicit close would briefly null the mutex and
+      // teardown focus restoration via the palette-to-palette guard.
+      usePaletteStore.getState().openPalette(route.paletteId);
+    },
+    [activeMode, query]
+  );
+
+  const footer = useMemo<React.ReactNode>(() => {
+    // Mode-active footer: name what Enter does in the current scope so the
+    // user can't accidentally fire the wrong primary action.
+    if (activeMode === "commands") {
+      return (
+        <PaletteFooterHints
+          primaryHint={{ keys: ["↵"], label: "to run command" }}
+          hints={[
+            { keys: ["⌫"], label: "exit scope" },
+            { keys: ["Esc"], label: "close" },
+          ]}
+        />
+      );
+    }
+
+    // Default empty-mode hint: surface the projects prefix when the query
+    // resembles a path or filename. Per-query-shape only — no auto-routing.
+    if (results.length === 0 && looksLikePath(query)) {
+      return (
+        <PaletteFooterHints
+          primaryHint={{ keys: ["/"], label: "search projects" }}
+          hints={[
+            { keys: ["↑", "↓"], label: "navigate" },
+            { keys: ["Esc"], label: "close" },
+          ]}
+        />
+      );
+    }
+
+    return undefined;
+  }, [activeMode, query, results.length]);
+
+  const chipNode = chipShouldRender ? (
+    <ModeChip label={activeMode === "commands" ? COMMANDS_LABEL : ""} isVisible={chipVisible} />
+  ) : null;
+
   return (
     <SearchablePalette<ActionPaletteItemType>
       isOpen={isOpen}
@@ -166,8 +320,11 @@ export function ActionPalette({
       onConfirm={confirmSelection}
       onClose={close}
       onHoverIndex={setSelectedIndex}
+      onKeyDown={handleKeyDown}
+      inputPrefix={chipNode}
+      footer={footer}
       getItemId={getActionItemId}
-      getActionLabel={getActionLabel}
+      getActionLabel={activeMode === null && footer === undefined ? getActionLabel : undefined}
       isFiltering={isStale}
       renderItem={(item, index, isSelected, onHoverIndex) => {
         const isPinned = pinnedActionIds.includes(item.id);

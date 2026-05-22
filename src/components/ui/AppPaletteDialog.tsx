@@ -397,13 +397,45 @@ function DefaultKeyboardHints() {
 
 interface AppPaletteInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   inputRef?: React.Ref<HTMLInputElement>;
+  /**
+   * Optional leading adornment rendered inside the input's border, left of the
+   * editable text. Used by `ActionPalette` to surface a mode-prefix chip
+   * (e.g. `> Commands`). When present, the input loses its hardcoded left
+   * padding so the adornment sits flush with the inner edge.
+   */
+  inputPrefix?: React.ReactNode;
 }
 
 AppPaletteDialog.Input = function AppPaletteInput({
   className,
   inputRef,
+  inputPrefix,
   ...props
 }: AppPaletteInputProps) {
+  if (inputPrefix) {
+    return (
+      <div
+        className={cn(
+          "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
+          "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)]",
+          "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+        )}
+      >
+        {inputPrefix}
+        <input
+          ref={inputRef}
+          type="text"
+          className={cn(
+            "flex-1 min-w-0 bg-transparent px-0 py-0 text-sm",
+            "text-daintree-text placeholder:text-text-muted",
+            "focus:outline-hidden focus:border-transparent focus:ring-0",
+            className
+          )}
+          {...props}
+        />
+      </div>
+    );
+  }
   return (
     <input
       ref={inputRef}
