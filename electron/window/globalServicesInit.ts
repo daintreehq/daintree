@@ -726,6 +726,43 @@ export async function initGlobalServices(
     },
   });
 
+  // Fire-and-forget background cleanup + monitor services migrated out of
+  // main.ts pre-window block (#8817). Each uses a lazy import() so the service
+  // module isn't pulled into the static main.ts boot graph. No ordering
+  // constraints among themselves or against the tasks above.
+  registerDeferredTask({
+    name: "trashed-pid-cleanup",
+    run: async () => {
+      const { initializeTrashedPidCleanup } = await import("../services/TrashedPidTracker.js");
+      initializeTrashedPidCleanup();
+    },
+  });
+
+  registerDeferredTask({
+    name: "scratch-cleanup",
+    run: async () => {
+      const { initializeScratchCleanup } = await import("../services/ScratchCleanupService.js");
+      initializeScratchCleanup();
+    },
+  });
+
+  registerDeferredTask({
+    name: "assistant-scratch-cleanup",
+    run: async () => {
+      const { startAssistantScratchCleanup } =
+        await import("../services/AssistantScratchService.js");
+      await startAssistantScratchCleanup();
+    },
+  });
+
+  registerDeferredTask({
+    name: "gpu-crash-monitor",
+    run: async () => {
+      const { initializeGpuCrashMonitor } = await import("../services/GpuCrashMonitorService.js");
+      initializeGpuCrashMonitor();
+    },
+  });
+
   return "ok";
 }
 

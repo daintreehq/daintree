@@ -120,6 +120,23 @@ vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
   }),
 }));
 
+vi.mock("../../services/TrashedPidTracker.js", () => ({
+  initializeTrashedPidCleanup: vi.fn(),
+}));
+
+vi.mock("../../services/ScratchCleanupService.js", () => ({
+  initializeScratchCleanup: vi.fn(),
+}));
+
+vi.mock("../../services/AssistantScratchService.js", () => ({
+  startAssistantScratchCleanup: vi.fn(async () => {}),
+}));
+
+vi.mock("../../services/GpuCrashMonitorService.js", () => ({
+  initializeGpuCrashMonitor: vi.fn(),
+  getGpuCrashMonitorService: vi.fn(() => ({ dispose: vi.fn() })),
+}));
+
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => ({ startBackupTimer: vi.fn(), stopBackupTimer: vi.fn() }),
 }));
@@ -322,6 +339,37 @@ describe("initGlobalServices task ordering", () => {
     await initGlobalServices(fakeRegistry);
 
     expect(registeredTaskNames).toContain("prune-old-logs");
+  });
+
+  it("registers cleanup/monitor services migrated out of main.ts as deferred tasks (#8817)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    expect(registeredTaskNames).toContain("trashed-pid-cleanup");
+    expect(registeredTaskNames).toContain("scratch-cleanup");
+    expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("gpu-crash-monitor");
+  });
+
+  it("deferred cleanup/monitor tasks invoke their service initializers when run (#8817)", async () => {
+    const { initializeTrashedPidCleanup } = await import("../../services/TrashedPidTracker.js");
+    const { initializeScratchCleanup } = await import("../../services/ScratchCleanupService.js");
+    const { startAssistantScratchCleanup } =
+      await import("../../services/AssistantScratchService.js");
+    const { initializeGpuCrashMonitor } = await import("../../services/GpuCrashMonitorService.js");
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    await registeredTaskRuns.get("trashed-pid-cleanup")?.();
+    await registeredTaskRuns.get("scratch-cleanup")?.();
+    await registeredTaskRuns.get("assistant-scratch-cleanup")?.();
+    await registeredTaskRuns.get("gpu-crash-monitor")?.();
+
+    expect(initializeTrashedPidCleanup).toHaveBeenCalled();
+    expect(initializeScratchCleanup).toHaveBeenCalled();
+    expect(startAssistantScratchCleanup).toHaveBeenCalled();
+    expect(initializeGpuCrashMonitor).toHaveBeenCalled();
   });
 
   it("prune-old-logs task invokes pruneOldLogs with retentionDays from privacy settings", async () => {

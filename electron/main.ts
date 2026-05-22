@@ -81,13 +81,8 @@ import {
 import { projectStore } from "./services/ProjectStore.js";
 import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
 import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
-import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
-import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
-import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
-import { startAssistantScratchCleanup } from "./services/AssistantScratchService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
-import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 
@@ -175,11 +170,19 @@ if (!gotTheLock) {
   // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
   // restore set; surfacing per-panel quarantine to the renderer.
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
+
+  // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
+  // complete before getSharedDb() opens the file (first opened by
+  // readLastActiveProjectIdSync below). Dynamic import keeps the service
+  // module off the static eager-boot graph while preserving this ordering.
+  // The remaining startMaintenance() timer + suspend listener is wired by the
+  // `database-maintenance` deferred task in globalServicesInit. The other four
+  // background services (trashed-pid, scratch, assistant-scratch, gpu-crash)
+  // have no pre-window ordering constraint and are also handed to deferred
+  // tasks. See #8817.
+  const { initializeDatabaseMaintenance } =
+    await import("./services/DatabaseMaintenanceService.js");
   initializeDatabaseMaintenance();
-  initializeTrashedPidCleanup();
-  initializeScratchCleanup();
-  startAssistantScratchCleanup();
-  initializeGpuCrashMonitor();
 
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
