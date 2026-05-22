@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -48,11 +49,13 @@ export function registerTerminalLifecycleActions(
         state.focusedId ??
         state.panelIds.find((id) => state.panelsById[id]?.location !== "trash");
       if (!targetId) return;
-      state.trashPanel(targetId);
-      const nextId = usePanelStore.getState().focusedId;
-      if (nextId) {
-        terminalInstanceService.focus(nextId);
-      }
+      // Optimistic close: hide the panel now, trash it after the removal has
+      // painted. The coordinator advances focus synchronously so a rapid Cmd+W
+      // stream keeps closing fresh panels instead of re-targeting this one.
+      requestPanelClose({
+        hideIds: [targetId],
+        commit: () => usePanelStore.getState().trashPanel(targetId),
+      });
     },
   }));
 

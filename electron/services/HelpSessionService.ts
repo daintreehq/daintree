@@ -1225,11 +1225,18 @@ export class HelpSessionService {
     }
     if (settings.daintreeControl && port) {
       // Bake the literal token into the file rather than `${DAINTREE_MCP_TOKEN}`
-      // substitution. Claude Code's env substitution in `headers` is broken
-      // (sends the literal placeholder, gets 401). Same reason as
-      // McpPaneConfigService.ts. The session dir is 0o700 and the file is
-      // 0o600. Token rotates on every provision; the in-memory map is the
-      // auth boundary, so the literal on disk is dead the moment its session
+      // substitution. Claude Code's `${VAR}` substitution in `headers` is still
+      // broken as of v2.1.83 through v2.1.133 (tested May 2026): the placeholder
+      // is not forwarded to the wire (anthropics/claude-code#6204). Worse,
+      // `claude mcp add`/`claude mcp remove` rewrite `${VAR}` to its literal env
+      // value when they touch `.mcp.json` (#18692, #57131), so env substitution
+      // would leak every session bearer to disk the moment a user runs either
+      // subcommand. The literal-token path avoids that class of leak entirely.
+      // (Separately, #28293 drops headers on SSE-transport POSTs regardless of
+      // literal-vs-substituted value — a known limitation neither path fixes.)
+      // Same reason as McpPaneConfigService.ts. The session dir is 0o700 and the
+      // file is 0o600. Token rotates on every provision; the in-memory map is
+      // the auth boundary, so the literal on disk is dead the moment its session
       // is revoked.
       mcpServers["daintree"] = {
         type: "sse",

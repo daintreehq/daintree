@@ -3,6 +3,7 @@ import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { TerminalSpawnSourceSchema } from "./schemas";
 import type { TerminalSpawnSource } from "@shared/types/panel";
@@ -121,6 +122,9 @@ export function registerTerminalSpawnActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Commit any in-flight optimistic close first — until it flushes the
+      // panel isn't in `trashedTerminals` yet and restore would no-op.
+      flushOptimisticCloses();
       usePanelStore.getState().restoreLastTrashed();
     },
   }));

@@ -148,6 +148,56 @@ const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
 
 let projectTransitionRequestId = 0;
 let projectListRequestId = 0;
+let currentProjectRequestId = 0;
+
+const PROJECT_VIEW_CURRENT_RETRY_DELAYS_MS = [100, 250, 500, 1000, 2000, 3000];
+
+function getLocationProjectId(): string | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return new URL(window.location.href).searchParams.get("projectId");
+  } catch {
+    return null;
+  }
+}
+
+function getProjectForCurrentLocation(projects: Project[]): Project | null {
+  const projectId = getLocationProjectId();
+  if (!projectId) return null;
+
+  const project = projects.find((candidate) => candidate.id === projectId);
+  if (project?.status === "closed") return null;
+  return project ?? null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function getCurrentProjectWithViewRetry(): Promise<Project | null> {
+  const expectedProjectId = getLocationProjectId();
+  const firstResult = await projectClient.getCurrent();
+  if (firstResult || !expectedProjectId) {
+    return firstResult;
+  }
+
+  for (const delayMs of PROJECT_VIEW_CURRENT_RETRY_DELAYS_MS) {
+    await delay(delayMs);
+    if (getLocationProjectId() !== expectedProjectId) {
+      return null;
+    }
+
+    const retryResult = await projectClient.getCurrent();
+    if (retryResult) {
+      return retryResult;
+    }
+  }
+
+  return null;
+}
 
 function getProjectStoreListenerState(): ProjectStoreListenerState {
   const target = globalThis as typeof globalThis & {
@@ -374,7 +424,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (requestId !== projectListRequestId) {
         return;
       }
-      set({ projects, isLoading: false });
+      set((state) => ({
+        projects,
+        currentProject: state.currentProject ?? getProjectForCurrentLocation(projects),
+        isLoading: false,
+      }));
       // Check for missing directories in the background after updating the list
       void get().checkMissingProjects();
     } catch (error) {
@@ -391,11 +445,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   getCurrentProject: async () => {
+    const requestId = ++currentProjectRequestId;
     set({ isLoading: true, error: null });
     try {
-      const currentProject = await projectClient.getCurrent();
-      set({ currentProject, isLoading: false });
+      const currentProject = await getCurrentProjectWithViewRetry();
+      if (requestId !== currentProjectRequestId) {
+        return;
+      }
+      set((state) => ({
+        currentProject: currentProject ?? getProjectForCurrentLocation(state.projects),
+        isLoading: false,
+      }));
     } catch (error) {
+      if (requestId !== currentProjectRequestId) {
+        return;
+      }
       logErrorWithContext(error, {
         operation: "get_current_project",
         component: "projectStore",

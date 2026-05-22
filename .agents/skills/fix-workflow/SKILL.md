@@ -13,6 +13,7 @@ Drive Daintree release dry-run and nightly workflows to green. Treat this as a d
 - Keep the branch focused on release/nightly reliability. Do not mix unrelated cleanup, dependency upgrades, or feature work into the fix.
 - Prefer fixing Daintree over relaxing tests. Update a test only when the test is stale, over-specific, or asserting behavior that the product no longer promises.
 - Do not blindly rerun the same failing job without learning something. Rerun after a code/test/workflow fix, or once for an obvious external/transient service failure.
+- Unless the user explicitly says not to, make local testing the first validation line after harvesting the failure: reproduce the narrow failure locally, then run the local E2E surface that matches the workflow before leaning on GitHub Actions. For release workflow fixes, this means the full release-gated Playwright command (`core`, all `full-*`, and `online`) before redispatching a dry run. For nightly fixes, include the `nightly` project as well. This repo is expected to be worked on from a powerful local Mac, so prefer using it.
 - Expect several hours of iteration. Do not stop after the first fixed test, the first green single-spec run, or the first green job; the task is complete only when the full nightly or full release dry-run workflow passes on the repair branch.
 - After each full workflow failure, harvest all failed jobs before editing. Fix the earliest/root failure first, but keep the other failures in a visible queue so secondary failures are not lost.
 - Before touching production code, read the relevant project instructions (`AGENTS.md`, and `CLAUDE.md` if present) and preserve Daintree architectural invariants.
@@ -44,7 +45,7 @@ Loop until done:
 1. Trigger or inspect the full target workflow.
 2. Wait for completion with `gh run watch <run-id> --exit-status`; long waits are expected.
 3. If it fails, inspect every failed job with `gh run view <run-id> --log-failed` and artifacts as needed.
-4. Pick the narrowest root failure, reproduce it locally or with `e2e-single.yml`, and fix it.
+4. Pick the narrowest root failure, reproduce it locally first, and fix it. Use `e2e-single.yml` only after local reproduction is impossible, OS-specific, or already green locally.
 5. Run the individual failing test/command until it passes.
 6. Run the relevant suite or job-level validation.
 7. Push the branch and rerun the full workflow.
@@ -82,7 +83,10 @@ npm run test:e2e:full-resilience
 npm run test:e2e:online
 npm run test:e2e:nightly
 npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1
+npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=online
 ```
+
+For release dry-run E2E work, the multi-project Playwright command above is the required local broad pass: it matches the release-gated `core`, all `full-*`, and `online` projects without pulling in unrelated `nightly` soak or manual `screenshots` jobs. Run it before the next full dry-run dispatch unless the user explicitly opts out or the current failure is only reproducible on another OS.
 
 ## Branch Setup
 
@@ -138,6 +142,12 @@ Reproduce the smallest failing surface first.
 - Knip failure: run `npm run knip`.
 - Build/package/update metadata failure: run `npm run build`, then the failing `electron-builder` or `scripts/ci/*` command from the workflow. Packaging, signing, notarization, Windows Store, and R2 checks may only be fully reproducible in Actions.
 - E2E failure: run the exact Playwright project and spec locally, usually with `--workers=1`. Use the suite that owns the spec path.
+
+After the narrow local repro passes, broaden locally before pushing and before redispatching the full workflow unless the user opted out or the failure is only reproducible on another OS:
+
+- Same suite: `npx playwright test --project=<suite>`
+- Release-gated all-e2e: `npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=online`
+- Nightly target: include `--project=nightly` and keep it serialized.
 
 Suite-to-path mapping:
 

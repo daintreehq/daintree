@@ -553,11 +553,10 @@ function App() {
       import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
-      // Warm chunks split out of the eager closure (#8626). These are reached
-      // through lazy boundaries in `panels/registry.tsx` (TerminalPane) and
-      // `Worktree/FileDiffModal.tsx` (FileViewerModal/DiffViewer), so they
-      // need an explicit post-paint prefetch to stay snappy on first use.
-      import("@/components/Terminal/TerminalPane").catch(() => {});
+      // Warm the FileViewerModal/DiffViewer chunk split out of the eager
+      // closure (#8626). It is reached through a lazy boundary in
+      // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
+      // it snappy on first use.
       import("@/components/FileViewer/FileViewerModal").catch(() => {});
     };
 

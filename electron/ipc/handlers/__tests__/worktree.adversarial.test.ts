@@ -323,4 +323,111 @@ describe("worktree IPC adversarial", () => {
 
     expect(resolveWorktreePatternMock).not.toHaveBeenCalled();
   });
+
+  describe("WORKTREE_RETRY_PROJECT_LOAD (#8796)", () => {
+    function eventWithSender(opts: { destroyed?: boolean } = {}): Electron.IpcMainInvokeEvent {
+      return {
+        sender: { id: 7, isDestroyed: () => opts.destroyed ?? false },
+      } as unknown as Electron.IpcMainInvokeEvent;
+    }
+
+    function registerRetryHandlers(svc: {
+      loadProject: ReturnType<typeof vi.fn>;
+      attachDirectPort: ReturnType<typeof vi.fn>;
+      getHostForProject: ReturnType<typeof vi.fn>;
+      brokerPort: ReturnType<typeof vi.fn>;
+    }) {
+      cleanup();
+      ipcHandlers.clear();
+      getWindowForWebContentsMock.mockReturnValue({ id: 7 });
+      cleanup = registerWorktreeHandlers({
+        worktreeService: {
+          loadProject: svc.loadProject,
+          attachDirectPort: svc.attachDirectPort,
+          getHostForProject: svc.getHostForProject,
+        },
+        worktreePortBroker: { brokerPort: svc.brokerPort },
+      } as unknown as HandlerDependencies);
+    }
+
+    it("brokers the worktree port after a successful reload", async () => {
+      const loadProject = vi.fn().mockResolvedValue(undefined);
+      const attachDirectPort = vi.fn();
+      const host = { hostId: "h1" };
+      const getHostForProject = vi.fn().mockReturnValue(host);
+      const brokerPort = vi.fn().mockReturnValue(true);
+      registerRetryHandlers({ loadProject, attachDirectPort, getHostForProject, brokerPort });
+
+      const event = eventWithSender();
+      await getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(event);
+
+      expect(loadProject).toHaveBeenCalledWith("/repo", 7);
+      expect(attachDirectPort).toHaveBeenCalledWith(7, event.sender);
+      expect(brokerPort).toHaveBeenCalledWith(host, event.sender);
+    });
+
+    it("rejects when the reload succeeds but the worktree port can't be brokered", async () => {
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort: vi.fn().mockReturnValue(false),
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).rejects.toThrow(/couldn't connect to the worktree service/);
+    });
+
+    it("skips brokering when no workspace host is available, without throwing", async () => {
+      const attachDirectPort = vi.fn();
+      const brokerPort = vi.fn().mockReturnValue(true);
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort,
+        getHostForProject: vi.fn().mockReturnValue(null),
+        brokerPort,
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).resolves.toBeUndefined();
+      expect(attachDirectPort).toHaveBeenCalled();
+      expect(brokerPort).not.toHaveBeenCalled();
+    });
+
+    it("does not attach or broker when the reload itself fails", async () => {
+      const attachDirectPort = vi.fn();
+      const brokerPort = vi.fn();
+      registerRetryHandlers({
+        loadProject: vi.fn().mockRejectedValue(new Error("project folder is gone")),
+        attachDirectPort,
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort,
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).rejects.toThrow(/project folder is gone/);
+      expect(attachDirectPort).not.toHaveBeenCalled();
+      expect(brokerPort).not.toHaveBeenCalled();
+    });
+
+    it("skips brokering when the sender webContents was destroyed", async () => {
+      const attachDirectPort = vi.fn();
+      const brokerPort = vi.fn();
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort,
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort,
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender({ destroyed: true }))
+      ).resolves.toBeUndefined();
+      expect(attachDirectPort).not.toHaveBeenCalled();
+      expect(brokerPort).not.toHaveBeenCalled();
+    });
+  });
 });

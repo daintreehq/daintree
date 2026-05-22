@@ -139,14 +139,14 @@ describe("TerminalRendererPolicy", () => {
       expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
     });
 
-    it("seeds backend polling hint on the first apply even when tier matches default (#8596)", async () => {
+    it("seeds backend polling hint on the first apply even when tier matches default", async () => {
       const { terminalClient } = await import("@/clients");
 
-      // Fleet-demoted initial mount: provider returns VISIBLE (the demoted
-      // resolution) on the very first read, and `lastAppliedTier` is still
-      // undefined. The PTY host's ActivityMonitor defaults to 50ms, so
-      // skipping `setActivityTier` here would defeat the entire 200ms
-      // VISIBLE cadence. The policy must send the hint anyway.
+      // First apply after mount: the provider resolves VISIBLE on the very
+      // first read and `lastAppliedTier` is still undefined. The PTY host's
+      // ActivityMonitor defaults to 50ms, so skipping `setActivityTier` here
+      // would defeat the 200ms VISIBLE cadence. The policy must send the hint
+      // anyway.
       mockManagedTerminal.lastAppliedTier = undefined;
       mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
 

@@ -37,7 +37,7 @@ export interface BasePanelProps {
   isFocused: boolean;
   isMaximized?: boolean;
   location?: "grid" | "dock";
-  gridPanelCount?: number;
+  isMultiPanelGrid?: boolean;
   onFocus: () => void;
   onClose: (force?: boolean) => void;
   onToggleMaximize?: () => void;
@@ -137,7 +137,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isFocused,
     isMaximized = false,
     location = "grid",
-    gridPanelCount,
+    isMultiPanelGrid = true,
     worktreeId,
     onFocus,
     onClose,
@@ -250,7 +250,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     return undefined;
   }, [titleEditing.isEditingTitle]);
 
-  const showGridAttention = location === "grid" && !isMaximized && (gridPanelCount ?? 2) > 1;
+  const showGridAttention = location === "grid" && !isMaximized && isMultiPanelGrid;
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
 
   // Per-worktree color identity

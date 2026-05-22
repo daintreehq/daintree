@@ -94,7 +94,7 @@ export function BrowserPane({
   onTitleChange,
   onMinimize,
   onRestore,
-  gridPanelCount,
+  isMultiPanelGrid,
   tabs,
   onTabClick,
   onTabClose,
@@ -568,7 +568,7 @@ export function BrowserPane({
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}
-      gridPanelCount={gridPanelCount}
+      isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
       onClose={onClose}
       onToggleMaximize={onToggleMaximize}

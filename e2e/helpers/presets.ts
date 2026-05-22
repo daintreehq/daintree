@@ -327,9 +327,14 @@ export async function addCustomPreset(
             .getByRole("button", { name: "Cancel" })
             .click({ force: true })
             .catch(() => undefined);
-          await window.keyboard.press("Escape").catch(() => undefined);
+          if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) {
+            await window.keyboard.press("Escape").catch(() => undefined);
+          }
         }
         await expect(dialog).not.toBeVisible({ timeout: process.env.CI ? 10_000 : 5000 });
+      }
+      if (!(await section.isVisible({ timeout: 1000 }).catch(() => false))) {
+        await navigateToAgentSettings(window, agentId);
       }
       // Poll the persisted settings directly. On Windows the Radix popover can
       // briefly report stale option counts even after the newly selected preset
@@ -380,7 +385,18 @@ export async function countPresetOptions(window: import("@playwright/test").Page
  * popover is closed before returning.
  */
 const CCR_POLL_TIMEOUT = process.platform === "win32" ? 75_000 : 45_000;
-const CCR_POLL_INTERVALS = [3_000, 5_000, 10_000];
+const CCR_POLL_INTERVALS = [250, 500, 1_000, 2_000];
+
+async function getCcrPresetLabels(window: Page): Promise<string[]> {
+  return window.evaluate(async (): Promise<string[]> => {
+    const presets = await window.electron.agentCapabilities.getCcrPresets();
+    return presets
+      .map((preset: { name?: unknown }) =>
+        typeof preset.name === "string" ? preset.name.replace(/^CCR:\s*/, "").trim() : ""
+      )
+      .filter((label) => label.length > 0);
+  });
+}
 
 /**
  * Polls the preset listbox until all expected label substrings appear.
@@ -401,10 +417,7 @@ export async function waitForCcrPresets(
       await expect
         .poll(
           async () => {
-            await navigateToAgentSettings(window, agentId);
-            const trigger = window.locator(SEL.preset.selectorTrigger);
-            await trigger.waitFor({ state: "visible", timeout: 2_000 });
-            return getPresetOptionLabels(window);
+            return getCcrPresetLabels(window);
           },
           {
             message: `Timed out waiting for CCR presets: [${expectedLabels.join(", ")}]`,
@@ -413,6 +426,8 @@ export async function waitForCcrPresets(
           }
         )
         .toEqual(expect.arrayContaining(expectedLabels.map((e) => expect.stringContaining(e))));
+
+      await navigateToAgentSettings(window, agentId);
     },
     { box: true }
   );
@@ -440,10 +455,7 @@ export async function waitForCcrPresetsRemoved(
       await expect
         .poll(
           async () => {
-            await navigateToAgentSettings(window, agentId);
-            const trigger = window.locator(SEL.preset.selectorTrigger);
-            await trigger.waitFor({ state: "visible", timeout: 2_000 });
-            return getPresetOptionLabels(window);
+            return getCcrPresetLabels(window);
           },
           {
             message: `Timed out waiting for CCR presets to be removed: [${removedLabels.join(", ")}]`,
@@ -452,6 +464,8 @@ export async function waitForCcrPresetsRemoved(
           }
         )
         .not.toEqual(expect.arrayContaining(removedLabels.map((e) => expect.stringContaining(e))));
+
+      await navigateToAgentSettings(window, agentId);
     },
     { box: true }
   );

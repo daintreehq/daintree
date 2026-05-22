@@ -121,8 +121,7 @@ export function ContentGridDefault({
                           <GridPanel
                             terminalId={terminal.id}
                             isFocused={terminal.id === ctx.focusedId}
-                            gridPanelCount={ctx.gridItemCount}
-                            gridCols={ctx.gridCols}
+                            isMultiPanelGrid={ctx.gridItemCount > 1}
                             onAddTabForPanel={ctx.handleAddTabForPanel}
                           />
                         </SortableTerminal>
@@ -143,8 +142,7 @@ export function ContentGridDefault({
                           <GridTabGroup
                             group={group}
                             focusedId={ctx.focusedId}
-                            gridPanelCount={ctx.gridItemCount}
-                            gridCols={ctx.gridCols}
+                            isMultiPanelGrid={ctx.gridItemCount > 1}
                           />
                         </SortableTerminal>
                       );

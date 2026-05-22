@@ -17,16 +17,14 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 export interface GridTabGroupProps {
   group: TabGroup;
   focusedId: string | null;
-  gridPanelCount?: number;
-  gridCols?: number;
+  isMultiPanelGrid?: boolean;
   isMaximized?: boolean;
 }
 
 export const GridTabGroup = React.memo(function GridTabGroup({
   group,
   focusedId,
-  gridPanelCount,
-  gridCols,
+  isMultiPanelGrid,
   isMaximized = false,
 }: GridTabGroupProps) {
   // Subscribe to this group's panels keyed by `group.panelIds`. `useShallow`
@@ -272,8 +270,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       terminalId={activePanel.id}
       isFocused={isFocused}
       isMaximized={isMaximized}
-      gridPanelCount={gridPanelCount}
-      gridCols={gridCols}
+      isMultiPanelGrid={isMultiPanelGrid}
       ambientAgentState={groupAmbientState}
       tabs={tabs}
       groupId={group.id}

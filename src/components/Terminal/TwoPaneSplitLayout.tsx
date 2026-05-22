@@ -345,8 +345,7 @@ export function TwoPaneSplitLayout({
               <GridPanel
                 terminalId={terminals[0].id}
                 isFocused={terminals[0].id === focusedId}
-                gridPanelCount={2}
-                gridCols={2}
+                isMultiPanelGrid={true}
                 onAddTabForPanel={onAddTabForPanel}
               />
             </SortableTerminal>
@@ -373,8 +372,7 @@ export function TwoPaneSplitLayout({
               <GridPanel
                 terminalId={terminals[1].id}
                 isFocused={terminals[1].id === focusedId}
-                gridPanelCount={2}
-                gridCols={2}
+                isMultiPanelGrid={true}
                 onAddTabForPanel={onAddTabForPanel}
               />
             </SortableTerminal>

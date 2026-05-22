@@ -4,6 +4,7 @@ import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
+import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -37,23 +38,13 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
   handlers.push(typedHandle(CHANNELS.PROJECT_GET_ALL, handleProjectGetAll));
 
   const handleProjectGetCurrent = async (ctx: import("../../types.js").IpcContext) => {
-    const senderWinForPvm = getWindowForWebContents(ctx.event.sender);
-    const pvmCtx = senderWinForPvm
-      ? deps.windowRegistry?.getByWindowId(senderWinForPvm.id)
-      : undefined;
-    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
-    if (pvm) {
-      const viewProjectId = pvm.getProjectIdForWebContents(ctx.event.sender.id);
-      if (viewProjectId) {
-        const project = projectStore.getProjectById(viewProjectId);
-        if (project) return project;
-        return null;
-      }
-      // PVM exists but this WebContents has no binding — an unbound new window.
-      // Returning null lets the renderer show the WelcomeScreen instead of inheriting
-      // the last-active project (#6015). Skip the worktree side-effect too: no port has
-      // been brokered for this view, so the snapshot would be orphaned.
-      return null;
+    const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
+    if (scopedProject) {
+      // Project-scoped views must not inherit the last-active global project.
+      // Returning null for an unbound view lets the renderer show the WelcomeScreen
+      // (#6015). Skip the worktree side-effect too: no port has been brokered
+      // for that view, so the snapshot would be orphaned.
+      return scopedProject.project;
     }
 
     const currentProject = projectStore.getCurrentProject();

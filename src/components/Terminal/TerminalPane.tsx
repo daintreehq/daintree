@@ -222,7 +222,7 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
-  gridPanelCount?: number;
+  isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
   ambientAgentState?: AgentState;
@@ -268,7 +268,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   scrollbackRestoreError,
-  gridPanelCount,
+  isMultiPanelGrid = true,
   detectedProcessId,
   ambientAgentState,
   isInputLocked: isInputLockedOverride,
@@ -415,25 +415,6 @@ function TerminalPaneComponent({
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
-  // Derived per-render so listeners that bypass `updateAgentState` (raw
-  // setState from identity reducers, exit handlers) can't desync a maintained
-  // counter (#8596 review feedback). Scoped to grid-visible panels — dock /
-  // trash / background / explicitly-hidden panels don't contribute to fleet
-  // pressure on the user's screen.
-  const workingPanelCount = usePanelStore((state) => {
-    let count = 0;
-    for (const tid in state.panelsById) {
-      const t = state.panelsById[tid];
-      if (!t) continue;
-      if (t.agentState !== "working") continue;
-      const location = t.location ?? "grid";
-      if (location !== "grid") continue;
-      if (t.isVisible === false) continue;
-      count++;
-    }
-    return count;
-  });
-
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.customPresets : undefined
@@ -680,14 +661,8 @@ function TerminalPaneComponent({
     const terminal = getTerminal(id);
     return getTerminalRefreshTier(terminal, isFocused, {
       isFleetArmed: isArmed,
-      workingCount: workingPanelCount,
     });
-  }, [getTerminal, id, isArmed, isFocused, workingPanelCount]);
-
-  // True when this pane is a working agent currently demoted from FOCUSED to
-  // VISIBLE because another working agent is competing for the budget
-  // (issue #8596). Drives the policy's longer fleet-driven hysteresis.
-  const isFleetDemoted = agentState === "working" && !isFocused && workingPanelCount > 1;
+  }, [getTerminal, id, isArmed, isFocused]);
 
   const handleClick = (e?: React.MouseEvent) => {
     const target = e?.target as HTMLElement | null;
@@ -1009,7 +984,7 @@ function TerminalPaneComponent({
   }, [id]);
 
   const isWorking = agentState === "working";
-  const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
+  const allowPing = !isMaximized && (location !== "grid" || isMultiPanelGrid);
 
   const agentHeaderActions = (() => {
     if (!effectiveAgentId) return undefined;
@@ -1069,7 +1044,7 @@ function TerminalPaneComponent({
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}
-      gridPanelCount={gridPanelCount}
+      isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
       onClose={onClose}
       onToggleMaximize={onToggleMaximize}
@@ -1234,7 +1209,6 @@ function TerminalPaneComponent({
                     onInput={handleInput}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
-                    isFleetDemoted={isFleetDemoted}
                     cwd={cwd}
                     hasBottomBar={showHybridInputBar}
                   />

@@ -1,4 +1,13 @@
-import { useMemo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  useMemo,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
@@ -20,13 +29,16 @@ import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGrid
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  subscribeOptimisticClose,
+  getClosingIdsSnapshot,
+} from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
   getMaxGridCapacity,
   GRID_TRANSITION_DURATION_MS,
-  GRID_FIT_DELAY_MS,
   ABSOLUTE_MAX_GRID_TERMINALS,
 } from "@/lib/terminalLayout";
 import {
@@ -50,6 +62,7 @@ import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
 
 // Stable empty arrays — returned from `useShallow` selectors and memos when
@@ -174,7 +187,7 @@ export function useContentGridContext({
     storeTabGroups,
     trashedTerminals,
     focusedId,
-    maximizedId,
+    maximizedId: rawMaximizedId,
     maximizeTarget,
     preMaximizeLayout,
     clearPreMaximizeLayout,
@@ -198,6 +211,16 @@ export function useContentGridContext({
       setFocused: state.setFocused,
     }))
   );
+
+  // Panels the user just clicked to close. They are filtered out of every grid
+  // derivation below so the panel disappears in the same frame as the click;
+  // the canonical trash commit runs ~one debounce later (see optimisticPanelClose).
+  const closingIds = useSyncExternalStore(subscribeOptimisticClose, getClosingIdsSnapshot);
+
+  // Closing the maximized panel un-maximizes instantly; the canonical commit
+  // clears the store's `maximizedId` ~one debounce later.
+  const maximizedId =
+    rawMaximizedId !== null && closingIds.has(rawMaximizedId) ? null : rawMaximizedId;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
@@ -263,11 +286,12 @@ export function useContentGridContext({
     const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of gridPanelIds) {
+      if (closingIds.has(id)) continue;
       const t = byId[id];
       if (t) result.push(t);
     }
-    return result;
-  }, [gridPanelIds]);
+    return result.length === 0 ? EMPTY_TERMINALS : result;
+  }, [gridPanelIds, closingIds]);
 
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
@@ -291,8 +315,26 @@ export function useContentGridContext({
     void gridPanelIds;
     void storeTabGroups;
     void trashedTerminals;
-    return getTabGroups("grid", activeWorktreeId ?? undefined);
-  }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals]);
+    const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
+    if (closingIds.size === 0) return groups;
+    // Drop optimistically-closing panels so the grid reflows the instant X is
+    // clicked — before the canonical trash commit lands in the store.
+    const filtered: TabGroup[] = [];
+    for (const group of groups) {
+      const kept = group.panelIds.filter((id) => !closingIds.has(id));
+      if (kept.length === 0) continue;
+      if (kept.length === group.panelIds.length) {
+        filtered.push(group);
+      } else {
+        filtered.push({
+          ...group,
+          panelIds: kept,
+          activeTabId: kept.includes(group.activeTabId) ? group.activeTabId : (kept[0] ?? ""),
+        });
+      }
+    }
+    return filtered.length === 0 ? EMPTY_TAB_GROUPS : filtered;
+  }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals, closingIds]);
 
   const handleAddTabForPanel = useCallback(
     async (panel: TerminalInstance) => {
@@ -566,6 +608,13 @@ export function useContentGridContext({
     hysteresisGridCols,
   ]);
 
+  // Mirror the live grid layout into a module-level snapshot so
+  // `GridPanel.handleToggleMaximize` can read `gridCols`/`gridItemCount`
+  // imperatively at click time instead of taking them as reactive props.
+  useEffect(() => {
+    setGridLayoutSnapshot({ gridCols, gridItemCount });
+  }, [gridCols, gridItemCount]);
+
   const layoutTransition: Transition = useMemo(
     () => ({
       duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
@@ -632,11 +681,12 @@ export function useContentGridContext({
     const byId = panelStoreApi.getState().panelsById;
     const result: TerminalInstance[] = [];
     for (const id of fleetPanelIds) {
+      if (closingIds.has(id)) continue;
       const t = byId[id];
       if (t) result.push(t);
     }
-    return result;
-  }, [fleetPanelIds]);
+    return result.length === 0 ? EMPTY_TERMINALS : result;
+  }, [fleetPanelIds, closingIds]);
 
   const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
@@ -664,7 +714,7 @@ export function useContentGridContext({
   }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth, hysteresisFleetCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const writeFleetHysteresis =
       isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
@@ -679,30 +729,36 @@ export function useContentGridContext({
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
     setHysteresisFleetCols(writeFleetHysteresis);
-    if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
+
+    if (isDraggingRef.current || ids.length === 0) return;
+
+    // Schedule a coalesced fleet-pane resize off the open/close path — one
+    // pass once the burst settles (see scheduleBatchResize).
+    terminalInstanceService.scheduleBatchResize(ids);
+
+    // A column-count change shifts cell widths, so the per-host ResizeObserver
+    // would otherwise fire an uncoordinated second resize through the 200ms
+    // FLIP. Lock those panes for the transition window; the lock's unlock pass
+    // doubles as the corrective backstop.
+    if (fleetColsChanged) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
         GRID_TRANSITION_DURATION_MS
       );
     }
-    const timeoutId = window.setTimeout(() => {
-      if (isDraggingRef.current) return;
-      terminalInstanceService.batchResize(ids);
-    }, GRID_FIT_DELAY_MS);
-    return () => {
-      clearTimeout(timeoutId);
-    };
   }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
 
-  const startBatchFit = useEffectEvent(() => {
+  // Reads fresh `gridTerminals` without making it an effect dependency — it
+  // changes on agent-state ticks that must not retrigger a resize pass.
+  const runGridBatchFit = useEffectEvent(() => {
+    if (isDraggingRef.current) return;
     const ids = gridTerminals.map((t) => t.id);
-    return window.setTimeout(() => {
-      if (isDraggingRef.current) return;
-      terminalInstanceService.batchResize(ids);
-    }, GRID_FIT_DELAY_MS);
+    if (ids.length > 0) {
+      terminalInstanceService.scheduleBatchResize(ids);
+    }
   });
   const prevGridColsRef = useRef(gridCols);
-  useEffect(() => {
+  useLayoutEffect(() => {
     void gridCols;
     void panelIds;
 
@@ -712,7 +768,18 @@ export function useContentGridContext({
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
 
-    if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
+    if (isProjectSwitching || isDraggingRef.current) return;
+
+    // Schedule a coalesced sibling resize off the open/close path — the click
+    // never waits on N xterm resizes, and a burst of opens/closes collapses
+    // into a single pass once it settles (see scheduleBatchResize).
+    runGridBatchFit();
+
+    // A column-count change shifts cell widths, so the per-host ResizeObserver
+    // would otherwise fire an uncoordinated second resize through the 200ms
+    // FLIP. Lock those panels for the transition window; the lock's unlock pass
+    // doubles as the corrective backstop for any panel not yet laid out here.
+    if (colsChanged) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(
@@ -721,12 +788,6 @@ export function useContentGridContext({
         );
       }
     }
-
-    const timeoutId = startBatchFit();
-
-    return () => {
-      clearTimeout(timeoutId);
-    };
   }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
 
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;

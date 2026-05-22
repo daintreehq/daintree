@@ -99,8 +99,7 @@ export function ContentGridFleetScope({
                       <GridPanel
                         terminalId={terminal.id}
                         isFocused={terminal.id === ctx.focusedId}
-                        gridPanelCount={ctx.fleetPanels.length}
-                        gridCols={ctx.fleetGridCols}
+                        isMultiPanelGrid={ctx.fleetPanels.length > 1}
                         isFleetScope
                         titleOverride={titleOverride}
                       />

@@ -295,8 +295,7 @@ describe("XtermAdapter lifecycle", () => {
     await waitFor(() =>
       expect(mocks.terminalInstanceService.applyRendererPolicy).toHaveBeenLastCalledWith(
         "term-1",
-        TerminalRefreshTier.BACKGROUND,
-        { fleetDriven: false }
+        TerminalRefreshTier.BACKGROUND
       )
     );
 
@@ -320,8 +319,7 @@ describe("XtermAdapter lifecycle", () => {
     await waitFor(() =>
       expect(mocks.terminalInstanceService.applyRendererPolicy).toHaveBeenLastCalledWith(
         "term-1",
-        TerminalRefreshTier.VISIBLE,
-        { fleetDriven: false }
+        TerminalRefreshTier.VISIBLE
       )
     );
     expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);

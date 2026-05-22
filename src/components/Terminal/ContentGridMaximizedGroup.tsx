@@ -39,8 +39,7 @@ export function ContentGridMaximizedGroup({
         <GridTabGroup
           group={group}
           focusedId={effectiveFocusedId}
-          gridPanelCount={1}
-          gridCols={1}
+          isMultiPanelGrid={false}
           isMaximized={true}
         />
       </div>

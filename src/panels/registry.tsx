@@ -17,8 +17,8 @@ import type {
 import type { PanelSnapshot } from "@shared/types/project";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
-import { TerminalPaneSkeleton } from "@/components/Terminal/TerminalPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
+import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { logError } from "@/utils/logger";
 
 import { serializePtyPanel } from "./terminal/serializer";
@@ -43,7 +43,7 @@ export interface PanelComponentProps {
   onMinimize?: () => void;
   onRestore?: () => void;
   showRestoreControl?: boolean;
-  gridPanelCount?: number;
+  isMultiPanelGrid?: boolean;
   extensionState?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -53,9 +53,6 @@ export interface PanelKindDefinition extends PanelKindConfig {
   component: ComponentType<any>;
 }
 
-const LazyTerminalPane = lazy(() =>
-  import("@/components/Terminal/TerminalPane").then((m) => ({ default: m.TerminalPane }))
-);
 const LazyBrowserPane = lazy(() =>
   import("@/components/Browser/BrowserPane").then((m) => ({ default: m.BrowserPane }))
 );
@@ -70,18 +67,9 @@ const LazyReviewPane = lazy(() =>
 // correct componentName attribution on chunk-load failures. The per-panel
 // boundary in GridPanel catches render errors; this wrapper catches import
 // failures with proper attribution — the two boundaries serve different roles.
-function TerminalPaneWrapper(props: ComponentProps<typeof LazyTerminalPane>) {
-  return (
-    <ErrorBoundary variant="component" componentName="TerminalPane">
-      <Suspense fallback={<TerminalPaneSkeleton />}>
-        <ContentFadeIn className="flex flex-col h-full w-full">
-          <LazyTerminalPane {...props} />
-        </ContentFadeIn>
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
+// TerminalPane is intentionally NOT lazy/wrapped: it is the hottest panel kind,
+// open/close must feel instant, and a Suspense skeleton + 150ms fade on every
+// mount is a visible regression for a live text surface.
 function BrowserPaneWrapper(props: ComponentProps<typeof LazyBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
@@ -184,7 +172,7 @@ function requirePanelKindConfig(kind: string): PanelKindConfig {
 // object by dynamic id, which requires the index signature. `satisfies` would
 // strip it from the inferred type and break the mutation site.
 const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
-  terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPaneWrapper },
+  terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPane },
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
   review: { ...requirePanelKindConfig("review"), component: ReviewPaneWrapper },

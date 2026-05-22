@@ -41,6 +41,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { yieldToScheduler } from "@/lib/schedulerYield";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
@@ -60,6 +61,18 @@ const WEBGL_RESTORE_DEBOUNCE_MS = 100;
 // multi-terminal hide. Authoritative release paths (tier demotion, agent
 // demotion, destroy, hibernation) cancel this timer and release immediately.
 const WEBGL_HIDE_DWELL_MS = 500;
+
+// Trailing-edge window for `scheduleBatchResize`. A burst of grid open/close
+// resizes within this gap collapses into one pass — long enough to coalesce a
+// rapid close stream, short enough that survivors settle promptly after it.
+const GRID_RESIZE_COALESCE_MS = 120;
+
+// Terminals resized per task inside `runResizePass`, yielding to the scheduler
+// between chunks. xterm.js 6.0 reflows the whole scrollback on a
+// column-changing resize (~15-40ms each), so one-per-task keeps every task
+// under the ~50ms long-task threshold and lets paint + input run between
+// terminals instead of freezing the renderer for the whole batch.
+const RESIZE_PASS_CHUNK_SIZE = 1;
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -696,11 +709,12 @@ class TerminalInstanceService {
       }
       // ResizeObserver doesn't retroactively fire when a lock releases, so a
       // corrective pass is required to pick up the post-transition geometry.
-      // batchResize runs the read-all / write-all pass in a single task —
-      // safe to call inline since locks above release synchronously (#8597).
-      // The grid hook (useContentGridContext) also schedules a batch ~50ms
-      // later when grid deps change; the resize() dedup guard absorbs that.
-      this.batchResize(panelIds);
+      // runResizePass chunks the work and yields between terminals so a
+      // post-transition correction never freezes the renderer, and a later
+      // close/open supersedes it cleanly (#8597). The grid hook
+      // (useContentGridContext) also schedules a pass ~50ms later when grid
+      // deps change; the resize() dedup guard absorbs the overlap.
+      this.runResizePass(panelIds);
     }, durationMs);
   }
 
@@ -1455,8 +1469,13 @@ class TerminalInstanceService {
    * does not, so we apply it here), and the panel must not be resize-locked.
    * Caller is responsible for the `isDragging` guard since the React ref
    * holding that state is owned by the grid hook.
+   *
+   * Private — this is the synchronous primitive. Callers outside this service
+   * must go through {@link runResizePass} (chunked, cancellable) or
+   * {@link scheduleBatchResize} (coalesced) so a survivor reflow never freezes
+   * the renderer in one task. `executeResizePass` invokes this one id at a time.
    */
-  batchResize(ids: string[]): void {
+  private batchResize(ids: string[]): void {
     if (ids.length === 0) return;
 
     type Pending = { id: string; width: number; height: number };
@@ -1482,6 +1501,94 @@ class TerminalInstanceService {
     for (const { id, width, height } of pending) {
       this.resizeController.resize(id, width, height);
     }
+  }
+
+  private gridResizeTimer: number | undefined;
+  private readonly gridResizePendingIds = new Set<string>();
+  private resizePassAbort: AbortController | undefined;
+
+  /**
+   * Coalesced variant of `batchResize`. A burst of grid open/close events each
+   * union their ids and reset a trailing-edge timer; the actual resize runs
+   * once the burst settles, on the next frame — so it never lands on the
+   * synchronous open/close path the user is waiting on.
+   */
+  scheduleBatchResize(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) this.gridResizePendingIds.add(id);
+    if (this.gridResizeTimer !== undefined) {
+      clearTimeout(this.gridResizeTimer);
+    }
+    this.gridResizeTimer = window.setTimeout(() => {
+      this.gridResizeTimer = undefined;
+      const pendingIds = [...this.gridResizePendingIds];
+      this.gridResizePendingIds.clear();
+      requestAnimationFrame(() => this.runResizePass(pendingIds));
+    }, GRID_RESIZE_COALESCE_MS);
+  }
+
+  /**
+   * Resize a set of panels as a chunked, cancellable pass instead of one
+   * synchronous loop. Closing or opening a panel resizes every surviving
+   * xterm; in xterm.js 6.0 a column-changing resize reflows the entire
+   * scrollback (O(scrollback)), so resizing ~15 terminals in a single
+   * synchronous loop freezes the renderer for hundreds of ms — the
+   * "app stops responding" the user feels on Cmd+W.
+   *
+   * This runs `RESIZE_PASS_CHUNK_SIZE` terminal(s) per task and yields to the
+   * scheduler between chunks (see {@link yieldToScheduler}), so paint and
+   * input stay live while the survivors settle progressively. The focused
+   * panel resizes first so the pane the user is looking at settles in the
+   * first frame; far corners of a large grid settle a beat later, unnoticed.
+   *
+   * Each new pass aborts any in-flight one: once a newer pass starts, the
+   * survivor set the old one was resizing is already stale, so its remaining
+   * reflows are cancelled. The trailing-edge debounce in
+   * {@link scheduleBatchResize} coalesces a close/open burst before a pass
+   * starts; this abort handles the case where a burst arrives once a pass is
+   * already running. Fire-and-forget — callers never await it.
+   */
+  runResizePass(ids: string[]): void {
+    if (ids.length === 0) return;
+    // A newer pass supersedes any in-flight one — its survivor set is stale.
+    this.resizePassAbort?.abort();
+    const controller = new AbortController();
+    this.resizePassAbort = controller;
+    void this.executeResizePass(ids, controller).catch((error) => {
+      logError("terminal resize pass failed", error);
+    });
+  }
+
+  private async executeResizePass(ids: string[], controller: AbortController): Promise<void> {
+    const { signal } = controller;
+    try {
+      const ordered = this.orderFocusedFirst([...new Set(ids)]);
+      for (let i = 0; i < ordered.length; i += RESIZE_PASS_CHUNK_SIZE) {
+        if (signal.aborted) return;
+        // batchResize re-applies every eligibility guard (instance exists,
+        // connected, visible, not resize-locked) and reads fresh geometry —
+        // correct here because layout has settled across the yields.
+        this.batchResize(ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE));
+        if (i + RESIZE_PASS_CHUNK_SIZE < ordered.length) {
+          await yieldToScheduler();
+        }
+      }
+    } finally {
+      if (this.resizePassAbort === controller) {
+        this.resizePassAbort = undefined;
+      }
+    }
+  }
+
+  /**
+   * Order the resize set so the focused panel settles first. The user's eye
+   * is on the focused pane; resizing it in the first chunk makes the pass
+   * feel instant even though total work is unchanged.
+   */
+  private orderFocusedFirst(ids: string[]): string[] {
+    const focusedId = usePanelStore.getState().focusedId;
+    if (!focusedId || !ids.includes(focusedId)) return ids;
+    return [focusedId, ...ids.filter((id) => id !== focusedId)];
   }
 
   scrollToBottom(id: string): void {
@@ -1949,12 +2056,8 @@ class TerminalInstanceService {
     });
   }
 
-  applyRendererPolicy(
-    id: string,
-    tier: TerminalRefreshTier,
-    options?: { fleetDriven?: boolean }
-  ): void {
-    this.rendererPolicy.applyRendererPolicy(id, tier, options);
+  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
+    this.rendererPolicy.applyRendererPolicy(id, tier);
   }
 
   updateRefreshTierProvider(id: string, provider: RefreshTierProvider): void {
@@ -2231,6 +2334,10 @@ class TerminalInstanceService {
 
   dispose(): void {
     this.stopPolling();
+    // Abort any in-flight chunked resize pass so its yielded continuation
+    // doesn't resume against a torn-down service.
+    this.resizePassAbort?.abort();
+    this.resizePassAbort = undefined;
     this.reflowController.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();

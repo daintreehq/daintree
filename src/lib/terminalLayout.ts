@@ -22,7 +22,6 @@ export const MIN_TERMINAL_HEIGHT_PX = 200;
 export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
 export const GRID_TRANSITION_DURATION_MS = 200;
-export const GRID_FIT_DELAY_MS = GRID_TRANSITION_DURATION_MS + 50;
 
 /**
  * Sidebar width transition duration. Mirrors the `duration-[var(--duration-250)]`

@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
+import { isBuiltInAgentId } from "../../shared/config/agentIds";
 
 function isAssistantSupportedAgentId(value: unknown): value is string {
   return typeof value === "string" && getAssistantSupportedAgentIds().includes(value);
@@ -30,6 +31,13 @@ interface HelpPanelState {
   terminalId: string | null;
   agentId: string | null;
   preferredAgentId: string | null;
+  /**
+   * Set at rehydration when a persisted preferredAgentId was dropped because the
+   * agent is no longer an assistant backend (CLI uninstalled or demoted from
+   * tier:"stable"). Transient (never persisted) — drives a one-shot banner so
+   * the silent null-out is explained instead of leaving a blank empty state.
+   */
+  droppedPreferredAgentId: string | null;
   sessionId: string | null;
   introDismissed: boolean;
   conversationTouched: boolean;
@@ -50,6 +58,7 @@ interface HelpPanelActions {
   setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
   setPreferredAgent: (agentId: string | null) => void;
+  clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
   markConversationStarted: () => void;
   requestFocus: () => void;
@@ -66,6 +75,7 @@ const initialState: HelpPanelState = {
   terminalId: null,
   agentId: null,
   preferredAgentId: null,
+  droppedPreferredAgentId: null,
   sessionId: null,
   introDismissed: false,
   conversationTouched: false,
@@ -117,13 +127,19 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           // choice (made via Settings) must survive terminal re-binds —
           // overwriting it here is what made #8353's agent switch a no-op.
           preferredAgentId: s.preferredAgentId ?? agentId,
+          // A launched session is a successful recovery — drop the stale banner
+          // so it can't resurface if the panel later returns to the empty state.
+          droppedPreferredAgentId: null,
           conversationTouched: false,
         })),
 
       clearTerminal: () =>
         set({ terminalId: null, agentId: null, sessionId: null, conversationTouched: false }),
 
-      setPreferredAgent: (agentId) => set({ preferredAgentId: agentId }),
+      setPreferredAgent: (agentId) =>
+        set({ preferredAgentId: agentId, droppedPreferredAgentId: null }),
+
+      clearDroppedPreferredAgent: () => set({ droppedPreferredAgentId: null }),
 
       dismissIntro: () => set({ introDismissed: true }),
 
@@ -160,6 +176,18 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       }),
       merge: (persistedState: unknown, currentState) => {
         const persisted = persistedState as Partial<HelpPanelState>;
+        // Capture a built-in preference that's no longer a valid assistant
+        // backend (demoted from tier:"stable") so the empty state can explain
+        // the silent null-out instead of appearing blank. Restricted to built-in
+        // IDs: the user agent registry loads asynchronously after this synchronous
+        // rehydration, so a still-valid user-defined agent would otherwise be
+        // false-flagged as dropped on every restart. A null/missing preference is
+        // a clean first-run state, not a drop.
+        const droppedPreferredAgentId =
+          isBuiltInAgentId(persisted.preferredAgentId) &&
+          !isAssistantSupportedAgentId(persisted.preferredAgentId)
+            ? persisted.preferredAgentId
+            : null;
         return {
           ...currentState,
           // The assistant can auto-launch as soon as it opens. Starting every
@@ -173,6 +201,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           preferredAgentId: isAssistantSupportedAgentId(persisted.preferredAgentId)
             ? persisted.preferredAgentId
             : null,
+          droppedPreferredAgentId,
           introDismissed:
             typeof persisted.introDismissed === "boolean"
               ? persisted.introDismissed

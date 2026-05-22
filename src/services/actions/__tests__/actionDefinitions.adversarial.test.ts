@@ -240,6 +240,14 @@ vi.mock("@/lib/notify", () => ({
   notify: vi.fn(() => "mock-notification-id"),
 }));
 
+// Run the optimistic-close commit synchronously so these tests assert the
+// canonical trash outcome directly; the deferral itself is covered by
+// optimisticPanelClose.test.ts.
+vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+  requestPanelClose: vi.fn((req: { commit: () => void }) => req.commit()),
+  flushOptimisticCloses: vi.fn(),
+}));
+
 const { registerTerminalQueryActions } = await import("../definitions/terminalQueryActions");
 const { registerTerminalSpawnActions } = await import("../definitions/terminalSpawnActions");
 const { registerTerminalLifecycleActions } =

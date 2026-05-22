@@ -1,7 +1,7 @@
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { ManagedTerminal } from "./types";
-import { TIER_DOWNGRADE_HYSTERESIS_MS, FLEET_DOWNGRADE_HYSTERESIS_MS } from "./types";
+import { TIER_DOWNGRADE_HYSTERESIS_MS } from "./types";
 
 export interface RendererPolicyDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -10,18 +10,6 @@ export interface RendererPolicyDeps {
   onResumeFlush?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => void;
-}
-
-export interface ApplyRendererPolicyOptions {
-  /**
-   * Set when the tier change is caused by sibling fleet pressure (another
-   * working agent in the panel registry pulled this one down from FOCUSED to
-   * VISIBLE). The policy uses {@link FLEET_DOWNGRADE_HYSTERESIS_MS} (1000ms)
-   * instead of {@link TIER_DOWNGRADE_HYSTERESIS_MS} (500ms) so fast working/
-   * idle flip chains (build → lint → bundler) don't oscillate cadence at the
-   * fleet level. See issue #8596.
-   */
-  fleetDriven?: boolean;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary
@@ -74,11 +62,7 @@ export class TerminalRendererPolicy {
     terminalClient.setActivityTier(id, tier, pollingIntervalMs);
   }
 
-  applyRendererPolicy(
-    id: string,
-    tier: TerminalRefreshTier,
-    options?: ApplyRendererPolicyOptions
-  ): void {
+  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
     this.knownTerminalIds.add(id);
     const managed = this.deps.getInstance(id);
     if (!managed) return;
@@ -133,9 +117,7 @@ export class TerminalRendererPolicy {
     }
 
     managed.pendingTier = tier;
-    const hysteresisMs = options?.fleetDriven
-      ? FLEET_DOWNGRADE_HYSTERESIS_MS
-      : TIER_DOWNGRADE_HYSTERESIS_MS;
+    const hysteresisMs = TIER_DOWNGRADE_HYSTERESIS_MS;
     managed.tierChangeTimer = window.setTimeout(() => {
       const current = this.deps.getInstance(id);
       if (current && current.pendingTier === tier) {
