@@ -93,7 +93,16 @@ const baseProps = {
   hideAction: noopHide,
 };
 
-function fireKey(key: string, options: { selectionStart?: number; selectionEnd?: number } = {}) {
+function fireKey(
+  key: string,
+  options: {
+    selectionStart?: number;
+    selectionEnd?: number;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+  } = {}
+) {
   const onKeyDown = lastSearchablePaletteProps.current?.onKeyDown as
     | ((e: React.KeyboardEvent<HTMLInputElement>) => void)
     | undefined;
@@ -105,9 +114,9 @@ function fireKey(key: string, options: { selectionStart?: number; selectionEnd?:
   };
   const event = {
     key,
-    metaKey: false,
-    ctrlKey: false,
-    altKey: false,
+    metaKey: options.metaKey ?? false,
+    ctrlKey: options.ctrlKey ?? false,
+    altKey: options.altKey ?? false,
     currentTarget,
     preventDefault: () => {
       prevented = true;
@@ -255,5 +264,67 @@ describe("ActionPalette", () => {
     const prevented = fireKey("Backspace", { selectionStart: 3, selectionEnd: 3 });
     expect(prevented).toBe(false);
     expect(screen.getByText("Commands")).toBeTruthy();
+  });
+
+  it("does not pop the chip when Backspace spans a selection that starts at 0", () => {
+    render(<ActionPalette {...baseProps} />);
+    fireKey(">");
+    expect(screen.getByText("Commands")).toBeTruthy();
+
+    const prevented = fireKey("Backspace", { selectionStart: 0, selectionEnd: 3 });
+    expect(prevented).toBe(false);
+    expect(screen.getByText("Commands")).toBeTruthy();
+  });
+
+  it("clears the active mode when the palette closes", () => {
+    const { rerender } = render(<ActionPalette {...baseProps} />);
+    fireKey(">");
+    expect(screen.getByText("Commands")).toBeTruthy();
+
+    rerender(<ActionPalette {...baseProps} isOpen={false} />);
+    rerender(<ActionPalette {...baseProps} isOpen={true} />);
+    expect(screen.queryByText("Commands")).toBeNull();
+  });
+
+  it("rejects prefix routing when modifier keys are held", () => {
+    render(<ActionPalette {...baseProps} />);
+
+    expect(fireKey(">", { metaKey: true })).toBe(false);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+
+    expect(fireKey("@", { ctrlKey: true })).toBe(false);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+
+    expect(fireKey("/", { altKey: true })).toBe(false);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+
+    expect(screen.queryByText("Commands")).toBeNull();
+  });
+
+  it("does not re-route when a second prefix is typed inside an active mode", () => {
+    render(<ActionPalette {...baseProps} />);
+    fireKey(">");
+    expect(screen.getByText("Commands")).toBeTruthy();
+
+    expect(fireKey("@")).toBe(false);
+    expect(fireKey("#")).toBe(false);
+    expect(fireKey("/")).toBe(false);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+  });
+
+  it.each([
+    ["src/foo", true],
+    [".env", true],
+    ["~/.ssh", true],
+    ["src\\foo", true],
+    ["foo.bar", false],
+    ["middle~tilde", false],
+  ])("looksLikePath heuristic for %s", (query, shouldHint) => {
+    render(<ActionPalette {...baseProps} query={query} results={[]} totalResults={0} />);
+    if (shouldHint) {
+      expect(screen.getByText("search projects")).toBeTruthy();
+    } else {
+      expect(screen.queryByText("search projects")).toBeNull();
+    }
   });
 });

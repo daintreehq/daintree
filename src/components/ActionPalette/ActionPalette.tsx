@@ -224,6 +224,22 @@ export function ActionPalette({
   }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
 
   const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
+  // Hold the last rendered chip label across the exit animation so the chip
+  // doesn't visibly blank out as `activeMode` clears.
+  const [chipLabel, setChipLabel] = useState("");
+
+  // Reset chip state when the palette closes so the next open never starts in
+  // a stale mode. `useActionPalette.close()` only clears query/index — local
+  // component state stays unless cleaned up here.
+  useEffect(() => {
+    if (!isOpen && activeMode !== null) {
+      setActiveMode(null);
+    }
+  }, [isOpen, activeMode]);
+
+  useEffect(() => {
+    if (activeMode === "commands") setChipLabel(COMMANDS_LABEL);
+  }, [activeMode]);
 
   // Drive chip mount/unmount with the palette enter/exit tier (150ms / 100ms)
   // so the chip doesn't pop in faster than the palette itself.
@@ -304,9 +320,7 @@ export function ActionPalette({
     return undefined;
   }, [activeMode, query, results.length]);
 
-  const chipNode = chipShouldRender ? (
-    <ModeChip label={activeMode === "commands" ? COMMANDS_LABEL : ""} isVisible={chipVisible} />
-  ) : null;
+  const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
 
   return (
     <SearchablePalette<ActionPaletteItemType>
