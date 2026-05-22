@@ -13,7 +13,7 @@ import {
   GRID_TRANSITION_DURATION_MS,
 } from "../terminalLayout";
 
-const C = COMFORTABLE_PANEL_WIDTH_PX; // size-driven denominator (800)
+const C = COMFORTABLE_PANEL_WIDTH_PX; // size-driven denominator (480, #8859)
 
 describe("getAutoGridCols", () => {
   describe("single terminal", () => {
@@ -40,35 +40,40 @@ describe("getAutoGridCols", () => {
     const many = 12;
 
     it("uses 1 column until two comfortable panels fit (2 × C)", () => {
-      expect(getAutoGridCols(many, C)).toBe(1); // floor(800/800)=1
-      expect(getAutoGridCols(many, 2 * C - 1)).toBe(1); // 1599 → 1
+      expect(getAutoGridCols(many, C)).toBe(1); // floor(480/480)=1
+      expect(getAutoGridCols(many, 2 * C - 1)).toBe(1); // 959 → 1
     });
 
     it("widens to 2 columns at 2 × C", () => {
-      expect(getAutoGridCols(many, 2 * C)).toBe(2); // 1600 → 2
-      expect(getAutoGridCols(many, 3 * C - 1)).toBe(2); // 2399 → 2
+      expect(getAutoGridCols(many, 2 * C)).toBe(2); // 960 → 2
+      expect(getAutoGridCols(many, 3 * C - 1)).toBe(2); // 1439 → 2
     });
 
     it("widens to 3 columns at 3 × C", () => {
-      expect(getAutoGridCols(many, 3 * C)).toBe(3); // 2400 → 3
+      expect(getAutoGridCols(many, 3 * C)).toBe(3); // 1440 → 3
+      expect(getAutoGridCols(many, 4 * C - 1)).toBe(3); // 1919 → 3
     });
 
-    it("hard-caps at 3 columns regardless of width", () => {
-      // Literal 3 (not AUTO_GRID_MAX_COLS) so a silent constant bump is caught —
-      // the issue treats the 3-column ceiling as a researched design contract.
-      expect(getAutoGridCols(many, 4 * C)).toBe(3);
-      expect(getAutoGridCols(many, 10 * C)).toBe(3);
-      expect(getAutoGridCols(100, 99999)).toBe(3);
+    it("widens to 4 columns at 4 × C", () => {
+      expect(getAutoGridCols(many, 4 * C)).toBe(4); // 1920 → 4
     });
 
-    it("pins AUTO_GRID_MAX_COLS to the 3-column design contract", () => {
-      expect(AUTO_GRID_MAX_COLS).toBe(3);
+    it("hard-caps at 4 columns regardless of width", () => {
+      // Literal 4 (not AUTO_GRID_MAX_COLS) so a silent constant bump is caught —
+      // the issue treats the 4-column ceiling as the at-a-glance limit (#8859).
+      expect(getAutoGridCols(many, 5 * C)).toBe(4);
+      expect(getAutoGridCols(many, 10 * C)).toBe(4);
+      expect(getAutoGridCols(100, 99999)).toBe(4);
     });
 
-    it("places the 1→2 column boundary at 1600px (1080p/1440p land on 2)", () => {
+    it("pins AUTO_GRID_MAX_COLS to the 4-column design contract", () => {
+      expect(AUTO_GRID_MAX_COLS).toBe(4);
+    });
+
+    it('places the 1→2 column boundary at 960px (13" MacBook Air gets 2)', () => {
       // Literal pixels (not C) to verify the product-facing breakpoint directly.
-      expect(getAutoGridCols(many, 1599)).toBe(1);
-      expect(getAutoGridCols(many, 1600)).toBe(2);
+      expect(getAutoGridCols(many, 959)).toBe(1);
+      expect(getAutoGridCols(many, 960)).toBe(2);
     });
 
     it("is driven by width, not panel count, at a fixed width", () => {
@@ -81,34 +86,48 @@ describe("getAutoGridCols", () => {
   });
 
   describe("no empty columns", () => {
-    const wide = 4 * C; // would fit 3 columns by width
+    const wide = 4 * C; // fits 4 columns at the new cap
 
     it("never uses more columns than panels", () => {
-      expect(getAutoGridCols(2, wide)).toBe(2); // capped by count, not the 3-col width fit
+      expect(getAutoGridCols(2, wide)).toBe(2); // capped by count, not the 4-col width fit
       expect(getAutoGridCols(3, wide)).toBe(3);
-      expect(getAutoGridCols(5, wide)).toBe(3); // still capped at AUTO_GRID_MAX_COLS
+      expect(getAutoGridCols(4, wide)).toBe(4);
+      expect(getAutoGridCols(6, wide)).toBe(4); // still capped at AUTO_GRID_MAX_COLS
     });
   });
 
   describe("fallback width", () => {
-    it("uses the first-paint fallback (2-column band) when width is null", () => {
-      expect(getAutoGridCols(4, null)).toBe(2);
-      expect(getAutoGridCols(10, null)).toBe(2);
-      expect(getAutoGridCols(2, null)).toBe(2);
+    it("uses the first-paint fallback (3-column band) when width is null", () => {
+      // FALLBACK_GRID_WIDTH_PX (1680) lands in the 3-column band with C=480.
+      expect(getAutoGridCols(4, null)).toBe(3);
+      expect(getAutoGridCols(10, null)).toBe(3);
+      expect(getAutoGridCols(2, null)).toBe(2); // capped by count
     });
 
     it("uses the fallback for non-positive transient widths", () => {
-      expect(getAutoGridCols(4, 0)).toBe(2);
-      expect(getAutoGridCols(4, -100)).toBe(2);
+      expect(getAutoGridCols(4, 0)).toBe(3);
+      expect(getAutoGridCols(4, -100)).toBe(3);
     });
   });
 
   describe("breakpoint hysteresis (width-driven Schmitt trigger)", () => {
     const many = 12;
-    // 2→3 boundary: widen at 3×C (2400), narrow at 3×C − buffer.
-    const threeColNarrow = 3 * C - GRID_HYSTERESIS_BUFFER_PX; // 2320
-    // 1→2 boundary: widen at 2×C (1600), narrow at 2×C − buffer.
-    const twoColNarrow = 2 * C - GRID_HYSTERESIS_BUFFER_PX; // 1520
+    // 3→4 boundary: widen at 4×C (1920), narrow at 4×C − buffer.
+    const fourColNarrow = 4 * C - GRID_HYSTERESIS_BUFFER_PX; // 1840
+    // 2→3 boundary: widen at 3×C (1440), narrow at 3×C − buffer.
+    const threeColNarrow = 3 * C - GRID_HYSTERESIS_BUFFER_PX; // 1360
+    // 1→2 boundary: widen at 2×C (960), narrow at 2×C − buffer.
+    const twoColNarrow = 2 * C - GRID_HYSTERESIS_BUFFER_PX; // 880
+
+    it("holds 4 columns through the narrow buffer once widened", () => {
+      // Natural width target is 3 cols here, but a sticky 4 holds above narrowAt.
+      expect(getAutoGridCols(many, fourColNarrow, 4)).toBe(4);
+      expect(getAutoGridCols(many, fourColNarrow + 10, 4)).toBe(4);
+    });
+
+    it("narrows from 4 to 3 columns once below the buffer", () => {
+      expect(getAutoGridCols(many, fourColNarrow - 1, 4)).toBe(3);
+    });
 
     it("holds 3 columns through the narrow buffer once widened", () => {
       // Natural width target is 2 cols here, but a sticky 3 holds above narrowAt.
@@ -132,32 +151,34 @@ describe("getAutoGridCols", () => {
       // prev=1 must not bias an upward widen — width drives that.
       expect(getAutoGridCols(many, 2 * C, 1)).toBe(2);
       expect(getAutoGridCols(many, 3 * C, 2)).toBe(3);
+      expect(getAutoGridCols(many, 4 * C, 3)).toBe(4);
     });
 
     it("a narrowing viewport overrides a sticky wide count", () => {
-      // Even with previousCols=3, a width that fits only 1 column wins.
-      expect(getAutoGridCols(many, C - 1, 3)).toBe(1);
+      // Even with previousCols=4, a width that fits only 1 column wins.
+      expect(getAutoGridCols(many, C - 1, 4)).toBe(1);
     });
 
     it("preserves pure width-driven behavior when previousCols is undefined", () => {
+      expect(getAutoGridCols(many, fourColNarrow, undefined)).toBe(3);
       expect(getAutoGridCols(many, threeColNarrow, undefined)).toBe(2);
       expect(getAutoGridCols(many, twoColNarrow, undefined)).toBe(1);
     });
 
     it("respects no-empty-columns under a sticky prior", () => {
-      // 2 panels cap at 2 cols even if a stale previousCols=3 leaks in.
-      expect(getAutoGridCols(2, 3 * C, 3)).toBe(2);
+      // 2 panels cap at 2 cols even if a stale previousCols=4 leaks in.
+      expect(getAutoGridCols(2, 4 * C, 4)).toBe(2);
     });
 
     it("holds a chained sequence through a staged narrowing drag", () => {
       // Simulate the per-render previousCols handoff as the window shrinks
-      // across the 2→3 boundary: 2450 → 2350 → 2300.
-      const at2450 = getAutoGridCols(many, 2450, 2); // widens to 3
-      const at2350 = getAutoGridCols(many, 2350, at2450); // sticky 3 (≥2320)
-      const at2300 = getAutoGridCols(many, 2300, at2350); // drops to 2 (<2320)
-      expect(at2450).toBe(3);
-      expect(at2350).toBe(3);
-      expect(at2300).toBe(2);
+      // across the 3→4 boundary: 1960 → 1860 → 1810.
+      const at1960 = getAutoGridCols(many, 1960, 3); // widens to 4
+      const at1860 = getAutoGridCols(many, 1860, at1960); // sticky 4 (≥1840)
+      const at1810 = getAutoGridCols(many, 1810, at1860); // drops to 3 (<1840)
+      expect(at1960).toBe(4);
+      expect(at1860).toBe(4);
+      expect(at1810).toBe(3);
     });
   });
 });
@@ -241,7 +262,7 @@ describe("computeGridColumns", () => {
 
     it("handles transitions with varying widths", () => {
       const narrow = 1.5 * MIN_TERMINAL_WIDTH_PX; // 570 — below the 2-pane gate
-      const twoFit = 2.2 * C; // ~1760 — fits 2 columns
+      const twoFit = 2.2 * C; // ~1056 — fits 2 columns
 
       // Narrow: 2 panels stack (each would get < MIN_TERMINAL_WIDTH_PX side by side).
       expect(computeGridColumns(2, narrow, "automatic")).toBe(1);
@@ -255,7 +276,7 @@ describe("computeGridColumns", () => {
 
     it("uses the null-width fallback during transitions", () => {
       expect(computeGridColumns(2, null, "automatic")).toBe(2); // invariant
-      expect(computeGridColumns(3, null, "automatic")).toBe(2); // fallback fits 2 cols
+      expect(computeGridColumns(3, null, "automatic")).toBe(3); // fallback fits 3 cols
     });
   });
 
@@ -324,9 +345,9 @@ describe("computeGridColumns", () => {
     });
 
     it("forwards previousCols to the automatic hysteresis path", () => {
-      // 2320 = 3×C − buffer: a sticky 3 holds, a fresh measurement narrows to 2.
-      expect(computeGridColumns(12, 2320, "automatic", undefined, 3)).toBe(3);
-      expect(computeGridColumns(12, 2319, "automatic", undefined, 3)).toBe(2);
+      // 1360 = 3×C − buffer: a sticky 3 holds, a fresh measurement narrows to 2.
+      expect(computeGridColumns(12, 1360, "automatic", undefined, 3)).toBe(3);
+      expect(computeGridColumns(12, 1359, "automatic", undefined, 3)).toBe(2);
     });
   });
 
@@ -334,7 +355,7 @@ describe("computeGridColumns", () => {
     const wide = 3 * C;
 
     it("handles null width gracefully", () => {
-      expect(computeGridColumns(4, null, "automatic")).toBe(2); // fallback fits 2
+      expect(computeGridColumns(4, null, "automatic")).toBe(3); // fallback fits 3
       expect(computeGridColumns(2, null, "automatic")).toBe(2); // invariant
     });
 
