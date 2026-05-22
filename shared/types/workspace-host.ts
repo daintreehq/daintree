@@ -106,6 +106,12 @@ export interface WorktreeSnapshot {
   prCiStatus?: GitHubPRCIStatus;
   prTitle?: string;
   issueTitle?: string;
+  /**
+   * Offline-derived sentence-cased title parsed from `issue-<n>-<slug>`
+   * branches, used as a fallback headline when `issueTitle` hasn't been
+   * fetched yet so the sidebar never shows the raw slug (#8851).
+   */
+  branchDerivedTitle?: string;
   prLastUpdatedAt?: number;
   issueLastUpdatedAt?: number;
   worktreeChanges?: WorktreeChanges | null;

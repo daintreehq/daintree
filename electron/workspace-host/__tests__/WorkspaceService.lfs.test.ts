@@ -32,6 +32,7 @@ vi.mock("../../services/github/GitHubAuth.js", () => ({ GitHubAuth: vi.fn() }));
 vi.mock("../../services/issueExtractor.js", () => ({
   extractIssueNumber: vi.fn(),
   extractIssueNumberSync: vi.fn(),
+  deriveIssueTitleFromBranch: vi.fn(),
 }));
 vi.mock("../WorktreeLifecycleService.js", () => ({ WorktreeLifecycleService: vi.fn() }));
 vi.mock("../WorktreeMonitor.js", () => ({ WorktreeMonitor: vi.fn() }));

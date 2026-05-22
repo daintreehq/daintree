@@ -186,6 +186,13 @@ export interface Worktree {
   /** GitHub issue title */
   issueTitle?: string;
 
+  /**
+   * Offline-derived sentence-cased title parsed from the `issue-<n>-<slug>`
+   * branch naming convention. Used as a fallback headline when `issueTitle`
+   * hasn't been fetched yet so the sidebar never shows the raw slug.
+   */
+  branchDerivedTitle?: string;
+
   /** Timestamp when the issue title was last updated by the workspace-host */
   issueLastUpdatedAt?: number;
 

@@ -360,7 +360,11 @@ export class WorkspaceService {
         if (!monitor) return;
         if (monitor.issueNumber !== issueNumber) return;
 
-        monitor.setIssueNumber(undefined);
+        // Don't clear monitor.issueNumber: it's the branch-parsed local fact
+        // (e.g., `issue-123` in `bugfix/issue-123-foo`). A "not found" from
+        // the forge means the issue may be private, deleted, or in another
+        // org — none of which invalidates the local number. Keeping it lets
+        // the offline branchDerivedTitle stay visible (#8851).
         monitor.setIssueTitle(undefined);
 
         // Clear the linked.issue projection but preserve any PR linkage

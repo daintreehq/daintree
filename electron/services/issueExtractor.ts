@@ -61,3 +61,29 @@ export async function extractIssueNumber(
 ): Promise<number | null> {
   return extractIssueNumberSync(branchName, folderName);
 }
+
+const BRANCH_SLUG_PATTERN = /^(?:[a-zA-Z]+-)?\d+-(.+)$/;
+
+/**
+ * Derive a sentence-cased title from Daintree's `issue-<n>-<slug>` branch
+ * naming convention so the worktree sidebar has an offline fallback when the
+ * canonical GitHub issue title hasn't been fetched yet. Lossy by design — the
+ * slug truncates and lower-cases the original title, so we don't try to
+ * reconstruct casing beyond capitalizing the first character.
+ */
+export function deriveIssueTitleFromBranch(branchName: string): string | undefined {
+  if (!branchName || typeof branchName !== "string") {
+    return undefined;
+  }
+  const trimmed = branchName.trim();
+  if (!trimmed) return undefined;
+
+  const lastSegment = trimmed.includes("/") ? trimmed.slice(trimmed.lastIndexOf("/") + 1) : trimmed;
+  const match = lastSegment.match(BRANCH_SLUG_PATTERN);
+  if (!match?.[1]) return undefined;
+
+  const slug = match[1].replace(/[_-]+/g, " ").trim();
+  if (!slug) return undefined;
+
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}

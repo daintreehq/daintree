@@ -22,7 +22,11 @@ import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { ensureSerializable } from "../../shared/utils/serialization.js";
-import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
+import {
+  extractIssueNumberSync,
+  extractIssueNumber,
+  deriveIssueTitleFromBranch,
+} from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
 import { ResourcePollTimer, type ResourcePollTimerHost } from "./ResourcePollTimer.js";
 import { WatcherController, type WatcherControllerHost } from "./WatcherController.js";
@@ -142,6 +146,7 @@ export class WorktreeMonitor {
   private prCiStatus: GitHubPRCIStatus | undefined;
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
+  private _branchDerivedTitle: string | undefined;
   private prLastUpdatedAt: number | undefined;
   private issueLastUpdatedAt: number | undefined;
 
@@ -266,6 +271,9 @@ export class WorktreeMonitor {
     this.path = worktree.path;
     this._name = worktree.name;
     this._branch = worktree.branch;
+    this._branchDerivedTitle = worktree.branch
+      ? deriveIssueTitleFromBranch(worktree.branch)
+      : undefined;
     this._gitDir = worktree.gitDir;
     this._isCurrent = worktree.isCurrent;
     this._isMainWorktree = Boolean(worktree.isMainWorktree);
@@ -497,6 +505,7 @@ export class WorktreeMonitor {
 
   set branch(value: string | undefined) {
     this._branch = value;
+    this._branchDerivedTitle = value ? deriveIssueTitleFromBranch(value) : undefined;
   }
 
   get isCurrent(): boolean {
@@ -1062,6 +1071,7 @@ export class WorktreeMonitor {
       prCiStatus: linkedPr ? linkedPrCiStatus : this.prCiStatus,
       prTitle: linkedPr ? linkedPr.title : this.prTitle,
       issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
+      branchDerivedTitle: this._branchDerivedTitle,
       prLastUpdatedAt: this.prLastUpdatedAt,
       issueLastUpdatedAt: this.issueLastUpdatedAt,
       worktreeChanges: this.worktreeChanges,
@@ -1463,6 +1473,7 @@ export class WorktreeMonitor {
           this._issueNumber = undefined;
           void this.extractIssueNumberAsync(currentBranch, this._name);
         }
+        this._branchDerivedTitle = deriveIssueTitleFromBranch(currentBranch);
         this.issueTitle = undefined;
         // Clear PR info synchronously in the same emit as the branch change
         // so the renderer never sees a frame with the new branch but the old

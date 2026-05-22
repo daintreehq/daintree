@@ -146,6 +146,11 @@ class PullRequestService {
 
   private candidates = new Map<string, WorktreeContext>();
   private resolvedWorktrees = new Set<string>();
+  // Tracks worktrees with a confirmed successful issue-title fetch. Decoupled
+  // from `resolvedWorktrees` so a worktree whose PR resolved but whose issue
+  // title still failed (or was never fetched) remains eligible for retry on
+  // the next polling cycle (#8851).
+  private issueTitleFetchedWorktrees = new Set<string>();
   private detectedPRs = new Map<string, InternalLinkedPR>();
   private updateDebounceTimer: NodeJS.Timeout | null = null;
   private unsubscribers: (() => void)[] = [];
@@ -225,6 +230,7 @@ class PullRequestService {
       // correct provider reference. Compare with handleWorktreeRemove below.
       const clearedProviderId = this.detectedPRs.get(state.worktreeId)?.providerId;
       this.resolvedWorktrees.delete(state.worktreeId);
+      this.issueTitleFetchedWorktrees.delete(state.worktreeId);
       this.detectedPRs.delete(state.worktreeId);
 
       // Tag the clear with the OLD branch and provider so the renderer drops it
@@ -259,6 +265,7 @@ class PullRequestService {
       const clearedProviderId = this.detectedPRs.get(worktreeId)?.providerId;
       this.candidates.delete(worktreeId);
       this.resolvedWorktrees.delete(worktreeId);
+      this.issueTitleFetchedWorktrees.delete(worktreeId);
       this.detectedPRs.delete(worktreeId);
 
       events.emit("sys:pr:cleared", {
@@ -533,6 +540,7 @@ class PullRequestService {
     // their CI status — which contradicts the "I want fresh data now"
     // semantics of a manual refresh.
     this.resolvedWorktrees.clear();
+    this.issueTitleFetchedWorktrees.clear();
     // Re-resolve the forge provider on manual refresh so token changes
     // and provider installs/uninstalls take effect immediately. Clear the
     // in-flight branch-lookup dedup so a stale promise from the previous
@@ -557,6 +565,7 @@ class PullRequestService {
     this.stop();
     this.candidates.clear();
     this.resolvedWorktrees.clear();
+    this.issueTitleFetchedWorktrees.clear();
     this.detectedPRs.clear();
     this.consecutiveErrors = 0;
     this.nextRetryAt = 0;
@@ -863,6 +872,7 @@ class PullRequestService {
 
           if (!pr) {
             this.resolvedWorktrees.delete(worktreeId);
+            this.issueTitleFetchedWorktrees.delete(worktreeId);
             this.detectedPRs.delete(worktreeId);
             logInfo("PR no longer found during revalidation - clearing state", { worktreeId });
             events.emit("sys:pr:cleared", {
@@ -919,6 +929,51 @@ class PullRequestService {
       }
 
       this.updateBoostFromDetectedPRs();
+
+      // Retry issue-title fetches for any candidate that still lacks a
+      // confirmed successful title (#8851). Polling otherwise stops once all
+      // PRs resolve, leaving the offline branchDerivedTitle as the only
+      // visible label until the next manual refresh.
+      const issueRetryLookups: Promise<void>[] = [];
+      for (const [worktreeId, context] of this.candidates) {
+        if (!context.issueNumber || typeof context.issueNumber !== "number") continue;
+        if (this.issueTitleFetchedWorktrees.has(worktreeId)) continue;
+        const issueNumber = context.issueNumber;
+        const branchAtFetchStart = context.branchName;
+        issueRetryLookups.push(
+          provider
+            .getIssue(repo, issueNumber)
+            .then((issue) => {
+              const currentBranch = this.candidates.get(worktreeId)?.branchName;
+              if (currentBranch !== branchAtFetchStart) return;
+              if (issue) {
+                this.issueTitleFetchedWorktrees.add(worktreeId);
+                events.emit("sys:issue:detected", {
+                  worktreeId,
+                  issueNumber,
+                  issueTitle: issue.title,
+                  branchName: branchAtFetchStart,
+                  providerId,
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  timestamp: Date.now(),
+                });
+              } else {
+                events.emit("sys:issue:not-found", {
+                  worktreeId,
+                  issueNumber,
+                  timestamp: Date.now(),
+                });
+              }
+            })
+            .catch(() => {
+              // Silent; will retry on the next revalidation cycle.
+            })
+        );
+      }
+      if (issueRetryLookups.length > 0) {
+        await Promise.allSettled(issueRetryLookups);
+      }
     } catch (error) {
       logWarn("Revalidation check error", {
         error: formatErrorMessage(error, "PR revalidation failed"),
@@ -932,6 +987,15 @@ class PullRequestService {
       issueNumber?: number;
       branchName?: string;
     }> = [];
+    // Issue-title lookup candidates include BOTH active and resolved
+    // worktrees that have an issue number and haven't had a successful title
+    // fetch yet (#8851). Resolved-PR worktrees still need this path because
+    // `revalidateResolvedPRs` only re-checks PR metadata, not issue titles.
+    const issueLookupCandidates: Array<{
+      worktreeId: string;
+      issueNumber: number;
+      branchName?: string;
+    }> = [];
     const lookupBranchByWorktreeId = new Map<string, string | undefined>();
     for (const [worktreeId, context] of this.candidates) {
       if (!this.resolvedWorktrees.has(worktreeId)) {
@@ -942,9 +1006,23 @@ class PullRequestService {
         });
         lookupBranchByWorktreeId.set(worktreeId, context.branchName);
       }
+      if (
+        context.issueNumber &&
+        typeof context.issueNumber === "number" &&
+        !this.issueTitleFetchedWorktrees.has(worktreeId)
+      ) {
+        issueLookupCandidates.push({
+          worktreeId,
+          issueNumber: context.issueNumber,
+          branchName: context.branchName,
+        });
+        if (!lookupBranchByWorktreeId.has(worktreeId)) {
+          lookupBranchByWorktreeId.set(worktreeId, context.branchName);
+        }
+      }
     }
 
-    if (activeCandidates.length === 0) {
+    if (activeCandidates.length === 0 && issueLookupCandidates.length === 0) {
       logDebug("No candidates to check for PRs");
       return;
     }
@@ -996,18 +1074,26 @@ class PullRequestService {
 
       // Issue lookups (independent of PR lookups, run in parallel per candidate)
       const issueLookups: Promise<void>[] = [];
-      for (const c of activeCandidates) {
-        const issueNumber = c.issueNumber ?? this.candidates.get(c.worktreeId)?.issueNumber;
-        if (!issueNumber || typeof issueNumber !== "number") continue;
+      for (const c of issueLookupCandidates) {
         const lookupBranch = lookupBranchByWorktreeId.get(c.worktreeId);
+        const branchAtFetchStart = this.candidates.get(c.worktreeId)?.branchName;
         issueLookups.push(
           provider
-            .getIssue(repo, issueNumber)
+            .getIssue(repo, c.issueNumber)
             .then((issue) => {
+              // Branch-token check (lesson #2243): if the worktree's branch
+              // changed during the fetch, the result is stale — don't write
+              // the fetched marker, let the next pass retry against the new
+              // branch's issue number.
+              const currentBranch = this.candidates.get(c.worktreeId)?.branchName;
+              if (currentBranch !== branchAtFetchStart) {
+                return;
+              }
               if (issue) {
+                this.issueTitleFetchedWorktrees.add(c.worktreeId);
                 events.emit("sys:issue:detected", {
                   worktreeId: c.worktreeId,
-                  issueNumber,
+                  issueNumber: c.issueNumber,
                   issueTitle: issue.title,
                   branchName: lookupBranch,
                   providerId,
@@ -1016,9 +1102,12 @@ class PullRequestService {
                   timestamp: Date.now(),
                 });
               } else {
+                // Null = forge confirmed not-found. Leave eligible for
+                // retry (no marker added) so private/transient cases get
+                // another chance on the next polling cycle.
                 events.emit("sys:issue:not-found", {
                   worktreeId: c.worktreeId,
-                  issueNumber,
+                  issueNumber: c.issueNumber,
                   timestamp: Date.now(),
                 });
               }
