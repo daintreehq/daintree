@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import { render, fireEvent, screen, act, within } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -540,6 +540,43 @@ describe("FleetPickerPalette", () => {
       expect(confirm.textContent).toContain("Arm selected");
     });
 
+    it("footer holds only commit controls — bulk-selection helpers sit above the list", async () => {
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      // The commit footer is the row that hosts the Replace/Append toggle.
+      const footer = screen.getByTestId("fleet-picker-cold-start-commit-mode")
+        .parentElement as HTMLElement;
+      const inFooter = within(footer);
+      expect(inFooter.getByTestId("fleet-picker-cold-start-confirm")).toBeTruthy();
+      expect(inFooter.getByText("Cancel")).toBeTruthy();
+      // The decluttered footer must not carry the bulk-selection helpers or
+      // the dropped status text — that's the whole point of #8802.
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-select-all")).toBeNull();
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-select-agents")).toBeNull();
+      expect(inFooter.queryByTestId("fleet-picker-cold-start-status")).toBeNull();
+
+      // The helpers still exist — relocated into the list's search section.
+      expect(screen.getByTestId("fleet-picker-cold-start-select-all")).toBeTruthy();
+      expect(screen.getByTestId("fleet-picker-cold-start-select-agents")).toBeTruthy();
+    });
+
+    it("surfaces the drift count as a live region when a selected terminal drifts out", async () => {
+      seedTerminals([
+        makeTerminal("t1", { worktreeId: "wt-1" }),
+        makeTerminal("t2", { worktreeId: "wt-1" }),
+      ]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      // Both terminals start pre-selected; drift t2 out of the panel store.
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
+      await act(async () => {});
+
+      const drift = screen.getByText("1 became ineligible");
+      expect(drift.getAttribute("role")).toBe("status");
+    });
   });
 
   describe("Replace / Append commit-mode toggle", () => {

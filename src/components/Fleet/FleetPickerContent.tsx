@@ -49,9 +49,10 @@ export interface FleetPickerContentProps {
  * through alongside fuzzy hits.
  *
  * Keyboard model: search input is focused for typing (Space types space,
- * Cmd+A selects query text). Tab moves focus into the listbox; once there,
- * Space toggles, ArrowUp/Down navigate, Cmd+A selects all visible, Cmd+Shift+I
- * inverts. First Esc clears the search query (handled by the consumer via
+ * Cmd+A selects query text). Tab moves focus through any `headerSlot`
+ * controls and then into the listbox; once there, Space toggles,
+ * ArrowUp/Down navigate, Cmd+A selects all visible, Cmd+Shift+I inverts.
+ * First Esc clears the search query (handled by the consumer via
  * `useEscapeStack` over `clearSearch`); second Esc closes the picker.
  */
 export function FleetPickerContent({
@@ -191,9 +192,14 @@ export function FleetPickerFooterHint({
   driftCount,
   hasVisibleRows,
 }: FleetPickerFooterHintProps): ReactElement | null {
+  // `role="status"` keeps drift changes announced to screen readers — the
+  // removed footer status span carried this and the drift count is the only
+  // dynamic copy left in the hint row.
   const driftNotice =
     driftCount > 0 ? (
-      <span className="text-daintree-text/45 tabular-nums">{driftCount} became ineligible</span>
+      <span role="status" className="text-daintree-text/45 tabular-nums">
+        {driftCount} became ineligible
+      </span>
     ) : null;
 
   if (!hasVisibleRows) return driftNotice;
