@@ -770,6 +770,7 @@ export const CHANNELS = {
   // Agent preset channels
   AGENT_PRESETS_UPDATED: "agent-presets:updated",
   AGENT_CAPABILITIES_GET_CCR_PRESETS: "agent-capabilities:get-ccr-presets",
+  AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST: "agent-capabilities:get-resolved-model-list",
 
   // Performance capture channels
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",

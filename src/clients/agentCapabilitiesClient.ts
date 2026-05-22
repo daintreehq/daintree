@@ -1,4 +1,8 @@
-import type { AgentRegistry, AgentMetadata } from "@shared/types/ipc/agentCapabilities";
+import type {
+  AgentRegistry,
+  AgentMetadata,
+  ResolvedModelCatalog,
+} from "@shared/types/ipc/agentCapabilities";
 
 export const agentCapabilitiesClient = {
   getRegistry: (): Promise<AgentRegistry> => {
@@ -15,5 +19,9 @@ export const agentCapabilitiesClient = {
 
   isAgentEnabled: (agentId: string): Promise<boolean> => {
     return window.electron.agentCapabilities.isAgentEnabled(agentId);
+  },
+
+  getResolvedModelList: (agentId: string): Promise<ResolvedModelCatalog | null> => {
+    return window.electron.agentCapabilities.getResolvedModelList(agentId);
   },
 } as const;

@@ -537,6 +537,22 @@ import { config as kiroConfig } from "./agents/kiro.js";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "./agentIds.js";
 import type { BuiltInAgentId } from "./agentIds.js";
 
+/**
+ * Mapping from `models.dev/api.json` provider keys to our agent IDs. The
+ * remote catalog groups models by provider (e.g. `"anthropic"` → claude),
+ * which is the inverse of how the local registry is keyed. Only agents whose
+ * model lists are covered by the remote catalog appear here; agents like
+ * `copilot` (multi-provider) and `aider` (broker without a single provider)
+ * stay on their bundled snapshot.
+ */
+export const PROVIDER_TO_AGENT_ID: Record<string, BuiltInAgentId> = {
+  anthropic: "claude",
+  openai: "codex",
+  google: "gemini",
+  alibaba: "qwen",
+  mistral: "mistral",
+};
+
 export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   claude: claudeConfig,
   opencode: opencodeConfig,

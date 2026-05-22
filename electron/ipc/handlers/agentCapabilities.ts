@@ -7,11 +7,16 @@ import {
   getEffectiveAgentConfig,
   type AgentConfig,
 } from "../../../shared/config/agentRegistry.js";
-import type { AgentMetadata, AgentRegistry } from "../../../shared/types/ipc/agentCapabilities.js";
+import type {
+  AgentMetadata,
+  AgentRegistry,
+  ResolvedModelCatalog,
+} from "../../../shared/types/ipc/agentCapabilities.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { AGENT_CAPABILITIES_METHOD_CHANNELS } from "./agentCapabilities.preload.js";
+import { getAgentModelCatalogService } from "../../window/serviceRefs.js";
 
 function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   const isBuiltIn = agentId in AGENT_REGISTRY;
@@ -85,6 +90,38 @@ export const agentCapabilitiesNamespace = defineIpcNamespace({
       AGENT_CAPABILITIES_METHOD_CHANNELS.getCcrPresets,
       async (): Promise<AgentPreset[]> => {
         return CcrConfigService.getInstance().loadAndApply();
+      }
+    ),
+    getResolvedModelList: op(
+      AGENT_CAPABILITIES_METHOD_CHANNELS.getResolvedModelList,
+      async (agentId: string): Promise<ResolvedModelCatalog | null> => {
+        if (!agentId || typeof agentId !== "string") {
+          throw new Error("Invalid agentId");
+        }
+        if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
+          throw new Error("Invalid agentId: reserved keyword");
+        }
+        const config = getEffectiveAgentConfig(agentId);
+        if (!config) return null;
+
+        const service = getAgentModelCatalogService();
+        if (service) {
+          try {
+            return await service.getResolvedModels(agentId);
+          } catch (err) {
+            console.warn(
+              "[agentCapabilities] getResolvedModelList resolver failed, returning bundled fallback",
+              err
+            );
+          }
+        }
+
+        return {
+          agentId,
+          models: config.models ? [...config.models] : [],
+          contextWindow: config.contextWindow ?? null,
+          source: "bundled",
+        };
       }
     ),
   },
