@@ -365,8 +365,23 @@ export default defineConfig(({ command, mode }) => {
                 priority: 60,
               },
               {
+                // `entriesAware: true` makes Rolldown split this group by the
+                // set of entries that import each module rather than merging
+                // everything into one chunk. The eager motion runtime
+                // (LazyMotion, MotionConfig, `m`) is imported by the renderer
+                // entry and stays eager; the heavy `domMax` feature subtree is
+                // reachable only through the dynamic import("./lib/motionFeatures")
+                // boundary, so it lands in its own deferred subgroup chunk off
+                // the first-paint path — preserving the LazyMotion deferral
+                // instead of sweeping ~43KB gzip into the eager closure (#8821).
+                // A plain `$initial` tag is insufficient: it evicts domMax from
+                // this group, but the orphaned modules then fall into the eager
+                // catch-all `vendor` chunk. `entriesAwareMergeThreshold: 0`
+                // disables small-subgroup merging so the deferred split holds.
                 name: "vendor-motion",
                 test: /node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/,
+                entriesAware: true,
+                entriesAwareMergeThreshold: 0,
                 priority: 50,
               },
               {
