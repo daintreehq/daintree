@@ -502,7 +502,12 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
     // No timeout warning — gate resolved by signal.
     expect(
-      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.paintgate.timeout")
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([e]) =>
+            e === "projectview.paintgate.softtimeout" || e === "projectview.paintgate.hardtimeout"
+        )
     ).toHaveLength(0);
   });
 

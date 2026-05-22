@@ -144,14 +144,14 @@ export interface ProjectViewManagerOptions {
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
   /**
-   * Override the soft paint-gate timeout (default 3000 ms). Crossing this
+   * Override the soft paint-gate timeout (default 1500 ms). Crossing this
    * bound only logs `projectview.paintgate.softtimeout` — the outgoing view
    * stays attached. Lower values are useful in tests to exercise the
    * soft-timeout warning path without forcing a real cold start.
    */
   paintGateTimeoutMs?: number;
   /**
-   * Override the hard paint-gate timeout (default 8000 ms). At this bound
+   * Override the hard paint-gate timeout (default 4000 ms). At this bound
    * the outgoing view is forcibly detached as a last resort. Lower values
    * are useful in tests to drive both the hard-timeout warning and the
    * fall-through deactivation deterministically.
@@ -443,16 +443,11 @@ export class ProjectViewManager {
       // in `notifyViewPainted`, which is exactly the signal the paint gate is
       // waiting on. Page.setWebLifecycleState("active") (via
       // `unfreezeWebContents`) keeps Blink in the foreground lifecycle so rAF
-      // keeps firing — fire-and-forget because the gate's hard timeout is the
-      // backstop and the CDP error swallow-list absorbs transient failures.
-      // Must run after did-finish-load — calling earlier hangs the CDP session
-      // on an uninitialised frame host (Chromium 146).
-      void unfreezeWebContents(view.webContents).catch((err) => {
-        logWarn("projectview.coldstart.keepalive-failed", {
-          projectId,
-          error: formatErrorMessage(err, "unfreezeWebContents failed"),
-        });
-      });
+      // keeps firing. Fire-and-forget: the helper swallows the CDP-error
+      // swallow-list and `console.warn`s unexpected failures itself, so no
+      // `.catch` here. Must run after did-finish-load — calling earlier hangs
+      // the CDP session on an uninitialised frame host (Chromium 146).
+      void unfreezeWebContents(view.webContents);
 
       // Wait for the renderer to confirm React has committed its first
       // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
