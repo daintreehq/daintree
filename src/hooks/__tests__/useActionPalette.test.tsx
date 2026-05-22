@@ -432,6 +432,38 @@ describe("useActionPalette", () => {
     expect(result.current.isOpen).toBe(true);
   });
 
+  it("confirmSelection (Enter) on a disabled item is a silent no-op (#8814)", async () => {
+    listMock.mockReturnValue([makeEntry("a.action", "Alpha", false)]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    act(() => {
+      result.current.setQuery("alpha");
+    });
+
+    await waitFor(
+      () => {
+        expect(result.current.results.length).toBe(1);
+        expect(result.current.isStale).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+
+    act(() => {
+      result.current.confirmSelection();
+    });
+
+    // The real Enter-key path runs through confirmSelection -> executeAction.
+    // Same expectation: no dispatch, palette stays open, MRU untouched.
+    expect(useActionMruStore.getState().getSortedActionMruList().length).toBe(0);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(result.current.isOpen).toBe(true);
+  });
+
   it("uses frecency as tiebreaker in non-empty query results", async () => {
     listMock.mockReturnValue([
       makeEntry("action.terminal.open", "Terminal Open"),
