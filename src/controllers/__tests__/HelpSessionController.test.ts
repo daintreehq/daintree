@@ -57,7 +57,7 @@ vi.mock("@/config/agents", () => ({
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: vi.fn() },
+  actionService: { dispatch: vi.fn(), getContext: vi.fn() },
 }));
 
 vi.mock("@/store/helpPanelStore", () => {
