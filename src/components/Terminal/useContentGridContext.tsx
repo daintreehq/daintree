@@ -819,11 +819,14 @@ export function useContentGridContext({
       runGridBatchFit();
     }
 
-    // A column-count change shifts cell widths, so the per-host ResizeObserver
-    // would otherwise fire an uncoordinated second resize through the 200ms
-    // FLIP. Lock those panels for the transition window; the lock's unlock pass
-    // doubles as the corrective backstop for any panel not yet laid out here.
-    if (colsChanged) {
+    // A layout-changing close (or a column change) resizes every survivor's
+    // box. Each panel's own ResizeObserver in XtermAdapter would otherwise
+    // fire its own un-chunked resize on top of the coalesced pass above — a
+    // resize storm that is the main cause of close-path lag. Lock the panels
+    // for the transition window so the single chunked pass is the only resize;
+    // the lock's unlock pass is the corrective backstop.
+    const layoutChangingClose = isPureClose && !survivorGeometryStable;
+    if (colsChanged || layoutChangingClose) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(

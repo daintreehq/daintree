@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
@@ -443,8 +444,14 @@ export function XtermAdapter({
       // doesn't background a terminal that has already been re-attached elsewhere.
       terminalInstanceService.setVisible(terminalId, false, attachGen);
 
-      // Flush pending resizes before unmount
-      terminalInstanceService.flushResize(terminalId);
+      // Flush pending resizes before unmount — but never for a panel the user
+      // just optimistically closed. That panel is being torn down; flushing
+      // its pending resize force-drains queued output and reflows scrollback
+      // synchronously inside the close click, which is exactly the blocking
+      // work the optimistic close exists to avoid.
+      if (!isOptimisticallyClosing(terminalId)) {
+        terminalInstanceService.flushResize(terminalId);
+      }
 
       terminalInstanceService.detach(terminalId, container);
 
