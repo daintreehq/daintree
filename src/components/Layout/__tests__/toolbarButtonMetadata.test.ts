@@ -24,6 +24,7 @@ const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = [
   "github-stats",
   "notification-center",
   "copy-tree",
+  "command-palette",
   "settings",
   "problems",
 ];

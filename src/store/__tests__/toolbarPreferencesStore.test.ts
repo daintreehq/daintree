@@ -329,6 +329,33 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons).toContain("dev-server");
     });
 
+    it("includes command-palette in default right buttons before settings", async () => {
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("command-palette");
+      expect(right.indexOf("command-palette")).toBeLessThan(right.indexOf("settings"));
+    });
+
+    it("re-inserts command-palette for persisted state missing it via mergeButtonList", async () => {
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "settings"],
+            hiddenButtons: [],
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        7
+      );
+
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("command-palette");
+      // Visibility preserved (not implicitly hidden).
+      expect(store.getState().layout.pinnedButtons["command-palette"]).toBeUndefined();
+    });
+
     it("re-inserts dev-server for persisted state missing it via mergeButtonList", async () => {
       setStoredState({
         layout: {

@@ -8,6 +8,7 @@ import {
   MonitorPlay,
   Plug,
   SlidersHorizontal,
+  SquareMenu,
   SquareTerminal,
 } from "lucide-react";
 import { Folders } from "@/components/icons";
@@ -88,6 +89,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Copy Context",
     icon: Folders,
     description: "Copy project context to clipboard",
+  },
+  "command-palette": {
+    label: "Command palette",
+    icon: SquareMenu,
+    description: "Search and run any action",
   },
   settings: {
     label: "Settings",
