@@ -612,7 +612,8 @@ describe("useActionPalette", () => {
 
       await waitFor(() => expect(result.current.results.length).toBe(3), { timeout: 2000 });
 
-      // terminal.close gets 0.08 context boost, greater than browser.close's max 0.05 MRU boost
+      // terminal.close gets CONTEXT_BOOST (80); browser.close gets MRU tanh bonus
+      // (≤ MRU_BONUS_CAP = 50) — the context-boosted item must win.
       expect(result.current.results[0]!.id).toBe("terminal.close");
     });
 

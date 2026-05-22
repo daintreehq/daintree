@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ActionFrecencyEntry } from "@shared/types/actions";
 import {
   extractAcronym,
   rankActionMatches,
@@ -29,6 +30,10 @@ function makeAction(overrides: {
     titleAcronym: extractAcronym(overrides.title),
     keywordsLower: keywords.map((k) => k.toLowerCase()),
   };
+}
+
+function mru(id: string, score = 5): ActionFrecencyEntry {
+  return { id, score, lastAccessedAt: 0 };
 }
 
 describe("extractAcronym", () => {
@@ -135,7 +140,7 @@ describe("rankActionMatches", () => {
       makeAction({ id: "off", title: "Terminal Open", enabled: false }),
       makeAction({ id: "on", title: "Close Terminal", enabled: true }),
     ];
-    const results = rankActionMatches("term", items, ["off"]);
+    const results = rankActionMatches("term", items, [mru("off")]);
     expect(results.map((r) => r.id)).toEqual(["on", "off"]);
   });
 
@@ -144,7 +149,7 @@ describe("rankActionMatches", () => {
       makeAction({ id: "open", title: "Open Terminal" }),
       makeAction({ id: "close", title: "Close Terminal" }),
     ];
-    const results = rankActionMatches("terminal", items, ["close"]);
+    const results = rankActionMatches("terminal", items, [mru("close")]);
     expect(results[0]!.id).toBe("close");
   });
 
@@ -153,8 +158,30 @@ describe("rankActionMatches", () => {
       makeAction({ id: "exact", title: "Git Commit" }),
       makeAction({ id: "mru", title: "Something Else Git" }),
     ];
-    const results = rankActionMatches("git commit", items, ["mru"]);
+    const results = rankActionMatches("git commit", items, [mru("mru", 15)]);
     expect(results[0]!.id).toBe("exact");
+  });
+
+  it("higher frecency score outranks lower frecency score when text scores tie", () => {
+    const items = [
+      makeAction({ id: "rare", title: "Open Terminal" }),
+      makeAction({ id: "frequent", title: "Close Terminal" }),
+    ];
+    // Both items get the same text score for "terminal"; the high-score entry
+    // should win by frecency bonus alone.
+    const results = rankActionMatches("terminal", items, [mru("rare", 1), mru("frequent", 13)]);
+    expect(results[0]!.id).toBe("frequent");
+  });
+
+  it("score at SCORE_FLOOR (0.5) still produces a small nonzero bonus", () => {
+    const items = [
+      makeAction({ id: "cold", title: "Open Terminal" }),
+      makeAction({ id: "warm", title: "Close Terminal" }),
+    ];
+    // Cold entry barely above the floor; warm entry with a typical recent score.
+    // Warm should still come out on top via the frecency bonus.
+    const results = rankActionMatches("terminal", items, [mru("cold", 0.5), mru("warm", 5)]);
+    expect(results[0]!.id).toBe("warm");
   });
 
   it("returns the original item references", () => {

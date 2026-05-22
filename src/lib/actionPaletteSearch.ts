@@ -1,8 +1,16 @@
+import type { ActionFrecencyEntry } from "@shared/types/actions";
+
 const TITLE_WEIGHT = 3;
 const CATEGORY_WEIGHT = 1.5;
 const DESCRIPTION_WEIGHT = 0.5;
 const KEYWORD_WEIGHT = 1.0;
 const MRU_BONUS_CAP = 50;
+// tanh scale: with the 14-day half-life + increment=1.0 frecency model
+// (shared/utils/frecency.ts), the steady-state score for 1x-daily use is ~20.7
+// and 2x-daily is ~41. SCALE=22 maps that heavy-use band to ~74-95% of cap
+// while keeping CONTEXT_BOOST (80) > MRU bonus > 0. Revisit if the frecency
+// half-life or increment changes.
+const MRU_SCORE_SCALE = 22;
 const CONTEXT_BOOST = 80;
 const GENERIC_CATEGORY = "general";
 
@@ -197,24 +205,25 @@ export function getBoostedCategories(context: RankContext | undefined): Set<stri
 export function rankActionMatches<T extends SearchableAction>(
   query: string,
   items: T[],
-  mruList: readonly string[],
+  mruList: readonly ActionFrecencyEntry[],
   context?: RankContext
 ): T[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  const mruIndex = new Map<string, number>();
-  mruList.forEach((id, idx) => mruIndex.set(id, idx));
-  const mruSize = mruList.length;
+  const mruScoreById = new Map<string, number>();
+  mruList.forEach(({ id, score }) => mruScoreById.set(id, score));
   const boostedCategories = getBoostedCategories(context);
 
   const scored: Array<{ item: T; score: number }> = [];
   for (const item of items) {
     const base = scoreAction(trimmed, item);
     if (base <= 0) continue;
-    const rank = mruIndex.get(item.id);
+    const frecencyScore = mruScoreById.get(item.id);
     const mruBonus =
-      rank !== undefined && mruSize > 0 ? ((mruSize - rank) / mruSize) * MRU_BONUS_CAP : 0;
+      frecencyScore !== undefined
+        ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE)
+        : 0;
     const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
     scored.push({ item, score: base + mruBonus + contextBonus });
   }
