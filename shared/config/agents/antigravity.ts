@@ -59,6 +59,16 @@ export const config: AgentConfig = {
   help: {
     args: [],
   },
+  // The exact credential filename under `~/.antigravity/` isn't documented
+  // yet — `oauth_creds.json` mirrors the Gemini CLI's layout and is the
+  // most likely location given `agy` is the Gemini CLI successor. The
+  // env var fallback (`GOOGLE_API_KEY`) is a strong signal regardless of
+  // file path. Worst case the file probe misses and we rely on the env
+  // signal; the auth check never gates launch.
+  authCheck: {
+    configPathsAll: [".antigravity/oauth_creds.json"],
+    envVar: "GOOGLE_API_KEY",
+  },
   prerequisites: [
     {
       tool: "agy",
