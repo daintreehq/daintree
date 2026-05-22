@@ -126,6 +126,7 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(true) // posix-pty-reaper supervisor
         .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(false); // better-sqlite3 dir
 
@@ -138,12 +139,37 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(true) // posix-pty-reaper supervisor
         .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(true) // better-sqlite3 dir
         .mockReturnValueOnce(false); // better_sqlite3.node
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /better-sqlite3 native binary not found/
+      );
+    });
+
+    it("should throw when posix-pty-reaper supervisor binary is missing", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false); // posix-pty-reaper supervisor
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /posix-pty-reaper supervisor binary not found/
+      );
+    });
+
+    it("should verify the posix-pty-reaper supervisor binary path", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(
+          unpackedBase,
+          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
+        )
       );
     });
   });
@@ -279,6 +305,30 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
         /native binary not found/
+      );
+    });
+
+    it("should throw when posix-pty-reaper supervisor binary is missing", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false); // posix-pty-reaper supervisor
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /posix-pty-reaper supervisor binary not found/
+      );
+    });
+
+    it("should verify the posix-pty-reaper supervisor binary path", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(
+          unpackedBase,
+          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
+        )
       );
     });
   });
