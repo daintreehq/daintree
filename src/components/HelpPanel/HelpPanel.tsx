@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ExternalLink, Settings2 } from "lucide-react";
+import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
@@ -131,6 +131,7 @@ export function HelpPanel({
     terminalId,
     agentId,
     preferredAgentId,
+    droppedPreferredAgentId,
     introDismissed,
     conversationTouched,
     focusRequest,
@@ -138,6 +139,7 @@ export function HelpPanel({
     setWidth,
     setOpen,
     dismissIntro,
+    clearDroppedPreferredAgent,
   } = useHelpPanelStore();
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
@@ -656,27 +658,70 @@ export function HelpPanel({
             onOpenSettings={handleOpenSettings}
           />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
-            <p className="text-sm text-daintree-text/70 max-w-[30ch]">
-              Use Daintree Assistant to configure and navigate Daintree.
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleOpenSettings}
-                className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          <div className="flex-1 flex flex-col">
+            {droppedPreferredAgentId && (
+              <div
+                role="alert"
+                className={cn(
+                  "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
+                  "rounded-[var(--radius-md)]",
+                  "bg-status-warning/10 border border-status-warning/40",
+                  "text-xs text-daintree-text/85"
+                )}
+                data-testid="help-dropped-agent-banner"
               >
-                <Settings2 className="w-3.5 h-3.5" />
-                Assistant settings
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenAssistantDocs}
-                className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                Daintree Assistant guide
-              </button>
+                <ShieldAlert
+                  className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-warning"
+                  aria-hidden="true"
+                />
+                <div className="flex-1 select-text">
+                  <p className="font-medium text-daintree-text">
+                    {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
+                    longer available
+                  </p>
+                  <p className="mt-0.5 text-daintree-text/70">
+                    The agent was removed or is no longer supported as an assistant backend.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleOpenSettings}
+                    className="mt-1 text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  >
+                    Open assistant settings
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearDroppedPreferredAgent}
+                  aria-label="Dismiss"
+                  className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+            <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
+              <p className="text-sm text-daintree-text/70 max-w-[30ch]">
+                Use Daintree Assistant to configure and navigate Daintree.
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenSettings}
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                  Assistant settings
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenAssistantDocs}
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Daintree Assistant guide
+                </button>
+              </div>
             </div>
           </div>
         )}
