@@ -41,7 +41,7 @@ import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import type { Project } from "@shared/types";
 import type { GitHubRateLimitDetails, RepositoryStats } from "@shared/types";
-import { FreshnessGlyph, freshnessSuffix } from "./FreshnessUtils";
+import { freshnessSuffix } from "./FreshnessUtils";
 import {
   formatRateLimitCountdown,
   msUntilNextLabelChange,
@@ -736,7 +736,6 @@ export const GitHubStatsToolbarButton = memo(
                   style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
                 />
               }
-              freshnessGlyph={!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             />
             <GitHubStatPill
               buttonRef={prsButtonRef}
@@ -841,7 +840,6 @@ export const GitHubStatsToolbarButton = memo(
                   style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
                 />
               }
-              freshnessGlyph={!isTokenError ? <FreshnessGlyph level={freshnessLevel} /> : null}
             />
             <GitHubStatPill
               buttonRef={commitsButtonRef}
@@ -893,7 +891,6 @@ export const GitHubStatsToolbarButton = memo(
                 setCommitsOpen(open);
                 if (!open) commitsButtonRef.current?.focus();
               }}
-              freshnessGlyph={<FreshnessGlyph level={commitFreshnessLevel} />}
             />
             <GitHubStatusIndicator
               status={getGitHubIndicatorStatus()}
