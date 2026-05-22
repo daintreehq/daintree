@@ -16,7 +16,7 @@ import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isSmokeTest, smokeTestStart } from "../setup/environment.js";
+import { isSmokeTest, smokeTestStart, getEarlyPathRefreshPromise } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E, shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -182,9 +182,26 @@ export async function setupWindowServices(
     console.log("[MAIN] E2E renderer-load deferral enabled — waiting for services");
   }
 
+  // Fork the PTY host now — *after* startRendererLoad — so first paint is no
+  // longer blocked by the early PATH refresh (#8827). PtyClient was constructed
+  // with `deferStart` in initPerWindowServices, so the host has not forked yet.
+  // We await the early PATH refresh here, immediately before forking, so
+  // node-pty inherits the user's full PATH (the #8625 invariant: PATH refresh →
+  // PTY fork). Awaiting a settled promise is a no-op; on the P95 path the probe
+  // resolved in ~50ms during the renderer bundle load, so the host forks before
+  // the renderer hydrates. First window only — `start()` is idempotent and
+  // `isHostStarted()` short-circuits subsequent windows.
+  const ptyClient = getPtyClient();
+  if (ptyClient && !ptyClient.isHostStarted()) {
+    const earlyPathRefresh = getEarlyPathRefreshPromise();
+    if (earlyPathRefresh) {
+      await earlyPathRefresh;
+    }
+    ptyClient.start();
+  }
+
   // Initialize workspace client (first window only) — per-project hosts
   // are started on-demand when loadProject() is called, not at init time.
-  const ptyClient = getPtyClient();
   if (!getWorkspaceClientRef()) {
     // Construct the workspace client and prewarm its per-project host
     // concurrently with the PTY host fork. The two utility processes load
