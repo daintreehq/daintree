@@ -82,8 +82,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: null,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
-    paintGateTimeoutMs: 3_000,
-    paintGateHardTimeoutMs: 8_000,
+    paintGateTimeoutMs: 1_500,
+    paintGateHardTimeoutMs: 4_000,
   },
   balanced: {
     pollIntervalActive: 2000,
@@ -96,8 +96,12 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: 768,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
-    paintGateTimeoutMs: 3_000,
-    paintGateHardTimeoutMs: 8_000,
+    // Balanced cold-start paint-gate values must match
+    // `DEFAULT_PAINT_GATE_TIMEOUT_MS` / `DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS` in
+    // `electron/window/ProjectViewManager.ts` — those constants are the
+    // fallback used until the profile push lands. Keep them in lockstep.
+    paintGateTimeoutMs: 1_500,
+    paintGateHardTimeoutMs: 4_000,
   },
   efficiency: {
     pollIntervalActive: 4000,
@@ -111,9 +115,10 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     fetchIntervalActiveMs: 45_000,
     fetchIntervalBackgroundMs: 10 * 60_000,
     // Cold starts under memory/thermal/battery pressure routinely run slower
-    // than the perf/balanced 3s soft bound — bumping to 5s keeps the
-    // anti-flash hand-off without false-timeout warning spam.
-    paintGateTimeoutMs: 5_000,
-    paintGateHardTimeoutMs: 12_000,
+    // than the perf/balanced 1.5s soft bound — keeping efficiency at a 2x
+    // headroom preserves the anti-flash hand-off without false-timeout
+    // warning spam on degraded hardware.
+    paintGateTimeoutMs: 2_500,
+    paintGateHardTimeoutMs: 6_000,
   },
 };

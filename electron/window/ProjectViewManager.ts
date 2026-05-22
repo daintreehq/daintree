@@ -61,14 +61,14 @@ const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
  * outgoing view stays attached so the user never sees an unfinished
  * frame. Crossing this bound is observable but never user-visible.
  */
-const DEFAULT_PAINT_GATE_TIMEOUT_MS = 3_000;
+const DEFAULT_PAINT_GATE_TIMEOUT_MS = 1_500;
 /**
  * Hard paint-gate timeout (ms). Last-resort ceiling — assumes the
  * incoming renderer is stuck or crashed and forcibly detaches the
  * outgoing view. Generous enough that legitimately slow cold starts
  * (low memory, thermal throttling) finish via the signal path instead.
  */
-const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 8_000;
+const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 4_000;
 /**
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
@@ -431,9 +431,28 @@ export class ProjectViewManager {
     );
 
     let visibleAt: number;
+    let loadFinishedAt: number;
     try {
       // Load the renderer with projectId context
       await this.loadView(view, projectId);
+      loadFinishedAt = performance.now();
+
+      // The incoming view is stacked behind the still-visible outgoing view,
+      // so Chromium's compositor marks it occluded and throttles its
+      // requestAnimationFrame callbacks. That stalls the renderer's double-rAF
+      // in `notifyViewPainted`, which is exactly the signal the paint gate is
+      // waiting on. Page.setWebLifecycleState("active") (via
+      // `unfreezeWebContents`) keeps Blink in the foreground lifecycle so rAF
+      // keeps firing — fire-and-forget because the gate's hard timeout is the
+      // backstop and the CDP error swallow-list absorbs transient failures.
+      // Must run after did-finish-load — calling earlier hangs the CDP session
+      // on an uninitialised frame host (Chromium 146).
+      void unfreezeWebContents(view.webContents).catch((err) => {
+        logWarn("projectview.coldstart.keepalive-failed", {
+          projectId,
+          error: formatErrorMessage(err, "unfreezeWebContents failed"),
+        });
+      });
 
       // Wait for the renderer to confirm React has committed its first
       // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
@@ -463,6 +482,7 @@ export class ProjectViewManager {
         projectId,
         durationMs: Math.round(performance.now() - coldStartAt),
         visibleMs: Math.round(visibleAt - coldStartAt),
+        loadToPaintMs: Math.round(visibleAt - loadFinishedAt),
         paintGateOutcome: gateResult,
       });
 
