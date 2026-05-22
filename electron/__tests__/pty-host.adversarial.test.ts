@@ -212,6 +212,7 @@ vi.mock("../services/PtyManager.js", () => {
     });
     isSabMode = vi.fn(() => this.sabMode);
     setProcessTreeCache = vi.fn();
+    setImagePathProbe = vi.fn();
     setPtyPool = vi.fn();
     setActivityMonitorTier = vi.fn();
     spawn = vi.fn((id: string, options: { projectId?: string }) => {

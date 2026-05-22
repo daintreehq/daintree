@@ -11,6 +11,7 @@ const { Unicode11Addon } = unicode11;
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
+import type { ImagePathProbe } from "./ImagePathProbe.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
@@ -113,6 +114,7 @@ export interface TerminalProcessDependencies {
   ptyPool: PtyPool | null;
   sabModeEnabled?: boolean;
   processTreeCache: ProcessTreeCache | null;
+  imagePathProbe?: ImagePathProbe | null;
 }
 
 export class TerminalProcess {
@@ -436,7 +438,8 @@ export class TerminalProcess {
           this.handleAgentDetection(result, cbSpawnedAt);
         },
         deps.processTreeCache,
-        Boolean(this.terminalInfo.launchAgentId)
+        Boolean(this.terminalInfo.launchAgentId),
+        deps.imagePathProbe ?? null
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
@@ -1271,7 +1274,8 @@ export class TerminalProcess {
           this.handleAgentDetection(result, cbSpawnedAt);
         },
         this.deps.processTreeCache,
-        Boolean(this.terminalInfo.launchAgentId)
+        Boolean(this.terminalInfo.launchAgentId),
+        this.deps.imagePathProbe ?? null
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();

@@ -1396,6 +1396,253 @@ describe("ProcessDetector", () => {
       );
     });
   });
+
+  describe("image-path evidence (#8790)", () => {
+    function createImagePathProbeMock(map: Record<number, string | null>) {
+      return {
+        readBasename: vi.fn((pid: number) => map[pid] ?? null),
+        evict: vi.fn(),
+        dispose: vi.fn(),
+      };
+    }
+
+    it("identifies an agent when comm is rewritten but image basename is the agent", () => {
+      // The exact failure mode #8790 targets: agent CLI rewrote its own
+      // process title to a marketing name, so `comm`/`command` look like
+      // "app-runner" with no AGENT_CLI_NAMES match — but the on-disk image
+      // is /opt/homebrew/bin/claude. Image-path evidence must rescue it.
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "app-runner",
+          command: "app-runner",
+        },
+      ]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-rewrite",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          detectionState: "agent",
+          agentType: "claude",
+          evidenceSource: "process_tree",
+        }),
+        expect.any(Number)
+      );
+      expect(imagePathProbe.readBasename).toHaveBeenCalledWith(200);
+    });
+
+    it("ignores image-path basename when it returns null", () => {
+      // Probe hasn't resolved yet (or platform unsupported). Detection must
+      // behave exactly as before — fall through to the existing comm/argv
+      // path. No regression on a process the detector already identifies.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: null });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-null",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: "claude",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("works when no image-path probe is wired (backwards compat)", () => {
+      // Existing call sites pass only the 6-arg constructor signature. The
+      // detector must work identically when the probe is omitted.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-no-probe",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ detected: true, agentType: "claude" }),
+        expect.any(Number)
+      );
+    });
+
+    it("prefers image-path agent over a comm-only generic icon", () => {
+      // Node-hosted agent: kernel reports comm="node", argv has been blanked,
+      // so without image-path the detector would settle on the generic
+      // "node" process icon. Image basename "claude" should win via the
+      // agent-priority promotion in selectPreferredCandidate.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "node", command: "node" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-node-hosted",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: "claude",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("does not regress when image-path basename matches an existing agent comm", () => {
+      // Both signals agree on `claude`. Detector should commit `claude`
+      // with process_tree evidence — no double-count, no priority inversion.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-both-agree",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: "claude",
+          evidenceSource: "process_tree",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("evicts ImagePathProbe entries for children that disappear between passes", () => {
+      // PID-reuse safety: if pid 200 was probed last pass and is gone this
+      // pass, the detector must evict its image-path cache entry so a future
+      // process with the recycled PID doesn't inherit the stale basename.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-evict",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(imagePathProbe.readBasename).toHaveBeenCalledWith(200);
+
+      // Child disappears.
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      expect(imagePathProbe.evict).toHaveBeenCalledWith(200);
+    });
+
+    it("evicts ImagePathProbe entries for the terminal's last-seen children on stop()", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-evict-stop",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      detector.stop();
+
+      expect(imagePathProbe.evict).toHaveBeenCalledWith(200);
+    });
+
+    it("resolves grandchild image paths when the direct child is only an icon match", () => {
+      // Grandchild fallback path: zsh → bash → renamed-claude. The direct
+      // child has only an icon (priority > 0 triggers grandchild scan); the
+      // grandchild's image basename "claude" promotes the result to agent
+      // even though both the grandchild comm and argv have been rewritten.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "bash", command: "bash login_script.sh" }]);
+      cache.setChildren(200, [{ pid: 300, comm: "app-runner", command: "app-runner" }]);
+      const imagePathProbe = createImagePathProbeMock({ 200: null, 300: "claude" });
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-image-grandchild",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: "claude",
+        }),
+        expect.any(Number)
+      );
+      expect(imagePathProbe.readBasename).toHaveBeenCalledWith(300);
+    });
+  });
 });
 
 describe("extractScriptBasenameFromCommand", () => {
