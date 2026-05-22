@@ -188,10 +188,10 @@ export function registerTerminalLayoutActions(
         );
       const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex < 0) return;
-      const { layoutConfig } = useLayoutConfigStore.getState();
+      const { layoutConfig, gridDimensions } = useLayoutConfigStore.getState();
       const cols = computeGridColumns(
         gridTerminals.length,
-        null,
+        gridDimensions?.width ?? null,
         layoutConfig.strategy,
         layoutConfig.value
       );
@@ -227,10 +227,10 @@ export function registerTerminalLayoutActions(
         );
       const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex < 0) return;
-      const { layoutConfig } = useLayoutConfigStore.getState();
+      const { layoutConfig, gridDimensions } = useLayoutConfigStore.getState();
       const cols = computeGridColumns(
         gridTerminals.length,
-        null,
+        gridDimensions?.width ?? null,
         layoutConfig.strategy,
         layoutConfig.value
       );
