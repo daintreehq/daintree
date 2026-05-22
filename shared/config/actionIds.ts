@@ -330,7 +330,6 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.moveToWorktree",
   "terminal.moveToNewWorktree",
   "terminal.watch",
-  "terminal.jumpToNextAttention",
 
   // -- terminalLayoutActions --
   "terminal.gridLayout.setStrategy",

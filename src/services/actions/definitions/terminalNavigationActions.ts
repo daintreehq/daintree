@@ -196,60 +196,6 @@ export function registerTerminalNavigationActions(
     },
   }));
 
-  actions.set("terminal.jumpToNextAttention", () => ({
-    id: "terminal.jumpToNextAttention",
-    title: "Jump to next agent needing attention",
-    description:
-      "Scroll the scrollable panel grid to the next agent that is waiting for input, directing, or errored",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    nonRepeatable: true,
-    keywords: ["attention", "waiting", "next", "scroll", "jump"],
-    run: async () => {
-      const state = usePanelStore.getState();
-      const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const focusedId = state.focusedId;
-
-      // Only the active panel of each tab group has a rendered DOM element
-      // (its `data-panel-id` attribute); scrolling to an inactive tab would
-      // silently no-op. Resolve candidates from active-tab IDs so every jump
-      // produces a visible response. Repeated invocations cycle past
-      // `focusedId` through every attention panel before returning to the
-      // first.
-      const gridGroups = state.getTabGroups("grid", activeWorktreeId ?? undefined);
-      const candidates: string[] = [];
-      for (const group of gridGroups) {
-        const activeId = group.panelIds.includes(group.activeTabId)
-          ? group.activeTabId
-          : (group.panelIds[0] ?? null);
-        if (!activeId) continue;
-        const t = state.panelsById[activeId];
-        if (!t) continue;
-        const needsAttention =
-          t.agentState === "waiting" || t.agentState === "directing" || t.runtimeStatus === "error";
-        if (needsAttention) candidates.push(activeId);
-      }
-
-      if (candidates.length === 0) return;
-
-      const startIndex = focusedId ? candidates.indexOf(focusedId) : -1;
-      // If `focusedId` is itself in the list, advance past it. Otherwise start
-      // from the beginning.
-      const ordered =
-        startIndex === -1
-          ? candidates
-          : [...candidates.slice(startIndex + 1), ...candidates.slice(0, startIndex + 1)];
-      const target = ordered[0];
-      if (!target) return;
-
-      state.setFocused(target);
-      const element = document.querySelector<HTMLElement>(`[data-panel-id="${target}"]`);
-      element?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
-    },
-  }));
-
   actions.set("terminal.scrollToLastActivity", () => ({
     id: "terminal.scrollToLastActivity",
     title: "Scroll to Last Activity",

@@ -109,10 +109,9 @@ export interface ContentGridContext {
   sourceContainer: string | null;
   /**
    * The grid's scroll container element, exposed so `TerminalPane` can root its
-   * IntersectionObserver at the grid (rather than the viewport) and so
-   * attention-jump targeting can drive `scrollIntoView` on the right element.
-   * Held as state — not a ref — because consumers depend on identity changes
-   * to re-create observers when the container mounts/remounts.
+   * IntersectionObserver at the grid (rather than the viewport). Held as state
+   * — not a ref — because consumers depend on identity changes to re-create
+   * observers when the container mounts/remounts.
    */
   gridScrollRoot: HTMLElement | null;
   setGridScrollRoot: (el: HTMLElement | null) => void;
