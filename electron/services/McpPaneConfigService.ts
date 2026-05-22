@@ -80,7 +80,13 @@ export class McpPaneConfigService {
     const token = randomUUID();
 
     // Bake the token literal into the file rather than using ${VAR} substitution.
-    // Claude Code's env substitution in `headers` has an active bug; literal value is reliable.
+    // Claude Code's `${VAR}` substitution in `headers` is still broken as of
+    // v2.1.83 through v2.1.133 (tested May 2026): placeholders aren't forwarded
+    // to the wire (anthropics/claude-code#6204). `claude mcp add`/`remove` also
+    // rewrite `${VAR}` to its literal env value (#18692, #57131), which would
+    // leak the session bearer to disk — the literal-token path sidesteps that
+    // leak class. (#28293 separately drops headers on SSE POSTs regardless of
+    // value; neither path fixes it.) Same reason as HelpSessionService.ts.
     const payload = {
       mcpServers: {
         [MCP_SERVER_KEY]: {
