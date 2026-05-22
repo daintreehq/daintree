@@ -118,9 +118,10 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 const RECONNECT_ESCALATE_MS = 10_000;
 
 // Fixed-count shimmer card placeholders for the worktree sidebar loading state.
-// Mirrors the `.skel-card` design in index.html startup ghost (~80px per card):
-// padding 12px 16px, flex-column gap-8px, three bones — title / subtitle / detail.
-// Varied widths avoid a picket-fence read.
+// Follows the same 3-bone structure as the `.skel-card` design in the
+// index.html startup ghost — title / subtitle / detail at 13px / 11px / 32px,
+// padding py-3 px-4, gap-2 between bones. Card height ≈ 100px (24 padding +
+// 56 bones + 16 gap + 4 mt). Varied widths avoid a picket-fence read.
 const WORKTREE_SKELETON_CARDS = [
   { id: "a", titleWidth: "58%", subtitleWidth: "44%" },
   { id: "b", titleWidth: "42%", subtitleWidth: "55%" },

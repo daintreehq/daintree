@@ -420,6 +420,16 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     expect(source).not.toContain("MIN_SKELETON_ROWS");
   });
 
+  it("declares exactly 4 entries in WORKTREE_SKELETON_CARDS — #8804", () => {
+    // The 4-card count matches the index.html startup ghost and gives the
+    // sidebar a settled rhythm without filling the full viewport. Guards
+    // against silent inflation/deflation of the count.
+    const arrayMatch = source.match(/const WORKTREE_SKELETON_CARDS = \[([\s\S]*?)\] as const;/);
+    expect(arrayMatch).not.toBeNull();
+    const entries = arrayMatch![1].match(/\{\s*id:\s*"[a-z]+"/g) ?? [];
+    expect(entries).toHaveLength(4);
+  });
+
   it("renders the loading branch via WORKTREE_SKELETON_CARDS.map with no row borders — #8804", () => {
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
