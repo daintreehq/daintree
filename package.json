@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "sideEffects": [
     "**/*.css",
+    "./electron/setup/environment.ts",
     "./src/main.tsx",
     "./src/lib/trustedTypesPolicy.ts",
     "./src/config/terminalFont.ts",
