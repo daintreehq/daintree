@@ -81,7 +81,7 @@ export function FileDiffModal({
       return;
     }
 
-    fetchDiff();
+    void fetchDiff();
   }, [isOpen, fetchDiff]);
 
   return (
