@@ -67,7 +67,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
   const dangerRationale =
     typeof entry.dangerRationale === "string" && entry.dangerRationale.trim().length > 0
-      ? entry.dangerRationale
+      ? entry.dangerRationale.trim()
       : undefined;
   const keywordsLower: readonly string[] = Array.isArray(entry.keywords)
     ? entry.keywords
