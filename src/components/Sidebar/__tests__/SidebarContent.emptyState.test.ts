@@ -426,7 +426,8 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     // against silent inflation/deflation of the count.
     const arrayMatch = source.match(/const WORKTREE_SKELETON_CARDS = \[([\s\S]*?)\] as const;/);
     expect(arrayMatch).not.toBeNull();
-    const entries = arrayMatch![1].match(/\{\s*id:\s*"[a-z]+"/g) ?? [];
+    if (!arrayMatch?.[1]) throw new Error("arrayMatch should have a captured group");
+    const entries = arrayMatch[1].match(/\{\s*id:\s*"[a-z]+"/g) ?? [];
     expect(entries).toHaveLength(4);
   });
 
