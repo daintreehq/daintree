@@ -221,9 +221,7 @@ export function rankActionMatches<T extends SearchableAction>(
     if (base <= 0) continue;
     const frecencyScore = mruScoreById.get(item.id);
     const mruBonus =
-      frecencyScore !== undefined
-        ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE)
-        : 0;
+      frecencyScore !== undefined ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE) : 0;
     const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
     scored.push({ item, score: base + mruBonus + contextBonus });
   }

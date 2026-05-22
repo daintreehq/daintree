@@ -118,9 +118,7 @@ export function useActionPalette(): UseActionPaletteReturn {
       const pinnedSet = new Set(pinnedActionIds);
       // Keep the full frecency entries (id + score) so `rankActionMatches` can
       // derive the MRU bonus from the frecency score, not list position (#8823).
-      const actionMruList = getSortedActionMruList().filter(
-        ({ id }) => !confirmDangerIds.has(id)
-      );
+      const actionMruList = getSortedActionMruList().filter(({ id }) => !confirmDangerIds.has(id));
 
       if (!query.trim()) {
         const itemById = new Map(items.map((item) => [item.id, item]));

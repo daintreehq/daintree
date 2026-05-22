@@ -192,12 +192,9 @@ describe("rankActionMatches", () => {
       makeAction({ id: "ctx", title: "Open Terminal", category: "terminal" }),
       makeAction({ id: "frecent", title: "Open Browser", category: "browser" }),
     ];
-    const results = rankActionMatches(
-      "open",
-      items,
-      [mru("frecent", Number.POSITIVE_INFINITY)],
-      { focusedTerminalKind: "terminal" }
-    );
+    const results = rankActionMatches("open", items, [mru("frecent", Number.POSITIVE_INFINITY)], {
+      focusedTerminalKind: "terminal",
+    });
     expect(results[0]!.id).toBe("ctx");
   });
 
