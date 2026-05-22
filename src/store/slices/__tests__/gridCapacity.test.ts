@@ -1,6 +1,11 @@
 /**
- * Tests for panel grid capacity enforcement
- * Verifies that the 16-panel limit is enforced for programmatic moves
+ * Tests for the scrollable panel grid's location-move behavior (#8805).
+ *
+ * Earlier versions of this file enforced a 16-panel screen-fit cap; that cap
+ * was removed when the grid became vertically scrollable. The tests below
+ * verify the new contract: programmatic `moveTerminalToGrid` and
+ * `bulkMoveToGrid` always honor the requested location. The hardware-adaptive
+ * `panelLimitStore.hardLimit` is a separate, upstream creation-time ceiling.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -150,7 +155,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(gridCount).toBe(16);
     });
 
-    it("should NOT move terminal to grid when at capacity", () => {
+    it("should move terminal to grid even past the legacy 16-cap (grid scrolls)", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
@@ -159,11 +164,11 @@ describe("Grid Capacity Enforcement", () => {
       const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
       const terminal = usePanelStore.getState().panelsById["docked-1"];
-      expect(result).toBe(false);
-      expect(terminal?.location).toBe("dock");
+      expect(result).toBe(true);
+      expect(terminal?.location).toBe("grid");
 
       const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
-      expect(gridCount).toBe(16);
+      expect(gridCount).toBe(17);
     });
 
     it("should NOT move terminal if already in grid", () => {
@@ -194,7 +199,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(dockCount).toBe(0);
     });
 
-    it("should move only available capacity when docked terminals exceed available slots", () => {
+    it("should move every docked terminal even past the legacy 16-cap", () => {
       const gridTerminals = createGridTerminals(14);
       const dockedTerminals = createDockedTerminals(5);
 
@@ -205,11 +210,11 @@ describe("Grid Capacity Enforcement", () => {
       const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       const dockCount = getTerminals().filter((t) => t!.location === "dock").length;
 
-      expect(gridCount).toBe(16);
-      expect(dockCount).toBe(3);
+      expect(gridCount).toBe(19);
+      expect(dockCount).toBe(0);
     });
 
-    it("should NOT move any terminals when grid is at capacity", () => {
+    it("should move all docked terminals when grid already exceeds the legacy 16-cap", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminals = createDockedTerminals(3);
 
@@ -220,11 +225,11 @@ describe("Grid Capacity Enforcement", () => {
       const gridCount = getTerminals().filter((t) => t!.location === "grid").length;
       const dockCount = getTerminals().filter((t) => t!.location === "dock").length;
 
-      expect(gridCount).toBe(16);
-      expect(dockCount).toBe(3);
+      expect(gridCount).toBe(19);
+      expect(dockCount).toBe(0);
     });
 
-    it("should move first N terminals when limited capacity", () => {
+    it("should move every docked terminal regardless of starting grid count", () => {
       const gridTerminals = createGridTerminals(15);
       const dockedTerminals = createDockedTerminals(3);
 
@@ -232,13 +237,9 @@ describe("Grid Capacity Enforcement", () => {
 
       usePanelStore.getState().bulkMoveToGrid();
 
-      const movedTerminal = usePanelStore.getState().panelsById["dock-0"];
-      const remainingTerminal1 = usePanelStore.getState().panelsById["dock-1"];
-      const remainingTerminal2 = usePanelStore.getState().panelsById["dock-2"];
-
-      expect(movedTerminal?.location).toBe("grid");
-      expect(remainingTerminal1?.location).toBe("dock");
-      expect(remainingTerminal2?.location).toBe("dock");
+      expect(usePanelStore.getState().panelsById["dock-0"]?.location).toBe("grid");
+      expect(usePanelStore.getState().panelsById["dock-1"]?.location).toBe("grid");
+      expect(usePanelStore.getState().panelsById["dock-2"]?.location).toBe("grid");
     });
 
     it("should preserve grid focus when moving terminals", () => {
@@ -275,7 +276,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(getTerminals()).toHaveLength(0);
     });
 
-    it("should handle exactly fitting capacity", () => {
+    it("should move all docked terminals into the scrolling grid", () => {
       const gridTerminals = createGridTerminals(12);
       const dockedTerminals = createDockedTerminals(4);
 
@@ -287,7 +288,7 @@ describe("Grid Capacity Enforcement", () => {
       expect(gridCount).toBe(16);
     });
 
-    it("should count terminals with undefined location as grid", () => {
+    it("treats panels with undefined location as grid members but still allows moves", () => {
       const gridTerminals = createGridTerminals(14);
       const undefinedTerminals = [
         createMockTerminal("undefined-1", "grid"),
@@ -298,18 +299,14 @@ describe("Grid Capacity Enforcement", () => {
 
       setTerminals([...gridTerminals, ...undefinedTerminals, dockedTerminal]);
 
-      usePanelStore.getState().moveTerminalToGrid("docked-1");
+      const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
       const terminal = usePanelStore.getState().panelsById["docked-1"];
-      expect(terminal?.location).toBe("dock");
-
-      const gridAndUndefinedCount = getTerminals().filter(
-        (t) => t!.location === "grid" || t!.location === undefined
-      ).length;
-      expect(gridAndUndefinedCount).toBe(16);
+      expect(result).toBe(true);
+      expect(terminal?.location).toBe("grid");
     });
 
-    it("should NOT set focus when move is blocked", () => {
+    it("should set focus on the docked terminal that moved to the grid", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
@@ -319,7 +316,7 @@ describe("Grid Capacity Enforcement", () => {
       usePanelStore.getState().moveTerminalToGrid("docked-1");
 
       const { focusedId } = usePanelStore.getState();
-      expect(focusedId).toBe("grid-0");
+      expect(focusedId).toBe("docked-1");
     });
 
     it("should set focus when move succeeds", () => {

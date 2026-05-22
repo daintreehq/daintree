@@ -35,12 +35,7 @@ import {
 } from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
-import {
-  computeGridColumns,
-  getMaxGridCapacity,
-  GRID_TRANSITION_DURATION_MS,
-  ABSOLUTE_MAX_GRID_TERMINALS,
-} from "@/lib/terminalLayout";
+import { computeGridColumns, GRID_TRANSITION_DURATION_MS } from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
   subscribeSidebarLayoutTransitionUnlock,
@@ -92,19 +87,6 @@ export interface ContentGridContext {
   emptyContent?: React.ReactNode;
   gridTerminals: TerminalInstance[];
   tabGroups: TabGroup[];
-  /**
-   * Tab groups that fit in the grid at the readable minimum size, sliced from
-   * `tabGroups` by `maxGridCapacity`. Renderers iterate this list (not the raw
-   * `tabGroups`) so any panels above capacity are excluded from the grid and
-   * routed to the overflow status strip instead. See #8702.
-   */
-  visibleTabGroups: TabGroup[];
-  /**
-   * Tab groups that exceed the grid's screen-fit capacity and render as
-   * compact status cards below the grid. Empty when `tabGroups.length <=
-   * maxGridCapacity`. See #8702.
-   */
-  overflowTabGroups: TabGroup[];
   focusedId: string | null;
   maximizedId: string | null;
   maximizeTarget: ReturnType<typeof usePanelStore.getState>["maximizeTarget"];
@@ -125,8 +107,15 @@ export interface ContentGridContext {
   placeholderInGrid: boolean;
   placeholderIndex: number | null;
   sourceContainer: string | null;
-  isGridFull: boolean;
-  showGridFullOverlay: boolean;
+  /**
+   * The grid's scroll container element, exposed so `TerminalPane` can root its
+   * IntersectionObserver at the grid (rather than the viewport) and so the
+   * `PanelScrollRuler` can drive `scrollIntoView` on attention jumps. Held as
+   * state — not a ref — because consumers depend on identity changes to
+   * re-create observers when the container mounts/remounts.
+   */
+  gridScrollRoot: HTMLElement | null;
+  setGridScrollRoot: (el: HTMLElement | null) => void;
   useTwoPaneSplitMode: boolean;
   isEmpty: boolean;
   isMacroFocused: boolean;
@@ -157,7 +146,6 @@ export interface ContentGridContext {
   getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => TerminalInstance[];
   getPanelGroup: (panelId: string) => TabGroup | undefined;
   getActiveTabId: (groupId: string) => string | null;
-  maxGridCapacity: number;
   storeTerminalIds: string[];
 }
 
@@ -381,27 +369,19 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
-  // Subscribe reactively to the derived capacity so height-only resizes
-  // re-partition the grid. A `state.getMaxGridCapacity` function reference
-  // is stable across height changes and would leave the partition stale
-  // (verified against `useGridNavigation`'s inline-derived selector).
-  const maxGridCapacity = useLayoutConfigStore((state) => {
-    if (!state.gridDimensions) return ABSOLUTE_MAX_GRID_TERMINALS;
-    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
-  });
-  // Split the grid panels at the screen-fit capacity. Everything past the cap
-  // renders in the overflow status strip (#8702) so we never paint terminals
-  // narrower than MIN_TERMINAL_WIDTH_PX.
-  const visibleTabGroups = useMemo(
-    () => (tabGroups.length <= maxGridCapacity ? tabGroups : tabGroups.slice(0, maxGridCapacity)),
-    [tabGroups, maxGridCapacity]
-  );
-  const overflowTabGroups = useMemo(
-    () =>
-      tabGroups.length <= maxGridCapacity ? EMPTY_TAB_GROUPS : tabGroups.slice(maxGridCapacity),
-    [tabGroups, maxGridCapacity]
-  );
-  const isGridFull = visibleTabGroups.length >= maxGridCapacity;
+
+  // The scroll container that hosts the panel grid. Held as state (not a ref)
+  // so `TerminalPane`'s IntersectionObserver effect can depend on its identity
+  // and re-create the observer when the container mounts. The setter is the
+  // ref callback wired into `ContentGridDefault`'s scrolling div.
+  const [gridScrollRoot, setGridScrollRootState] = useState<HTMLElement | null>(null);
+  const setGridScrollRoot = useCallback((el: HTMLElement | null) => {
+    setGridScrollRootState((prev) => (prev === el ? prev : el));
+  }, []);
+
+  // `EMPTY_TAB_GROUPS` is still referenced by the tab-group filter above for
+  // the closing-panel fast path.
+  void EMPTY_TAB_GROUPS;
 
   const { setNodeRef, isOver } = useDroppable({
     id: "grid-container",
@@ -423,12 +403,13 @@ export function useContentGridContext({
   }, [isDragging]);
 
   const placeholderInGrid =
-    placeholderIndex !== null &&
-    placeholderIndex >= 0 &&
-    placeholderIndex <= visibleTabGroups.length;
+    placeholderIndex !== null && placeholderIndex >= 0 && placeholderIndex <= tabGroups.length;
 
-  const showPlaceholder = placeholderInGrid && sourceContainer === "dock" && !isGridFull;
-  const gridItemCount = visibleTabGroups.length + (showPlaceholder ? 1 : 0);
+  // The grid scrolls vertically now, so dock→grid drops always have a landing
+  // spot — no more grid-full rejection. The placeholder shows whenever the
+  // drag originates from the dock and the cursor is in the grid region.
+  const showPlaceholder = placeholderInGrid && sourceContainer === "dock";
+  const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
   const bindGridRegion = useCallback((node: HTMLDivElement | null) => {
     useMacroFocusStore.getState().setRegionRef("grid", node);
@@ -652,15 +633,16 @@ export function useContentGridContext({
   );
 
   const panelIds = useMemo(() => {
-    // Only visible groups participate in SortableContext / dnd — overflow
-    // status cards are non-draggable and live outside the grid container.
-    const ids = visibleTabGroups.map((g) => g.panelIds[0] ?? g.id);
+    // All grid groups now participate in SortableContext / dnd — the scrollable
+    // grid keeps every panel in the grid container, so there is no off-grid
+    // overflow set to exclude.
+    const ids = tabGroups.map((g) => g.panelIds[0] ?? g.id);
     if (showPlaceholder && placeholderInGrid) {
       const insertIndex = Math.min(Math.max(0, placeholderIndex), ids.length);
       ids.splice(insertIndex, 0, GRID_PLACEHOLDER_ID);
     }
     return ids;
-  }, [visibleTabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
+  }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
   // Structurally-filtered fleet panel IDs. Delegates membership to
   // `buildFleetPanels` (single source of truth — see #5989) and projects to
@@ -790,8 +772,6 @@ export function useContentGridContext({
     }
   }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
 
-  const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
-
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
   const useTwoPaneSplitMode =
     twoPaneSplitEnabled &&
@@ -885,21 +865,6 @@ export function useContentGridContext({
     }
   }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
 
-  // Focus reconciliation when capacity shrinks (sidebar opens, window narrows):
-  // if `focusedId` has slipped into the overflow strip, arrow keys and Cmd+N
-  // can't reach it anymore. Drop focus onto the first visible panel instead so
-  // the user has a working keyboard model (#8702). Only fires when the focused
-  // panel is in the active worktree's grid set but no longer visible.
-  useEffect(() => {
-    if (!focusedId) return;
-    const focusedInVisible = visibleTabGroups.some((g) => g.panelIds.includes(focusedId));
-    if (focusedInVisible) return;
-    const focusedInOverflow = overflowTabGroups.some((g) => g.panelIds.includes(focusedId));
-    if (!focusedInOverflow) return;
-    const fallback = visibleTabGroups[0]?.panelIds[0] ?? null;
-    if (fallback) setFocused(fallback);
-  }, [focusedId, visibleTabGroups, overflowTabGroups, setFocused]);
-
   const gridContextMenuContent = (
     <ContextMenuContent>
       <ContextMenuActionItem
@@ -988,8 +953,6 @@ export function useContentGridContext({
     emptyContent,
     gridTerminals,
     tabGroups,
-    visibleTabGroups,
-    overflowTabGroups,
     focusedId,
     maximizedId,
     maximizeTarget,
@@ -1010,8 +973,8 @@ export function useContentGridContext({
     placeholderInGrid,
     placeholderIndex,
     sourceContainer,
-    isGridFull,
-    showGridFullOverlay,
+    gridScrollRoot,
+    setGridScrollRoot,
     useTwoPaneSplitMode,
     isEmpty,
     isMacroFocused,
@@ -1042,7 +1005,6 @@ export function useContentGridContext({
     getTabGroupPanels,
     getPanelGroup,
     getActiveTabId,
-    maxGridCapacity,
     storeTerminalIds,
   };
 

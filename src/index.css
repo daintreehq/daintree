@@ -813,9 +813,12 @@ code.hljs {
     font-family: var(--font-mono);
   }
 
-  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar */
+  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar.
+     Contain overscroll so terminal scrollback can't chain into the outer
+     scrollable panel grid (#8805). */
   .xterm .xterm-viewport {
     scrollbar-width: none;
+    overscroll-behavior-y: contain;
   }
   .xterm .xterm-viewport::-webkit-scrollbar {
     display: none;

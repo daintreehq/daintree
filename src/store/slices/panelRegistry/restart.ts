@@ -23,7 +23,6 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
@@ -619,20 +618,10 @@ export const createRestartActions = (
     let movedToLocation: PanelLocation | null = null;
 
     set((state) => {
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      let targetGridCount = 0;
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.worktreeId ?? null) === (worktreeId ?? null) &&
-          t.location !== "trash" &&
-          (t.location === "grid" || t.location === undefined)
-        )
-          targetGridCount++;
-      }
-
-      const newLocation: PanelLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
+      // Scrollable grid (#8805): restoring a panel always lands it in the
+      // destination worktree's grid; the grid scrolls if it now exceeds the
+      // screen-fit count.
+      const newLocation: PanelLocation = "grid";
       movedToLocation = newLocation;
 
       const t = state.panelsById[id];

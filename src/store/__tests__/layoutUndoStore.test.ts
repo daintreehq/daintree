@@ -440,8 +440,11 @@ describe("layoutUndoStore", () => {
     expect(allTerminals[1]!.location).toBe("dock");
   });
 
-  describe("grid capacity clamping", () => {
-    it("undo clamps grid panels to current capacity", () => {
+  // Scrollable panel grid (#8805): undo no longer clamps panels to the
+  // screen-fit capacity. The grid scrolls vertically, so restoring a snapshot
+  // returns every panel to its captured location regardless of how many fit.
+  describe("scrollable grid restore (no clamp)", () => {
+    it("undo restores every grid panel from the snapshot even past the legacy fit cap", () => {
       const terminals = Array.from({ length: 6 }, (_, i) =>
         makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
       );
@@ -459,15 +462,11 @@ describe("layoutUndoStore", () => {
       const gridCount = allTerms.filter((t) => t!.location === "grid").length;
       const dockCount = allTerms.filter((t) => t!.location === "dock").length;
 
-      expect(gridCount).toBe(2);
-      expect(dockCount).toBe(4);
-
-      expect(state.panelsById[state.panelIds[0]!]!.location).toBe("grid");
-      expect(state.panelsById[state.panelIds[1]!]!.location).toBe("grid");
-      expect(state.panelsById[state.panelIds[2]!]!.location).toBe("dock");
+      expect(gridCount).toBe(6);
+      expect(dockCount).toBe(0);
     });
 
-    it("undo respects per-worktree capacity", () => {
+    it("undo restores per-worktree grids without clamping", () => {
       const w1Terminals = Array.from({ length: 4 }, (_, i) =>
         makeTerminal({ id: `w1-t${i}`, location: "grid", worktreeId: "w1" })
       );
@@ -485,16 +484,16 @@ describe("layoutUndoStore", () => {
 
       const state = usePanelStore.getState();
       const allTerms = state.panelIds.map((id) => state.panelsById[id]);
-      const w1Grid = allTerms.filter((t) => t!.worktreeId === "w1" && t!.location === "grid");
-      const w1Dock = allTerms.filter((t) => t!.worktreeId === "w1" && t!.location === "dock");
-      const w2Grid = allTerms.filter((t) => t!.worktreeId === "w2" && t!.location === "grid");
-
-      expect(w1Grid).toHaveLength(2);
-      expect(w1Dock).toHaveLength(2);
-      expect(w2Grid).toHaveLength(2);
+      expect(allTerms.filter((t) => t!.worktreeId === "w1" && t!.location === "grid")).toHaveLength(
+        4
+      );
+      expect(allTerms.filter((t) => t!.worktreeId === "w2" && t!.location === "grid")).toHaveLength(
+        2
+      );
+      expect(allTerms.filter((t) => t!.location === "dock")).toHaveLength(0);
     });
 
-    it("undo clamps tab groups as whole units", () => {
+    it("undo restores tab groups to their captured location without splitting them", () => {
       const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
       const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
       const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
@@ -534,16 +533,15 @@ describe("layoutUndoStore", () => {
       useLayoutUndoStore.getState().undo();
 
       const state = usePanelStore.getState();
-
       expect(state.panelsById["t1"]?.location).toBe("grid");
       expect(state.panelsById["t2"]?.location).toBe("grid");
-      expect(state.panelsById["t3"]?.location).toBe("dock");
-      expect(state.panelsById["tg1"]?.location).toBe("dock");
-      expect(state.panelsById["tg2"]?.location).toBe("dock");
-      expect(state.tabGroups.get("g1")?.location).toBe("dock");
+      expect(state.panelsById["t3"]?.location).toBe("grid");
+      expect(state.panelsById["tg1"]?.location).toBe("grid");
+      expect(state.panelsById["tg2"]?.location).toBe("grid");
+      expect(state.tabGroups.get("g1")?.location).toBe("grid");
     });
 
-    it("undo with no capacity exceeded works normally", () => {
+    it("undo restores a small layout without modification", () => {
       const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
       const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
       seedTerminals([t1, t2]);
@@ -563,7 +561,7 @@ describe("layoutUndoStore", () => {
       expect(state.panelsById[state.panelIds[1]!]!.location).toBe("grid");
     });
 
-    it("undo with null gridDimensions uses absolute max", () => {
+    it("undo with null gridDimensions still restores all panels to grid", () => {
       const terminals = Array.from({ length: 10 }, (_, i) =>
         makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
       );
@@ -581,7 +579,7 @@ describe("layoutUndoStore", () => {
       expect(gridCount).toBe(10);
     });
 
-    it("post-snapshot grid terminals are clamped during undo", () => {
+    it("post-snapshot grid terminals are appended in their current location", () => {
       const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
       seedTerminals([t1]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
@@ -595,9 +593,11 @@ describe("layoutUndoStore", () => {
       useLayoutUndoStore.getState().undo();
 
       const state = usePanelStore.getState();
+      // t1 returns to its snapshotted grid; t2 and t3 were created post-snapshot
+      // and keep their current grid location — no overflow clamp.
       expect(state.panelsById["t1"]?.location).toBe("grid");
       expect(state.panelsById["t2"]?.location).toBe("grid");
-      expect(state.panelsById["t3"]?.location).toBe("dock");
+      expect(state.panelsById["t3"]?.location).toBe("grid");
     });
   });
 });

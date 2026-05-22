@@ -73,13 +73,30 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
   });
 
-  it("returns FOCUSED for a working agent regardless of focus or identity", () => {
+  it("returns FOCUSED for a visible working agent regardless of focus or identity", () => {
     const terminal = makeTerminal({
       kind: "terminal",
       detectedAgentId: undefined,
       agentState: "working",
+      isVisible: true,
     });
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.FOCUSED);
+  });
+
+  it("drops a hidden working agent to BACKGROUND (scrollable-grid regression guard)", () => {
+    // In the scrollable panel grid, panels can scroll out of the viewport.
+    // The IntersectionObserver flips `isVisible` to false; the refresh-tier
+    // gate must respect that even for working agents — otherwise a scrolled-off
+    // streaming agent would render at FOCUSED rate with no visible payoff.
+    const terminal = makeTerminal({
+      kind: "terminal",
+      detectedAgentId: undefined,
+      agentState: "working",
+      isVisible: false,
+      hasPty: true,
+      runtimeStatus: "running",
+    });
+    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
   });
 
   it("returns FOCUSED when the terminal is focused, regardless of agent state", () => {
