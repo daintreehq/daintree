@@ -694,8 +694,17 @@ export function useContentGridContext({
   //   click time so stable props don't churn its `React.memo`.
   // - `useGridNavigation` reads `gridCols`/`fleetGridCols` at memo time so the
   //   keyboard-nav layout always agrees with the rendered grid (#8857).
-  useEffect(() => {
+  //
+  // `useLayoutEffect` rather than `useEffect`: the write must land before
+  // paint so a keypress immediately after a maximize/restore commit never
+  // reads a stale column count. Cleanup resets to defaults on unmount so a
+  // project switch doesn't briefly serve the previous grid's values while
+  // the new `useContentGridContext` mounts.
+  useLayoutEffect(() => {
     setGridLayoutSnapshot({ gridCols, gridItemCount, fleetGridCols });
+    return () => {
+      setGridLayoutSnapshot({ gridCols: 1, gridItemCount: 0, fleetGridCols: 1 });
+    };
   }, [gridCols, gridItemCount, fleetGridCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
