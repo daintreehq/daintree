@@ -754,6 +754,51 @@ describe("ActionService", () => {
       expect(entry!.id).toBe("actions.hiddenButFetchable");
     });
 
+    it("should still dispatch hidden actions (isVisible is discovery-only)", async () => {
+      const run = vi.fn().mockResolvedValue("ran");
+      const hiddenAction: ActionDefinition = {
+        id: "actions.hiddenButDispatchable" as ActionId,
+        title: "Hidden But Dispatchable Action",
+        description:
+          "A hidden action used for testing that dispatch() ignores isVisible and still invokes run.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run,
+      };
+
+      service.register(hiddenAction);
+      const result = await service.dispatch("actions.hiddenButDispatchable" as ActionId);
+
+      expect(result.ok).toBe(true);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("should forward the explicit ctx argument to isVisible", () => {
+      const action: ActionDefinition = {
+        id: "actions.ctxAware" as ActionId,
+        title: "Context-Aware Action",
+        description:
+          "An action whose isVisible inspects the provided context to validate context forwarding through list().",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: (ctx) => ctx.projectId === "project-visible",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+
+      const visibleManifest = service.list({ projectId: "project-visible" });
+      const hiddenManifest = service.list({ projectId: "project-other" });
+
+      expect(visibleManifest.map((e) => e.id)).toContain("actions.ctxAware");
+      expect(hiddenManifest.map((e) => e.id)).not.toContain("actions.ctxAware");
+    });
+
     it("should propagate keywords to manifest entries", () => {
       const action: ActionDefinition = {
         id: "actions.keyworded" as ActionId,

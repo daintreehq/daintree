@@ -299,4 +299,21 @@ describe("ActionService adversarial", () => {
       expect.objectContaining({ actionId: "actions.list" })
     );
   });
+
+  it("isVisible that throws does not drop sibling actions from list()", () => {
+    service.register(
+      safeAction("actions.list", {
+        isVisible: () => {
+          throw new Error("visibility predicate boom");
+        },
+      })
+    );
+    service.register(safeAction("actions.help", { isVisible: () => true }));
+
+    const manifest = service.list();
+    const ids = manifest.map((entry) => entry.id);
+
+    expect(ids).toContain("actions.list");
+    expect(ids).toContain("actions.help");
+  });
 });
