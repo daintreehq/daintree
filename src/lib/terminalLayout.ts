@@ -195,11 +195,13 @@ export function desiredAutoCols(count: number): number {
  * Breakpoint hysteresis (Schmitt trigger). `target` is the freshly computed
  * width-feasible column count; `previous` is the last committed count.
  *
- * Only *width* changes are smoothed — hold the wider previous count until the
- * container narrows `GRID_HYSTERESIS_BUFFER_PX` past what that count needs.
- * Count changes (opening/closing panels) are never smoothed: `countCeiling`
- * caps the held value so closing a panel drops columns immediately and the
- * count-driven progression stays predictable.
+ * Smooths width-driven thrash near a column breakpoint: the wider previous
+ * count is held until the container narrows `GRID_HYSTERESIS_BUFFER_PX` past
+ * that count's feasibility boundary. The held count is always capped by
+ * `countCeiling` — the current panel count's column ceiling — so it can never
+ * leave empty columns or outlive a panel close that lowers the ceiling. A
+ * panel *open* right at a width boundary may hold one extra column for a
+ * render; that stays within the readability buffer and is intentional.
  */
 export function applyHysteresis(
   target: number,
@@ -214,8 +216,12 @@ export function applyHysteresis(
   // justifies it — otherwise a close would leave empty columns.
   const held = Math.min(previous, countCeiling);
   if (held <= target) return target;
+  // Mirror `maxFeasibleCols`' nth-column boundary exactly — n panels plus
+  // (n-1) gaps plus the grid padding — then hold `held` until the container
+  // narrows the full buffer past it. Omitting the padding term silently
+  // widened the effective buffer by `GRID_PADDING_PX`.
   const downgradeThreshold =
-    held * minPanelWidth + (held - 1) * GRID_GAP_PX - GRID_HYSTERESIS_BUFFER_PX;
+    held * minPanelWidth + (held - 1) * GRID_GAP_PX + GRID_PADDING_PX - GRID_HYSTERESIS_BUFFER_PX;
   return width >= downgradeThreshold ? held : target;
 }
 

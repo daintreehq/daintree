@@ -376,7 +376,6 @@ export function useContentGridContext({
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
-  const gridDimensions = useLayoutConfigStore((state) => state.gridDimensions);
 
   // The scroll container that hosts the panel grid. Held as state (not a ref)
   // so `TerminalPane`'s IntersectionObserver effect can depend on its identity
@@ -402,6 +401,11 @@ export function useContentGridContext({
     preMaximizeLayoutRef.current = preMaximizeLayout;
   }, [preMaximizeLayout]);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
+  // Grid height is tracked locally (like `gridWidth`) rather than read from the
+  // layout store: the store's `gridDimensions` is reset to null whenever the
+  // ResizeObserver effect re-subscribes (it re-runs on every panel open/close),
+  // which would blip `scrollRowHeight` to its default and resize every terminal.
+  const [gridHeight, setGridHeight] = useState<number | null>(null);
 
   const { placeholderIndex, sourceContainer } = useDndPlaceholder();
   const isDragging = useIsDragging();
@@ -494,6 +498,7 @@ export function useContentGridContext({
         if (entry) {
           const { width, height } = entry.contentRect;
           setGridWidth((prev) => (prev === width ? prev : width));
+          setGridHeight((prev) => (prev === height ? prev : height));
           setGridDimensions({ width, height });
         }
       });
@@ -507,6 +512,7 @@ export function useContentGridContext({
     // below will sync the grid once the transition completes.
     if (!isSidebarLayoutTransitionLocked()) {
       setGridWidth(container.clientWidth);
+      setGridHeight(container.clientHeight);
       setGridDimensions({ width: container.clientWidth, height: container.clientHeight });
     }
 
@@ -528,6 +534,7 @@ export function useContentGridContext({
         const width = measureNode.clientWidth;
         const height = measureNode.clientHeight;
         setGridWidth((prev) => (prev === width ? prev : width));
+        setGridHeight((prev) => (prev === height ? prev : height));
         setGridDimensions({ width, height });
       });
     });
@@ -600,14 +607,19 @@ export function useContentGridContext({
   // Scroll mode: once the grid would need more than two rows (or holds 5+
   // panels) it stops trying to fit everything and becomes a vertical scan
   // surface with fixed-height rows. Fixed rows — rather than a `1fr` stretch —
-  // are what keep closing a panel cheap: a close never restretches and
-  // resizes every surviving terminal.
-  const gridRows = gridCols > 0 ? Math.ceil(gridItemCount / gridCols) : gridItemCount;
-  const isScrollMode = gridItemCount >= 5 || gridRows > 2;
-  const scrollRowHeight = useMemo(
-    () => computeScrollRowHeight(gridDimensions?.height ?? null),
-    [gridDimensions?.height]
-  );
+  // are what keep closing a panel cheap: a close never restretches and resizes
+  // every surviving terminal.
+  //
+  // The scroll-mode count uses real grid groups (`tabGroups.length`), not
+  // `gridItemCount`: a drag placeholder must not flip row-height mode mid-drag.
+  // `closingIds.size` is added back so an in-flight optimistic close keeps the
+  // pre-close count — a 5→4 close otherwise exits scroll mode on the click path
+  // and restretches the survivors, the exact resize fixed rows exist to avoid.
+  // The layout settles to quad mode once the canonical commit clears `closingIds`.
+  const scrollModeCount = tabGroups.length + closingIds.size;
+  const scrollModeRows = gridCols > 0 ? Math.ceil(scrollModeCount / gridCols) : scrollModeCount;
+  const isScrollMode = scrollModeCount >= 5 || scrollModeRows > 2;
+  const scrollRowHeight = useMemo(() => computeScrollRowHeight(gridHeight), [gridHeight]);
 
   const layoutTransition: Transition = useMemo(
     () => ({

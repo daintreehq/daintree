@@ -106,6 +106,7 @@ describe("maxFeasibleCols", () => {
     expect(maxFeasibleCols(wCols(2), mpw)).toBe(2);
     expect(maxFeasibleCols(wCols(3), mpw)).toBe(3);
     expect(maxFeasibleCols(wCols(3) - 1, mpw)).toBe(2);
+    expect(maxFeasibleCols(wCols(2) - 1, mpw)).toBe(1);
   });
 });
 
@@ -214,8 +215,17 @@ describe("getAutoGridCols — count-driven feel inside a readability envelope", 
 
     it("does not smooth a column drop caused by opening more panels", () => {
       // Going from 3 panels (3 cols) to 4 panels must drop to 2 immediately —
-      // count changes are predictable, only width changes are smoothed.
+      // a close/open that lowers the column ceiling is never smoothed.
       expect(getAutoGridCols(4, wCols(4), 3)).toBe(2);
+    });
+
+    it("may hold a readable wider count for one render when a panel opens at a boundary", () => {
+      // Opening the 3rd panel one pixel below the 2-column boundary: a fresh
+      // compute is 1, but the prior committed 2 columns are still ~readable
+      // (within the hysteresis buffer), so 2 is held for this render. The held
+      // count stays count-justified — it never leaves empty columns.
+      expect(getAutoGridCols(3, wCols(2) - 1, undefined)).toBe(1);
+      expect(getAutoGridCols(3, wCols(2) - 1, 2)).toBe(2);
     });
 
     it("a narrowing viewport overrides a stale wide previousCols", () => {
@@ -246,10 +256,12 @@ describe("computeScrollRowHeight", () => {
     expect(computeScrollRowHeight(null)).toBe(pxForRows(TARGET_GRID_ROWS));
   });
 
-  it("stays within the readable row-height tiers", () => {
+  it("stays between the target and max row-height tiers", () => {
+    // The effective floor is the 32-row target — two-rows-plus-peek can only
+    // raise the height — and the ceiling is the 40-row max.
     for (const h of [400, 900, 1500, 3000]) {
       const rh = computeScrollRowHeight(h);
-      expect(rh).toBeGreaterThanOrEqual(pxForRows(READABLE_MIN_ROWS));
+      expect(rh).toBeGreaterThanOrEqual(pxForRows(TARGET_GRID_ROWS));
       expect(rh).toBeLessThanOrEqual(pxForRows(MAX_SCROLL_ROWS));
     }
   });
