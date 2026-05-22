@@ -174,12 +174,13 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const executeAction = useCallback(
     (item: ActionPaletteItem) => {
-      // Only record frecency for enabled items so disabled actions don't get
-      // promoted to the top from repeated attempts. Dispatch still runs for
-      // disabled items so ActionService can surface the disabled-reason toast.
-      // Also skip confirm-danger actions (e.g. "Delete worktree") so destructive
-      // actions don't land in the "Recently used" rail (issue #7481).
-      if (item.enabled && item.danger !== "confirm") {
+      // Enter on a disabled row is a silent no-op: palette stays open, no
+      // dispatch, no toast. The inline disabled-reason text in the row already
+      // explains why it's unavailable (issue #8814).
+      if (!item.enabled) return;
+      // Skip confirm-danger actions (e.g. "Delete worktree") from frecency so
+      // destructive actions don't land in the "Recently used" rail (#7481).
+      if (item.danger !== "confirm") {
         useActionMruStore.getState().recordActionMru(item.id);
       }
       close();

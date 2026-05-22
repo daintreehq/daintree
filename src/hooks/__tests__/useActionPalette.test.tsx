@@ -401,7 +401,7 @@ describe("useActionPalette", () => {
     expect(dispatchMock).toHaveBeenCalledWith("worktree.delete", {}, { source: "user" });
   });
 
-  it("does NOT record frecency when executeAction is called on disabled item", async () => {
+  it("is a silent no-op when executeAction is called on a disabled item (#8814)", async () => {
     listMock.mockReturnValue([makeEntry("a.action", "Alpha", false)]);
 
     const { result } = renderHook(() => useActionPalette());
@@ -425,11 +425,43 @@ describe("useActionPalette", () => {
       result.current.executeAction(result.current.results[0]!);
     });
 
-    // Dispatch still runs so ActionService can surface the disabled-reason toast,
-    // but MRU stays clean — repeated attempts on a disabled item must not promote
-    // it to the top of the palette.
+    // Enter on a disabled row is a silent no-op: palette stays open, no
+    // dispatch fires, MRU stays clean, no toast (issue #8814).
     expect(useActionMruStore.getState().getSortedActionMruList().length).toBe(0);
-    expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(result.current.isOpen).toBe(true);
+  });
+
+  it("confirmSelection (Enter) on a disabled item is a silent no-op (#8814)", async () => {
+    listMock.mockReturnValue([makeEntry("a.action", "Alpha", false)]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    act(() => {
+      result.current.setQuery("alpha");
+    });
+
+    await waitFor(
+      () => {
+        expect(result.current.results.length).toBe(1);
+        expect(result.current.isStale).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+
+    act(() => {
+      result.current.confirmSelection();
+    });
+
+    // The real Enter-key path runs through confirmSelection -> executeAction.
+    // Same expectation: no dispatch, palette stays open, MRU untouched.
+    expect(useActionMruStore.getState().getSortedActionMruList().length).toBe(0);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(result.current.isOpen).toBe(true);
   });
 
   it("uses frecency as tiebreaker in non-empty query results", async () => {
