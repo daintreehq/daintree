@@ -589,13 +589,6 @@ export function useContentGridContext({
     hysteresisGridCols,
   ]);
 
-  // Mirror the live grid layout into a module-level snapshot so
-  // `GridPanel.handleToggleMaximize` can read `gridCols`/`gridItemCount`
-  // imperatively at click time instead of taking them as reactive props.
-  useEffect(() => {
-    setGridLayoutSnapshot({ gridCols, gridItemCount });
-  }, [gridCols, gridItemCount]);
-
   const layoutTransition: Transition = useMemo(
     () => ({
       duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
@@ -694,6 +687,16 @@ export function useContentGridContext({
       hysteresisFleetCols
     );
   }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth, hysteresisFleetCols]);
+
+  // Mirror the live grid layout into a module-level snapshot. Two consumers
+  // read it imperatively rather than as React props:
+  // - `GridPanel.handleToggleMaximize` reads `gridCols`/`gridItemCount` at
+  //   click time so stable props don't churn its `React.memo`.
+  // - `useGridNavigation` reads `gridCols`/`fleetGridCols` at memo time so the
+  //   keyboard-nav layout always agrees with the rendered grid (#8857).
+  useEffect(() => {
+    setGridLayoutSnapshot({ gridCols, gridItemCount, fleetGridCols });
+  }, [gridCols, gridItemCount, fleetGridCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
   useLayoutEffect(() => {

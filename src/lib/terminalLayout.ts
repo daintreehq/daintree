@@ -200,8 +200,11 @@ export function getAutoGridCols(
  * Single source of truth for grid column calculation across all layout strategies.
  * Enforces the 2-pane invariant: exactly 2 panes should ALWAYS be 2x1 layout.
  *
- * This function is used by both ContentGrid.tsx (for rendering) and
- * useGridNavigation.ts (for keyboard navigation) to ensure consistency.
+ * Called only by `useContentGridContext.tsx` (rendering). `useGridNavigation`
+ * reads the computed result through `gridLayoutSnapshot` rather than running
+ * this function a second time — independent re-derivation drifted from the
+ * rendered grid whenever maximize/restore, drag placeholder, or hysteresis
+ * state were in flight (#8857).
  */
 export function computeGridColumns(
   count: number,
