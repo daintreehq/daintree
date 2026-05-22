@@ -17,7 +17,7 @@ import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
-import { buildResumeCommand } from "@shared/types/agentSettings";
+import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
 
@@ -967,6 +967,21 @@ export class HelpSessionController {
               cwd,
               agentId: liveAgentId,
             });
+          } else if (
+            projectId &&
+            liveAgentId &&
+            cwd &&
+            buildResumeLatestCommand(liveAgentId) !== undefined
+          ) {
+            // Capture missed but the agent has a resume-latest flag — persist
+            // a sentinel hibernate entry (empty sessionId) so the next panel
+            // open hits the `--continue`-style fallback in `_spawnResumed`
+            // instead of starting a fresh session (#8787).
+            after.setHibernateSession(projectId, {
+              sessionId: "",
+              cwd,
+              agentId: liveAgentId,
+            });
           } else if (projectId) {
             after.clearHibernateSession(projectId);
           }
@@ -1027,11 +1042,11 @@ export class HelpSessionController {
     folderPath: string
   ): Promise<string | null> {
     const customLaunchFlags = await loadCustomLaunchFlags();
-    const command = buildResumeCommand(
-      launchAgentId,
-      hibernated.sessionId,
-      customLaunchFlags.length > 0 ? customLaunchFlags : undefined
-    );
+    const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
+    const command = hibernated.sessionId
+      ? (buildResumeCommand(launchAgentId, hibernated.sessionId, flags) ??
+        buildResumeLatestCommand(launchAgentId, flags))
+      : buildResumeLatestCommand(launchAgentId, flags);
     if (!command) return null;
 
     const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;

@@ -98,6 +98,7 @@ vi.mock("@shared/types", () => ({
   generateAgentCommand: vi.fn().mockReturnValue("claude --resume"),
   buildAgentLaunchFlags: vi.fn().mockReturnValue([]),
   buildResumeCommand: vi.fn().mockReturnValue(null),
+  buildResumeLatestCommand: vi.fn().mockReturnValue(null),
   buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude"),
 }));
 
@@ -273,5 +274,33 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
     // Even after callback, addAgentStateListener should not be called for injection
     expect(mockAddAgentStateListener).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke resume-latest fallback when restarting after worktree move (#8787)", async () => {
+    // The new-CWD restart must NOT pick up an unrelated session in the new
+    // worktree directory via resume-latest. moveToNewWorktreeAndTransfer
+    // passes { allowResumeLatest: false } so buffer injection remains the
+    // sole context-transfer mechanism (lesson #4781).
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockClear();
+    mockCaptureBufferText.mockReturnValue("some history");
+    const terminalWithoutSession = {
+      ...agentTerminal,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [terminalWithoutSession.id]: terminalWithoutSession },
+      panelIds: [terminalWithoutSession.id],
+    });
+
+    usePanelStore.getState().moveToNewWorktreeAndTransfer("test-1");
+
+    await vi.dynamicImportSettled();
+
+    if (openCreateDialogCallback) {
+      await openCreateDialogCallback("wt-new").catch(() => {});
+    }
+
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
   });
 });

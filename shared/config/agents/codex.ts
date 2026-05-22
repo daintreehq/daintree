@@ -116,6 +116,7 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "codex resume ([\\w-]+)",
+    resumeLatestArgs: ["resume", "--last"],
   },
   help: {
     args: [],

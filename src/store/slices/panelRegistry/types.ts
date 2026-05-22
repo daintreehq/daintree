@@ -17,6 +17,24 @@ import type {
 export type TerminalInstance = TerminalInstanceType;
 export type { AddPanelOptions };
 
+/**
+ * Options accepted by `restartTerminal`. Opaque defaults match existing
+ * behaviour; flags are opt-in for specific callers whose intent differs from
+ * the standard graceful-restart flow.
+ */
+export interface RestartTerminalOptions {
+  /**
+   * When `false`, suppresses the "resume the most recent session" fallback
+   * even if the agent declares `resumeLatestArgs`. Used by
+   * `moveToNewWorktreeAndTransfer` where the CWD has changed and a fresh
+   * launch with buffer-injected context is intentional — letting the agent
+   * silently resume a stale session in the new CWD would mask the move. See
+   * issue #4781 for the cross-worktree-transfer rationale.
+   * Defaults to `true` (fallback enabled).
+   */
+  allowResumeLatest?: boolean;
+}
+
 export interface TrashedTerminalGroupMetadata {
   panelIds: string[];
   activeTabId: string;
@@ -146,7 +164,7 @@ export interface PanelRegistrySlice {
   ) => void;
   restoreTerminalOrder: (orderedIds: string[]) => void;
 
-  restartTerminal: (id: string) => Promise<void>;
+  restartTerminal: (id: string, options?: RestartTerminalOptions) => Promise<void>;
   clearTerminalError: (id: string) => void;
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;

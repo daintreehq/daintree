@@ -35,6 +35,10 @@ const buildResumeCommandMock = vi.fn(
     `${agentId} --resume ${sessionId}`
 );
 
+const buildResumeLatestCommandMock = vi.fn(
+  (_agentId: string, _flags?: string[]): string | undefined => undefined
+);
+
 const generateAgentCommandMock = vi.hoisted(() =>
   vi.fn(
     (base: string, _entry?: unknown, _agentId?: string, _options?: unknown): string =>
@@ -50,6 +54,8 @@ vi.mock("@shared/types", async () => {
       generateAgentCommandMock(base, entry, agentId, options),
     buildResumeCommand: (...args: unknown[]) =>
       buildResumeCommandMock(...(args as [string, string, string[]?])),
+    buildResumeLatestCommand: (...args: unknown[]) =>
+      buildResumeLatestCommandMock(...(args as [string, string[]?])),
   };
 });
 
@@ -70,6 +76,8 @@ beforeEach(() => {
   buildResumeCommandMock.mockImplementation(
     (agentId: string, sessionId: string) => `${agentId} --resume ${sessionId}`
   );
+  buildResumeLatestCommandMock.mockReset();
+  buildResumeLatestCommandMock.mockImplementation(() => undefined);
   generateAgentCommandMock.mockReset();
   generateAgentCommandMock.mockImplementation(
     (base: string, _entry?: unknown, _agentId?: string, _options?: unknown) => `${base} --generated`
@@ -618,6 +626,97 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.command).toBe("claude --dangerously-skip-permissions");
     expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("uses resume-latest fallback when session ID was never captured", () => {
+    // The graceful-shutdown capture loop missed (timeout, pattern change).
+    // Instead of a fresh launch that loses context, use the agent's
+    // resume-latest flag (e.g. claude --continue).
+    buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.command).toBe("claude --continue");
+    expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", undefined);
+    expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("passes persisted agentLaunchFlags to buildResumeLatestCommand", () => {
+    buildResumeLatestCommandMock.mockReturnValue(
+      "claude --dangerously-skip-permissions --continue"
+    );
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentLaunchFlags: ["--dangerously-skip-permissions"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", [
+      "--dangerously-skip-permissions",
+    ]);
+  });
+
+  it("falls through to persisted flags when no session ID and no resume-latest fallback", () => {
+    buildResumeLatestCommandMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentLaunchFlags: ["--dangerously-skip-permissions"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.command).toBe("claude --dangerously-skip-permissions");
+    expect(buildResumeLatestCommandMock).toHaveBeenCalledOnce();
+    expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {
+    buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.command).toBe("claude --resume sess-1");
+    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
   });
 
   it("shell-escapes non-flag tokens in persisted agentLaunchFlags (defends against metachars)", () => {
