@@ -196,4 +196,126 @@ describe("ActionPaletteItem", () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(item);
   });
+
+  describe("pin & hide affordances", () => {
+    it("renders the pin button when onPin is provided", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /pin .* to favorites/i })).toBeTruthy();
+    });
+
+    it("renders the hide button when onHide is provided and the item is not pinned or destructive", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onHide={() => {}}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /hide .* from recently used/i })).toBeTruthy();
+    });
+
+    it("hides the hide button on destructive (danger:'confirm') items", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem({ danger: "confirm" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onHide={() => {}}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+    });
+
+    it("calls onPin and stops propagation when the pin button is clicked", () => {
+      const onPin = vi.fn(() => true);
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={onPin}
+        />
+      );
+
+      onSelect.mockClear();
+      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      fireEvent.click(pinButton);
+
+      expect(onPin).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a rejection message when onPin returns false (e.g., destructive action)", () => {
+      const onPin = vi.fn(() => false);
+      render(
+        <ActionPaletteItem
+          item={makeItem({ danger: "confirm" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={onPin}
+        />
+      );
+
+      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      fireEvent.click(pinButton);
+
+      expect(onPin).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Can't pin destructive actions")).toBeTruthy();
+    });
+
+    it("uses 'Unpin' label and routes click to onUnpin when isPinned", () => {
+      const onUnpin = vi.fn();
+      const item = makeItem();
+      render(
+        <ActionPaletteItem
+          item={item}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+          onUnpin={onUnpin}
+          isPinned
+        />
+      );
+
+      const unpinButton = screen.getByRole("button", { name: /unpin/i });
+      fireEvent.click(unpinButton);
+
+      expect(onUnpin).toHaveBeenCalledTimes(1);
+      expect(onUnpin).toHaveBeenCalledWith(item.id);
+    });
+
+    it("hides the hide button when the item is already pinned", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          onPin={() => true}
+          onUnpin={() => {}}
+          onHide={() => {}}
+          isPinned
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+    });
+  });
 });

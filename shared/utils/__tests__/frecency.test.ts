@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { computeFrecencyScore, FRECENCY_HALF_LIFE_MS } from "../frecency.js";
 
+describe("FRECENCY_HALF_LIFE_MS", () => {
+  it("is set to 14 days — pairs with the eviction affordance (issue #8815)", () => {
+    expect(FRECENCY_HALF_LIFE_MS).toBe(14 * 24 * 60 * 60 * 1000);
+  });
+});
+
 describe("computeFrecencyScore", () => {
   const NOW = 1_700_000_000_000;
 

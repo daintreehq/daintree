@@ -118,6 +118,8 @@ export interface StoreSchema {
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
     actionMruList?: ActionFrecencyEntry[] | string[];
+    actionPinnedIds?: string[];
+    actionHiddenIds?: string[];
     fleetScopeMode?: "legacy" | "scoped";
   };
   userConfig: {

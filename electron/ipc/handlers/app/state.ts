@@ -18,6 +18,8 @@ export const CRASH_CRITICAL_FIELDS = new Set([
   "recipes",
   "mruList",
   "actionMruList",
+  "actionPinnedIds",
+  "actionHiddenIds",
   "developerMode",
   "fleetScopeMode",
 ]);
@@ -614,6 +616,44 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           }
           updates.actionMruList = sanitized;
         }
+      }
+
+      if ("actionPinnedIds" in partialState && Array.isArray(partialState.actionPinnedIds)) {
+        const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
+        const MAX_PINNED = 100;
+        const seen = new Set<string>();
+        const sanitized: string[] = [];
+        for (const id of partialState.actionPinnedIds) {
+          if (
+            typeof id === "string" &&
+            ACTION_ID_PATTERN.test(id) &&
+            !seen.has(id) &&
+            sanitized.length < MAX_PINNED
+          ) {
+            seen.add(id);
+            sanitized.push(id);
+          }
+        }
+        updates.actionPinnedIds = sanitized;
+      }
+
+      if ("actionHiddenIds" in partialState && Array.isArray(partialState.actionHiddenIds)) {
+        const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
+        const MAX_HIDDEN = 200;
+        const seen = new Set<string>();
+        const sanitized: string[] = [];
+        for (const id of partialState.actionHiddenIds) {
+          if (
+            typeof id === "string" &&
+            ACTION_ID_PATTERN.test(id) &&
+            !seen.has(id) &&
+            sanitized.length < MAX_HIDDEN
+          ) {
+            seen.add(id);
+            sanitized.push(id);
+          }
+        }
+        updates.actionHiddenIds = sanitized;
       }
 
       if ("fleetScopeMode" in partialState) {
