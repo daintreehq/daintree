@@ -71,7 +71,9 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     // the resize-lock is armed whenever the survivors' boxes change — a
     // column-count change or a layout-changing close.
     expect(content).toMatch(/if\s*\(isProjectSwitching\s*\|\|\s*isDraggingRef\.current\)\s*return/);
-    expect(content).toMatch(/if\s*\(colsChanged\s*\|\|\s*layoutChangingClose\)\s*\{/);
+    expect(content).toMatch(
+      /if\s*\(colsChanged\s*\|\|\s*scrollGeoChanged\s*\|\|\s*layoutChangingClose\)\s*\{/
+    );
     expect(content).toContain("GRID_PLACEHOLDER_ID");
   });
 

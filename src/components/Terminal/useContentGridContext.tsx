@@ -826,7 +826,7 @@ export function useContentGridContext({
     // for the transition window so the single chunked pass is the only resize;
     // the lock's unlock pass is the corrective backstop.
     const layoutChangingClose = isPureClose && !survivorGeometryStable;
-    if (colsChanged || layoutChangingClose) {
+    if (colsChanged || scrollGeoChanged || layoutChangingClose) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(
