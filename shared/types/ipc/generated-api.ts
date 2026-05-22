@@ -129,6 +129,9 @@ export interface GeneratedElectronAPI {
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
     ): Promise<IpcInvokeMap["help:get-folder-path"]["result"]>;
+    getPinnedActionContext(
+      ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
+    ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;

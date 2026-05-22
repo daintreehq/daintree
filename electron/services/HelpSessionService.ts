@@ -349,6 +349,34 @@ export class HelpSessionService {
   }
 
   /**
+   * Renderer-safe sibling of `getActionContextForToken`, keyed on the public
+   * `sessionId` (persisted in `helpPanelStore`) instead of the bearer token.
+   * The HelpPanel footer uses this to surface the pinned worktree/terminal
+   * binding to the user (#8772) without the token ever crossing the IPC
+   * bridge. Returns null for unknown, revoked, or context-less sessions.
+   */
+  getActionContextForSessionId(sessionId: string): ActionContext | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.actionContext ?? null;
+  }
+
+  /**
+   * Session-id keyed sibling of `getWebContentsIdForToken`. Lets the
+   * sessionId-facing IPC handlers (#8772) reject reads from a window other
+   * than the one that minted the session, mirroring the per-window pin from
+   * #7002 without exposing the bearer token. Returns null for unknown or
+   * revoked sessions.
+   */
+  getWebContentsIdForSessionId(sessionId: string): number | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.projectViewWebContentsId;
+  }
+
+  /**
    * Inverse of `terminalBySessionId` for the assistant-turn audit. Returns
    * the help-session id currently bound to a given terminal id, or null
    * when the terminal is not (or no longer) a help-session terminal. Linear

@@ -5,6 +5,7 @@ import type * as HelpSessionServiceModule from "../../services/HelpSessionServic
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
+import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
 
 let cachedHelpService: typeof HelpServiceModule | null = null;
 async function getHelpService(): Promise<typeof HelpServiceModule> {
@@ -71,6 +72,48 @@ async function handleProvisionSession(
   });
 }
 
+/**
+ * Projects an `ActionContext` onto the narrow, display-only snapshot the
+ * HelpPanel footer renders (#8772). Always reads the *active* worktree triple
+ * together — `ActionContext` only carries name/branch for the active worktree,
+ * so mixing in `focusedWorktreeId` would yield an id that doesn't match the
+ * name/branch beside it. The session's tool calls target the active worktree
+ * anyway. Returns null when the snapshot carries no identifying target (neither
+ * worktree nor terminal), so the chip is suppressed rather than rendered empty.
+ */
+export function pinnedSnapshotFromContext(
+  context: ActionContext | null
+): PinnedActionContextSnapshot | null {
+  if (!context) return null;
+  const worktreeId = context.activeWorktreeId ?? null;
+  const worktreeName = context.activeWorktreeName ?? null;
+  const worktreeBranch = context.activeWorktreeBranch ?? null;
+  const terminalId = context.focusedTerminalId ?? null;
+  if (worktreeId === null && terminalId === null) return null;
+  return { worktreeId, worktreeName, worktreeBranch, terminalId };
+}
+
+async function handleGetPinnedActionContext(
+  ctx: import("../types.js").IpcContext,
+  sessionId: string
+): Promise<PinnedActionContextSnapshot | null> {
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  const { helpSessionService } = await getHelpSessionService();
+  // Per-window pin (#7002): only the renderer that minted the session may
+  // read its pinned context. The data is display-only (no token), but
+  // refusing cross-window reads keeps the namespace consistent with the rest
+  // of the per-view isolation discipline.
+  const ownerWebContentsId = helpSessionService.getWebContentsIdForSessionId(sessionId);
+  if (ownerWebContentsId !== null && ownerWebContentsId !== ctx.webContentsId) {
+    console.warn(
+      "[help] getPinnedActionContext: webContents mismatch — refusing cross-window read",
+      { fromWebContents: ctx.webContentsId, owner: ownerWebContentsId }
+    );
+    return null;
+  }
+  return pinnedSnapshotFromContext(helpSessionService.getActionContextForSessionId(sessionId));
+}
+
 async function handleRevokeSession(sessionId: string): Promise<void> {
   const { helpSessionService } = await getHelpSessionService();
   await helpSessionService.revokeSession(sessionId);
@@ -112,6 +155,11 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     revokeSession: op(HELP_METHOD_CHANNELS.revokeSession, handleRevokeSession),
+    getPinnedActionContext: op(
+      HELP_METHOD_CHANNELS.getPinnedActionContext,
+      handleGetPinnedActionContext,
+      { withContext: true }
+    ),
     takePendingHibernation: op(
       HELP_METHOD_CHANNELS.takePendingHibernation,
       handleTakePendingHibernation,

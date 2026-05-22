@@ -474,6 +474,32 @@ describe("HelpSessionService", () => {
     expect(service.getActionContextForToken(noCtx.token)).toBeNull();
   });
 
+  it("getActionContextForSessionId returns the snapshot keyed on the public session id and null for unknown / revoked / context-less sessions (#8772)", async () => {
+    const withCtx = await service.provisionSession({
+      ...provisionInput(),
+      actionContext: { focusedWorktreeId: "wt-1", focusedTerminalId: "term-9" },
+    });
+    if (!withCtx) throw new Error("expected result");
+
+    expect(service.getActionContextForSessionId(withCtx.sessionId)).toEqual({
+      focusedWorktreeId: "wt-1",
+      focusedTerminalId: "term-9",
+    });
+    expect(service.getActionContextForSessionId("not-a-real-session")).toBeNull();
+    expect(service.getActionContextForSessionId("")).toBeNull();
+
+    await service.revokeSession(withCtx.sessionId);
+    expect(service.getActionContextForSessionId(withCtx.sessionId)).toBeNull();
+
+    const noCtx = await service.provisionSession({
+      ...provisionInput(),
+      projectId: "proj-noctx-sid",
+      projectPath: "/tmp/proj-noctx-sid",
+    });
+    if (!noCtx) throw new Error("expected result");
+    expect(service.getActionContextForSessionId(noCtx.sessionId)).toBeNull();
+  });
+
   it("getWebContentsIdForToken returns the per-session pin when two sessions are minted from different views", async () => {
     // Distinct projectIds so the single-backend invariant (#7509) doesn't
     // displace `a` when `b` is provisioned. The intent of this test is the

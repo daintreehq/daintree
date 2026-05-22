@@ -179,7 +179,10 @@ vi.mock("@shared/types/agentSettings", () => ({
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
+  actionService: {
+    dispatch: (...args: unknown[]) => mockDispatch(...args),
+    getContext: () => ({}),
+  },
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -392,6 +395,7 @@ beforeEach(() => {
           markTerminal: mockMarkTerminal,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,
