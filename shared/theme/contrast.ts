@@ -98,6 +98,43 @@ export function contrastRatio(foreground: string, background: string): number {
 
 export { isHexColor };
 
+// Surfaces the accent renders against as text/icon tint (`text-accent-primary`).
+// Mirrors the `text-primary` surface set in CONTRAST_PAIRS.
+const ACCENT_SURFACE_BACKGROUNDS: AppThemeTokenKey[] = [
+  "surface-grid",
+  "surface-sidebar",
+  "surface-canvas",
+  "surface-panel",
+  "surface-panel-elevated",
+];
+
+const ACCENT_MIN_CONTRAST = 4.5;
+
+/**
+ * Returns true when the scheme's accent fails WCAG AA 4.5:1 either as button-label
+ * text (`accent-foreground` over `accent-primary`) or as accent-tinted text on any
+ * of the main theme surfaces (`accent-primary` over `surface-*`). Pass the scheme
+ * already patched with the override via `applyAccentOverrideToScheme`. Non-hex token
+ * values are skipped rather than flagged — they cannot be evaluated numerically.
+ */
+export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
+  const accent = scheme.tokens["accent-primary"];
+  if (!isHexColor(accent)) return false;
+
+  const accentForeground = scheme.tokens["accent-foreground"];
+  if (
+    isHexColor(accentForeground) &&
+    contrastRatio(accentForeground, accent) < ACCENT_MIN_CONTRAST
+  ) {
+    return true;
+  }
+
+  return ACCENT_SURFACE_BACKGROUNDS.some((key) => {
+    const background = scheme.tokens[key];
+    return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
+  });
+}
+
 export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
 
