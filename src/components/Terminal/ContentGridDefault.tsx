@@ -2,7 +2,7 @@ import React, { useCallback } from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
+import { GRID_MIN_PANEL_ROWS, MIN_TERMINAL_WIDTH_PX, pxForRows } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
@@ -16,6 +16,12 @@ import { GridShell } from "./GridShell";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import type { ContentGridContext } from "./useContentGridContext";
+
+// Non-scroll row floor: the small minimum a row shrinks to before the grid has
+// to scroll. Rows stretch above it (`1fr`) to fill the viewport when there is
+// room. Mirrors `gridRowsOverflow`'s per-row minimum so the scroll-mode flip
+// lines up exactly with the point this floor would overflow.
+const NON_SCROLL_ROW_MIN_PX = pxForRows(GRID_MIN_PANEL_ROWS);
 
 export function ContentGridDefault({
   ctx,
@@ -78,7 +84,7 @@ export function ContentGridDefault({
                   gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
                   gridAutoRows: ctx.isScrollMode
                     ? `${ctx.scrollRowHeight}px`
-                    : `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
+                    : `minmax(${NON_SCROLL_ROW_MIN_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
                   overflowX: "hidden",

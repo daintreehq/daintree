@@ -38,6 +38,7 @@ import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
   computeScrollRowHeight,
+  gridRowsOverflow,
   GRID_TRANSITION_DURATION_MS,
 } from "@/lib/terminalLayout";
 import {
@@ -604,21 +605,21 @@ export function useContentGridContext({
     hysteresisGridCols,
   ]);
 
-  // Scroll mode: once the grid would need more than two rows (or holds 5+
-  // panels) it stops trying to fit everything and becomes a vertical scan
-  // surface with fixed-height rows. Fixed rows — rather than a `1fr` stretch —
-  // are what keep closing a panel cheap: a close never restretches and resizes
-  // every surviving terminal.
+  // Scroll mode is the last resort: the grid scrolls only once its rows would
+  // overflow the visible height even at the small `GRID_MIN_PANEL_ROWS` floor.
+  // Panel count never triggers it — a tall display fits many rows first. When
+  // it does scroll, rows are fixed-height (not a `1fr` stretch) so closing a
+  // panel never restretches and resizes every surviving terminal.
   //
-  // The scroll-mode count uses real grid groups (`tabGroups.length`), not
+  // The row count uses real grid groups (`tabGroups.length`), not
   // `gridItemCount`: a drag placeholder must not flip row-height mode mid-drag.
   // `closingIds.size` is added back so an in-flight optimistic close keeps the
-  // pre-close count — a 5→4 close otherwise exits scroll mode on the click path
-  // and restretches the survivors, the exact resize fixed rows exist to avoid.
-  // The layout settles to quad mode once the canonical commit clears `closingIds`.
+  // pre-close count — a close otherwise exits scroll mode on the click path and
+  // restretches the survivors, the exact resize fixed rows exist to avoid. The
+  // layout settles once the canonical commit clears `closingIds`.
   const scrollModeCount = tabGroups.length + closingIds.size;
   const scrollModeRows = gridCols > 0 ? Math.ceil(scrollModeCount / gridCols) : scrollModeCount;
-  const isScrollMode = scrollModeCount >= 5 || scrollModeRows > 2;
+  const isScrollMode = gridRowsOverflow(scrollModeRows, gridHeight);
   const scrollRowHeight = useMemo(() => computeScrollRowHeight(gridHeight), [gridHeight]);
 
   const layoutTransition: Transition = useMemo(

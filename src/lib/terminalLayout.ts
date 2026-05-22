@@ -39,10 +39,9 @@ export const COMFORTABLE_PANEL_HEIGHT_PX = 520;
 
 /**
  * Hard upper bound on automatic columns. Subitizing and multiple-object
- * tracking both land at ~4 items; the automatic grid never exceeds it. The
- * count-driven model in practice tops out at 3 (exactly 3 panels) and settles
- * at 2 for 4+ — see `desiredAutoCols`. The explicit `fixed-columns` strategy is
- * the escape hatch for a denser overview.
+ * tracking both land at ~4 items; the size-driven grid never exceeds it, so a
+ * very wide display tops out at a 4-column scan surface rather than sprawling
+ * further. The explicit `fixed-columns` strategy is the escape hatch for more.
  */
 export const AUTO_GRID_MAX_COLS = 4;
 
@@ -178,18 +177,17 @@ export function maxFeasibleCols(width: number, minPanelWidth: number): number {
 }
 
 /**
- * Count-driven desired column count — the predictable progression the user
- * feels when opening panels, *before* the readability gate is applied:
- *   1 → 1, 2 → 2, 3 → 3, 4+ → 2 (the two-column monitoring rail).
- * Four-plus deliberately settles at two columns rather than chasing width;
- * `fixed-columns` is the manual escape hatch for a denser overview.
+ * The automatic grid packs panels toward a *reasonably small* minimum so it
+ * fits as many as possible on screen before it ever scrolls. These are the
+ * floors panels shrink down to — not a comfortable target.
+ *   - 60 columns: a terminal stays monitorable well below the 80-column
+ *     "comfortable" width. 60 keeps agent output legible while letting a wide
+ *     display carry 3-4 columns.
+ *   - 16 rows: enough to watch an agent's recent activity. Small on purpose so
+ *     a tall display packs several rows in before the grid has to scroll.
  */
-export function desiredAutoCols(count: number): number {
-  if (count <= 1) return 1;
-  if (count === 2) return 2;
-  if (count === 3) return 3;
-  return 2;
-}
+export const GRID_MIN_PANEL_COLS = 60;
+export const GRID_MIN_PANEL_ROWS = 16;
 
 /**
  * Breakpoint hysteresis (Schmitt trigger). `target` is the freshly computed
@@ -226,19 +224,17 @@ export function applyHysteresis(
 }
 
 /**
- * The automatic grid's column count: a count-driven progression gated by how
- * many *measured readable* panels actually fit the container width.
+ * The automatic grid's column count. Size-driven: as many columns as fit the
+ * container at the small `GRID_MIN_PANEL_COLS` floor, capped at
+ * `AUTO_GRID_MAX_COLS` and never more than the panel count.
  *
- * - `comfortable` density gates on 80-column panels; `compact` on 64-column.
- * - Three panels render three-across only when three readable panels fit,
- *   otherwise fall back to 2 (or 1 on a genuinely tiny container).
- * - Four-plus panels settle at two columns; `compact` may use three on a
- *   genuinely wide container as a deliberate density choice.
- * - `previousCols` enables width hysteresis (see `applyHysteresis`).
+ * A wide display therefore carries 3-4 columns; a typical laptop 1-2. Panels
+ * stretch to fill the column track when there is room and shrink toward the
+ * floor as more open — the grid fits as much as it can across before it has
+ * to add scrolling rows.
  *
- * `width === null` (first paint) assumes the count-driven ideal fits, so the
- * grid lands on its predictable shape immediately and only narrows once a real
- * measurement proves a column would be unreadable.
+ * `previousCols` enables width hysteresis (see `applyHysteresis`).
+ * `width === null` (first paint) assumes the count-justified shape fits.
  */
 export function computeAutomaticGridCols({
   count,
@@ -256,43 +252,56 @@ export function computeAutomaticGridCols({
   if (count <= 1) return 1;
   if (count === 2) return 2;
 
-  const readableCols = density === "compact" ? COMPACT_GRID_MIN_COLS : READABLE_GRID_MIN_COLS;
-  const minPanelWidth = pxForCols(readableCols, metrics);
+  // Compact density packs to a tighter floor; comfortable uses the standard one.
+  const minCols = density === "compact" ? ABSOLUTE_MIN_COLS : GRID_MIN_PANEL_COLS;
+  const minPanelWidth = pxForCols(minCols, metrics);
 
-  // Count/density-justified ceiling — the most columns this panel count may
-  // use before the width gate. Comfortable density follows the pure
-  // count-driven progression (`desiredAutoCols`); compact density (opt-in)
-  // lets a 4+ grid reach three columns on a wide enough container.
-  let maxCols = Math.min(count, desiredAutoCols(count));
-  if (count >= 4 && density === "compact") maxCols = 3;
+  // No empty columns, and never past the at-a-glance ceiling.
+  const countCeiling = Math.min(count, AUTO_GRID_MAX_COLS);
 
-  // Width gate: how many readable panels actually fit. First paint (no
-  // measurement yet) assumes the count-driven ideal fits, so the grid lands
-  // on its predictable shape immediately and only narrows once measured.
-  const feasible = width && width > 0 ? maxFeasibleCols(width, minPanelWidth) : maxCols;
+  // Width gate: how many minimum-width panels fit across. First paint (no
+  // measurement yet) assumes the count-justified shape fits.
+  const feasible = width && width > 0 ? maxFeasibleCols(width, minPanelWidth) : countCeiling;
 
-  const target = Math.min(maxCols, feasible);
-  return applyHysteresis(target, previousCols, width, minPanelWidth, maxCols);
+  const target = Math.min(countCeiling, feasible);
+  return applyHysteresis(target, previousCols, width, minPanelWidth, countCeiling);
 }
 
 /**
- * Fixed row height (px) for scroll mode. Aims for two readable rows plus a
- * peek of the next, clamped between a 24-row floor and a 40-row ceiling so the
- * grid keeps a consistent vertical rhythm and the peek signals "more below".
+ * Whether `rows` rows of panels overflow the visible grid height even at the
+ * `GRID_MIN_PANEL_ROWS` floor. Until they do, the grid fits everything on
+ * screen (rows stretch to fill); once they do, it scrolls. This is the only
+ * thing that puts the grid into scroll mode — panel count never does.
+ */
+export function gridRowsOverflow(
+  rows: number,
+  containerHeight: number | null,
+  metrics: TerminalMetrics = DEFAULT_TERMINAL_METRICS
+): boolean {
+  if (rows <= 1) return false;
+  if (!containerHeight || containerHeight <= 0) return false;
+  const minRow = pxForRows(GRID_MIN_PANEL_ROWS, metrics);
+  const needed = rows * minRow + (rows - 1) * GRID_GAP_PX + GRID_PADDING_PX;
+  return needed > containerHeight;
+}
+
+/**
+ * Row height (px) for scroll mode. The grid only scrolls once even
+ * minimum-height rows overflow the viewport, so scroll rows sit at — or just
+ * above — the `GRID_MIN_PANEL_ROWS` floor: the rows that fit are divided
+ * evenly so they fill the viewport with no wasted strip. The height depends
+ * only on the viewport, never the panel count, so closing a panel in scroll
+ * mode never resizes the survivors.
  */
 export function computeScrollRowHeight(
   containerHeight: number | null,
   metrics: TerminalMetrics = DEFAULT_TERMINAL_METRICS
 ): number {
-  const min = pxForRows(READABLE_MIN_ROWS, metrics);
-  const target = pxForRows(TARGET_GRID_ROWS, metrics);
-  const max = pxForRows(MAX_SCROLL_ROWS, metrics);
-  const twoRowsPlusPeek =
-    containerHeight && containerHeight > 0
-      ? Math.floor((containerHeight - GRID_PEEK_PX - GRID_GAP_PX) / 2)
-      : target;
-  const desired = Math.max(target, twoRowsPlusPeek);
-  return Math.min(max, Math.max(min, desired));
+  const minRow = pxForRows(GRID_MIN_PANEL_ROWS, metrics);
+  if (!containerHeight || containerHeight <= 0) return minRow;
+  const usable = containerHeight - GRID_PADDING_PX;
+  const visibleRows = Math.max(1, Math.floor((usable + GRID_GAP_PX) / (minRow + GRID_GAP_PX)));
+  return Math.max(minRow, Math.floor((usable - (visibleRows - 1) * GRID_GAP_PX) / visibleRows));
 }
 
 /** Layout mode for a given panel count: 1 → single, 2 → split, 3+ → grid. */
