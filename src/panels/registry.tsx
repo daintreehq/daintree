@@ -43,7 +43,7 @@ export interface PanelComponentProps {
   onMinimize?: () => void;
   onRestore?: () => void;
   showRestoreControl?: boolean;
-  gridPanelCount?: number;
+  isMultiPanelGrid?: boolean;
   extensionState?: Record<string, unknown>;
   [key: string]: unknown;
 }

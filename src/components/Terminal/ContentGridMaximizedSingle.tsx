@@ -37,7 +37,7 @@ export function ContentGridMaximizedSingle({
           terminalId={maximizedId}
           isFocused={true}
           isMaximized={true}
-          gridPanelCount={ctx.gridItemCount}
+          isMultiPanelGrid={ctx.gridItemCount > 1}
         />
       </div>
     </div>

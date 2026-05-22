@@ -12,14 +12,14 @@ import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/comp
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
+import { getGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import type { AgentState } from "@/types";
 
 export interface GridPanelProps {
   terminalId: string;
   isFocused: boolean;
   isMaximized?: boolean;
-  gridPanelCount?: number;
-  gridCols?: number;
+  isMultiPanelGrid?: boolean;
   // Group-level ambient agent state (highest urgency across all tabs in a tab group)
   ambientAgentState?: AgentState;
   // Fleet scope render overrides: force input lock, disable per-panel
@@ -52,8 +52,7 @@ export const GridPanel = React.memo(function GridPanel({
   terminalId,
   isFocused,
   isMaximized = false,
-  gridPanelCount,
-  gridCols,
+  isMultiPanelGrid,
   ambientAgentState,
   isFleetScope = false,
   titleOverride,
@@ -80,8 +79,9 @@ export const GridPanel = React.memo(function GridPanel({
   });
 
   const handleToggleMaximize = useCallback(() => {
-    toggleMaximize(terminalId, gridCols, gridPanelCount, getPanelGroup);
-  }, [toggleMaximize, terminalId, gridCols, gridPanelCount, getPanelGroup]);
+    const snapshot = getGridLayoutSnapshot();
+    toggleMaximize(terminalId, snapshot.gridCols, snapshot.gridItemCount, getPanelGroup);
+  }, [toggleMaximize, terminalId, getPanelGroup]);
 
   const handleMinimize = useCallback(() => {
     const panelElement = document.querySelector(`[data-panel-id="${terminalId}"]`);
@@ -143,7 +143,7 @@ export const GridPanel = React.memo(function GridPanel({
       overrides: {
         location: "grid" as const,
         isMaximized,
-        gridPanelCount,
+        isMultiPanelGrid,
         ambientAgentState,
         onFocus: handleFocus,
         onClose: handleClose,
@@ -167,7 +167,7 @@ export const GridPanel = React.memo(function GridPanel({
     terminal,
     isFocused,
     isMaximized,
-    gridPanelCount,
+    isMultiPanelGrid,
     ambientAgentState,
     handleFocus,
     handleClose,

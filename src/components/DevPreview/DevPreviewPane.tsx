@@ -216,7 +216,7 @@ export function DevPreviewPane({
   onTitleChange,
   onMinimize,
   onRestore,
-  gridPanelCount,
+  isMultiPanelGrid,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
@@ -1170,7 +1170,7 @@ export function DevPreviewPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
-      gridPanelCount={gridPanelCount}
+      isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       className={stuckTier >= 1 ? "panel-state-working" : undefined}
     >

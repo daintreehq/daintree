@@ -222,7 +222,7 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
-  gridPanelCount?: number;
+  isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
   ambientAgentState?: AgentState;
@@ -268,7 +268,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   scrollbackRestoreError,
-  gridPanelCount,
+  isMultiPanelGrid = true,
   detectedProcessId,
   ambientAgentState,
   isInputLocked: isInputLockedOverride,
@@ -984,7 +984,7 @@ function TerminalPaneComponent({
   }, [id]);
 
   const isWorking = agentState === "working";
-  const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
+  const allowPing = !isMaximized && (location !== "grid" || isMultiPanelGrid);
 
   const agentHeaderActions = (() => {
     if (!effectiveAgentId) return undefined;
@@ -1044,7 +1044,7 @@ function TerminalPaneComponent({
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}
-      gridPanelCount={gridPanelCount}
+      isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
       onClose={onClose}
       onToggleMaximize={onToggleMaximize}

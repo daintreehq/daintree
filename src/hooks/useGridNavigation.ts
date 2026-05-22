@@ -1,10 +1,6 @@
-import { useMemo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
-import type { TabGroup } from "@shared/types/panel";
-import {
-  subscribeOptimisticClose,
-  getClosingIdsSnapshot,
-} from "@/services/terminal/optimisticPanelClose";
+import { getClosingIdsSnapshot } from "@/services/terminal/optimisticPanelClose";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useShallow } from "zustand/react/shallow";
@@ -60,11 +56,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
-  // Panels optimistically closing are gone from the grid render, so the
-  // keyboard-nav model must drop them too — otherwise arrow keys could target
-  // a cell that is no longer on screen.
-  const closingIds = useSyncExternalStore(subscribeOptimisticClose, getClosingIdsSnapshot);
-
+  // Optimistically-closing panels are excluded from navigation results, but
+  // imperatively at keypress time (see findNearest/findByIndex) — NOT via a
+  // reactive subscription. This hook runs at the App root, so a render-time
+  // `closingIds` subscription would re-render the whole app on every close.
   const gridTerminals = useMemo(
     () =>
       panelIds
@@ -73,10 +68,9 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
           (t) =>
             t &&
             (t.location === "grid" || t.location === undefined) &&
-            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
-            !closingIds.has(t.id)
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         ),
-    [panelIds, panelsById, activeWorktreeId, closingIds]
+    [panelIds, panelsById, activeWorktreeId]
   );
 
   const dockTerminals = useMemo(
@@ -178,35 +172,8 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     void panelIds;
     void panelsById;
     const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    const visible =
-      closingIds.size === 0
-        ? groups
-        : groups.reduce<TabGroup[]>((acc, group) => {
-            const kept = group.panelIds.filter((id) => !closingIds.has(id));
-            if (kept.length === 0) return acc;
-            acc.push(
-              kept.length === group.panelIds.length
-                ? group
-                : {
-                    ...group,
-                    panelIds: kept,
-                    activeTabId: kept.includes(group.activeTabId)
-                      ? group.activeTabId
-                      : (kept[0] ?? ""),
-                  }
-            );
-            return acc;
-          }, []);
-    return visible.length <= maxGridCapacity ? visible : visible.slice(0, maxGridCapacity);
-  }, [
-    getTabGroups,
-    activeWorktreeId,
-    tabGroups,
-    panelIds,
-    panelsById,
-    maxGridCapacity,
-    closingIds,
-  ]);
+    return groups.length <= maxGridCapacity ? groups : groups.slice(0, maxGridCapacity);
+  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById, maxGridCapacity]);
 
   // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
   // track the visual grid through the same sticky boundaries, otherwise arrow
@@ -318,60 +285,62 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const findNearest = useCallback(
     (currentId: string, direction: NavigationDirection): string | null => {
-      if (directionCacheRef.current.source !== gridLayout) {
-        directionCacheRef.current = { source: gridLayout, map: new Map() };
-      }
-      const directionCache = directionCacheRef.current.map;
-
-      const cacheKey = `${currentId}:${direction}`;
-      if (directionCache.has(cacheKey)) {
-        return directionCache.get(cacheKey) ?? null;
-      }
-
       if (rowMajor.length === 0) return null;
 
-      const current = positionById.get(currentId);
-      if (!current) return null;
+      // One navigation step in `direction` from `fromId`, ignoring closing state.
+      const stepOnce = (fromId: string): string | null => {
+        const current = positionById.get(fromId);
+        if (!current) return null;
 
-      let result: string | null = null;
-
-      switch (direction) {
-        case "left":
-        case "right": {
-          const currentIndex = indexById.get(currentId);
-          if (currentIndex === undefined) break;
-
-          if (direction === "right") {
-            const nextIndex = (currentIndex + 1) % rowMajor.length;
-            result = rowMajor[nextIndex]!.terminalId;
-          } else {
-            const prevIndex = (currentIndex - 1 + rowMajor.length) % rowMajor.length;
-            result = rowMajor[prevIndex]!.terminalId;
+        switch (direction) {
+          case "left":
+          case "right": {
+            const currentIndex = indexById.get(fromId);
+            if (currentIndex === undefined) return null;
+            const nextIndex =
+              direction === "right"
+                ? (currentIndex + 1) % rowMajor.length
+                : (currentIndex - 1 + rowMajor.length) % rowMajor.length;
+            return rowMajor[nextIndex]!.terminalId;
           }
-          break;
-        }
-
-        case "up":
-        case "down": {
-          const colBucket = columnBuckets.get(current.col);
-          if (!colBucket || colBucket.length === 0) break;
-
-          const currentColIndex = colBucket.findIndex((p) => p.terminalId === currentId);
-          if (currentColIndex === -1) break;
-
-          if (direction === "down") {
-            const nextIndex = (currentColIndex + 1) % colBucket.length;
-            result = colBucket[nextIndex]!.terminalId;
-          } else {
-            const prevIndex = (currentColIndex - 1 + colBucket.length) % colBucket.length;
-            result = colBucket[prevIndex]!.terminalId;
+          case "up":
+          case "down": {
+            const colBucket = columnBuckets.get(current.col);
+            if (!colBucket || colBucket.length === 0) return null;
+            const colIndex = colBucket.findIndex((p) => p.terminalId === fromId);
+            if (colIndex === -1) return null;
+            const nextIndex =
+              direction === "down"
+                ? (colIndex + 1) % colBucket.length
+                : (colIndex - 1 + colBucket.length) % colBucket.length;
+            return colBucket[nextIndex]!.terminalId;
           }
-          break;
         }
+        return null;
+      };
+
+      // Fast path: nothing closing — use the per-layout direction cache.
+      const closing = getClosingIdsSnapshot();
+      if (closing.size === 0) {
+        if (directionCacheRef.current.source !== gridLayout) {
+          directionCacheRef.current = { source: gridLayout, map: new Map() };
+        }
+        const cache = directionCacheRef.current.map;
+        const cacheKey = `${currentId}:${direction}`;
+        if (cache.has(cacheKey)) return cache.get(cacheKey) ?? null;
+        const result = stepOnce(currentId);
+        cache.set(cacheKey, result);
+        return result;
       }
 
-      directionCache.set(cacheKey, result);
-      return result;
+      // Optimistic close in flight: step past any panel that's hiding. The
+      // direction cache is keyed on layout identity only, so bypass it here.
+      let result = stepOnce(currentId);
+      let guard = rowMajor.length;
+      while (result !== null && closing.has(result) && guard-- > 0) {
+        result = stepOnce(result);
+      }
+      return result !== null && closing.has(result) ? null : result;
     },
     [rowMajor, indexById, columnBuckets, positionById, gridLayout]
   );
@@ -413,7 +382,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const findByIndex = useCallback(
     (index: number): string | null => {
-      return groupRowMajor[index - 1] ?? null;
+      const closing = getClosingIdsSnapshot();
+      const order =
+        closing.size === 0 ? groupRowMajor : groupRowMajor.filter((id) => !closing.has(id));
+      return order[index - 1] ?? null;
     },
     [groupRowMajor]
   );

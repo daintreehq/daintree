@@ -62,6 +62,7 @@ import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
 
 // Stable empty arrays — returned from `useShallow` selectors and memos when
@@ -606,6 +607,13 @@ export function useContentGridContext({
     activeWorktreeId,
     hysteresisGridCols,
   ]);
+
+  // Mirror the live grid layout into a module-level snapshot so
+  // `GridPanel.handleToggleMaximize` can read `gridCols`/`gridItemCount`
+  // imperatively at click time instead of taking them as reactive props.
+  useEffect(() => {
+    setGridLayoutSnapshot({ gridCols, gridItemCount });
+  }, [gridCols, gridItemCount]);
 
   const layoutTransition: Transition = useMemo(
     () => ({
