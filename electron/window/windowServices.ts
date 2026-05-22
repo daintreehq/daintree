@@ -16,7 +16,12 @@ import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isSmokeTest, smokeTestStart, getEarlyPathRefreshPromise } from "../setup/environment.js";
+import {
+  isSmokeTest,
+  smokeTestStart,
+  getEarlyPathRefreshPromise,
+  kickOffEarlyPathRefresh,
+} from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E, shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -193,10 +198,12 @@ export async function setupWindowServices(
   // `isHostStarted()` short-circuits subsequent windows.
   const ptyClient = getPtyClient();
   if (ptyClient && !ptyClient.isHostStarted()) {
-    const earlyPathRefresh = getEarlyPathRefreshPromise();
-    if (earlyPathRefresh) {
-      await earlyPathRefresh;
-    }
+    // Fall back to kicking off the refresh here if it was never started (e.g. a
+    // custom entry path that skips main.ts's app.whenReady kickoff). The kickoff
+    // is idempotent — it returns the cached promise when already running — so
+    // this never double-runs the probe and guarantees the #8625 invariant holds
+    // before the fork rather than silently skipping it on a null promise.
+    await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
     ptyClient.start();
   }
 

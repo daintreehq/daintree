@@ -378,6 +378,19 @@ export class PtyClient extends EventEmitter {
     if (this.needsRespawn) {
       this.needsRespawn = false;
       this.respawnPending();
+    } else if (this.pendingSpawns.size > 0) {
+      // Initial host-ready replay (#8827). With deferred start the host forks
+      // only after the early PATH refresh, so any spawn requested during that
+      // window had its send() dropped — the host's message listener isn't
+      // attached until it emits "ready" (also true for the brief construct→
+      // ready window on the non-deferred path). Replay those spawns now so a
+      // terminal launched before the host was ready isn't silently lost.
+      // Double-spawn-safe: on the first "ready" no spawn could have been
+      // delivered yet. The restart-only side effects (port refresh, stale-kill
+      // clearing) stay in respawnPending() above.
+      for (const [id, options] of this.pendingSpawns) {
+        this.send({ type: "spawn", id, options });
+      }
     }
     const pendingPortWindowIds = new Set(this.pendingMessagePorts.keys());
     this.flushPendingMessagePorts();

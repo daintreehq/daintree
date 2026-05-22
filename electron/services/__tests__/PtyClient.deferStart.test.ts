@@ -116,4 +116,46 @@ describe("PtyClient deferStart", () => {
 
     client.dispose();
   });
+
+  it("replays a spawn requested before the deferred host was ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    // Spawn while the host has not forked yet — the send() is dropped (no child).
+    client.spawn("t1", { cwd: "/tmp", cols: 80, rows: 30 });
+    expect(mockChild.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "spawn", id: "t1" })
+    );
+
+    // Fork the host, then signal ready — the queued spawn must be replayed.
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "spawn", id: "t1" })
+    );
+
+    client.dispose();
+  });
+
+  it("queues a MessagePort requested before start() and flushes it on ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+    const port = { close: vi.fn(), postMessage: vi.fn(), start: vi.fn() };
+
+    // No host child yet — the port is queued rather than forwarded.
+    client.connectMessagePort(7, port as never);
+    expect(mockChild.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "connect-port", windowId: 7 }),
+      expect.anything()
+    );
+
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "connect-port", windowId: 7 }),
+      [port]
+    );
+
+    client.dispose();
+  });
 });
