@@ -74,6 +74,7 @@ export interface AgentSettings {
 export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   claude: "--dangerously-skip-permissions",
   gemini: "--yolo",
+  antigravity: "--dangerously-skip-permissions",
   codex: "--dangerously-bypass-approvals-and-sandbox",
   cursor: "--force",
   interpreter: "--auto_run",

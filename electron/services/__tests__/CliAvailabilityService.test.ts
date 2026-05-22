@@ -188,12 +188,12 @@ describe("CliAvailabilityService", () => {
         expect(detail?.authConfirmed).toBe(false);
       }
 
-      // Should have called execFileSync 15 times (once for each CLI).
+      // Should have called execFileSync 16 times (once for each CLI).
       // Fallback probes (native paths, npm-global, WSL) run via async execFile and
       // only fire when the which/where probe returns missing — in this test
       // every agent succeeds on the first probe, so execFileSync count
       // matches the registry size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(15);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
 
       // stdio is now [ignore, pipe, ignore] so we can capture the resolved
       // path from stdout while still suppressing any TTY output on stderr.
@@ -237,6 +237,7 @@ describe("CliAvailabilityService", () => {
         aider: "missing",
         claude: "missing",
         gemini: "missing",
+        antigravity: "missing",
         codex: "missing",
         opencode: "missing",
         cursor: "missing",
@@ -675,11 +676,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 15 successful primary calls + 14 BusyBox-style bare-`which` retries
-      // (the 14 agents whose mock throws a generic `Error` with no errno
+      // 16 primary calls (one per registry entry) + 15 BusyBox-style bare-`which`
+      // retries (the 15 agents whose mock throws a generic `Error` with no errno
       // code — which `probeViaShell` retries without `-a` to recover
       // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(29);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(31);
     });
 
     it("works on cold start before initial check", async () => {
@@ -707,9 +708,10 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(15);
+      expect(executionOrder).toHaveLength(16);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
+      expect(executionOrder).toContain("agy");
       expect(executionOrder).toContain("codex");
       expect(executionOrder).toContain("opencode");
       expect(executionOrder).toContain("cursor-agent");
@@ -736,7 +738,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(15);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -745,19 +747,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(30);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(32);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(15);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(15);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
     });
   });
 

@@ -29,7 +29,11 @@ export const config: AgentConfig = {
     tier: "experimental",
   },
   shortcut: "Cmd/Ctrl+Alt+G",
-  tooltip: "quick exploration",
+  // Gemini CLI for consumer accounts (free, AI Pro, AI Ultra) is being
+  // discontinued on 2026-06-18 in favour of Antigravity (`agy`). Enterprise
+  // Gemini Code Assist keeps Gemini CLI. See issue #8808 and the
+  // `antigravity` entry for the consumer successor.
+  tooltip: "Replaced by Antigravity (agy) for consumer accounts in June 2026",
   version: {
     args: ["--version"],
     githubRepo: "google-gemini/gemini-cli",

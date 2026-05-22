@@ -522,6 +522,7 @@ import { config as claudeConfig } from "./agents/claude.js";
 import { config as opencodeConfig } from "./agents/opencode.js";
 import { config as aiderConfig } from "./agents/aider.js";
 import { config as geminiConfig } from "./agents/gemini.js";
+import { config as antigravityConfig } from "./agents/antigravity.js";
 import { config as codexConfig } from "./agents/codex.js";
 import { config as cursorConfig } from "./agents/cursor.js";
 import { config as copilotConfig } from "./agents/copilot.js";
@@ -567,6 +568,7 @@ export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   opencode: opencodeConfig,
   aider: aiderConfig,
   gemini: geminiConfig,
+  antigravity: antigravityConfig,
   codex: codexConfig,
   cursor: cursorConfig,
   copilot: copilotConfig,

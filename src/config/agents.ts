@@ -52,6 +52,7 @@ export function getAgentIds(): string[] {
 export const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
   gemini: "Quick exploration and broad knowledge lookup",
+  antigravity: "Google's agy — successor to Gemini CLI for consumer accounts",
   codex: "Careful, methodical runs with sandboxed execution",
   opencode: "Provider-agnostic, open-source flexibility",
   cursor: "Cursor's agentic coding assistant",
