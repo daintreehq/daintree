@@ -290,7 +290,9 @@ describe("windowServices workspace prewarm ordering (#8828)", () => {
 
   it("only sets the IPC-visible ref after PTY-ready, never before", () => {
     const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
-    expect(order(actions, "setWorkspaceClientRef")).toBeGreaterThan(order(actions, "ptyWaitForReady"));
+    expect(order(actions, "setWorkspaceClientRef")).toBeGreaterThan(
+      order(actions, "ptyWaitForReady")
+    );
   });
 
   it("continues startup when prewarm throws synchronously (PTY-ready and ref still happen)", () => {
