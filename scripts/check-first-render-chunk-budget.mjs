@@ -319,9 +319,7 @@ function compareToBaseline(report, threshold) {
   lines.push("");
   lines.push(`- baseline gzip: ${baselineTotalGzip} bytes`);
   lines.push(`- current gzip:  ${currentTotalGzip} bytes`);
-  lines.push(
-    `- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`
-  );
+  lines.push(`- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`);
 
   mkdirSync(path.dirname(SUMMARY_FILE), { recursive: true });
   writeFileSync(SUMMARY_FILE, lines.join("\n") + "\n");
