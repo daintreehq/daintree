@@ -1137,6 +1137,33 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses the typed-name Enter submit while the cooldown is active", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete it?"
+        confirmLabel="Delete worktree"
+        onConfirm={onConfirm}
+        variant="destructive"
+        typedNameTarget="my-thing"
+        confirmCooldownMs={1200}
+      />
+    );
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    fireEvent.change(input, { target: { value: "my-thing" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it("restarts the cooldown when cooldownKey changes while staying open", () => {
     const props = {
       isOpen: true as const,

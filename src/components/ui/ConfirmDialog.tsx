@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { AppDialog, type DialogInitialFocus, type DialogZIndex } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 
@@ -111,7 +111,12 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     Boolean(isOpen && confirmCooldownMs && confirmCooldownMs > 0)
   );
 
-  useEffect(() => {
+  // useLayoutEffect (not useEffect) so the re-arm is synchronous before paint:
+  // when the singleton dialog transitions isOpen false→true, or cooldownKey
+  // changes to a freshly-promoted item while staying open, the button must
+  // already be disabled in the first painted frame — a passive effect would
+  // leave a one-frame enabled gap that defeats the read-time guarantee.
+  useLayoutEffect(() => {
     if (!isOpen || !confirmCooldownMs || confirmCooldownMs <= 0) {
       setIsCooldownActive(false);
       return;

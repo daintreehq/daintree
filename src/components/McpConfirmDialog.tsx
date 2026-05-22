@@ -56,7 +56,14 @@ export function McpConfirmDialog() {
     // queued item could outlive main's 30s deadline and degrade to a generic
     // timeout error instead of `CONFIRMATION_TIMEOUT`.
     const elapsed = Date.now() - enqueuedAt;
-    const remaining = Math.max(500, CONFIRMATION_TIMEOUT_MS - elapsed);
+    // Destructive dispatches disable the confirm button for CONFIRM_COOLDOWN_MS
+    // after promotion. A deeply-queued item could otherwise have less budget
+    // left than the cooldown and auto-time-out before the user can ever click —
+    // so floor the window above the cooldown for those. The floor still lands
+    // under main's 30s deadline (28s budget + ~1.5s), preserving the clean
+    // CONFIRMATION_TIMEOUT outcome.
+    const floor = current.danger === "confirm" ? CONFIRM_COOLDOWN_MS + 300 : 500;
+    const remaining = Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed);
     const timer = setTimeout(() => {
       resolveOnce(requestId, "timeout");
     }, remaining);
