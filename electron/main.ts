@@ -81,13 +81,9 @@ import {
 import { projectStore } from "./services/ProjectStore.js";
 import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
 import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
-import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
-import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
-import { initializeScratchCleanup } from "./services/ScratchCleanupService.js";
-import { startAssistantScratchCleanup } from "./services/AssistantScratchService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
-import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
+import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 
@@ -175,10 +171,27 @@ if (!gotTheLock) {
   // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
   // restore set; surfacing per-panel quarantine to the renderer.
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
+
+  // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
+  // complete before getSharedDb() opens the file. Dynamic import removes
+  // main.ts as a static-graph importer of this service; shutdown.ts and
+  // globalServicesInit.ts still pull it in via their own eager paths, so the
+  // module remains on the eager graph — the win is keeping the boot path
+  // free of an additional static edge and the sync probe off the
+  // top-of-module evaluation. The 200ms startMaintenance() timer + suspend
+  // listener wiring is handled by the `database-maintenance` deferred task
+  // in globalServicesInit. See #8817.
+  const { initializeDatabaseMaintenance } =
+    await import("./services/DatabaseMaintenanceService.js");
   initializeDatabaseMaintenance();
-  initializeTrashedPidCleanup();
-  initializeScratchCleanup();
-  startAssistantScratchCleanup();
+
+  // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
+  // GPU process spawns (first BrowserWindow creation), so it sees crashes in
+  // the small window between createWindow() and renderer-first-interactive.
+  // Deferring it to the post-first-interactive queue would silently drop GPU
+  // crashes during startup. Static import is fine here — the service module
+  // is already pulled into the eager graph via AppHydrationService,
+  // CrashRecoveryService, and the ipc/handlers/app/* handlers.
   initializeGpuCrashMonitor();
 
   const windowRegistry = new WindowRegistry();

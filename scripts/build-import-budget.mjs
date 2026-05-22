@@ -19,7 +19,18 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 
-const external = ["electron", "node-pty", "better-sqlite3", "copytree"];
+// Mirror the `external` list in scripts/build-main.mjs so the budget graph
+// matches the real build. Drifting out of sync silently changes coverage
+// (e.g. a missed native module turns a .node loader error into a hard build
+// failure, blocking baseline regeneration).
+const external = [
+  "electron",
+  "@parcel/watcher",
+  "node-pty",
+  "better-sqlite3",
+  "win-job-object",
+  "copytree",
+];
 
 const METAFILE_OUT = path.join(root, "dist-electron", "eager-import-meta.json");
 
