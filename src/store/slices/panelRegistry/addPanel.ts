@@ -10,7 +10,7 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
-import { getXtermOptions } from "@/config/xtermConfig";
+import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
@@ -489,12 +489,11 @@ export const createAddPanelActions = (
 
         // For offscreen/inactive agents, prewarmTerminal's fit() already handles
         // initial PTY resize through settled strategy. Only send explicit resize
-        // for active grid spawns where fit() is skipped.
+        // for active grid spawns where fit() is skipped. Cell metrics come from
+        // calculateTerminalDimensions so the lineHeight assumption stays in sync
+        // with xtermConfig (1.0 — see BASE_TERMINAL_OPTIONS).
         if (!offscreenOrInactive) {
-          const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
-          const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
-          const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
-          const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
+          const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
         }
       }

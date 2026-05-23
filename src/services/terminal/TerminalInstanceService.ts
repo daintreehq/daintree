@@ -311,6 +311,15 @@ class TerminalInstanceService {
     this.webGLManager.setHardwareAvailable(available);
   }
 
+  // Triggered when the renderer receives a new ResourceProfilePayload — the
+  // thresholds have already been written into TerminalWebGLConfig by the time
+  // this runs, so we just nudge the manager to re-check its mode against the
+  // new band. Without this, a profile downgrade can leave more wants on WebGL
+  // than the new upper allows until the next consumer event happens to land.
+  refreshWebGLMode(): void {
+    this.webGLManager.refreshMode();
+  }
+
   notifyUserInput(id: string, data = ""): void {
     this.onUserInput(id, data);
   }

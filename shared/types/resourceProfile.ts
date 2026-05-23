@@ -9,14 +9,21 @@ export interface ResourceProfileConfig {
   processTreePollInterval: number;
   /** ProjectStatsService polling interval (ms) */
   projectStatsPollInterval: number;
-  /** Max WebGL contexts in the renderer */
-  maxWebGLContexts: number;
   /**
-   * Passive-mode gate: once this many agent terminals hold or are queued for a
-   * WebGL context, new acquisitions are suppressed (DOM renderer) to stop
-   * release/reacquire churn under large visible fleets.
+   * Upper threshold for the WebGL mode switch. When the count of terminals
+   * wanting WebGL exceeds this value, every active context is released and
+   * the manager flips to DOM-mode. Must stay below 16 to leave headroom for
+   * Chromium's per-renderer WebGL-context cap.
    */
-  passiveWebGLThreshold: number;
+  webglUpperThreshold: number;
+  /**
+   * Lower threshold for the WebGL mode switch. Once the count drops to this
+   * value or below, the manager flips back to WebGL-mode and re-attaches an
+   * addon to every want via a rAF-staggered drain. The gap between upper and
+   * lower is the hysteresis band — opening/closing one panel at the boundary
+   * will not flap the fleet.
+   */
+  webglLowerThreshold: number;
   /** FetchScheduler focused (isCurrent) fetch interval (ms) */
   fetchIntervalActiveMs: number;
   /** FetchScheduler background (non-current) fetch interval (ms) */
@@ -63,8 +70,8 @@ export interface ResourceProfilePayload {
  * - pollIntervalBackground: 10000 (WorkspaceService DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS)
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
  * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
- * - maxWebGLContexts: 16 (TerminalWebGLConfig initial value)
- * - passiveWebGLThreshold: 12 (TerminalWebGLConfig initial value)
+ * - webglUpperThreshold: 12 (TerminalWebGLConfig initial value)
+ * - webglLowerThreshold: 10 (TerminalWebGLConfig initial value)
  * - memoryPressureInactiveMs: 1800000 (HibernationService MEMORY_PRESSURE_INACTIVE_MS = 30min)
  */
 export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileConfig> = {
@@ -73,11 +80,11 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 5000,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
-    // Performance mode disables the passive gate (threshold == max) so all
-    // slots fill before DOM fallback kicks in. Only reached under low-pressure
-    // conditions, so coexisting WebGL consumers have ample budget.
-    maxWebGLContexts: 24,
-    passiveWebGLThreshold: 24,
+    // Performance pushes closer to Chromium's 16-context cap. Higher upper +
+    // 2-slot hysteresis still leaves room for devtools / OffscreenCanvas while
+    // letting more agents render through WebGL simultaneously.
+    webglUpperThreshold: 14,
+    webglLowerThreshold: 12,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
     lowMemoryFreeThresholdMb: null,
     fetchIntervalActiveMs: 20_000,
@@ -90,8 +97,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 10000,
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
-    maxWebGLContexts: 16,
-    passiveWebGLThreshold: 12,
+    webglUpperThreshold: 12,
+    webglLowerThreshold: 10,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
     lowMemoryFreeThresholdMb: 768,
     fetchIntervalActiveMs: 30_000,
@@ -108,8 +115,10 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     pollIntervalBackground: 20000,
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
-    maxWebGLContexts: 8,
-    passiveWebGLThreshold: 8,
+    // Efficiency kicks to DOM-mode sooner on constrained hardware where each
+    // active WebGL context is comparatively more expensive.
+    webglUpperThreshold: 8,
+    webglLowerThreshold: 6,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
     lowMemoryFreeThresholdMb: 1024,
     fetchIntervalActiveMs: 45_000,

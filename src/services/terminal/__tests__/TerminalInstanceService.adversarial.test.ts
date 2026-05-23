@@ -74,6 +74,8 @@ type AdversarialService = {
   webGLManager: {
     ensureContext: (id: string, managed: ManagedTerminal) => void;
     isActive: (id: string) => boolean;
+    getMode: () => "webgl" | "dom";
+    getWantsSize: () => number;
   };
   resizeController: {
     fit: (id: string) => void;
@@ -190,7 +192,8 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
 
 describe("TerminalInstanceService adversarial", () => {
   let service: AdversarialService;
-  let originalMaxContexts: number;
+  let originalUpperThreshold: number;
+  let originalLowerThreshold: number;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -223,7 +226,8 @@ describe("TerminalInstanceService adversarial", () => {
     service.instances.clear();
 
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-    originalMaxContexts = TerminalWebGLManager.MAX_CONTEXTS;
+    originalUpperThreshold = TerminalWebGLManager.UPPER_THRESHOLD;
+    originalLowerThreshold = TerminalWebGLManager.LOWER_THRESHOLD;
     await preloadMockWebglAddon();
   });
 
@@ -231,7 +235,7 @@ describe("TerminalInstanceService adversarial", () => {
     service.dispose();
     document.body.innerHTML = "";
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-    TerminalWebGLManager.setMaxContexts(originalMaxContexts);
+    TerminalWebGLManager.setWebglThresholds(originalUpperThreshold, originalLowerThreshold);
     vi.useRealTimers();
   });
 
@@ -266,9 +270,13 @@ describe("TerminalInstanceService adversarial", () => {
     expect(managedB.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("ATTACH_EVICTS_OLDEST_WEBGL_LEASE_ON_EXHAUSTION", async () => {
+  it("ATTACH_FLIPS_TO_DOM_WHEN_WANTS_EXCEEDS_UPPER_THRESHOLD", async () => {
+    // The previous per-context LRU eviction model is gone. The manager now
+    // tracks a count of wanters and flips wholesale to DOM mode when wants
+    // exceed the upper threshold. Set upper=1, lower=0: the second attach
+    // pushes wants to 2, crosses upper, and releases both contexts together.
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
-    TerminalWebGLManager.setMaxContexts(1);
+    TerminalWebGLManager.setWebglThresholds(1, 0);
 
     const managedA = makeManaged({
       kind: "terminal",
@@ -287,12 +295,21 @@ describe("TerminalInstanceService adversarial", () => {
     vi.spyOn(service.resizeController, "fit").mockImplementation(() => undefined);
 
     service.attach("a", document.createElement("div"));
-    service.attach("b", document.createElement("div"));
+    // 'a' attached cleanly (1 wants, 1 upper).
+    expect(service.webGLManager.isActive("a")).toBe(true);
+    expect(testState.webglAddons).toHaveLength(1);
 
-    expect(testState.webglAddons).toHaveLength(2);
-    expect(testState.webglAddons[0]!.dispose).toHaveBeenCalledTimes(1);
+    service.attach("b", document.createElement("div"));
+    // Crossing upper (1→2 wants) flips to DOM — both released, neither active.
+    expect(service.webGLManager.getMode()).toBe("dom");
     expect(service.webGLManager.isActive("a")).toBe(false);
-    expect(service.webGLManager.isActive("b")).toBe(true);
+    expect(service.webGLManager.isActive("b")).toBe(false);
+    // ensureContext for 'b' evaluates mode BEFORE queueing the attach (the
+    // count from setting wants flips us straight to dom), so only 'a' ever
+    // had an addon constructed. Pin the exact count to lock that ordering.
+    expect(testState.webglAddons).toHaveLength(1);
+    // 'a's addon was disposed by flipToDom.
+    expect(testState.webglAddons[0]!.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("ATTACH_AFTER_DESTROY_RETURNS_NULL", () => {

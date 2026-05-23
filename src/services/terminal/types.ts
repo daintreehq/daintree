@@ -176,14 +176,17 @@ export interface ManagedTerminal {
   ipcListenerCount: number;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
-  // re-acquiring so rapid tab/panel toggles don't thrash addon load/unload.
+  // re-ensuring the addon, so rapid tab/panel toggles don't repeatedly
+  // construct/dispose addons even when the manager-level mode flag is stable.
   webGLRestoreTimer?: number;
 
-  // Visibility-driven WebGL release hysteresis. Hide path holds the context
-  // for ~500ms before releasing so rapid hide→show cycles (panel toggles,
-  // focus oscillation) don't churn the WebGL pool. Authoritative release
-  // paths (tier demotion, agent demotion, destroy, hibernation) cancel this
-  // timer and release immediately.
+  // Visibility-driven WebGL release hysteresis. Hide path holds eligibility
+  // for ~500ms before calling releaseContext, so rapid hide→show cycles don't
+  // repeatedly drop/re-add the terminal to the manager's `wants` set.
+  // Authoritative release paths (tier demotion, agent demotion, destroy,
+  // hibernation) cancel this timer and release immediately. Note: while the
+  // timer is armed, the terminal still counts toward the mode-switch
+  // threshold — see TerminalWebGLManager for the trade-off.
   webGLHideTimer?: number;
 
   // Timestamp of the most recent successful reduceScrollback() — gates the

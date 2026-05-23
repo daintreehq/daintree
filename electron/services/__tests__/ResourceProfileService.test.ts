@@ -864,22 +864,26 @@ describe("ResourceProfileService", () => {
     expect(balanced.pollIntervalBackground).toBe(10000);
     expect(balanced.processTreePollInterval).toBe(2500);
     expect(balanced.projectStatsPollInterval).toBe(5000);
-    expect(balanced.maxWebGLContexts).toBe(16);
-    expect(balanced.passiveWebGLThreshold).toBe(12);
+    expect(balanced.webglUpperThreshold).toBe(12);
+    expect(balanced.webglLowerThreshold).toBe(10);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
     expect(balanced.lowMemoryFreeThresholdMb).toBe(768);
   });
 
-  it("performance and efficiency WebGL ceilings stay pinned", () => {
-    expect(RESOURCE_PROFILE_CONFIGS.performance.maxWebGLContexts).toBe(24);
-    expect(RESOURCE_PROFILE_CONFIGS.performance.passiveWebGLThreshold).toBe(24);
-    expect(RESOURCE_PROFILE_CONFIGS.efficiency.maxWebGLContexts).toBe(8);
-    expect(RESOURCE_PROFILE_CONFIGS.efficiency.passiveWebGLThreshold).toBe(8);
+  it("performance and efficiency WebGL thresholds stay pinned", () => {
+    // Performance pushes closer to Chromium's 16-context cap.
+    expect(RESOURCE_PROFILE_CONFIGS.performance.webglUpperThreshold).toBe(14);
+    expect(RESOURCE_PROFILE_CONFIGS.performance.webglLowerThreshold).toBe(12);
+    // Efficiency kicks to DOM-mode sooner on constrained hardware.
+    expect(RESOURCE_PROFILE_CONFIGS.efficiency.webglUpperThreshold).toBe(8);
+    expect(RESOURCE_PROFILE_CONFIGS.efficiency.webglLowerThreshold).toBe(6);
   });
 
-  it("every profile keeps passiveWebGLThreshold <= maxWebGLContexts", () => {
+  it("every profile keeps webglLowerThreshold <= webglUpperThreshold", () => {
+    // The mode-switch hysteresis assumes lower <= upper. A profile that
+    // inverted them would oscillate forever at the boundary.
     for (const config of Object.values(RESOURCE_PROFILE_CONFIGS)) {
-      expect(config.passiveWebGLThreshold).toBeLessThanOrEqual(config.maxWebGLContexts);
+      expect(config.webglLowerThreshold).toBeLessThanOrEqual(config.webglUpperThreshold);
     }
   });
 
