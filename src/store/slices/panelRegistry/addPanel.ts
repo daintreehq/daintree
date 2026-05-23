@@ -49,6 +49,43 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
   return count;
 }
 
+const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
+
+class TerminalStartupQueue {
+  private readonly tasks: Array<() => Promise<void>> = [];
+  private isDraining = false;
+
+  enqueue(task: () => Promise<void>): void {
+    this.tasks.push(task);
+    void this.drain();
+  }
+
+  private async drain(): Promise<void> {
+    if (this.isDraining) return;
+    this.isDraining = true;
+
+    try {
+      while (this.tasks.length > 0) {
+        const task = this.tasks.shift();
+        if (!task) continue;
+
+        try {
+          await task();
+        } catch (error) {
+          logError("[TerminalStore] Terminal startup task failed", error);
+        }
+      }
+    } finally {
+      this.isDraining = false;
+      if (this.tasks.length > 0) {
+        void this.drain();
+      }
+    }
+  }
+}
+
+const terminalStartupQueue = new TerminalStartupQueue();
+
 export const createAddPanelActions = (
   set: Set,
   get: Get
@@ -457,21 +494,20 @@ export const createAddPanelActions = (
         screenReaderMode: appearance.screenReaderMode,
       });
 
-      // Prewarm ALL terminal types to ensure managed instance exists.
-      // This is critical for terminals in inactive worktrees - they need a managed
-      // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
+      // Prewarm ALL terminal types to ensure the managed instance and data
+      // listeners exist before the backend PTY can emit output. Do not attach
+      // to an offscreen or visible DOM node here. Visible xterm.open() is
+      // gated by spawnStatus below so burst-created panels realize one at a
+      // time instead of all mounting xterm/WebGL during the same grid layout.
       const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-      // When activeWorktreeId is null (hydration in progress), don't treat the
-      // terminal as offscreen — it would be prewarmed in the offscreen container
-      // at -20000px and backgrounded, suppressing data flow from the pty-host.
-      const offscreenOrInactive =
+      const isDockOrInactive =
         location === "dock" ||
         (currentActiveWorktreeId !== null &&
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
       if (!isAgent) {
         terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
-          offscreen: offscreenOrInactive,
+          offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
         });
@@ -482,17 +518,16 @@ export const createAddPanelActions = (
         const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
         terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
-          offscreen: offscreenOrInactive,
+          offscreen: false,
           widthPx,
           heightPx,
         });
 
-        // For offscreen/inactive agents, prewarmTerminal's fit() already handles
-        // initial PTY resize through settled strategy. Only send explicit resize
-        // for active grid spawns where fit() is skipped. Cell metrics come from
-        // calculateTerminalDimensions so the lineHeight assumption stays in sync
-        // with xtermConfig (1.0 — see BASE_TERMINAL_OPTIONS).
-        if (!offscreenOrInactive) {
+        // Only send explicit resize for active grid spawns. Background/dock
+        // terminals can boot at the spawn default and will be resized on reveal.
+        // Cell metrics come from calculateTerminalDimensions so the lineHeight
+        // assumption stays in sync with xtermConfig.
+        if (!isDockOrInactive) {
           const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
         }
@@ -539,70 +574,76 @@ export const createAddPanelActions = (
       return id;
     }
 
-    // Fire env fetch + spawn IPC in the background so the panel render is not
-    // blocked on ~200-500ms of IPC round-trips. Any caller that needs to pipe
-    // input after spawn already gates on agentState (which starts at "working"
-    // for agents and only drops to "idle" once the PTY reports ready).
-    const spawnPromise = (async () => {
-      let mergedEnv: Record<string, string> | undefined = options.env;
+    const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
+
+    // The panel chrome is already committed. Realize backend PTY startup and
+    // visible xterm.open() through a single queue so bulk recipes can add many
+    // panels without making Chromium/xterm settle every terminal in the same
+    // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
+    // lightweight chrome instead of mounting XtermAdapter.
+    terminalStartupQueue.enqueue(async () => {
+      if (get().panelsById[id]?.spawnStatus !== "spawning") return;
+
       try {
-        const [globalEnvVars, projectEnvVars] = await Promise.all([
-          globalEnvClient.get().catch((error: unknown) => {
-            logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
-            return {} as Record<string, string>;
-          }),
-          capturedProjectId
-            ? projectClient.getSettings(capturedProjectId).then(
-                (s) => s?.environmentVariables ?? ({} as Record<string, string>),
-                (error: unknown) => {
-                  logWarn("[TerminalStore] Failed to fetch project environment variables", {
-                    error,
-                  });
-                  return {} as Record<string, string>;
-                }
-              )
-            : Promise.resolve({} as Record<string, string>),
-        ]);
+        let mergedEnv: Record<string, string> | undefined = options.env;
+        try {
+          const [globalEnvVars, projectEnvVars] = await Promise.all([
+            globalEnvClient.get().catch((error: unknown) => {
+              logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+              return {} as Record<string, string>;
+            }),
+            capturedProjectId
+              ? projectClient.getSettings(capturedProjectId).then(
+                  (s) => s?.environmentVariables ?? ({} as Record<string, string>),
+                  (error: unknown) => {
+                    logWarn("[TerminalStore] Failed to fetch project environment variables", {
+                      error,
+                    });
+                    return {} as Record<string, string>;
+                  }
+                )
+              : Promise.resolve({} as Record<string, string>),
+          ]);
 
-        const hasGlobal = Object.keys(globalEnvVars).length > 0;
-        const hasProject = Object.keys(projectEnvVars).length > 0;
-        if (hasGlobal || hasProject) {
-          mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+          const hasGlobal = Object.keys(globalEnvVars).length > 0;
+          const hasProject = Object.keys(projectEnvVars).length > 0;
+          if (hasGlobal || hasProject) {
+            mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+          }
+        } catch (error) {
+          logWarn("[TerminalStore] Failed to fetch environment variables", { error });
         }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch environment variables", { error });
-      }
 
-      const commandToExecute = options.skipCommandExecution ? undefined : options.command;
-      await terminalClient.spawn({
-        id,
-        projectId: capturedProjectId,
-        cwd: options.cwd,
-        shell: options.shell,
-        cols: 80,
-        rows: 24,
-        command: commandToExecute,
-        kind,
-        launchAgentId,
-        title,
-        env: mergedEnv,
-        restore: options.restore,
-        agentLaunchFlags: options.agentLaunchFlags,
-        agentModelId: options.agentModelId,
-        worktreeId: options.worktreeId,
-        agentPresetId: options.agentPresetId,
-        agentPresetColor: options.agentPresetColor,
-        originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-      });
-    })();
+        if (get().panelsById[id]?.spawnStatus !== "spawning") return;
 
-    void spawnPromise.then(
-      () => {
+        const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+        await terminalClient.spawn({
+          id,
+          projectId: capturedProjectId,
+          cwd: options.cwd,
+          shell: options.shell,
+          cols: 80,
+          rows: 24,
+          command: commandToExecute,
+          kind,
+          launchAgentId,
+          title,
+          env: mergedEnv,
+          restore: options.restore,
+          agentLaunchFlags: options.agentLaunchFlags,
+          agentModelId: options.agentModelId,
+          worktreeId: options.worktreeId,
+          agentPresetId: options.agentPresetId,
+          agentPresetColor: options.agentPresetColor,
+          originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+        });
+
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
         // removed during the spawn window, issue a compensating kill to avoid
         // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
         // at the time because the backend had no terminal yet).
         let orphaned = false;
+        let mountedPanel = false;
         set((state) => {
           const current = state.panelsById[id];
           if (!current) {
@@ -610,6 +651,7 @@ export const createAddPanelActions = (
             return state;
           }
           if (current.spawnStatus !== "spawning") return state;
+          mountedPanel = true;
           return {
             panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
           };
@@ -622,8 +664,20 @@ export const createAddPanelActions = (
             });
           });
         }
-      },
-      (error) => {
+
+        if (mountedPanel && shouldWaitForVisibleAttach) {
+          try {
+            await terminalInstanceService.waitForAttachSettled(id, {
+              timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
+            });
+          } catch (error) {
+            logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
+              id,
+              error,
+            });
+          }
+        }
+      } catch (error) {
         logError("[TerminalStore] Failed to spawn terminal", error);
         // Only remove the placeholder we committed. If the id has been reused
         // (e.g. the user closed the panel mid-spawn and a reconnect slot picked
@@ -640,7 +694,7 @@ export const createAddPanelActions = (
           });
         }
       }
-    );
+    });
 
     return id;
   },
