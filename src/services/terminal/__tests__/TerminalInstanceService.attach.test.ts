@@ -56,6 +56,7 @@ type AttachTestService = {
   attach: (id: string, container: HTMLElement) => ManagedTerminal | null;
   detach: (id: string, container: HTMLElement | null) => void;
   destroy: (id: string) => void;
+  waitForAttachSettled: (id: string, options?: { timeoutMs?: number }) => Promise<void>;
   resizeController: {
     fit: (id: string) => void;
     applyResize: (id: string, cols: number, rows: number) => void;
@@ -141,6 +142,7 @@ describe("TerminalInstanceService attach reveal", () => {
 
   afterEach(() => {
     service.instances.clear();
+    document.body.innerHTML = "";
     vi.useRealTimers();
   });
 
@@ -276,6 +278,37 @@ describe("TerminalInstanceService attach reveal", () => {
     service.attach("t1", container);
 
     expect(managed.hostElement.style.opacity).toBe("");
+  });
+
+  it("resolves attach-settled waiters after the post-attach fit pass", async () => {
+    const managed = makeMockManaged("t1");
+    const offscreen = document.createElement("div");
+    offscreen.appendChild(managed.hostElement);
+    service.instances.set("t1", managed);
+
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {});
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+
+    service.attach("t1", container);
+
+    let settled = false;
+    const settledPromise = service.waitForAttachSettled("t1").then(() => {
+      settled = true;
+    });
+
+    vi.advanceTimersByTime(16);
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(service.resizeController.fit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(16);
+    await settledPromise;
+
+    expect(service.resizeController.fit).toHaveBeenCalledWith("t1");
+    expect(settled).toBe(true);
   });
 
   describe("early synchronous resize for warm terminals", () => {

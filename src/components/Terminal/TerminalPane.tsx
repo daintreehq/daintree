@@ -184,6 +184,17 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
+function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-daintree-bg text-sm text-daintree-text/60">
+      <div className="flex items-center gap-2">
+        <Spinner size="sm" className="text-daintree-text/45" />
+        <span>{agentId ? "Starting agent" : "Starting terminal"}</span>
+      </div>
+    </div>
+  );
+}
+
 export interface ActivityState {
   headline: string;
   status: "working" | "waiting" | "success" | "failure";
@@ -1201,6 +1212,8 @@ function TerminalPaneComponent({
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
             onRunAnyway={handleRunAnyway}
           />
+        ) : spawnStatus === "spawning" ? (
+          <TerminalStartupPlaceholder agentId={agentId} />
         ) : (
           <>
             <div className="flex-1 relative min-h-0">
