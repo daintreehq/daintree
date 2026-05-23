@@ -184,6 +184,12 @@ export class ActivityMonitor {
   // Resize suppression
   private resizeSuppressUntil = 0;
 
+  // Focus suppression (#8865). xterm emits CSI I / CSI O on focus changes when
+  // the TUI has enabled DEC mode ?1004; the agent's repaint can arrive after
+  // the 1s echo window closes, so a dedicated longer window is required to
+  // suppress the idle→busy promotion that the repaint would otherwise cause.
+  private focusSuppressUntil = 0;
+
   private readonly onWaitingTimeout?: (id: string, spawnedAt: number) => void;
   private readonly onBootComplete?: (bootCompleteAt: number) => void;
   private bootCompleteCallbackFired = false;
@@ -483,6 +489,7 @@ export class ActivityMonitor {
       if (
         isWorking &&
         !this.isResizeSuppressed(now) &&
+        !this.isFocusSuppressed(now) &&
         (this.state === "busy" ||
           this.inputTracker.pendingInputUntil > 0 ||
           !this.inputTracker.isRecentUserInput(now))
@@ -529,6 +536,7 @@ export class ActivityMonitor {
       this.state === "idle" &&
       hasOutputActivity &&
       !this.isResizeSuppressed(now) &&
+      !this.isFocusSuppressed(now) &&
       !this.inputTracker.isRecentUserInput(now) &&
       this.bootDetector.hasExitedBootState
     ) {
@@ -560,6 +568,7 @@ export class ActivityMonitor {
         this.getVisibleLines &&
         this.state === "idle" &&
         !this.isResizeSuppressed(now) &&
+        !this.isFocusSuppressed(now) &&
         !this.inputTracker.isRecentUserInput(now) &&
         this.bootDetector.hasExitedBootState
       ) {
@@ -582,12 +591,16 @@ export class ActivityMonitor {
         this.lastWorkingIndicatorTimestamp = now;
       }
 
-      if (patternResult.isWorking && !this.isResizeSuppressed(now)) {
+      if (
+        patternResult.isWorking &&
+        !this.isResizeSuppressed(now) &&
+        !this.isFocusSuppressed(now)
+      ) {
         this.becomeBusyFromPattern(patternResult.confidence, now);
       }
     }
 
-    if (this.isResizeSuppressed(now)) {
+    if (this.isResizeSuppressed(now) || this.isFocusSuppressed(now)) {
       return;
     }
 
@@ -636,6 +649,7 @@ export class ActivityMonitor {
       return;
     }
     if (this.isResizeSuppressed(now)) return;
+    if (this.isFocusSuppressed(now)) return;
     // Pre-boot frames are part of the agent's startup chrome — let the boot
     // detector handle them via the regular onData path.
     if (!this.bootDetector.hasExitedBootState) return;
@@ -660,6 +674,12 @@ export class ActivityMonitor {
 
   private noteStructuralWorkingSignal(now: number, confidence: number): void {
     this.lastActivityTimestamp = now;
+    if (this.isFocusSuppressed(now)) {
+      // Focus-triggered repaint is not a structural working signal (#8865).
+      // Reset the debouncer so a single post-focus blip can't accumulate.
+      this.structuralRecoveryDebouncer.reset();
+      return;
+    }
     if (this.inputTracker.isRecentUserInput(now)) {
       // The user just typed; require sustained signal across user input
       // before recovering (matches the regex tier's behavior).
@@ -718,7 +738,10 @@ export class ActivityMonitor {
       return;
     }
 
-    if (this.state !== "busy" && result.stateHint === "busy") {
+    // Focus-triggered TUI redrawn during a suppression window is not new work
+    // (#8865). Skip idle→busy promotion until the window expires; lastActivity
+    // is still refreshed above so the idle timer doesn't drift.
+    if (this.state !== "busy" && result.stateHint === "busy" && !this.isFocusSuppressed(now)) {
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
@@ -776,6 +799,7 @@ export class ActivityMonitor {
     this.patternBuf.reset();
     this.bootDetector.reset();
     this.resizeSuppressUntil = 0;
+    this.focusSuppressUntil = 0;
     this.lastPatternResult = undefined;
     this.lastPatternResultAt = 0;
     this.cpuTracker.reset();
@@ -839,6 +863,10 @@ export class ActivityMonitor {
     this.lastActivityTimestamp = now;
     this.lastDataTimestamp = now;
     if (this.state !== "busy") {
+      // Skip idle→busy on OSC progress while focus suppression is active —
+      // a focus-triggered repaint that also emits OSC 9;4 must not bypass
+      // the suppression window (#8865).
+      if (this.isFocusSuppressed(now)) return;
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
@@ -882,6 +910,27 @@ export class ActivityMonitor {
 
   private isResizeSuppressed(now: number): boolean {
     return this.resizeSuppressUntil > 0 && now < this.resizeSuppressUntil;
+  }
+
+  // Called by `TerminalProcess.write`/`tryWrite` when the renderer forwards a
+  // focus-in or focus-out report to the PTY. Opens a 2s window during which
+  // output cannot promote idle→busy: agent TUIs respond to focus changes by
+  // repainting their prompt, and that repaint frequently arrives after the
+  // 1s INPUT_ECHO_WINDOW_MS expires. Window is bounded — same lesson as
+  // PR #4974: never let a suppression mechanism stick indefinitely.
+  notifyFocus(suppressionMs = 2000): void {
+    this.focusSuppressUntil = Date.now() + suppressionMs;
+    this.workingSignalDebouncer.reset();
+    this.cosmeticRecoveryDebouncer.reset();
+    this.structuralRecoveryDebouncer.reset();
+    // Discard accumulated temperature snapshot so the post-focus redraw gets a
+    // fresh baseline. Unlike resize, focus does not invalidate cell ring-buffer
+    // history or the high-output window — those stay intact.
+    this.simpleOutputTemperature.reset();
+  }
+
+  isFocusSuppressed(now: number = Date.now()): boolean {
+    return this.focusSuppressUntil > 0 && now < this.focusSuppressUntil;
   }
 
   getState(): "busy" | "idle" {

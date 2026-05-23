@@ -127,6 +127,117 @@ describe("TerminalProcess.submit", () => {
     vi.useRealTimers();
   });
 
+  it("routes focus-in (CSI I) to activityMonitor.notifyFocus instead of onInput (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    expect(monitor).toBeTruthy();
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    const result = terminal.tryWrite("\x1b[I");
+
+    expect(result.ok).toBe(true);
+    expect(notifyFocusSpy).toHaveBeenCalledTimes(1);
+    expect(onInputSpy).not.toHaveBeenCalled();
+    // Focus bytes still reach the PTY (vim's FocusGained etc. must keep working).
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b[I");
+  });
+
+  it("routes focus-out (CSI O) to activityMonitor.notifyFocus on write() too (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    terminal.write("\x1b[O");
+
+    expect(notifyFocusSpy).toHaveBeenCalledTimes(1);
+    expect(onInputSpy).not.toHaveBeenCalled();
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b[O");
+  });
+
+  it("normal keystrokes still go through onInput, not notifyFocus (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    terminal.tryWrite("a");
+
+    expect(onInputSpy).toHaveBeenCalledWith("a");
+    expect(notifyFocusSpy).not.toHaveBeenCalled();
+  });
+
+  it("focus event resets the agentOutputTemperature baseline (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const internals = terminal as unknown as {
+      agentOutputTemperature: { reset: () => void };
+      agentOutputContentSnapshot: unknown;
+    };
+    const tempResetSpy = vi.spyOn(internals.agentOutputTemperature, "reset");
+
+    terminal.tryWrite("\x1b[I");
+
+    expect(tempResetSpy).toHaveBeenCalledTimes(1);
+    expect(internals.agentOutputContentSnapshot).toBeUndefined();
+  });
+
+  it("noteAgentOutputActivity respects ActivityMonitor focus suppression (#8865)", () => {
+    const handleActivityState = vi.fn();
+    const ctx = defaultSpawnContext();
+    const terminal = new TerminalProcess(
+      "t-focus-bypass",
+      {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+      },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState } as any,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      ctx,
+      createMockPty()
+    );
+
+    const internals = terminal as unknown as {
+      isAgentLive: boolean;
+      terminalInfo: { agentState: string };
+      activityMonitor: { notifyFocus: (ms?: number) => void };
+      agentOutputContentSnapshot: unknown;
+      noteAgentOutputActivity: (before: unknown) => void;
+      getAgentOutputContentSnapshot: () => unknown;
+    };
+
+    // Force a busy-promoting condition: agent live, state idle, baseline set,
+    // visible delta after focus is non-trivial.
+    Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
+    internals.terminalInfo.agentState = "idle";
+    // Seed the snapshot baseline so the activity check has something to diff
+    // against in the noteAgentOutputActivity call below.
+    internals.agentOutputContentSnapshot = { lines: ["before"] };
+    internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with lots of new"] });
+
+    internals.activityMonitor.notifyFocus(2000);
+    // Clear any busy emissions from startPolling()'s initial state — we only
+    // care about whether noteAgentOutputActivity promotes during the window.
+    handleActivityState.mockClear();
+    internals.noteAgentOutputActivity({ lines: ["before"] });
+
+    const busyCalls = handleActivityState.mock.calls.filter((call) => call[1] === "busy");
+    expect(busyCalls.length).toBe(0);
+  });
+
   it("delays Enter for Copilot (submitEnterDelayMs: 200) so Ink TUI registers input", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });

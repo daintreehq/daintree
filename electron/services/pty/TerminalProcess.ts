@@ -41,6 +41,7 @@ import {
   getSoftNewlineSequence,
   getSubmitEnterDelay,
   isBracketedPaste,
+  isFocusReport,
   delay,
   BRACKETED_PASTE_START,
   BRACKETED_PASTE_END,
@@ -741,7 +742,11 @@ export class TerminalProcess {
       terminal.traceId = traceId || undefined;
     }
     if (this.activityMonitor) {
-      this.activityMonitor.onInput(data);
+      if (isFocusReport(data)) {
+        this.handleFocusInput();
+      } else {
+        this.activityMonitor.onInput(data);
+      }
     }
 
     try {
@@ -770,7 +775,11 @@ export class TerminalProcess {
     }
 
     if (this.activityMonitor) {
-      this.activityMonitor.onInput(data);
+      if (isFocusReport(data)) {
+        this.handleFocusInput();
+      } else {
+        this.activityMonitor.onInput(data);
+      }
     }
 
     const bracketedPaste = isBracketedPaste(data);
@@ -1449,11 +1458,29 @@ export class TerminalProcess {
     const result = this.agentOutputTemperature.observeDelta(Date.now(), {
       changedChars: delta.changedChars,
     });
+    // ActivityMonitor.notifyFocus suppresses its own idle→busy paths, but this
+    // direct call into agentStateService is a parallel promotion path; gate it
+    // on the same window so a focus-triggered TUI repaint can't flip an idle
+    // agent to busy (#8865).
+    if (this.activityMonitor?.isFocusSuppressed()) {
+      return;
+    }
     if (result.stateHint === "busy" && this.terminalInfo.agentState === state) {
       this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
         trigger: "output",
       });
     }
+  }
+
+  // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O
+  // focus report. Mirrors the resize handler's pattern (notifyResize +
+  // agentOutputTemperature.noteResize): open the ActivityMonitor suppression
+  // window AND invalidate the agentOutputTemperature baseline so the redraw
+  // that follows the focus event is treated as a fresh comparison point.
+  private handleFocusInput(): void {
+    this.activityMonitor?.notifyFocus();
+    this.agentOutputTemperature.reset();
+    this.agentOutputContentSnapshot = undefined;
   }
 
   /**
