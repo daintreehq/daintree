@@ -36,6 +36,30 @@ import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
+import {
+  registerForgeProviders,
+  registerForgeProviderImpl,
+} from "./services/forgeProviderRegistry.js";
+import { githubForgeProvider } from "../plugins/builtin/github/main/forgeProvider.js";
+
+// Plugins normally register their forge contributions via `PluginService.activate`
+// in the main process. The workspace-host runs as a separate UtilityProcess
+// with no plugin loader, so its per-process forge registry stays empty and
+// `PullRequestService.resolveProvider` here exits with `hasImpl=false`, leaving
+// every worktree's `linked.pr` permanently undefined (#8870).
+//
+// Pre-registering the built-in `daintree.github` provider unblocks PR detection
+// for the common case. Third-party forge plugins (e.g. GitLab) still won't be
+// visible to PR polling until plugin registrations are propagated from main →
+// workspace-host — tracked as a follow-up.
+registerForgeProviders("daintree.github", [
+  {
+    id: "github",
+    name: "GitHub",
+    matches: ["github.com"],
+  },
+]);
+registerForgeProviderImpl("daintree.github", "github", githubForgeProvider);
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
