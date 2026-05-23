@@ -37,6 +37,7 @@ describe("webContentsLifecycle", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     warnSpy.mockRestore();
   });
 
@@ -166,6 +167,16 @@ describe("webContentsLifecycle", () => {
   });
 
   describe("throttleCpuWebContents / unthrottleCpuWebContents", () => {
+    it("skips CPU throttling when Windows E2E disables cached-view CDP throttles", async () => {
+      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
+      const wc = createMockWc();
+      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
+      await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.isAttached).not.toHaveBeenCalled();
+      expect(wc.debugger.attach).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
     it("throttleCpuWebContents sends Emulation.setCPUThrottlingRate with rate: 4", async () => {
       const wc = createMockWc();
       await throttleCpuWebContents(wc as unknown as Electron.WebContents);

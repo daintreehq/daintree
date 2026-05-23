@@ -257,12 +257,17 @@ function prepareFixture(): void {
   fakeBinDir = path.join(fixtureDir, ".e2e bin");
   mkdirSync(fakeBinDir, { recursive: true });
 
-  const fakeClaude = path.join(fakeBinDir, "claude");
+  const fakeClaudeImplName = process.platform === "win32" ? "claude.js" : "claude";
+  const fakeClaude = path.join(fakeBinDir, fakeClaudeImplName);
 
   writeFileSync(
     fakeClaude,
     [
       "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude code v9.9.9');",
+      "  process.exit(0);",
+      "}",
       `const stopToken = ${JSON.stringify(FAKE_CLAUDE_STOP)};`,
       "console.log('Accessing workspace:');",
       "console.log('');",
@@ -304,7 +309,7 @@ function prepareFixture(): void {
   if (process.platform === "win32") {
     writeFileSync(
       path.join(fakeBinDir, "claude.cmd"),
-      ["@echo off", 'node "%~dp0claude" %*', ""].join("\r\n")
+      ["@echo off", 'node "%~dp0claude.js" %*', ""].join("\r\n")
     );
   }
 

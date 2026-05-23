@@ -215,6 +215,75 @@ describe("WorkspaceService.createWorktree", () => {
     expect(listSpy).not.toHaveBeenCalled();
   });
 
+  it("coalesces concurrent duplicate create requests while the first git add is in flight", async () => {
+    const options = {
+      baseBranch: "main",
+      newBranch: "feature/duplicate",
+      path: "/test/worktree-duplicate",
+    };
+
+    let resolveAdd!: () => void;
+    let markAddStarted!: () => void;
+    const addStarted = new Promise<void>((resolve) => {
+      markAddStarted = resolve;
+    });
+    const addFinished = new Promise<void>((resolve) => {
+      resolveAdd = resolve;
+    });
+
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        markAddStarted();
+        return addFinished;
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const firstCreate = service.createWorktree("req-duplicate-a", "/test/root", options);
+    await addStarted;
+
+    const secondCreate = service.createWorktree("req-duplicate-b", "/test/root", options);
+    await flushAsyncTail();
+
+    const addCallsBeforeRelease = mockSimpleGit.raw.mock.calls.filter(
+      (call) => call[0][0] === "worktree" && call[0][1] === "add"
+    );
+    expect(addCallsBeforeRelease).toHaveLength(1);
+
+    resolveAdd();
+    await Promise.all([firstCreate, secondCreate]);
+
+    const addCalls = mockSimpleGit.raw.mock.calls.filter(
+      (call) => call[0][0] === "worktree" && call[0][1] === "add"
+    );
+    expect(addCalls).toHaveLength(1);
+
+    const createResultCalls = mockSendEvent.mock.calls.filter(
+      ([event]: [{ type: string }]) => event.type === "create-worktree-result"
+    );
+    const createResultEvents = createResultCalls.map(
+      ([event]: [{ type: string; requestId?: string; success?: boolean; worktreeId?: string }]) =>
+        event
+    );
+
+    expect(createResultEvents).toHaveLength(2);
+    expect(createResultEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "req-duplicate-a",
+          success: true,
+          worktreeId: "/test/worktree-duplicate",
+        }),
+        expect.objectContaining({
+          requestId: "req-duplicate-b",
+          success: true,
+          worktreeId: "/test/worktree-duplicate",
+        }),
+      ])
+    );
+    expect(service["monitors"].has("/test/worktree-duplicate")).toBe(true);
+  });
+
   it("preserves issue-mode-only --no-track: useExistingBranch argv is unchanged", async () => {
     const requestId = "test-request-456";
     const options = {

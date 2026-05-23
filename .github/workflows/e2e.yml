@@ -179,7 +179,15 @@ jobs:
           }
 
       - name: Check out repository
-        uses: actions/checkout@v6
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --prune --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
+          git -C "$GITHUB_WORKSPACE" checkout --force FETCH_HEAD
+          git -C "$GITHUB_WORKSPACE" clean -ffdx
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Playwright browsers
         id: cache-playwright
@@ -404,6 +412,7 @@ jobs:
       - name: Check for Playwright last-run results
         id: playwright-last-run
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           if [ -f test-results/.last-run.json ]; then
@@ -415,6 +424,7 @@ jobs:
 
       - name: Save Playwright last-run results
         if: always() && steps.playwright-last-run.outputs.exists == 'true'
+        continue-on-error: true
         uses: actions/cache/save@v5
         with:
           path: test-results/.last-run.json
@@ -422,6 +432,7 @@ jobs:
 
       - name: Upload test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: e2e-${{ inputs.suite || 'core' }}-results-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.sha }}-attempt-${{ github.run_attempt }}

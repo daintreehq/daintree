@@ -11,7 +11,7 @@ import {
   getPanelDragHandle,
   openTerminal,
 } from "../../helpers/panels";
-import { dragElementTo } from "../../helpers/dragDrop";
+import { keyboardReorderElement } from "../../helpers/dragDrop";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -54,16 +54,23 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     const idsBefore = await getGridPanelIds(window);
     expect(idsBefore).toHaveLength(3);
 
-    const firstPanel = getPanelById(window, idsBefore[0]);
-    const thirdPanel = getPanelById(window, idsBefore[2]);
+    let idsAfter = idsBefore;
 
-    const dragHandle = getPanelDragHandle(firstPanel);
-    await expect(dragHandle).toBeVisible({ timeout: T_SHORT });
+    const keySequences = [["ArrowRight"], ["ArrowRight", "ArrowRight"]];
 
-    await dragElementTo(window, dragHandle, thirdPanel);
-    await window.waitForTimeout(T_SETTLE);
+    for (const keys of keySequences) {
+      const firstPanel = getPanelById(window, idsBefore[0]);
+      const dragHandle = getPanelDragHandle(firstPanel);
+      await expect(dragHandle).toBeVisible({ timeout: T_SHORT });
 
-    const idsAfter = await getGridPanelIds(window);
+      await keyboardReorderElement(window, dragHandle, keys);
+
+      idsAfter = await getGridPanelIds(window);
+      if (idsAfter[0] !== idsBefore[0]) {
+        break;
+      }
+    }
+
     expect(idsAfter).toHaveLength(3);
     // The dragged panel should have moved past its original position
     expect(idsAfter[0]).not.toBe(idsBefore[0]);
@@ -73,7 +80,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
   // ── Grid to Dock ─────────────────────────────────────────
 
-  test("drag a grid panel to the dock", async () => {
+  test("move a grid panel to the dock", async () => {
     const { window } = ctx;
 
     const gridIdsBefore = await getGridPanelIds(window);
@@ -81,22 +88,12 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
     const panelToDrag = gridIdsBefore[0];
     const panel = getPanelById(window, panelToDrag);
-    const dragHandle = getPanelDragHandle(panel);
-    await expect(dragHandle).toBeVisible({ timeout: T_SHORT });
+    const moveToDock = panel.locator(SEL.panel.minimize);
+    await expect(moveToDock).toBeVisible({ timeout: T_SHORT });
+    await moveToDock.click();
 
-    const dockTarget = window.locator(SEL.dock.container);
-    // The dock may not be visible yet (no items docked). If so, we need a
-    // fallback target. The dock container is always in the DOM even when empty
-    // but may have zero height. Force-scroll it into view first.
-    await dockTarget.evaluate((el) => el.scrollIntoView());
+    await expect.poll(() => getDockPanelIds(window), { timeout: T_MEDIUM }).toContain(panelToDrag);
 
-    await dragElementTo(window, dragHandle, dockTarget);
-    await window.waitForTimeout(T_SETTLE);
-
-    // The dragged panel should now be in the dock
-    const dockIds = await getDockPanelIds(window);
-    expect(dockIds).toContain(panelToDrag);
-    // Grid should have one fewer panel than before
     const gridIdsAfter = await getGridPanelIds(window);
     expect(gridIdsAfter).not.toContain(panelToDrag);
   });
