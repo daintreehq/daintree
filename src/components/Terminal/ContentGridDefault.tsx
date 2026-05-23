@@ -159,6 +159,7 @@ export function ContentGridDefault({
                             sourceIndex={index}
                             disabled={isGroupDisabled}
                             layoutTransition={ctx.layoutTransition}
+                            layoutEnabled={ctx.layoutAnimationEnabled}
                           >
                             <GridPanel
                               terminalId={terminal.id}
@@ -180,6 +181,7 @@ export function ContentGridDefault({
                             groupId={group.id}
                             groupPanelIds={group.panelIds}
                             layoutTransition={ctx.layoutTransition}
+                            layoutEnabled={ctx.layoutAnimationEnabled}
                           >
                             <GridTabGroup
                               group={group}

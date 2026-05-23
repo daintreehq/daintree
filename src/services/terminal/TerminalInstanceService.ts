@@ -1575,7 +1575,13 @@ class TerminalInstanceService {
     this.resizePassAbort?.abort();
     const controller = new AbortController();
     this.resizePassAbort = controller;
-    void this.executeResizePass(ids, controller).catch((error) => {
+    const run = () => this.executeResizePass(ids, controller);
+    const task =
+      typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
+        ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
+        : run();
+    void task.catch((error) => {
+      if (error instanceof Error && error.name === "AbortError") return;
       logError("terminal resize pass failed", error);
     });
   }

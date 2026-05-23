@@ -11,8 +11,9 @@ import { type ManagedTerminal } from "./types";
 
 // WebGL is gated by a count-based mode switch, not per-context eviction.
 // Below the upper threshold, every wanting terminal gets WebGL. Above it,
-// the manager flips to DOM mode and releases every active context in one
-// pass; it flips back to WebGL once the count returns to the lower threshold.
+// the manager flips to DOM mode and releases active contexts through a
+// requestAnimationFrame drain queue; it flips back to WebGL once the count
+// returns to the lower threshold.
 // The hysteresis gap prevents flapping when a single panel opens or closes at
 // the boundary.
 //
@@ -199,6 +200,13 @@ export class TerminalWebGLManager {
   private pendingDrainScheduled = false;
   private pendingEnsureRafId: number | null = null;
 
+  // Queue of active contexts to release after a fleet-wide DOM-mode downgrade.
+  // Releasing a WebGL addon forces synchronous GPU-side context loss, so the
+  // downgrade is paced the same way as attach: one terminal per frame.
+  private pendingReleases = new Map<string, ManagedTerminal>();
+  private pendingReleaseDrainScheduled = false;
+  private pendingReleaseRafId: number | null = null;
+
   // xterm shares one module-global TextureAtlas across every terminal with a
   // matching font/theme config. A page-merge (TextureAtlas._mergePages) splices
   // pages and rewrites glyph texturePage indices, but each WebGL renderer keeps
@@ -258,6 +266,7 @@ export class TerminalWebGLManager {
   releaseContext(id: string): void {
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
+    this.pendingReleases.delete(id);
     if (this.pool.has(id)) {
       this.dropPoolEntry(id);
     }
@@ -290,6 +299,7 @@ export class TerminalWebGLManager {
   onTerminalDestroyed(id: string): void {
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
+    this.pendingReleases.delete(id);
     const entry = this.pool.get(id);
     if (entry) {
       try {
@@ -330,6 +340,16 @@ export class TerminalWebGLManager {
     this.pendingEnsureRafId = null;
     this.pendingDrainScheduled = false;
     this.pendingEnsures.clear();
+    if (this.pendingReleaseRafId !== null) {
+      try {
+        cancelAnimationFrame(this.pendingReleaseRafId);
+      } catch {
+        // ignore
+      }
+    }
+    this.pendingReleaseRafId = null;
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleases.clear();
     this.wants.clear();
     if (this.atlasResyncRafId !== null) {
       try {
@@ -389,27 +409,19 @@ export class TerminalWebGLManager {
     }
     this.pendingDrainScheduled = false;
 
-    // Release every active context. Each terminal falls back to xterm's DOM
-    // renderer on its next paint. Trigger a refresh on visible terminals so
-    // the renderer swap is one frame, not deferred until the next write.
-    for (const id of [...this.pool.keys()]) {
-      const entry = this.pool.get(id);
-      if (!entry) continue;
-      const managed = entry.managed;
-      this.dropPoolEntry(id);
-      if (managed.isOpened && managed.isVisible && managed.terminal.rows > 0) {
-        try {
-          managed.terminal.refresh(0, managed.terminal.rows - 1);
-        } catch {
-          // ignore — next user-driven paint will catch up regardless
-        }
-      }
+    // Release active contexts progressively. Each terminal falls back to
+    // xterm's DOM renderer on its next paint. Visible terminals refresh when
+    // their release lands so the renderer swap is not deferred until output.
+    for (const [id, entry] of this.pool) {
+      this.pendingReleases.set(id, entry.managed);
     }
+    this.scheduleReleaseDrain();
   }
 
   private flipToWebgl(): void {
     if (this.mode === "webgl") return;
     this.mode = "webgl";
+    this.cancelReleaseDrain();
     // Reset the mode-flip warning so a future downgrade is logged again
     // (per-session, but recoverable across the cycle).
     this.hasLoggedModeFlip = false;
@@ -474,6 +486,64 @@ export class TerminalWebGLManager {
     }
     if (this.pendingEnsures.size > 0) {
       this.scheduleDrain();
+    }
+  };
+
+  private scheduleReleaseDrain(): void {
+    if (this.pendingReleaseDrainScheduled) return;
+    if (this.pendingReleases.size === 0) return;
+    this.pendingReleaseDrainScheduled = true;
+    const id = requestAnimationFrame(this.drainOneRelease);
+    // If drainOneRelease ran synchronously (test shim or unusual host), it
+    // will have already cleared pendingReleaseDrainScheduled and there is no
+    // rAF id to cancel.
+    if (this.pendingReleaseDrainScheduled) {
+      this.pendingReleaseRafId = id;
+    }
+  }
+
+  private cancelReleaseDrain(): void {
+    if (this.pendingReleaseRafId !== null) {
+      try {
+        cancelAnimationFrame(this.pendingReleaseRafId);
+      } catch {
+        // ignore
+      }
+    }
+    this.pendingReleaseRafId = null;
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleases.clear();
+  }
+
+  private drainOneRelease = (): void => {
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleaseRafId = null;
+
+    // A quick recovery back to WebGL makes the release queue stale. Keep any
+    // still-active contexts instead of churning them through DOM and back.
+    if (this.mode !== "dom") {
+      this.pendingReleases.clear();
+      return;
+    }
+
+    const next = this.pendingReleases.entries().next();
+    if (next.done) return;
+    const [id, managed] = next.value;
+    this.pendingReleases.delete(id);
+
+    if (this.pool.has(id)) {
+      this.dropPoolEntry(id);
+      if (managed.isOpened && managed.isVisible && managed.terminal.rows > 0) {
+        try {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        } catch {
+          // ignore — next user-driven paint will catch up regardless
+        }
+      }
+    }
+
+    if (this.pendingReleases.size > 0) {
+      this.scheduleReleaseDrain();
     }
   };
 

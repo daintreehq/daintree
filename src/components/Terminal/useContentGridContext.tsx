@@ -105,6 +105,7 @@ export interface ContentGridContext {
   /** Fixed row height (px) used in scroll mode; ignored in non-scroll quad mode. */
   scrollRowHeight: number;
   layoutTransition: Transition;
+  layoutAnimationEnabled: boolean;
   layoutConfig: ReturnType<typeof useLayoutConfigStore.getState>["layoutConfig"];
   gridWidth: number | null;
   isFleetScopeRender: boolean;
@@ -624,11 +625,12 @@ export function useContentGridContext({
 
   const layoutTransition: Transition = useMemo(
     () => ({
-      duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
+      duration: isProjectSwitching || closingIds.size > 0 ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
       ease: [0.22, 1, 0.36, 1],
     }),
-    [isProjectSwitching]
+    [isProjectSwitching, closingIds.size]
   );
+  const layoutAnimationEnabled = !isProjectSwitching && closingIds.size === 0;
 
   const gridAgentMenuItems = useMemo(() => {
     return getEffectiveAgentIds()
@@ -1037,6 +1039,7 @@ export function useContentGridContext({
     isScrollMode,
     scrollRowHeight,
     layoutTransition,
+    layoutAnimationEnabled,
     layoutConfig,
     gridWidth,
     isFleetScopeRender,

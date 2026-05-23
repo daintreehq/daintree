@@ -1085,6 +1085,45 @@ describe("TerminalWebGLManager", () => {
       expect(manager.getWantsSize()).toBe(4);
     });
 
+    it("paces dom-mode release to one active context per animation frame", () => {
+      const terms = Array.from({ length: 4 }, () => makeManagedTerminal());
+      manager.ensureContext("t1", terms[0]!);
+      manager.ensureContext("t2", terms[1]!);
+      manager.ensureContext("t3", terms[2]!);
+
+      rafMode = "queued";
+      manager.ensureContext("t4", terms[3]!);
+      expect(manager.getMode()).toBe("dom");
+
+      // The downgrade is visible immediately, but expensive WebGL teardown is
+      // paced so a 16-panel fleet does not lose every context in one task.
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+      expect(manager.isActive("t3")).toBe(true);
+
+      flushRafFrame();
+      const activeAfterFrame1 = [
+        manager.isActive("t1"),
+        manager.isActive("t2"),
+        manager.isActive("t3"),
+      ].filter(Boolean);
+      expect(activeAfterFrame1).toHaveLength(2);
+
+      flushRafFrame();
+      const activeAfterFrame2 = [
+        manager.isActive("t1"),
+        manager.isActive("t2"),
+        manager.isActive("t3"),
+      ].filter(Boolean);
+      expect(activeAfterFrame2).toHaveLength(1);
+
+      flushRafFrame();
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isActive("t2")).toBe(false);
+      expect(manager.isActive("t3")).toBe(false);
+      expect(flushRafFrame()).toBe(false);
+    });
+
     it("flipping to dom refreshes every visible formerly-pooled terminal", () => {
       // Visible terminals must repaint so the renderer swap (WebGL→DOM) happens
       // in the same frame, not deferred to the next write. A regression that

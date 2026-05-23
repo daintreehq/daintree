@@ -30,6 +30,31 @@ export interface FrameProbeResult {
   p95GapMs: number;
 }
 
+export interface LoafProbeScript {
+  sourceURL?: string;
+  sourceFunctionName?: string;
+  invoker?: string;
+  invokerType?: string;
+  duration?: number;
+  executionStart?: number;
+  forcedStyleAndLayoutDuration?: number;
+}
+
+export interface LoafProbeEntry {
+  startTime: number;
+  duration: number;
+  blockingDuration?: number;
+  forcedStyleAndLayoutDuration?: number;
+  scripts: LoafProbeScript[];
+}
+
+export interface LoafProbeResult {
+  supported: boolean;
+  count: number;
+  maxDurationMs: number;
+  entries: LoafProbeEntry[];
+}
+
 export interface TerminalStats {
   terminalCount: number;
   withPty: number;
@@ -373,6 +398,78 @@ export async function stopFrameProbe(page: Page): Promise<FrameProbeResult> {
       maxGapMs: gaps[gaps.length - 1],
       avgGapMs: sum / gaps.length,
       p95GapMs: gaps[p95Index],
+    };
+  });
+}
+
+export async function startLoafProbe(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    if (!("PerformanceObserver" in window)) {
+      w.__daintreeLoafProbe = { supported: false, entries: [], stop: () => {} };
+      return false;
+    }
+    const supported = PerformanceObserver.supportedEntryTypes ?? [];
+    if (!supported.includes("long-animation-frame")) {
+      w.__daintreeLoafProbe = { supported: false, entries: [], stop: () => {} };
+      return false;
+    }
+
+    const entries: Array<Record<string, unknown>> = [];
+    const observer = new PerformanceObserver((list) => {
+      for (const raw of list.getEntries()) {
+        const entry = raw as PerformanceEntry & {
+          blockingDuration?: number;
+          forcedStyleAndLayoutDuration?: number;
+          scripts?: Array<Record<string, unknown>>;
+        };
+        entries.push({
+          startTime: entry.startTime,
+          duration: entry.duration,
+          blockingDuration: entry.blockingDuration,
+          forcedStyleAndLayoutDuration: entry.forcedStyleAndLayoutDuration,
+          scripts: (entry.scripts ?? []).map((script) => ({
+            sourceURL: script.sourceURL,
+            sourceFunctionName: script.sourceFunctionName,
+            invoker: script.invoker,
+            invokerType: script.invokerType,
+            duration: script.duration,
+            executionStart: script.executionStart,
+            forcedStyleAndLayoutDuration: script.forcedStyleAndLayoutDuration,
+          })),
+        });
+      }
+    });
+    observer.observe({ type: "long-animation-frame" } as PerformanceObserverInit);
+    w.__daintreeLoafProbe = {
+      supported: true,
+      entries,
+      stop: () => observer.disconnect(),
+    };
+    return true;
+  });
+}
+
+export async function stopLoafProbe(page: Page): Promise<LoafProbeResult> {
+  return page.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    const probe = w.__daintreeLoafProbe as
+      | { supported: boolean; entries: LoafProbeEntry[]; stop: () => void }
+      | undefined;
+    if (!probe) {
+      return { supported: false, count: 0, maxDurationMs: 0, entries: [] };
+    }
+
+    probe.stop();
+    delete w.__daintreeLoafProbe;
+
+    const entries = probe.entries;
+    const maxDurationMs = entries.reduce((max, entry) => Math.max(max, entry.duration), 0);
+    return {
+      supported: probe.supported,
+      count: entries.length,
+      maxDurationMs,
+      entries,
     };
   });
 }

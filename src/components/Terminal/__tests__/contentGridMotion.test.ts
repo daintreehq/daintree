@@ -38,19 +38,28 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     expect(fleetContent).toContain('LayoutGroup id="fleet-grid"');
   });
 
-  it("derives a shared layoutTransition that drops to 0 during project switch", async () => {
+  it("derives a shared layoutTransition that drops to 0 during project switch and close", async () => {
     const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toMatch(
-      /duration:\s*isProjectSwitching\s*\?\s*0\s*:\s*GRID_TRANSITION_DURATION_MS\s*\/\s*1000/
+      /isProjectSwitching\s*\|\|\s*closingIds\.size\s*>\s*0\s*\?\s*0\s*:\s*GRID_TRANSITION_DURATION_MS\s*\/\s*1000/
     );
   });
 
-  it("passes layoutTransition to every SortableTerminal in the main grid", async () => {
+  it("passes layout controls to every SortableTerminal in the main grid", async () => {
     const content = await readFile(DEFAULT_PATH, "utf-8");
     const sortableMatches = content.match(/<SortableTerminal\b/g) ?? [];
     const propMatches = content.match(/layoutTransition=\{ctx\.layoutTransition\}/g) ?? [];
+    const enabledMatches = content.match(/layoutEnabled=\{ctx\.layoutAnimationEnabled\}/g) ?? [];
     expect(sortableMatches.length).toBeGreaterThan(0);
     expect(propMatches.length).toBe(sortableMatches.length);
+    expect(enabledMatches.length).toBe(sortableMatches.length);
+  });
+
+  it("disables FLIP layout projection while an optimistic close is in flight", async () => {
+    const content = await readFile(CONTEXT_PATH, "utf-8");
+    expect(content).toContain(
+      "const layoutAnimationEnabled = !isProjectSwitching && closingIds.size === 0"
+    );
   });
 
   it("snaps FLIP translations to integer pixels to avoid xterm canvas blur", async () => {

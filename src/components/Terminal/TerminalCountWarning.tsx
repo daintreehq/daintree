@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 
 interface TerminalCountWarningProps {
   className?: string;
@@ -79,6 +80,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       onOpenBulkActions();
     } else {
       const { panelsById, panelIds } = usePanelStore.getState();
+      const idsToClose: string[] = [];
       for (const id of panelIds) {
         const t = panelsById[id];
         if (
@@ -87,9 +89,17 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
           t.location !== "trash" &&
           t.ephemeral !== true
         ) {
-          usePanelStore.getState().trashPanel(t.id);
+          idsToClose.push(t.id);
         }
       }
+      if (idsToClose.length === 0) return;
+      requestPanelClose({
+        hideIds: idsToClose,
+        commit: () => {
+          const latest = usePanelStore.getState();
+          idsToClose.forEach((id) => latest.trashPanel(id));
+        },
+      });
     }
   }, [onOpenBulkActions]);
 

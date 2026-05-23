@@ -28,6 +28,8 @@ interface SortableTerminalProps {
   groupPanelIds?: string[];
   /** Shared layout transition for the FLIP animation. When omitted, framer-motion's default is used. */
   layoutTransition?: Transition;
+  /** Disable FLIP on latency-critical paths such as optimistic close. */
+  layoutEnabled?: boolean;
 }
 
 export function SortableTerminal({
@@ -39,6 +41,7 @@ export function SortableTerminal({
   groupId,
   groupPanelIds,
   layoutTransition,
+  layoutEnabled = true,
 }: SortableTerminalProps) {
   const dragData: DragData = {
     terminal,
@@ -84,7 +87,7 @@ export function SortableTerminal({
 
   return (
     <m.div
-      layout="position"
+      layout={layoutEnabled ? "position" : false}
       transition={layoutTransition}
       transformTemplate={pixelSnapTransform}
       data-terminal-id={terminal.id}
