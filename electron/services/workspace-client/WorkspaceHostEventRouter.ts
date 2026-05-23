@@ -108,6 +108,12 @@ export class WorkspaceHostEventRouter {
         const providerId = event.linked?.providerId ?? event.providerId ?? "";
         const owner = linkedRef?.owner ?? "";
         const repo = linkedRef?.repo ?? "";
+        // Renderer payload MUST carry `linked` + `branchName` + `providerId`
+        // (#8870 regression from #8452). After #8452 the renderer's pr-detected
+        // handler reads `event.linked ?? existing.linked` and `branchesMatch`
+        // uses `event.branchName`. Dropping these fields here meant the
+        // renderer's `event.linked` was always undefined, so `linked.pr` never
+        // landed in the store and the PR sub-row never rendered.
         const prPayload = {
           worktreeId: event.worktreeId,
           prNumber: event.prNumber,
@@ -117,6 +123,11 @@ export class WorkspaceHostEventRouter {
           prTitle: event.prTitle,
           issueNumber: event.issueNumber,
           issueTitle: event.issueTitle,
+          prLastUpdatedAt: event.prLastUpdatedAt,
+          issueLastUpdatedAt: event.issueLastUpdatedAt,
+          branchName: event.branchName,
+          providerId: event.providerId,
+          linked: event.linked,
           timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", { ...prPayload, providerId, owner, repo });
@@ -142,10 +153,16 @@ export class WorkspaceHostEventRouter {
         const providerId = event.linked?.providerId ?? event.providerId ?? "";
         const owner = linkedRef?.owner ?? "";
         const repo = linkedRef?.repo ?? "";
+        // Renderer payload MUST carry `linked` + `branchName` + `providerId`
+        // (#8870 regression — see pr-detected case above for the full rationale).
         const issuePayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
           issueTitle: event.issueTitle,
+          issueLastUpdatedAt: event.issueLastUpdatedAt,
+          branchName: event.branchName,
+          providerId: event.providerId,
+          linked: event.linked,
         };
         events.emit("sys:issue:detected", {
           ...issuePayload,

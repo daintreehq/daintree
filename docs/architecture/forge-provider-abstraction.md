@@ -140,6 +140,39 @@ Every returned shape (`Issue`, `PR`, `ReviewThread`, `Release`, etc.) carries `r
 
 `rawData` is meant for plugin views to consume their own data. If a host-side component or a first-party Daintree component finds itself reading `rawData`, the interface is wrong and the missing field should be promoted to the typed surface or a capability. Treat first-party `rawData` reads as an interface-review signal.
 
+## Process Boundary: workspace-host RPC Bridge
+
+Daintree runs in multiple Electron processes. Plugin loading (`PluginService`) runs in **main**, alongside auth, IPC, window management, and the rest of Electron's native surface. PR polling, worktree git monitoring, and the file-watcher loop run in a separate **workspace-host UtilityProcess** (`electron/workspace-host.ts`) so synchronous filesystem and process work can't stall main. The workspace-host has no plugin loader, so it cannot hold provider impls of its own — the actual provider method bodies (HTTP calls, GraphQL queries) execute in main when invoked through the bridge.
+
+The host bridges the boundary so plugin authors never see it.
+
+```
+┌─────────────────────────────────┐         ┌──────────────────────────────────┐
+│ main process                    │         │ workspace-host UtilityProcess    │
+│                                 │         │                                  │
+│  PluginService.activate()       │         │  PullRequestService              │
+│       ↓                         │         │       ↓                          │
+│  host.registerForgeProvider     │         │  getForgeBridge()                │
+│       ↓                         │         │       ↓                          │
+│  forgeProviderRegistry          │←ipc────│  ForgeBridge.invoke              │
+│  (descriptors + impls)          │         │  (typed methods only)            │
+│       ↓                         │         │                                  │
+│  forgeRpcServer.dispatchForgeRpc│────ipc→│  bridge.handleResult             │
+│       ↓                         │         │       ↓                          │
+│  impl.findPRByBranch(...)       │         │  resolve pending promise         │
+└─────────────────────────────────┘         └──────────────────────────────────┘
+```
+
+**On the workspace-host side** (`electron/workspace-host/forgeBridge.ts`) — `ForgeBridge` is a thin IPC client. It exposes the subset of `ForgeProviderImpl` methods the workspace-host actually needs (`resolveProvider`, `findPRByBranch`, `findPRsByBranches`, `getPR`, `getIssue`, `getCIStatus`, `getRateLimit`), dispatches each call as a `forge:rpc` event over the parent port, and resolves the matching pending promise when `forge:rpc-result` lands. `parseRemote` is folded into `resolveProvider` so the workspace-host never has to call a synchronous provider method through an async transport.
+
+**On the main side** (`electron/services/forgeRpcServer.ts`) — `dispatchForgeRpc` looks up the impl by namespaced id in the local registry and invokes the requested method. `WorkspaceHostProcess.processHostEvent` (`electron/services/WorkspaceHostProcess.ts`) routes inbound `forge:rpc` events here and the response back to the child via `child.postMessage`.
+
+**Race on first poll.** `PullRequestService` in the workspace-host starts polling before main's `PluginService.initialize()` finishes — the workspace-host is spawned early, the plugin scan completes asynchronously. The bridge handles this by allowing every poll to re-attempt resolution: when `providerNamespacedId` is null, `checkForPRs` calls `resolveProvider()` first. To keep the user from staring at empty PR sub-rows for an entire blurred-cadence interval (120s) on cold start, the next poll fires at the fast `FOCUS_CATCHUP_THROTTLE_MS` (5s) until resolution lands. Once a provider is bound, the normal 30s/120s cadence resumes. Explicit invalidation (`refresh()`, `setForgeSettings`) clears the cache.
+
+**For plugin authors:** there is nothing to do. `host.registerForgeProvider(descriptor, impl)` in the plugin's `activate()` is the entire surface. The bridge is invisible — the provider impl lives in main, and the workspace-host transparently proxies through. This means every forge plugin (built-in GitHub, future GitLab/Gitea/Bitbucket/Forgejo, third-party plugins) participates in PR detection without any extra wiring. Auth tokens, network state, and rate-limit accounting all stay in one process where they belong.
+
+**Why not just load plugins in the workspace-host too?** Activating plugins twice risks duplicating side effects (IPC handlers, broadcasts, scheduled timers), duplicates auth state across processes, and exposes plugin authors to a second host-API surface with a different set of capabilities (no `registerHandler`, no `broadcastToRenderer`). The single-process activation with an RPC bridge keeps the plugin contract simple and main as the single source of truth.
+
 ## State Normalization
 
 Even though only GitHub ships in this stage, the interface normalizes states so future providers don't force a re-shape. PR state enums diverge across providers (GitHub `OPEN | CLOSED | MERGED`, GitLab `opened | closed | locked | merged`, Bitbucket `OPEN | MERGED | DECLINED | SUPERSEDED`, Gitea `open | closed`). The host's normalized enum is:

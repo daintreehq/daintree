@@ -13,6 +13,7 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
+import { dispatchForgeRpc } from "./forgeRpcServer.js";
 import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -832,6 +833,23 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       case "git:project-pulse-error":
         this.handleRequestResult(this.toResult(event, false));
+        break;
+
+      // Forge RPC request from the workspace-host — dispatch against the
+      // local registry and send the result back. Provider impls live here
+      // (registered by `PluginService` on plugin activate), so the
+      // workspace-host has to round-trip through this server for any PR /
+      // CI / rate-limit call. See `docs/architecture/forge-provider-abstraction.md`.
+      case "forge:rpc":
+        void dispatchForgeRpc(
+          {
+            forgeRequestId: event.forgeRequestId,
+            method: event.method,
+            namespacedId: event.namespacedId,
+            args: event.args,
+          },
+          (request) => this.send(request)
+        );
         break;
 
       // Spontaneous events - re-emit for the manager to route

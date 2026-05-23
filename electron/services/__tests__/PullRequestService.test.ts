@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type { DaintreeEventMap } from "../events.js";
 import type { ForgeProviderImpl, RepoRef, PR as ForgePR } from "../../../shared/types/forge.js";
+import type { ForgeResolveProviderResult } from "../../../shared/types/workspace-host.js";
 
 function makeWorktreeSnapshot(
   overrides: Partial<WorktreeSnapshot> & Pick<WorktreeSnapshot, "worktreeId">
@@ -36,6 +37,48 @@ function makeMockForgePR(overrides?: Partial<ForgePR>): ForgePR {
     updatedAt: Date.now(),
     rawData: null,
     ...overrides,
+  };
+}
+
+// Module-level handle so tests that want to assert on bridge calls directly
+// (resolveProvider, getRateLimit) can grab the most recently created stub
+// without changing every helper call site.
+let lastMockBridge: ReturnType<typeof makeMockBridge> | null = null;
+
+function makeMockBridge(impl: ForgeProviderImpl) {
+  // The bridge stub delegates each call to the underlying impl, stripping the
+  // namespacedId argument so existing `expect(impl.X).toHaveBeenCalledWith(...)`
+  // assertions keep matching the original (provider-shaped) signature.
+  return {
+    // Explicit return-type annotation so `.mockResolvedValue(null)` is allowed
+    // for the unresolved variant; the default resolves to a real provider.
+    resolveProvider: vi.fn<
+      (_opts: {
+        remoteUrl: string | null;
+        forgeProviderOverride: string | null;
+        globalDefaultProviderId: string | null;
+      }) => Promise<ForgeResolveProviderResult | null>
+    >(async () => ({
+      namespacedId: "daintree.github.github",
+      repo: makeMockRepoRef(),
+    })),
+    findPRByBranch: vi.fn((_id: string, repo: RepoRef, branch: string) =>
+      impl.findPRByBranch(repo, branch)
+    ),
+    findPRsByBranches: vi.fn(async (_id: string, repo: RepoRef, branches: string[]) => {
+      if (!impl.findPRsByBranches) return null;
+      return impl.findPRsByBranches(repo, branches);
+    }),
+    getPR: vi.fn((_id: string, repo: RepoRef, prNumber: number) => impl.getPR(repo, prNumber)),
+    getIssue: vi.fn((_id: string, repo: RepoRef, issueNumber: number) =>
+      impl.getIssue(repo, issueNumber)
+    ),
+    getCIStatus: vi.fn((_id: string, repo: RepoRef, prNumber: number) =>
+      impl.getCIStatus(repo, prNumber)
+    ),
+    getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
+    handleResult: vi.fn(),
+    dispose: vi.fn(),
   };
 }
 
@@ -73,20 +116,11 @@ function mockForgeProviderResolved(
     getRateLimit: vi.fn().mockResolvedValue({ limit: null, remaining: null, resetAt: null }),
   };
 
-  vi.doMock("../forgeProviderResolver.js", () => ({
-    resolveForgeProvider: vi.fn().mockReturnValue({
-      entry: {
-        pluginId: "daintree.github",
-        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
-      },
-      resolvedVia: "hostname",
-    }),
-  }));
-  vi.doMock("../forgeProviderRegistry.js", () => ({
-    getForgeProviderImpl: vi.fn().mockReturnValue(mockImpl),
-    registerForgeProviders: vi.fn(),
-    unregisterForgeProviders: vi.fn(),
-    clearForgeProviderRegistry: vi.fn(),
+  const bridge = makeMockBridge(mockImpl);
+  lastMockBridge = bridge;
+  vi.doMock("../../workspace-host/forgeBridge.js", () => ({
+    getForgeBridge: () => bridge,
+    initForgeBridge: vi.fn(() => bridge),
   }));
   vi.doMock("../projectStorePaths.js", () => ({
     generateProjectId: vi.fn().mockReturnValue("test-project-id"),
@@ -100,21 +134,49 @@ function mockForgeProviderResolved(
   return mockImpl;
 }
 
-function mockForgeProviderUnresolved() {
-  vi.doMock("../forgeProviderResolver.js", () => ({
-    resolveForgeProvider: vi.fn().mockReturnValue({ entry: null, resolvedVia: null }),
-  }));
-  vi.doMock("../forgeProviderRegistry.js", () => ({
-    getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
+function mockForgeProviderUnresolved(opts?: {
+  getConfig?: (key: string) => Promise<string | null>;
+}) {
+  // No impl behind the bridge — `resolveProvider` returns null so the service
+  // takes the "no forge provider resolved" branch.
+  const placeholderImpl = makeMockEmptyImpl();
+  const bridge = makeMockBridge(placeholderImpl);
+  bridge.resolveProvider.mockResolvedValue(null);
+  lastMockBridge = bridge;
+  vi.doMock("../../workspace-host/forgeBridge.js", () => ({
+    getForgeBridge: () => bridge,
+    initForgeBridge: vi.fn(() => bridge),
   }));
   vi.doMock("../projectStorePaths.js", () => ({
     generateProjectId: vi.fn().mockReturnValue("test-project-id"),
   }));
+  const getConfig =
+    opts?.getConfig ?? vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git");
   vi.doMock("../../utils/hardenedGit.js", () => ({
-    createHardenedGit: vi.fn().mockReturnValue({
-      getConfig: vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git"),
-    }),
+    createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
   }));
+}
+
+function makeMockEmptyImpl(): ForgeProviderImpl {
+  return {
+    getCredentials: vi.fn(),
+    validateCredentials: vi.fn(),
+    parseRemote: vi.fn(),
+    listIssues: vi.fn(),
+    listPRs: vi.fn(),
+    getIssue: vi.fn(),
+    getPR: vi.fn(),
+    findPRByBranch: vi.fn(),
+    getCIStatus: vi.fn(),
+    getRepoMetadata: vi.fn(),
+    buildIssueUrl: vi.fn(),
+    buildPRUrl: vi.fn(),
+    buildIssuesUrl: vi.fn(),
+    buildPRsUrl: vi.fn(),
+    buildCommitsUrl: vi.fn(),
+    assignIssue: vi.fn(),
+    validateToken: vi.fn(),
+  };
 }
 
 describe("PullRequestService", () => {
@@ -126,6 +188,9 @@ describe("PullRequestService", () => {
     vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
+    // `lastMockBridge` is module-level so a stale reference from a prior
+    // test never bleeds into the next one's assertions.
+    lastMockBridge = null;
   });
 
   it("detects PRs for non-default branches without issue numbers", async () => {
@@ -218,22 +283,13 @@ describe("PullRequestService", () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
 
-    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
-    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
-    vi.doMock("../forgeProviderRegistry.js", () => ({
-      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
-    }));
-    vi.doMock("../projectStorePaths.js", () => ({
-      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
-    }));
     const getConfig = vi.fn(async (key: string) =>
       key === "remote.upstream.url"
         ? "https://github.com/upstreamowner/upstreamrepo.git"
         : "https://github.com/originowner/originrepo.git"
     );
-    vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
-    }));
+    mockForgeProviderUnresolved({ getConfig });
+    const bridge = lastMockBridge!;
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
@@ -247,7 +303,7 @@ describe("PullRequestService", () => {
     await pullRequestService.refresh();
 
     expect(getConfig).toHaveBeenCalledWith("remote.upstream.url");
-    expect(resolveForgeProvider).toHaveBeenCalledWith(
+    expect(bridge.resolveProvider).toHaveBeenCalledWith(
       expect.objectContaining({ remoteUrl: "https://github.com/upstreamowner/upstreamrepo.git" })
     );
 
@@ -258,20 +314,11 @@ describe("PullRequestService", () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
 
-    const resolveForgeProvider = vi.fn().mockReturnValue({ entry: null, resolvedVia: null });
-    vi.doMock("../forgeProviderResolver.js", () => ({ resolveForgeProvider }));
-    vi.doMock("../forgeProviderRegistry.js", () => ({
-      getForgeProviderImpl: vi.fn().mockReturnValue(undefined),
-    }));
-    vi.doMock("../projectStorePaths.js", () => ({
-      generateProjectId: vi.fn().mockReturnValue("test-project-id"),
-    }));
     const getConfig = vi.fn(async (key: string) =>
       key === "remote.origin.url" ? "https://github.com/originowner/originrepo.git" : null
     );
-    vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
-    }));
+    mockForgeProviderUnresolved({ getConfig });
+    const bridge = lastMockBridge!;
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
@@ -284,8 +331,47 @@ describe("PullRequestService", () => {
 
     await pullRequestService.refresh();
 
-    expect(resolveForgeProvider).toHaveBeenCalledWith(
+    expect(bridge.resolveProvider).toHaveBeenCalledWith(
       expect.objectContaining({ remoteUrl: "https://github.com/originowner/originrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("unwraps the ConfigGetResult envelope from simple-git's getConfig (#8870)", async () => {
+    // Regression: PullRequestService used to cast `git.getConfig()` straight
+    // to `string | null`, but simple-git returns a `{ value, values, ... }`
+    // envelope at runtime in the workspace-host UtilityProcess. The cast
+    // silently produced null and the bridge never saw a real `remoteUrl`,
+    // so PR detection was permanently skipped (#8870). The fix unwraps the
+    // envelope; this test pins the envelope shape so a future change can't
+    // silently regress it.
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const getConfig = vi.fn(async (key: string) => ({
+      key,
+      paths: [".git/config"],
+      scopes: {},
+      value: "  https://github.com/envowner/envrepo.git  ",
+      values: ["  https://github.com/envowner/envrepo.git  "],
+    }));
+    // Cast is necessary because the helper's parameter type promises a
+    // plain string return; the test deliberately exercises the envelope
+    // shape that the real simple-git ships and PullRequestService unwraps.
+    mockForgeProviderUnresolved({
+      getConfig: getConfig as unknown as (key: string) => Promise<string | null>,
+    });
+    const bridge = lastMockBridge!;
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    await pullRequestService.refresh();
+
+    expect(getConfig).toHaveBeenCalledWith("remote.origin.url");
+    expect(bridge.resolveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/envowner/envrepo.git" })
     );
 
     pullRequestService.destroy();
@@ -314,6 +400,43 @@ describe("PullRequestService", () => {
 
     expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
 
+    pullRequestService.destroy();
+  });
+
+  it("emits sys:pr:cleared for a fresh candidate when the forge has no PR (#8870)", async () => {
+    // Without this clear, WorktreeMonitor._linked stays at its initial
+    // `undefined` and the renderer's preservation rule keeps any prior
+    // session's linked.pr visible indefinitely.
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+    mockForgeProviderResolved(async () => null);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribeCleared = events.on("sys:pr:cleared", (p) => cleared.push(p));
+    const unsubscribeDetected = events.on("sys:pr:detected", (p) => detected.push(p));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/no-pr" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(detected).toHaveLength(0);
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]).toMatchObject({
+      worktreeId: "wt-1",
+      branchName: "feature/no-pr",
+      providerId: "daintree.github.github",
+    });
+
+    unsubscribeCleared();
+    unsubscribeDetected();
     pullRequestService.destroy();
   });
 
