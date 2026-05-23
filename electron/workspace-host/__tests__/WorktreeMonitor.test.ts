@@ -615,11 +615,15 @@ describe("WorktreeMonitor", () => {
       expect(monitor.getSnapshot().prState).toBe("closed");
     });
 
-    it("falls back to legacy flat fields when linked is null", () => {
+    it("falls back to legacy flat fields when linked is unset", () => {
+      // `_linked` initializes to `undefined` (#8870 — distinguishes "PR
+      // service hasn't run" from "ran and found no link"). The legacy flat
+      // fields populated via setPRInfo remain the source until setLinked
+      // or clearLinked fires.
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
       monitor.setPRInfo({ prNumber: 42, prUrl: "url", prState: "open", prTitle: "Legacy" });
       const snapshot = monitor.getSnapshot();
-      expect(snapshot.linked).toBeNull();
+      expect(snapshot.linked).toBeUndefined();
       expect(snapshot.prNumber).toBe(42);
       expect(snapshot.prTitle).toBe("Legacy");
     });
