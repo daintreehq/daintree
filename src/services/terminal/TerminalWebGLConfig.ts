@@ -1,27 +1,46 @@
-// Mutable WebGL pool size, isolated from xterm imports so the eager renderer
-// chunk can update it (via useResourceProfile) without pulling @xterm/addon-webgl.
-// Initial value matches the balanced resource profile (see RESOURCE_PROFILE_CONFIGS).
-let maxContexts = 16;
+// Mode-switch thresholds for the WebGL pool. Held in a tiny module isolated
+// from xterm imports so the eager renderer chunk can update them (via
+// useResourceProfile) without pulling @xterm/addon-webgl into the entry bundle.
+//
+// The manager runs in one of two modes based on how many terminals currently
+// want WebGL. When count exceeds `upperThreshold` it flips to DOM mode and
+// releases every active context. When count drops back to `lowerThreshold` or
+// below it flips back and re-attaches every want via a rAF-staggered drain.
+// The gap between the two values is hysteresis: opening/closing a single panel
+// at the boundary will not flap the whole fleet.
+//
+// Chromium hard-caps active WebGL contexts at 16 per renderer process and
+// silently evicts the oldest on overflow (webglcontextlost), so the upper
+// threshold must stay comfortably below 16 to leave headroom for devtools,
+// OffscreenCanvas, and any future non-terminal WebGL consumer.
+// Initial values match the balanced resource profile.
 
-export function getMaxContexts(): number {
-  return maxContexts;
+let upperThreshold = 12;
+let lowerThreshold = 10;
+
+export function getWebglUpperThreshold(): number {
+  return upperThreshold;
 }
 
-export function setMaxContexts(n: number): void {
-  maxContexts = Math.max(1, n);
+export function getWebglLowerThreshold(): number {
+  return lowerThreshold;
 }
 
-// Passive-mode gate: once this many agent terminals already hold (or are
-// queued for) a WebGL context, new acquisitions are suppressed and those
-// terminals render via the DOM renderer instead. This stops the release/
-// reacquire churn that flashes terminals when a large fleet (20+) is visible
-// at once. Initial value matches the balanced resource profile.
-let passiveThreshold = 12;
-
-export function getPassiveThreshold(): number {
-  return passiveThreshold;
+export function setWebglUpperThreshold(n: number): void {
+  upperThreshold = Math.max(1, n);
+  if (lowerThreshold > upperThreshold) {
+    lowerThreshold = upperThreshold;
+  }
 }
 
-export function setPassiveThreshold(n: number): void {
-  passiveThreshold = Math.max(1, n);
+export function setWebglLowerThreshold(n: number): void {
+  lowerThreshold = Math.max(0, Math.min(n, upperThreshold));
+}
+
+// Atomically set both. Order matters: setting upper first lets the lower
+// setter clamp against the new upper without flipping through an intermediate
+// invalid state where lower > upper.
+export function setWebglThresholds(upper: number, lower: number): void {
+  setWebglUpperThreshold(upper);
+  setWebglLowerThreshold(lower);
 }

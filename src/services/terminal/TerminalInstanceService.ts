@@ -311,6 +311,15 @@ class TerminalInstanceService {
     this.webGLManager.setHardwareAvailable(available);
   }
 
+  // Triggered when the renderer receives a new ResourceProfilePayload — the
+  // thresholds have already been written into TerminalWebGLConfig by the time
+  // this runs, so we just nudge the manager to re-check its mode against the
+  // new band. Without this, a profile downgrade can leave more wants on WebGL
+  // than the new upper allows until the next consumer event happens to land.
+  refreshWebGLMode(): void {
+    this.webGLManager.refreshMode();
+  }
+
   notifyUserInput(id: string, data = ""): void {
     this.onUserInput(id, data);
   }
@@ -1436,6 +1445,18 @@ class TerminalInstanceService {
     this.resizeController.flushResize(id);
   }
 
+  /**
+   * Cancel a panel's pending resize job and debounce timer *without* applying
+   * it. Used on optimistic close: `flushResize` would force-drain queued
+   * output and reflow scrollback synchronously inside the close click, but the
+   * pending job still has to be cleared so no stale resize fires after the
+   * panel is detached or restored from trash.
+   */
+  cancelPendingResize(id: string): void {
+    const managed = this.instances.get(id);
+    if (managed) this.resizeController.clearResizeJob(managed);
+  }
+
   sendPtyResize(id: string, cols: number, rows: number): void {
     this.resizeController.sendPtyResize(id, cols, rows);
   }
@@ -1554,7 +1575,13 @@ class TerminalInstanceService {
     this.resizePassAbort?.abort();
     const controller = new AbortController();
     this.resizePassAbort = controller;
-    void this.executeResizePass(ids, controller).catch((error) => {
+    const run = () => this.executeResizePass(ids, controller);
+    const task =
+      typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
+        ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
+        : run();
+    void task.catch((error) => {
+      if (error instanceof Error && error.name === "AbortError") return;
       logError("terminal resize pass failed", error);
     });
   }

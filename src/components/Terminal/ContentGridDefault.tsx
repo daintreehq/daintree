@@ -2,7 +2,7 @@ import React, { useCallback } from "react";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
+import { GRID_MIN_PANEL_ROWS, MIN_TERMINAL_WIDTH_PX, pxForRows } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
@@ -13,9 +13,16 @@ import {
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
 import { GridShell } from "./GridShell";
+import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import type { ContentGridContext } from "./useContentGridContext";
+
+// Non-scroll row floor: the small minimum a row shrinks to before the grid has
+// to scroll. Rows stretch above it (`1fr`) to fill the viewport when there is
+// room. Mirrors `gridRowsOverflow`'s per-row minimum so the scroll-mode flip
+// lines up exactly with the point this floor would overflow.
+const NON_SCROLL_ROW_MIN_PX = pxForRows(GRID_MIN_PANEL_ROWS);
 
 export function ContentGridDefault({
   ctx,
@@ -76,22 +83,29 @@ export function ContentGridDefault({
                 style={{
                   display: "grid",
                   gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
-                  gridAutoRows: `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
+                  gridAutoRows: ctx.isScrollMode
+                    ? `${ctx.scrollRowHeight}px`
+                    : `minmax(${NON_SCROLL_ROW_MIN_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
                   overflowX: "hidden",
-                  overflowY: "auto",
+                  // Scroll mode shows the dedicated grid scrollbar at all
+                  // times (`scroll`) so the user can always see the grid
+                  // itself scrolls; non-scroll mode only scrolls if a short
+                  // window genuinely clips the quad (`auto`).
+                  overflowY: ctx.isScrollMode ? "scroll" : "auto",
                   // Prevent Chromium's scroll-anchor algorithm from fighting
                   // framer-motion's `LayoutGroup` layout-projection when panels
                   // are added or removed above the viewport — Chromium 146
                   // reflow would otherwise produce visible stutter (#8805).
                   overflowAnchor: "none",
-                  // Reserve gutter width so a row of cells doesn't reflow when
-                  // the scrollbar appears mid-burst.
-                  scrollbarGutter: "stable",
                   // Stop xterm scrollback / overflow strip-of-history from
                   // chaining into the outer chrome via overscroll bounces.
                   overscrollBehavior: "contain",
+                  // Reserve a real gutter on the right for the custom
+                  // GridScrollbar so panels never sit under the handle. The
+                  // native scrollbar is hidden in CSS; this is the only gutter.
+                  paddingRight: ctx.isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
                 }}
                 id="panel-grid"
                 data-grid-container="true"
@@ -145,6 +159,7 @@ export function ContentGridDefault({
                             sourceIndex={index}
                             disabled={isGroupDisabled}
                             layoutTransition={ctx.layoutTransition}
+                            layoutEnabled={ctx.layoutAnimationEnabled}
                           >
                             <GridPanel
                               terminalId={terminal.id}
@@ -166,6 +181,7 @@ export function ContentGridDefault({
                             groupId={group.id}
                             groupPanelIds={group.panelIds}
                             layoutTransition={ctx.layoutTransition}
+                            layoutEnabled={ctx.layoutAnimationEnabled}
                           >
                             <GridTabGroup
                               group={group}
@@ -188,6 +204,10 @@ export function ContentGridDefault({
               </div>
             </GridShell>
           </SortableContext>
+          <GridScrollbar
+            scrollRoot={ctx.gridScrollRoot}
+            revision={`${ctx.gridItemCount}:${ctx.gridCols}:${ctx.isScrollMode}:${ctx.scrollRowHeight}`}
+          />
         </div>
       </div>
     </GridScrollRootContext.Provider>

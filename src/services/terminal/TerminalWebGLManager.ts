@@ -1,24 +1,46 @@
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import type { IDisposable } from "@xterm/xterm";
 import {
-  getMaxContexts,
-  getPassiveThreshold,
-  setMaxContexts as setConfiguredMaxContexts,
-  setPassiveThreshold as setConfiguredPassiveThreshold,
+  getWebglLowerThreshold,
+  getWebglUpperThreshold,
+  setWebglLowerThreshold as setConfiguredLowerThreshold,
+  setWebglThresholds as setConfiguredThresholds,
+  setWebglUpperThreshold as setConfiguredUpperThreshold,
 } from "./TerminalWebGLConfig";
-import { WRITE_BURST_RECENCY_MS, type ManagedTerminal } from "./types";
+import { type ManagedTerminal } from "./types";
 
-const WEBGL_DISABLED = import.meta.env.DAINTREE_DISABLE_WEBGL === "1";
+// WebGL is gated by a count-based mode switch, not per-context eviction.
+// Below the upper threshold, every wanting terminal gets WebGL. Above it,
+// the manager flips to DOM mode and releases active contexts through a
+// requestAnimationFrame drain queue; it flips back to WebGL once the count
+// returns to the lower threshold.
+// The hysteresis gap prevents flapping when a single panel opens or closes at
+// the boundary.
+//
+// DAINTREE_DISABLE_WEBGL=1 is an escape hatch for deterministic environments
+// (E2E suites, perf benchmarks) — when set, the manager starts with
+// hardwareAvailable=false so every ensureContext is a no-op. Vite exposes
+// DAINTREE_* env vars to import.meta.env via envPrefix in vite.config.ts.
+//
+// Why this shape instead of an LRU pool:
+// Chromium hard-caps active WebGL contexts at 16 per renderer and silently
+// evicts the oldest on overflow (webglcontextlost — see crbug 40939743). An
+// LRU pool inside our renderer was making the same eviction decisions
+// Chromium was already making one layer below, producing visible churn at
+// 12-20 visible agent terminals: contexts cycled out, fell back to DOM,
+// reacquired, flashed. The mode switch is a single coordinated decision
+// applied to every terminal at once, which trades one wholesale repaint per
+// boundary crossing for the continuous churn we had before.
 
 type WebglAddonConstructor = new () => WebglAddonType;
 
 // @xterm/addon-webgl loads via dynamic import so it stays out of the renderer's
 // eager critical path. ensureContext() routes every new request through a
 // requestAnimationFrame drain queue (one attach per frame): without that
-// stagger, a burst of synchronous attaches during bulk worktree creation
-// over-subscribes Chromium's 16-context-per-renderer cap, causing silent
-// eviction of older contexts that then sit blank for 3s waiting on
-// webglcontextrestored before xterm's onContextLoss fires (see #7467).
+// stagger, a burst of synchronous attaches during bulk worktree creation or a
+// DOM→WebGL mode flip over-subscribes Chromium's 16-context-per-renderer cap,
+// causing silent eviction of older contexts that then sit blank for 3s waiting
+// on webglcontextrestored before xterm's onContextLoss fires (see #7467).
 let WebglAddonClass: WebglAddonConstructor | null = null;
 let webglAddonLoadPromise: Promise<WebglAddonConstructor> | null = null;
 
@@ -108,18 +130,12 @@ interface WebGLEntry {
   atlasResyncDisposable: IDisposable | null;
 }
 
-export class TerminalWebGLManager {
-  // Chromium caps active WebGL contexts at 16 per renderer process.
-  // Reserve 4 slots for potential non-terminal WebGL consumers in the
-  // main renderer (browser/dev-preview panels are process-isolated via
-  // <webview> partitions and have their own budgets). The pool size lives
-  // in TerminalWebGLConfig so the eager renderer chunk can adjust it
-  // without dragging @xterm/addon-webgl into the entry bundle.
+type Mode = "webgl" | "dom";
 
+export class TerminalWebGLManager {
   // Circuit breaker: if N genuine context-loss events occur within W ms,
   // disable WebGL for the rest of the session to avoid strobing reacquisition
-  // on systems with persistent GPU faults. Two recurrence paths to keep in
-  // mind when tuning these constants:
+  // on systems with persistent GPU faults. Two recurrence paths matter:
   //   1. M-series Macs on external displays at fractional scaling — repeated
   //      per-context faults spaced over seconds; each loss is a distinct GPU
   //      event and must each count toward the threshold (issue #6163).
@@ -131,45 +147,50 @@ export class TerminalWebGLManager {
   // To preserve case 1 while neutralising case 2, recordContextLoss is fed
   // through scheduleContextLossFlush: per-frame burst coalescing means one
   // GPU event = one breaker tick regardless of how many pool entries fired.
-  // Timestamps are taken at flush time (next rAF), not at event-dispatch time;
-  // this matters only if rAF is suppressed for longer than LOSS_WINDOW_MS (e.g.
-  // a fully backgrounded renderer), which is not a path we render WebGL on.
   private static readonly LOSS_THRESHOLD = 3;
   private static readonly LOSS_WINDOW_MS = 60_000;
 
-  static get MAX_CONTEXTS(): number {
-    return getMaxContexts();
+  static get UPPER_THRESHOLD(): number {
+    return getWebglUpperThreshold();
   }
 
-  static setMaxContexts(n: number): void {
-    setConfiguredMaxContexts(n);
+  static get LOWER_THRESHOLD(): number {
+    return getWebglLowerThreshold();
   }
 
-  static setPassiveThreshold(n: number): void {
-    setConfiguredPassiveThreshold(n);
+  static setWebglUpperThreshold(n: number): void {
+    setConfiguredUpperThreshold(n);
   }
 
+  static setWebglLowerThreshold(n: number): void {
+    setConfiguredLowerThreshold(n);
+  }
+
+  static setWebglThresholds(upper: number, lower: number): void {
+    setConfiguredThresholds(upper, lower);
+  }
+
+  // Every terminal that currently wants WebGL. The consumer (visibility/agent
+  // gating in TerminalInstanceService) decides what "wants" means; the manager
+  // just counts. wants stays populated in DOM mode so a later flip back to
+  // WebGL re-attaches every still-wanting terminal in one pass.
+  private wants = new Map<string, ManagedTerminal>();
   private pool = new Map<string, WebGLEntry>();
-  private lruOrder: string[] = [];
-  private hardwareAvailable = true;
+  private mode: Mode = "webgl";
+  // Start with hardware unavailable if the env-level disable is set; mode
+  // is "webgl" so the first ensureContext is what flips to "dom" cleanly via
+  // evaluateMode (mirrors the breaker path).
+  private hardwareAvailable = import.meta.env.DAINTREE_DISABLE_WEBGL !== "1";
   private hasLoggedSoftwareSkip = false;
-  private lossTimestamps: number[] = [];
   private hasLoggedBreakerTrip = false;
-  // Burst coalescer for context-loss events: a bulk GPU-process eviction can
-  // synchronously fire webglcontextlost on every pool entry within one frame.
-  // pendingLossCount accumulates raw notifications; flushContextLoss records
-  // exactly one breaker tick per frame regardless of how many fired.
+  private hasLoggedModeFlip = false;
+
+  // Coalesce a burst of webglcontextlost events (one per active pool entry on
+  // a bulk GPU eviction — see LOSS_THRESHOLD comment) into one breaker tick.
+  private lossTimestamps: number[] = [];
   private pendingLossCount = 0;
   private lossCoalesceRafId: number | null = null;
-  // Pool-pressure diagnostics (Tier 0 — silent log). Eviction at a full pool is
-  // expected behaviour in 20–30 terminal tiled fleets and falls back seamlessly
-  // to the DOM renderer, so this is observable-only, not user-facing. Rate
-  // limited to one console.warn per minute, mirroring hasLoggedBreakerTrip.
-  private evictionCount = 0;
-  // -Infinity so the first eviction always crosses the interval and warns,
-  // independent of the absolute clock value (real epoch or a faked time of 0).
-  private lastEvictionWarnAt = Number.NEGATIVE_INFINITY;
-  private static readonly EVICTION_WARN_INTERVAL_MS = 60_000;
+
   // Queue of pending ensure requests: drained one-per-rAF so each context
   // allocation completes its GPU IPC roundtrip before the next is requested.
   private pendingEnsures = new Map<string, ManagedTerminal>();
@@ -178,6 +199,14 @@ export class TerminalWebGLManager {
   // under a test shim that invokes the callback inline).
   private pendingDrainScheduled = false;
   private pendingEnsureRafId: number | null = null;
+
+  // Queue of active contexts to release after a fleet-wide DOM-mode downgrade.
+  // Releasing a WebGL addon forces synchronous GPU-side context loss, so the
+  // downgrade is paced the same way as attach: one terminal per frame.
+  private pendingReleases = new Map<string, ManagedTerminal>();
+  private pendingReleaseDrainScheduled = false;
+  private pendingReleaseRafId: number | null = null;
+
   // xterm shares one module-global TextureAtlas across every terminal with a
   // matching font/theme config. A page-merge (TextureAtlas._mergePages) splices
   // pages and rewrites glyph texturePage indices, but each WebGL renderer keeps
@@ -202,11 +231,15 @@ export class TerminalWebGLManager {
   private atlasResyncRafId: number | null = null;
 
   setHardwareAvailable(available: boolean): void {
+    const wasAvailable = this.hardwareAvailable;
     this.hardwareAvailable = available;
+    if (wasAvailable && !available) {
+      // Hardware degraded — force DOM mode regardless of count and stay there.
+      this.flipToDom();
+    }
   }
 
   ensureContext(id: string, managed: ManagedTerminal): void {
-    if (WEBGL_DISABLED) return;
     if (!this.hardwareAvailable) {
       if (!this.hasLoggedSoftwareSkip && !this.hasLoggedBreakerTrip) {
         console.warn("[TerminalWebGLManager] Skipping WebGL: software-only GPU detected");
@@ -216,49 +249,57 @@ export class TerminalWebGLManager {
     }
     if (!managed.isOpened) return;
 
-    // Passive-mode gate: when a large agent fleet is visible at once, the pool
-    // (capped well below the visible count) would otherwise cycle the same
-    // terminals through release/reacquire, flashing them. Once the threshold of
-    // contexts is occupied, suppress new acquisitions — those terminals stay on
-    // the DOM renderer. Existing pooled contexts are untouched and drain
-    // naturally via releaseContext/onTerminalDestroyed; the next ensure from a
-    // newly-visible terminal passes the gate once the count falls back below it.
-    // Re-ensures of terminals already pooled (LRU touch) or already queued must
-    // pass through — they don't add a new context, and gating them on the raw
-    // pool+queue size would spuriously suppress an unrelated free slot.
-    if (!this.pool.has(id) && !this.pendingEnsures.has(id)) {
-      if (this.pool.size + this.pendingEnsures.size >= getPassiveThreshold()) return;
+    const wasWanted = this.wants.has(id);
+    this.wants.set(id, managed);
+    if (!wasWanted) {
+      this.evaluateMode();
     }
-
-    // Dedupe: latest request per id wins until the queue drains.
-    this.pendingEnsures.set(id, managed);
-
-    if (WebglAddonClass) {
-      this.scheduleDrain();
-      return;
+    // In WebGL mode, queue an attach for this id if not already pooled. In
+    // DOM mode the want is tracked but no attach happens until the next flip
+    // back. attachWithLoadedAddon dedups via pool.has(id), so a repeat ensure
+    // on an already-attached terminal is a cheap no-op.
+    if (this.mode === "webgl" && !this.pool.has(id)) {
+      this.queueAttach(id, managed);
     }
-
-    void loadWebglAddon().then(
-      () => this.scheduleDrain(),
-      () => {
-        // Retain pending; a subsequent ensureContext call will retry the load.
-      }
-    );
   }
 
   releaseContext(id: string): void {
+    const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
+    this.pendingReleases.delete(id);
     if (this.pool.has(id)) {
-      this.doRelease(id);
+      this.dropPoolEntry(id);
     }
+    if (wasWanted) {
+      this.evaluateMode();
+    }
+  }
+
+  // External re-evaluation hook. Threshold changes pushed from the main
+  // process via useResourceProfile arrive between consumer events; without
+  // this, a profile downgrade from balanced (12/10) to efficiency (8/6) would
+  // leave 9+ wants on WebGL until the next ensure/release happens to land.
+  refreshMode(): void {
+    this.evaluateMode();
   }
 
   isActive(id: string): boolean {
     return this.pool.has(id);
   }
 
+  // Test/diagnostic introspection — not part of the consumer API.
+  getMode(): Mode {
+    return this.mode;
+  }
+
+  getWantsSize(): number {
+    return this.wants.size;
+  }
+
   onTerminalDestroyed(id: string): void {
+    const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
+    this.pendingReleases.delete(id);
     const entry = this.pool.get(id);
     if (entry) {
       try {
@@ -282,7 +323,9 @@ export class TerminalWebGLManager {
       // Chromium budget the same way #7467 stalled the attach path.
       forceGpuSlotRelease(entry.addon);
       this.pool.delete(id);
-      this.removeFromLru(id);
+    }
+    if (wasWanted) {
+      this.evaluateMode();
     }
   }
 
@@ -297,6 +340,17 @@ export class TerminalWebGLManager {
     this.pendingEnsureRafId = null;
     this.pendingDrainScheduled = false;
     this.pendingEnsures.clear();
+    if (this.pendingReleaseRafId !== null) {
+      try {
+        cancelAnimationFrame(this.pendingReleaseRafId);
+      } catch {
+        // ignore
+      }
+    }
+    this.pendingReleaseRafId = null;
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleases.clear();
+    this.wants.clear();
     if (this.atlasResyncRafId !== null) {
       try {
         cancelAnimationFrame(this.atlasResyncRafId);
@@ -316,8 +370,83 @@ export class TerminalWebGLManager {
     this.lossCoalesceRafId = null;
     this.pendingLossCount = 0;
     for (const id of [...this.pool.keys()]) {
-      this.doRelease(id);
+      this.dropPoolEntry(id);
     }
+  }
+
+  private evaluateMode(): void {
+    if (!this.hardwareAvailable) {
+      // Hardware-unavailable is a one-way trip — stay in DOM regardless of count.
+      if (this.mode !== "dom") this.flipToDom();
+      return;
+    }
+    const count = this.wants.size;
+    if (this.mode === "webgl" && count > getWebglUpperThreshold()) {
+      this.flipToDom();
+    } else if (this.mode === "dom" && count <= getWebglLowerThreshold()) {
+      this.flipToWebgl();
+    }
+  }
+
+  private flipToDom(): void {
+    if (this.mode === "dom") return;
+    this.mode = "dom";
+    if (!this.hasLoggedModeFlip) {
+      console.warn(
+        `[TerminalWebGLManager] Switching to DOM renderer (wants=${this.wants.size}, upper=${getWebglUpperThreshold()})`
+      );
+      this.hasLoggedModeFlip = true;
+    }
+    // Cancel any pending attaches — none will be honored in DOM mode.
+    this.pendingEnsures.clear();
+    if (this.pendingEnsureRafId !== null) {
+      try {
+        cancelAnimationFrame(this.pendingEnsureRafId);
+      } catch {
+        // ignore
+      }
+      this.pendingEnsureRafId = null;
+    }
+    this.pendingDrainScheduled = false;
+
+    // Release active contexts progressively. Each terminal falls back to
+    // xterm's DOM renderer on its next paint. Visible terminals refresh when
+    // their release lands so the renderer swap is not deferred until output.
+    for (const [id, entry] of this.pool) {
+      this.pendingReleases.set(id, entry.managed);
+    }
+    this.scheduleReleaseDrain();
+  }
+
+  private flipToWebgl(): void {
+    if (this.mode === "webgl") return;
+    this.mode = "webgl";
+    this.cancelReleaseDrain();
+    // Reset the mode-flip warning so a future downgrade is logged again
+    // (per-session, but recoverable across the cycle).
+    this.hasLoggedModeFlip = false;
+    // Queue every still-wanting terminal for attach. The rAF drain serialises
+    // them so the bulk attach never over-subscribes the 16-context budget.
+    for (const [id, managed] of this.wants) {
+      if (!this.pool.has(id)) {
+        this.queueAttach(id, managed);
+      }
+    }
+  }
+
+  private queueAttach(id: string, managed: ManagedTerminal): void {
+    // Dedupe: latest request per id wins until the queue drains.
+    this.pendingEnsures.set(id, managed);
+    if (WebglAddonClass) {
+      this.scheduleDrain();
+      return;
+    }
+    void loadWebglAddon().then(
+      () => this.scheduleDrain(),
+      () => {
+        // Retain pending; a subsequent ensureContext call will retry the load.
+      }
+    );
   }
 
   private scheduleDrain(): void {
@@ -340,18 +469,81 @@ export class TerminalWebGLManager {
       this.pendingEnsures.clear();
       return;
     }
+    // A mode flip during an in-flight drain is honored — flipToDom clears
+    // pendingEnsures so the next entries().next() returns done immediately.
+    if (this.mode !== "webgl") {
+      this.pendingEnsures.clear();
+      return;
+    }
     const next = this.pendingEnsures.entries().next();
     if (next.done) return;
     const [id, managed] = next.value;
     this.pendingEnsures.delete(id);
-    if (managed.isOpened) {
-      // attachWithLoadedAddon dedups via pool.has(id) and routes the
-      // already-active case through moveLruToEnd so the touch semantics of
-      // a repeat ensure are preserved.
+    // Re-check the want: the terminal may have called releaseContext between
+    // queueing and now (visibility change, agent ended, etc).
+    if (managed.isOpened && this.wants.has(id)) {
       this.attachWithLoadedAddon(id, managed, WebglAddonClass);
     }
     if (this.pendingEnsures.size > 0) {
       this.scheduleDrain();
+    }
+  };
+
+  private scheduleReleaseDrain(): void {
+    if (this.pendingReleaseDrainScheduled) return;
+    if (this.pendingReleases.size === 0) return;
+    this.pendingReleaseDrainScheduled = true;
+    const id = requestAnimationFrame(this.drainOneRelease);
+    // If drainOneRelease ran synchronously (test shim or unusual host), it
+    // will have already cleared pendingReleaseDrainScheduled and there is no
+    // rAF id to cancel.
+    if (this.pendingReleaseDrainScheduled) {
+      this.pendingReleaseRafId = id;
+    }
+  }
+
+  private cancelReleaseDrain(): void {
+    if (this.pendingReleaseRafId !== null) {
+      try {
+        cancelAnimationFrame(this.pendingReleaseRafId);
+      } catch {
+        // ignore
+      }
+    }
+    this.pendingReleaseRafId = null;
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleases.clear();
+  }
+
+  private drainOneRelease = (): void => {
+    this.pendingReleaseDrainScheduled = false;
+    this.pendingReleaseRafId = null;
+
+    // A quick recovery back to WebGL makes the release queue stale. Keep any
+    // still-active contexts instead of churning them through DOM and back.
+    if (this.mode !== "dom") {
+      this.pendingReleases.clear();
+      return;
+    }
+
+    const next = this.pendingReleases.entries().next();
+    if (next.done) return;
+    const [id, managed] = next.value;
+    this.pendingReleases.delete(id);
+
+    if (this.pool.has(id)) {
+      this.dropPoolEntry(id);
+      if (managed.isOpened && managed.isVisible && managed.terminal.rows > 0) {
+        try {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        } catch {
+          // ignore — next user-driven paint will catch up regardless
+        }
+      }
+    }
+
+    if (this.pendingReleases.size > 0) {
+      this.scheduleReleaseDrain();
     }
   };
 
@@ -401,8 +593,7 @@ export class TerminalWebGLManager {
     }
   };
 
-  // Coalesce a burst of webglcontextlost events (one per active pool entry on
-  // a bulk GPU eviction — see LOSS_THRESHOLD comment) into one breaker tick.
+  // Coalesce a burst of webglcontextlost events into one breaker tick.
   private scheduleContextLossFlush(): void {
     this.pendingLossCount += 1;
     if (this.lossCoalesceRafId !== null) return;
@@ -424,9 +615,9 @@ export class TerminalWebGLManager {
   private reacquireContext(id: string, entry: WebGLEntry): void {
     if (this.pool.get(id) !== entry) return;
     const managed = entry.managed;
-    this.doRelease(id);
-    if (managed.isOpened) {
-      this.ensureContext(id, managed);
+    this.dropPoolEntry(id);
+    if (managed.isOpened && this.wants.has(id) && this.mode === "webgl") {
+      this.queueAttach(id, managed);
     }
   }
 
@@ -435,17 +626,17 @@ export class TerminalWebGLManager {
     managed: ManagedTerminal,
     AddonClass: WebglAddonConstructor
   ): void {
-    if (this.pool.has(id)) {
-      this.moveLruToEnd(id);
+    if (this.pool.has(id)) return;
+    // No eviction branch: the mode switch guarantees the pool never exceeds
+    // upperThreshold while we are in WebGL mode. The real path that can reach
+    // here over the line is a threshold change pushed via setWebglThresholds
+    // between when this attach was queued and when the rAF drain landed —
+    // refreshMode() is best-effort but the queue can already be in flight.
+    // Re-evaluating here flips to DOM and clears pendingEnsures, so the next
+    // drain iteration bails immediately.
+    if (this.wants.size > getWebglUpperThreshold()) {
+      this.evaluateMode();
       return;
-    }
-
-    if (this.pool.size >= getMaxContexts()) {
-      const evictId = this.pickEvictTarget();
-      if (evictId) {
-        this.doRelease(evictId);
-        this.recordEvictionForDiagnostics();
-      }
     }
 
     let addon: WebglAddonType | null = null;
@@ -460,7 +651,18 @@ export class TerminalWebGLManager {
         if (this.pool.get(id)?.addon === ownAddon) {
           // record before release; pool entry still valid here
           this.scheduleContextLossFlush();
-          this.releaseContext(id);
+          // Drop the dead pool entry but LEAVE the terminal in `wants`.
+          // A context loss kills the addon, not the consumer's eligibility:
+          // calling releaseContext() would decrement the mode-switch count
+          // and silently drop the terminal from the next dom→webgl recovery.
+          // We deliberately do NOT auto-requeue here — a bulk Chromium
+          // eviction (caused BY too many contexts) would re-request the
+          // contexts immediately and re-trigger the same eviction, looping
+          // until the breaker trips after 3 cycles. Instead the terminal
+          // sits on the DOM renderer (which renders correctly under
+          // lineHeight: 1.0) until a consumer-side re-ensure happens
+          // (visibility change, tier transition, mode flip).
+          this.dropPoolEntry(id);
         }
       });
       managed.terminal.loadAddon(addon);
@@ -492,7 +694,11 @@ export class TerminalWebGLManager {
         const captureHandler = (): void => {
           if (this.pool.get(id)?.addon !== ownAddon) return;
           this.scheduleContextLossFlush();
-          this.releaseContext(id);
+          // Same reasoning as the onContextLoss handler above — drop the
+          // pool entry but keep the want, and do not auto-requeue. The next
+          // consumer event (visibility / tier / mode flip) will restore
+          // WebGL; until then the terminal renders via DOM.
+          this.dropPoolEntry(id);
           try {
             if (managed.isOpened && managed.terminal.rows > 0) {
               managed.terminal.refresh(0, managed.terminal.rows - 1);
@@ -513,7 +719,6 @@ export class TerminalWebGLManager {
         captureDisposable,
         atlasResyncDisposable,
       });
-      this.lruOrder.push(id);
     } catch {
       try {
         clDisposable?.dispose();
@@ -538,15 +743,18 @@ export class TerminalWebGLManager {
     }
   }
 
-  private doRelease(id: string): void {
+  // Drop the pool entry for an id without touching the wants set. Internal —
+  // used by the context-loss path (the addon died but the consumer still wants
+  // WebGL) and by mode flips. The public releaseContext() wraps this and also
+  // mutates wants because that path means "consumer no longer wants WebGL".
+  private dropPoolEntry(id: string): void {
     const entry = this.pool.get(id);
     if (!entry) return;
 
-    // Delete from pool/lru first so the capture-phase listener (and stale
+    // Delete from pool first so the capture-phase listener (and stale
     // onContextLoss fires) treat the loseContext below as a self-initiated
     // release rather than a real eviction.
     this.pool.delete(id);
-    this.removeFromLru(id);
 
     try {
       entry.contextLossDisposable.dispose();
@@ -588,104 +796,6 @@ export class TerminalWebGLManager {
         );
         this.hasLoggedBreakerTrip = true;
       }
-    }
-  }
-
-  // Eviction priority scorer. Returns the pool id that should give up its
-  // WebGL slot first under pool pressure. Lower tier = evict sooner; LRU
-  // position breaks ties within a tier so existing recency semantics survive.
-  //
-  // Tiers (most → least evictable):
-  //   0  done/idle (no agent, or completed/exited/idle) — DOM renderer is fine
-  //   1  waiting, unfocused, not recently writing — idle between prompts
-  //   2  working but drained (pendingWrites 0, no recent write), unfocused
-  //   3  waiting + in an active write burst (lastWriteAt within window)
-  //   4  focused — user is looking at it; glyph quality matters
-  //   5  working with queued writes — actively streaming output
-  //   6  focused + directing — user typing into a live agent; never evict first
-  //
-  // Reads the live `managed` ref on each pool entry (mutated in place by the
-  // write and agent-state controllers), so no cross-controller coupling.
-  private pickEvictTarget(): string | undefined {
-    const lruIndex = new Map<string, number>();
-    for (let i = 0; i < this.lruOrder.length; i++) {
-      lruIndex.set(this.lruOrder[i]!, i);
-    }
-
-    const now = Date.now();
-    let bestId: string | undefined;
-    let bestTier = Number.POSITIVE_INFINITY;
-    let bestLru = Number.POSITIVE_INFINITY;
-
-    for (const [id, entry] of this.pool) {
-      const m = entry.managed;
-      const state = m.agentState ?? "idle";
-      const focused = m.isFocused === true;
-      const pending = m.pendingWrites ?? 0;
-      const recentlyWriting =
-        m.lastWriteAt !== undefined && now - m.lastWriteAt < WRITE_BURST_RECENCY_MS;
-
-      let tier: number;
-      if (state === "directing" && focused) {
-        tier = 6;
-      } else if (state === "working" && pending > 0) {
-        tier = 5;
-      } else if (focused) {
-        tier = 4;
-      } else if (recentlyWriting && state === "waiting") {
-        // Burst protection only applies to "waiting" — an agent between prompts
-        // that just streamed output. A recent lastWriteAt on a done state
-        // (idle/completed/exited) is a final flush, not an ongoing burst, so
-        // those fall through to tier 0 below.
-        tier = 3;
-      } else if (state === "working" && pending === 0 && !recentlyWriting) {
-        tier = 2;
-      } else if (state === "waiting" && !recentlyWriting) {
-        tier = 1;
-      } else if (state === "idle" || state === "completed" || state === "exited") {
-        tier = 0;
-      } else {
-        // "waiting" while recently writing, or any unmapped state — keep it
-        // above the cleanly-idle tier but below focused/active work.
-        tier = 2;
-      }
-
-      const lru = lruIndex.get(id) ?? Number.POSITIVE_INFINITY;
-      if (tier < bestTier || (tier === bestTier && lru < bestLru)) {
-        bestTier = tier;
-        bestLru = lru;
-        bestId = id;
-      }
-    }
-
-    // Fall back to the LRU front if the pool/LRU ever desynchronise.
-    return bestId ?? this.lruOrder[0]!;
-  }
-
-  private recordEvictionForDiagnostics(): void {
-    this.evictionCount += 1;
-    const now = Date.now();
-    if (now - this.lastEvictionWarnAt > TerminalWebGLManager.EVICTION_WARN_INTERVAL_MS) {
-      console.warn(
-        `[TerminalWebGLManager] Pool pressure: evicted ${this.evictionCount} WebGL context(s) since last warning (pool=${this.pool.size}/${getMaxContexts()})`
-      );
-      this.evictionCount = 0;
-      this.lastEvictionWarnAt = now;
-    }
-  }
-
-  private moveLruToEnd(id: string): void {
-    const idx = this.lruOrder.indexOf(id);
-    if (idx !== -1) {
-      this.lruOrder.splice(idx, 1);
-    }
-    this.lruOrder.push(id);
-  }
-
-  private removeFromLru(id: string): void {
-    const idx = this.lruOrder.indexOf(id);
-    if (idx !== -1) {
-      this.lruOrder.splice(idx, 1);
     }
   }
 }

@@ -35,7 +35,12 @@ import {
 } from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
-import { computeGridColumns, GRID_TRANSITION_DURATION_MS } from "@/lib/terminalLayout";
+import {
+  computeGridColumns,
+  computeScrollRowHeight,
+  gridRowsOverflow,
+  GRID_TRANSITION_DURATION_MS,
+} from "@/lib/terminalLayout";
 import {
   isSidebarLayoutTransitionLocked,
   subscribeSidebarLayoutTransitionUnlock,
@@ -95,7 +100,12 @@ export interface ContentGridContext {
   maximizedGroupFocusTarget: string | null;
   gridCols: number;
   fleetGridCols: number;
+  /** True once the grid becomes a vertical scroll surface (5+ panels / 3+ rows). */
+  isScrollMode: boolean;
+  /** Fixed row height (px) used in scroll mode; ignored in non-scroll quad mode. */
+  scrollRowHeight: number;
   layoutTransition: Transition;
+  layoutAnimationEnabled: boolean;
   layoutConfig: ReturnType<typeof useLayoutConfigStore.getState>["layoutConfig"];
   gridWidth: number | null;
   isFleetScopeRender: boolean;
@@ -393,6 +403,11 @@ export function useContentGridContext({
     preMaximizeLayoutRef.current = preMaximizeLayout;
   }, [preMaximizeLayout]);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
+  // Grid height is tracked locally (like `gridWidth`) rather than read from the
+  // layout store: the store's `gridDimensions` is reset to null whenever the
+  // ResizeObserver effect re-subscribes (it re-runs on every panel open/close),
+  // which would blip `scrollRowHeight` to its default and resize every terminal.
+  const [gridHeight, setGridHeight] = useState<number | null>(null);
 
   const { placeholderIndex, sourceContainer } = useDndPlaceholder();
   const isDragging = useIsDragging();
@@ -485,6 +500,7 @@ export function useContentGridContext({
         if (entry) {
           const { width, height } = entry.contentRect;
           setGridWidth((prev) => (prev === width ? prev : width));
+          setGridHeight((prev) => (prev === height ? prev : height));
           setGridDimensions({ width, height });
         }
       });
@@ -498,6 +514,7 @@ export function useContentGridContext({
     // below will sync the grid once the transition completes.
     if (!isSidebarLayoutTransitionLocked()) {
       setGridWidth(container.clientWidth);
+      setGridHeight(container.clientHeight);
       setGridDimensions({ width: container.clientWidth, height: container.clientHeight });
     }
 
@@ -519,6 +536,7 @@ export function useContentGridContext({
         const width = measureNode.clientWidth;
         const height = measureNode.clientHeight;
         setGridWidth((prev) => (prev === width ? prev : width));
+        setGridHeight((prev) => (prev === height ? prev : height));
         setGridDimensions({ width, height });
       });
     });
@@ -588,13 +606,31 @@ export function useContentGridContext({
     hysteresisGridCols,
   ]);
 
+  // Scroll mode is the last resort: the grid scrolls only once its rows would
+  // overflow the visible height even at the small `GRID_MIN_PANEL_ROWS` floor.
+  // Panel count never triggers it — a tall display fits many rows first. When
+  // it does scroll, rows are fixed-height (not a `1fr` stretch) so closing a
+  // panel never restretches and resizes every surviving terminal.
+  //
+  // The row count uses real grid groups (`tabGroups.length`), not
+  // `gridItemCount`: a drag placeholder must not flip row-height mode mid-drag.
+  // `closingIds.size` is added back so an in-flight optimistic close keeps the
+  // pre-close count — a close otherwise exits scroll mode on the click path and
+  // restretches the survivors, the exact resize fixed rows exist to avoid. The
+  // layout settles once the canonical commit clears `closingIds`.
+  const scrollModeCount = tabGroups.length + closingIds.size;
+  const scrollModeRows = gridCols > 0 ? Math.ceil(scrollModeCount / gridCols) : scrollModeCount;
+  const isScrollMode = gridRowsOverflow(scrollModeRows, gridHeight);
+  const scrollRowHeight = useMemo(() => computeScrollRowHeight(gridHeight), [gridHeight]);
+
   const layoutTransition: Transition = useMemo(
     () => ({
-      duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
+      duration: isProjectSwitching || closingIds.size > 0 ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
       ease: [0.22, 1, 0.36, 1],
     }),
-    [isProjectSwitching]
+    [isProjectSwitching, closingIds.size]
   );
+  const layoutAnimationEnabled = !isProjectSwitching && closingIds.size === 0;
 
   const gridAgentMenuItems = useMemo(() => {
     return getEffectiveAgentIds()
@@ -751,28 +787,48 @@ export function useContentGridContext({
     }
   });
   const prevGridColsRef = useRef(gridCols);
+  const prevPanelCountRef = useRef(panelIds.length);
+  const prevScrollGeoRef = useRef(`${isScrollMode}:${scrollRowHeight}`);
   useLayoutEffect(() => {
     void gridCols;
     void panelIds;
 
     const colsChanged = prevGridColsRef.current !== gridCols;
     prevGridColsRef.current = gridCols;
+
+    const scrollGeoKey = `${isScrollMode}:${scrollRowHeight}`;
+    const scrollGeoChanged = prevScrollGeoRef.current !== scrollGeoKey;
+    prevScrollGeoRef.current = scrollGeoKey;
+
+    const isPureClose = panelIds.length < prevPanelCountRef.current;
+    prevPanelCountRef.current = panelIds.length;
+
     setHysteresisGridCols(
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
 
     if (isProjectSwitching || isDraggingRef.current) return;
 
-    // Schedule a coalesced sibling resize off the open/close path — the click
-    // never waits on N xterm resizes, and a burst of opens/closes collapses
-    // into a single pass once it settles (see scheduleBatchResize).
-    runGridBatchFit();
+    // Closing a panel in scroll mode leaves every survivor at its exact size —
+    // fixed column tracks, fixed row height. Resizing them all on the close
+    // path is pure waste and a real source of close-path lag, so skip the
+    // batch fit when nothing about the survivors' geometry actually changed.
+    const survivorGeometryStable = isScrollMode && isPureClose && !colsChanged && !scrollGeoChanged;
+    if (!survivorGeometryStable) {
+      // Schedule a coalesced sibling resize off the open/close path — the click
+      // never waits on N xterm resizes, and a burst of opens/closes collapses
+      // into a single pass once it settles (see scheduleBatchResize).
+      runGridBatchFit();
+    }
 
-    // A column-count change shifts cell widths, so the per-host ResizeObserver
-    // would otherwise fire an uncoordinated second resize through the 200ms
-    // FLIP. Lock those panels for the transition window; the lock's unlock pass
-    // doubles as the corrective backstop for any panel not yet laid out here.
-    if (colsChanged) {
+    // A layout-changing close (or a column change) resizes every survivor's
+    // box. Each panel's own ResizeObserver in XtermAdapter would otherwise
+    // fire its own un-chunked resize on top of the coalesced pass above — a
+    // resize storm that is the main cause of close-path lag. Lock the panels
+    // for the transition window so the single chunked pass is the only resize;
+    // the lock's unlock pass is the corrective backstop.
+    const layoutChangingClose = isPureClose && !survivorGeometryStable;
+    if (colsChanged || scrollGeoChanged || layoutChangingClose) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(
@@ -781,7 +837,15 @@ export function useContentGridContext({
         );
       }
     }
-  }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
+  }, [
+    gridCols,
+    panelIds,
+    isScrollMode,
+    scrollRowHeight,
+    isProjectSwitching,
+    layoutConfig.strategy,
+    showPlaceholder,
+  ]);
 
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
   const useTwoPaneSplitMode =
@@ -972,7 +1036,10 @@ export function useContentGridContext({
     maximizedGroupFocusTarget,
     gridCols,
     fleetGridCols,
+    isScrollMode,
+    scrollRowHeight,
     layoutTransition,
+    layoutAnimationEnabled,
     layoutConfig,
     gridWidth,
     isFleetScopeRender,

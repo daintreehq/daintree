@@ -6,9 +6,9 @@
 // rapid closes stack and feel laggy.
 //
 // This coordinator splits the close in two:
-//   1. Optimistic hide — the clicked panel id(s) land in `closingIds` and the
-//      grid filters them out immediately, so the panel disappears in the same
-//      frame with near-zero work (just a free CSS-grid reflow).
+//   1. Optimistic hide — the clicked panel id(s) land in `closingIds` for
+//      dedupe/focus and their DOM cells are hidden imperatively with
+//      `display:none`. React does not unmount xterm on the click path.
 //   2. Deferred canonical commit — the real teardown runs after the browser
 //      has painted the removal, coalesced so a burst of closes flushes once.
 //
@@ -19,12 +19,26 @@ import { panelStoreApi } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logError } from "@/utils/logger";
 
-// A burst of closes within this gap collapses into one deferred flush. Short
-// enough that canonical state (and undo) stays responsive, long enough that the
-// optimistic removal has reliably painted first.
-const FLUSH_DEBOUNCE_MS = 48;
-// Hard ceiling so a sustained close stream still commits promptly.
+// The canonical teardown runs in idle time — after the optimistic removal has
+// painted — so it never competes with the close interaction or a burst of
+// closes. `FLUSH_MAX_WAIT_MS` caps the wait so undo and canonical state stay
+// responsive even if the main thread never goes idle.
 const FLUSH_MAX_WAIT_MS = 160;
+
+const supportsIdleCallback =
+  typeof window !== "undefined" && typeof window.requestIdleCallback === "function";
+
+/** Schedule `cb` for the next idle slot, or `FLUSH_MAX_WAIT_MS` at the latest. */
+function scheduleIdle(cb: () => void): number {
+  return supportsIdleCallback
+    ? window.requestIdleCallback(cb, { timeout: FLUSH_MAX_WAIT_MS })
+    : window.setTimeout(cb, FLUSH_MAX_WAIT_MS);
+}
+
+function cancelIdle(handle: number): void {
+  if (supportsIdleCallback) window.cancelIdleCallback(handle);
+  else window.clearTimeout(handle);
+}
 
 export interface PanelCloseRequest {
   /** Panel ids to hide from the grid immediately. */
@@ -35,9 +49,9 @@ export interface PanelCloseRequest {
 
 const EMPTY: ReadonlySet<string> = new Set<string>();
 let closingIds: ReadonlySet<string> = EMPTY;
+let renderClosingIds: ReadonlySet<string> = EMPTY;
 let pending: PanelCloseRequest[] = [];
 let flushTimer: number | undefined;
-let firstRequestAt: number | undefined;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -50,7 +64,7 @@ function emit(): void {
   }
 }
 
-/** Subscribe to `closingIds` changes — wired into `useSyncExternalStore`. */
+/** Subscribe to render-overlay changes — wired into `useSyncExternalStore`. */
 export function subscribeOptimisticClose(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -60,7 +74,7 @@ export function subscribeOptimisticClose(listener: () => void): () => void {
 
 /** Stable snapshot for `useSyncExternalStore` — identity changes only on edit. */
 export function getClosingIdsSnapshot(): ReadonlySet<string> {
-  return closingIds;
+  return renderClosingIds;
 }
 
 export function isOptimisticallyClosing(id: string): boolean {
@@ -73,7 +87,97 @@ export function hasPendingOptimisticCloses(): boolean {
 
 function setClosingIds(next: Set<string>): void {
   closingIds = next.size === 0 ? EMPTY : next;
+  renderClosingIds = EMPTY;
   emit();
+}
+
+function setClosingIdsSilently(next: Set<string>): void {
+  closingIds = next.size === 0 ? EMPTY : next;
+}
+
+function getPanelElement(id: string): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  for (const element of document.querySelectorAll<HTMLElement>("[data-panel-id]")) {
+    if (element.dataset.panelId === id) return element;
+  }
+  for (const element of document.querySelectorAll<HTMLElement>("[data-terminal-id]")) {
+    if (element.dataset.terminalId === id) return element;
+  }
+  return null;
+}
+
+function hidePanelsImperatively(ids: string[]): void {
+  for (const id of ids) {
+    const panelElement = getPanelElement(id);
+    const element =
+      (panelElement?.closest("[data-terminal-id]") as HTMLElement | null) ?? panelElement;
+    if (!element) continue;
+    element.dataset.optimisticClosing = "true";
+    element.setAttribute("aria-hidden", "true");
+    element.style.display = "none";
+    (element as HTMLElement & { inert?: boolean }).inert = true;
+  }
+}
+
+function firstFocusablePanelInGroup(
+  panelIds: string[],
+  activeTabId: string | undefined,
+  closing: ReadonlySet<string>
+): string | null {
+  if (activeTabId && panelIds.includes(activeTabId) && !closing.has(activeTabId)) {
+    return activeTabId;
+  }
+  return panelIds.find((id) => !closing.has(id)) ?? null;
+}
+
+function findNextGridFocusTarget(hideIds: string[]): string | null {
+  const state = panelStoreApi.getState();
+  const closing = new Set(closingIds);
+  const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
+  const groups = state.getTabGroups?.("grid", closingWorktreeId);
+
+  if (groups && groups.length > 0) {
+    const closedGroupIndex = groups.findIndex((group) =>
+      group.panelIds.some((id) => hideIds.includes(id))
+    );
+
+    if (closedGroupIndex >= 0) {
+      for (let i = closedGroupIndex + 1; i < groups.length; i++) {
+        const group = groups[i]!;
+        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
+        if (candidate) return candidate;
+      }
+      for (let i = closedGroupIndex - 1; i >= 0; i--) {
+        const group = groups[i]!;
+        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
+        if (candidate) return candidate;
+      }
+      return null;
+    }
+  }
+
+  const closedIndexes = hideIds
+    .map((id) => state.panelIds.indexOf(id))
+    .filter((index) => index >= 0);
+  const startIndex = closedIndexes.length > 0 ? Math.max(...closedIndexes) + 1 : 0;
+
+  const isGridSurvivor = (id: string): boolean => {
+    if (closing.has(id)) return false;
+    const terminal = state.panelsById[id];
+    if (!terminal) return false;
+    if (terminal.location !== "grid" && terminal.location !== undefined) return false;
+    return terminal.worktreeId === closingWorktreeId;
+  };
+
+  for (let i = startIndex; i < state.panelIds.length; i++) {
+    const id = state.panelIds[i]!;
+    if (isGridSurvivor(id)) return id;
+  }
+  for (let i = startIndex - 2; i >= 0; i--) {
+    const id = state.panelIds[i]!;
+    if (isGridSurvivor(id)) return id;
+  }
+  return null;
 }
 
 // Closing the focused panel must advance `focusedId` synchronously: keybinding
@@ -86,37 +190,35 @@ function advanceFocusPastClosing(hideIds: string[]): void {
   const focusedId = state.focusedId;
   if (!focusedId || !hideIds.includes(focusedId)) return;
 
-  const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
-  let next: string | null = null;
-  for (const id of state.panelIds) {
-    if (closingIds.has(id)) continue;
-    const terminal = state.panelsById[id];
-    if (!terminal) continue;
-    if (terminal.location !== "grid" && terminal.location !== undefined) continue;
-    if (terminal.worktreeId !== closingWorktreeId) continue;
-    next = id;
-    break;
-  }
+  const next = findNextGridFocusTarget(hideIds);
   state.setFocused(next);
   if (next) {
     // Move DOM focus too — the closed pane's xterm textarea is unmounting, so
-    // without this keyboard focus falls to <body> until the user clicks.
-    terminalInstanceService.focus(next);
+    // without this keyboard focus falls to <body> until the user clicks. Defer
+    // it past paint: xterm `.focus()` restores the viewport scroll position,
+    // real work that must not block the close frame. The logical `setFocused`
+    // above already retargets a rapid Cmd+W stream synchronously.
+    const focusTarget = next;
+    requestAnimationFrame(() => {
+      // Re-check before the deferred focus lands: a rapid close burst or a
+      // click elsewhere may have moved focus on, or closed this target too.
+      const current = panelStoreApi.getState().focusedId;
+      if (current === focusTarget && !closingIds.has(focusTarget)) {
+        terminalInstanceService.focus(focusTarget);
+      }
+    });
   }
 }
 
 function scheduleFlush(): void {
-  const now = Date.now();
-  if (firstRequestAt === undefined) firstRequestAt = now;
-  if (flushTimer !== undefined) clearTimeout(flushTimer);
-  const elapsed = now - firstRequestAt;
-  const delay = Math.max(0, Math.min(FLUSH_DEBOUNCE_MS, FLUSH_MAX_WAIT_MS - elapsed));
-  flushTimer = window.setTimeout(runFlush, delay);
+  // A burst of closes coalesces: the first schedules the flush, the rest just
+  // queue into `pending` — `runFlush` drains every queued request at once.
+  if (flushTimer !== undefined) return;
+  flushTimer = scheduleIdle(runFlush);
 }
 
 function runFlush(): void {
   flushTimer = undefined;
-  firstRequestAt = undefined;
   if (pending.length === 0) return;
 
   const batch = pending;
@@ -130,7 +232,7 @@ function runFlush(): void {
   }
 
   // The canonical commit moved these panels to trash, so the grid derivations
-  // exclude them on their own now — drop them from the optimistic overlay.
+  // exclude them on their own now — drop them from the lifecycle overlay.
   if (closingIds.size > 0) {
     const next = new Set(closingIds);
     for (const request of batch) {
@@ -147,10 +249,9 @@ function runFlush(): void {
  */
 export function flushOptimisticCloses(): void {
   if (flushTimer !== undefined) {
-    clearTimeout(flushTimer);
+    cancelIdle(flushTimer);
     flushTimer = undefined;
   }
-  firstRequestAt = undefined;
   runFlush();
 }
 
@@ -164,7 +265,8 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 
   const next = new Set(closingIds);
   for (const id of request.hideIds) next.add(id);
-  setClosingIds(next);
+  setClosingIdsSilently(next);
+  hidePanelsImperatively(request.hideIds);
 
   advanceFocusPastClosing(request.hideIds);
   pending.push(request);
@@ -173,12 +275,12 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 
 export function __resetOptimisticPanelCloseForTests(): void {
   if (flushTimer !== undefined) {
-    clearTimeout(flushTimer);
+    cancelIdle(flushTimer);
     flushTimer = undefined;
   }
-  firstRequestAt = undefined;
   pending = [];
   closingIds = EMPTY;
+  renderClosingIds = EMPTY;
   listeners.clear();
 }
 

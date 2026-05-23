@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
@@ -443,8 +444,16 @@ export function XtermAdapter({
       // doesn't background a terminal that has already been re-attached elsewhere.
       terminalInstanceService.setVisible(terminalId, false, attachGen);
 
-      // Flush pending resizes before unmount
-      terminalInstanceService.flushResize(terminalId);
+      // Settle pending resizes before unmount. For a panel the user just
+      // optimistically closed, *cancel* the pending resize rather than flush
+      // it — flushing force-drains queued output and reflows scrollback
+      // synchronously inside the close click. Cancelling still clears the
+      // job/debounce so no stale resize fires after teardown or on undo.
+      if (isOptimisticallyClosing(terminalId)) {
+        terminalInstanceService.cancelPendingResize(terminalId);
+      } else {
+        terminalInstanceService.flushResize(terminalId);
+      }
 
       terminalInstanceService.detach(terminalId, container);
 

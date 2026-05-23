@@ -91,7 +91,7 @@ export function ContentGridFleetScope({
                   return (
                     <m.div
                       key={terminal.id}
-                      layout="position"
+                      layout={ctx.layoutAnimationEnabled ? "position" : false}
                       transition={ctx.layoutTransition}
                       transformTemplate={pixelSnapTransform}
                       className="h-full min-w-0"
