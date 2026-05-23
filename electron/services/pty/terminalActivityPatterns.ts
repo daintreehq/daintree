@@ -176,7 +176,12 @@ export function buildActivityMonitorOptions(
   }
 ): ActivityMonitorOptions {
   const agentConfig = effectiveAgentId ? getEffectiveAgentConfig(effectiveAgentId) : undefined;
-  const ignoredInputSequences = agentConfig?.capabilities?.ignoredInputSequences ?? ["\x1b\r"];
+  // Focus-in/out (CSI I/O) must not stamp lastUserInputAt: a focus click would
+  // open the 1s echo window, expire before a slow TUI redraw, and the redraw
+  // then flips idle→busy (#8865). Forwarding to the PTY still happens — only
+  // the input-tracking side ignores it.
+  const ignoredInputSequences =
+    agentConfig?.capabilities?.ignoredInputSequences ?? ["\x1b\r", "\x1b[I", "\x1b[O"];
 
   const detection = effectiveAgentId
     ? getEffectiveAgentConfig(effectiveAgentId)?.detection

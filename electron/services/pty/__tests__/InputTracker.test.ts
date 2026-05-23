@@ -14,6 +14,33 @@ describe("InputTracker", () => {
       expect(result.kind).toBe("ignored");
     });
 
+    it("ignores focus-in (CSI I) when configured (#8865)", () => {
+      const focusTracker = new InputTracker({
+        ignoredInputSequences: ["\x1b\r", "\x1b[I", "\x1b[O"],
+      });
+      const result = focusTracker.process("\x1b[I", 1000);
+      expect(result.kind).toBe("ignored");
+      expect(focusTracker.lastUserInputAt).toBe(0);
+    });
+
+    it("ignores focus-out (CSI O) when configured (#8865)", () => {
+      const focusTracker = new InputTracker({
+        ignoredInputSequences: ["\x1b\r", "\x1b[I", "\x1b[O"],
+      });
+      const result = focusTracker.process("\x1b[O", 1000);
+      expect(result.kind).toBe("ignored");
+      expect(focusTracker.lastUserInputAt).toBe(0);
+    });
+
+    it("still stamps lastUserInputAt for normal keystrokes after focus events (#8865)", () => {
+      const focusTracker = new InputTracker({
+        ignoredInputSequences: ["\x1b\r", "\x1b[I", "\x1b[O"],
+      });
+      focusTracker.process("\x1b[I", 1000);
+      focusTracker.process("a", 2000);
+      expect(focusTracker.lastUserInputAt).toBe(2000);
+    });
+
     it("returns no-enter for non-enter input", () => {
       const result = tracker.process("abc", 1000);
       expect(result.kind).toBe("no-enter");

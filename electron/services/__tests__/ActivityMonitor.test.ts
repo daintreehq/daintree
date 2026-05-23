@@ -3353,6 +3353,152 @@ describe("ActivityMonitor", () => {
     });
   });
 
+  describe("Focus suppression (Issue #8865)", () => {
+    it("does NOT promote idle→busy from agent redraw inside the focus suppression window", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      monitor.notifyFocus();
+
+      // Simulate a slow agent redraw arriving 1.5s after focus (past the 1s
+      // INPUT_ECHO_WINDOW_MS but within the 2s notifyFocus window).
+      vi.advanceTimersByTime(1500);
+      for (let i = 0; i < 30; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(10);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("promotes idle→busy from output AFTER the focus suppression window expires", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-2", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      monitor.notifyFocus(200);
+      vi.advanceTimersByTime(250);
+
+      for (let i = 0; i < 30; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(20);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("rapid successive focus events extend the suppression window", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-3", 1000, onStateChange, {
+        highOutputThreshold: {
+          enabled: true,
+          windowMs: 500,
+          bytesPerSecond: 2048,
+          recoveryEnabled: true,
+          recoveryDelayMs: 500,
+        },
+      });
+
+      monitor.notifyFocus(500);
+      vi.advanceTimersByTime(400);
+      monitor.notifyFocus(500);
+      vi.advanceTimersByTime(400);
+
+      // Still within the second window — bytes should be suppressed
+      for (let i = 0; i < 20; i++) {
+        monitor.onData("x".repeat(500));
+        vi.advanceTimersByTime(5);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("suppresses pattern-based busy promotion during the focus window", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["> "]);
+      const monitor = new ActivityMonitor("focus-test-4", 1000, onStateChange, {
+        getVisibleLines,
+        getCursorLine: () => "> ",
+        pollingIntervalMs: 50,
+        idleDebounceMs: 200,
+        bootCompletePatterns: [/ready/i],
+        pollingMaxBootMs: 100,
+        workingRecoveryDelayMs: 200,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(150);
+      onStateChange.mockClear();
+
+      // Transition to idle
+      vi.advanceTimersByTime(3000);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Focus event, then agent redraws working pattern content
+      monitor.notifyFocus(2000);
+      getVisibleLines.mockReturnValue(["  esc to interrupt  "]);
+
+      vi.advanceTimersByTime(1500);
+
+      // Should remain idle — pattern recovery suppressed during focus window
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("dispose() clears the focus suppression window", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-5", 1000, onStateChange);
+
+      monitor.notifyFocus(5000);
+      monitor.dispose();
+
+      // After dispose, internal state is reset. Creating a new monitor with
+      // a fresh ID should behave normally — the disposed monitor's focus
+      // window must not bleed across instances (it can't via shared state,
+      // but we still assert dispose() doesn't throw with a pending window).
+      expect(monitor.getState()).toBe("idle");
+    });
+
+    it("does not affect an already-busy terminal — focus does not flip busy→idle", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-6", 1000, onStateChange);
+
+      monitor.onInput("hello\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      monitor.notifyFocus(2000);
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+  });
+
   describe("Working silence timeout", () => {
     it("should transition polling terminal to idle after silence exceeds maxWorkingSilenceMs", () => {
       const onStateChange = vi.fn();

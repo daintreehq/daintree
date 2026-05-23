@@ -741,7 +741,11 @@ export class TerminalProcess {
       terminal.traceId = traceId || undefined;
     }
     if (this.activityMonitor) {
-      this.activityMonitor.onInput(data);
+      if (data === "\x1b[I" || data === "\x1b[O") {
+        this.activityMonitor.notifyFocus();
+      } else {
+        this.activityMonitor.onInput(data);
+      }
     }
 
     try {
@@ -770,7 +774,11 @@ export class TerminalProcess {
     }
 
     if (this.activityMonitor) {
-      this.activityMonitor.onInput(data);
+      if (data === "\x1b[I" || data === "\x1b[O") {
+        this.activityMonitor.notifyFocus();
+      } else {
+        this.activityMonitor.onInput(data);
+      }
     }
 
     const bracketedPaste = isBracketedPaste(data);

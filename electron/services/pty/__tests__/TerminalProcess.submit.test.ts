@@ -127,6 +127,53 @@ describe("TerminalProcess.submit", () => {
     vi.useRealTimers();
   });
 
+  it("routes focus-in (CSI I) to activityMonitor.notifyFocus instead of onInput (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    expect(monitor).toBeTruthy();
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    const result = terminal.tryWrite("\x1b[I");
+
+    expect(result.ok).toBe(true);
+    expect(notifyFocusSpy).toHaveBeenCalledTimes(1);
+    expect(onInputSpy).not.toHaveBeenCalled();
+    // Focus bytes still reach the PTY (vim's FocusGained etc. must keep working).
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b[I");
+  });
+
+  it("routes focus-out (CSI O) to activityMonitor.notifyFocus on write() too (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    terminal.write("\x1b[O");
+
+    expect(notifyFocusSpy).toHaveBeenCalledTimes(1);
+    expect(onInputSpy).not.toHaveBeenCalled();
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b[O");
+  });
+
+  it("normal keystrokes still go through onInput, not notifyFocus (#8865)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+    const monitor = (
+      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
+    ).activityMonitor;
+    const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
+    const onInputSpy = vi.spyOn(monitor, "onInput");
+
+    terminal.tryWrite("a");
+
+    expect(onInputSpy).toHaveBeenCalledWith("a");
+    expect(notifyFocusSpy).not.toHaveBeenCalled();
+  });
+
   it("delays Enter for Copilot (submitEnterDelayMs: 200) so Ink TUI registers input", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });
