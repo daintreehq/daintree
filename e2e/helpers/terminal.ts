@@ -105,15 +105,22 @@ export async function waitForTerminalReady(
 ): Promise<void> {
   await waitForTerminalPty(page, panelLocator, timeout);
 
+  // Bypass getTerminalText's DOM fallback: after DOM→WebGL swap the rows element
+  // is empty, so null (reader not yet registered) must mean "keep polling", not
+  // "fall through to DOM text".
+  const panelId = await getPanelId(panelLocator);
   await expect
     .poll(
-      async () => {
-        const text = await getTerminalText(panelLocator);
-        return text.trim().length > 0;
-      },
+      () =>
+        page.evaluate((id) => {
+          const reader = (window as unknown as Record<string, unknown>)
+            .__daintreeReadTerminalBuffer;
+          if (typeof reader !== "function") return null;
+          return reader(id) as string | null;
+        }, panelId),
       { timeout, intervals: [100, 250, 500] }
     )
-    .toBe(true);
+    .toSatisfy((text: string | null) => typeof text === "string" && text.trim().length > 0);
 }
 
 async function activateTerminal(page: Page, panelId: string): Promise<void> {
