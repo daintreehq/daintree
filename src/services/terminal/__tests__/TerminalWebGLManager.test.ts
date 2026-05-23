@@ -155,6 +155,19 @@ function makeFakeElement(): HTMLElement {
     __listenerCount(type) {
       return (captureBucket.get(type)?.size ?? 0) + (bubbleBucket.get(type)?.size ?? 0);
     },
+    // Stubs for forceXtermReflow + post-attach screen-element lookup. The
+    // reflow utility reads/writes style.paddingTop and forces a sync layout
+    // via offsetHeight; the post-attach refresh queries for ".xterm-screen"
+    // to perturb its layout specifically. In the node test env there's no
+    // jsdom, so the mock returns null for the query and accepts the
+    // reflow ops as no-ops.
+    style: { paddingTop: "" },
+    offsetHeight: 0,
+    querySelector: () => null,
+  } as FakeElement & {
+    style: { paddingTop: string };
+    offsetHeight: number;
+    querySelector: (selectors: string) => HTMLElement | null;
   };
   return el as unknown as HTMLElement;
 }
@@ -1787,25 +1800,29 @@ describe("TerminalWebGLManager", () => {
     });
   });
 
-  describe("post-attach double-rAF refresh (#8864)", () => {
+  describe("post-attach deferred refresh (#8864)", () => {
     // xterm's RenderService.refreshRows() silently no-ops while _isPaused is
-    // true. _isPaused is driven by an internal IntersectionObserver that, per
-    // the HTML spec, fires AFTER rAF callbacks in the same rendering-pipeline
-    // tick. A synchronous (or single-rAF) refresh issued by the attach path
-    // therefore lands while _isPaused is still true, leaving the pane blank
-    // on bulk-open until the next intersection event — which on a stable
-    // layout may never come. Two rAFs let xterm's observer flush _isPaused in
-    // frame N before the inner refresh fires in frame N+1.
+    // true. _isPaused is driven by an IntersectionObserver registered on the
+    // .xterm-screen element that, per the HTML spec, fires AFTER rAF
+    // callbacks in the same rendering-pipeline tick. A synchronous (or
+    // single-rAF) refresh issued by the attach path therefore lands while
+    // _isPaused is still true, leaving the pane blank on bulk-open until the
+    // next intersection event — which on a stable post-bulk-open layout may
+    // never come.
     //
     // Frame sequence under `rafMode = "queued"`:
     //   ensureContext()        → schedules the attach-drain rAF
     //   flushRafFrame() #1     → drain rAF fires → attaches addon
     //                            → schedules the post-attach outer rAF
-    //   flushRafFrame() #2     → outer rAF fires (xterm's observer flushes
-    //                            _isPaused in this same frame, step 3)
+    //   flushRafFrame() #2     → outer rAF fires
     //                            → schedules the post-attach inner rAF
-    //   flushRafFrame() #3     → inner rAF fires in frame N+1 step 2 with
-    //                            _isPaused === false → refresh actually paints
+    //   flushRafFrame() #3     → inner rAF fires in frame N+2 step 2 with
+    //                            _isPaused === false → reflow + refresh paint
+    //                            → schedules the post-attach backup rAF
+    //   flushRafFrame() #4     → backup rAF fires in frame N+3 step 2; the
+    //                            second refresh is a no-op when the inner
+    //                            already painted, or a paint-of-last-resort
+    //                            when the inner was absorbed by _isPaused
 
     it("does not refresh synchronously during ensureContext", () => {
       const managed = makeManagedTerminal({ isVisible: true });
@@ -1842,19 +1859,58 @@ describe("TerminalWebGLManager", () => {
       expect(managed.terminal.refresh).not.toHaveBeenCalled();
     });
 
-    it("refreshes the full buffer after the second post-attach rAF", () => {
+    it("refreshes the full buffer after the inner post-attach rAF", () => {
       const managed = makeManagedTerminal({ isVisible: true });
       rafMode = "queued";
 
       manager.ensureContext("t1", managed);
       expect(flushRafFrame()).toBe(true); // attach drain
       expect(flushRafFrame()).toBe(true); // outer post-attach rAF
-      expect(flushRafFrame()).toBe(true); // inner post-attach rAF — fires the refresh
+      expect(flushRafFrame()).toBe(true); // inner post-attach rAF — first refresh
 
       expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
       expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    });
+
+    it("fires a backup refresh on the third post-attach frame", () => {
+      // The inner refresh in frame N+2 fires in step 2 of the rendering
+      // pipeline, before the IntersectionObserver callbacks run in step 3.
+      // If xterm's observer was still on its initial "not intersecting"
+      // snapshot at step 2, the refresh was absorbed as _needsFullRefresh
+      // and the observer's own flush in step 3 paints. If the observer
+      // didn't fire either (Chromium occasionally defers under bulk-open
+      // layout work), the backup refresh in frame N+3 step 2 lands after
+      // the observer would have flushed, painting directly.
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      expect(flushRafFrame()).toBe(true); // outer post-attach rAF
+      expect(flushRafFrame()).toBe(true); // inner post-attach rAF — first refresh
+      expect(flushRafFrame()).toBe(true); // backup post-attach rAF — second refresh
+
+      expect(managed.terminal.refresh).toHaveBeenCalledTimes(2);
+      expect(managed.terminal.refresh).toHaveBeenNthCalledWith(1, 0, 23);
+      expect(managed.terminal.refresh).toHaveBeenNthCalledWith(2, 0, 23);
       // Queue drained — no further work was scheduled by the helper.
       expect(flushRafFrame()).toBe(false);
+    });
+
+    it("skips the backup refresh when the terminal hides between inner and backup", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      expect(flushRafFrame()).toBe(true); // outer post-attach rAF
+      expect(flushRafFrame()).toBe(true); // inner post-attach rAF — first refresh
+      expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
+
+      managed.isVisible = false;
+      expect(flushRafFrame()).toBe(true); // backup post-attach rAF — guard trips
+
+      expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
     });
 
     it("skips scheduling entirely for an attach-time invisible terminal", () => {

@@ -7,6 +7,7 @@ import {
   setWebglThresholds as setConfiguredThresholds,
   setWebglUpperThreshold as setConfiguredUpperThreshold,
 } from "./TerminalWebGLConfig";
+import { forceXtermReflow } from "./TerminalReflowController";
 import { type ManagedTerminal } from "./types";
 
 // WebGL is gated by a count-based mode switch, not per-context eviction.
@@ -759,20 +760,38 @@ export class TerminalWebGLManager {
     }
   }
 
-  // Issue the post-attach repaint two frames after loadAddon(). xterm's
-  // RenderService.refreshRows() gates on _isPaused, which is driven by an
-  // internal IntersectionObserver. Per the HTML spec, the rendering pipeline
-  // runs rAF callbacks (step 2) before IntersectionObserver callbacks (step
-  // 3) of the same frame, so a synchronous (or single-rAF) refresh fires
-  // while _isPaused is still true — xterm buffers _needsFullRefresh and the
-  // pane stays blank until the next intersection event, which on a stable
-  // post-bulk-open layout may never come. Two rAFs land the inner callback
-  // in frame N+1 step 2, after xterm's observer flushed _isPaused in frame
-  // N step 3, so the refresh actually paints. All conditions are re-checked
-  // inside the inner callback because the terminal can hide, dispose, or
-  // lose its context during the ~32ms deferral window — the identity guard
-  // (`pool.get(id)?.addon === ownAddon`) makes the callback a no-op for any
-  // pool entry that has since been replaced or dropped.
+  // Issue the post-attach repaint across three frames after loadAddon().
+  // xterm's RenderService.refreshRows() gates on _isPaused, which is driven
+  // by an IntersectionObserver registered on the .xterm-screen element. Per
+  // the HTML spec, rAF callbacks (step 2) run before IntersectionObserver
+  // callbacks (step 3) of the same frame, so a synchronous refresh while the
+  // observer is still on its initial "not intersecting" snapshot is absorbed
+  // silently as _needsFullRefresh. Three layers, each addressing a distinct
+  // sub-case (#8864):
+  //
+  //   (1) Outer + inner rAF land the refresh in frame N+2 step 2, after the
+  //       observer's frame N step 3 callback has had a chance to flush
+  //       _isPaused.
+  //   (2) forceXtermReflow on .xterm-screen perturbs that element's layout
+  //       before the inner refresh, so when frame N+2 step 3 runs the
+  //       observer is guaranteed to re-evaluate. Without this jitter, an
+  //       observer that fired "not intersecting" once during cold-mount can
+  //       remain stuck on that state across the entire post-attach window
+  //       and absorb every refresh until a user-driven event (focus, scroll)
+  //       perturbs the layout for it.
+  //   (3) A third rAF runs a backup refresh in frame N+3. If the inner
+  //       refresh from (1) hit _isPaused and only the observer's flush in
+  //       frame N+2 step 3 actually painted, this backup is a no-op. If the
+  //       observer hadn't fired in time (Chromium occasionally batches
+  //       across frames under heavy bulk-open layout work) the backup
+  //       refresh in N+3 step 2 fires after the observer's flush in N+2
+  //       step 3, so _isPaused is false and the refresh paints directly.
+  //
+  // All conditions are re-checked inside each callback because the terminal
+  // can hide, dispose, or lose its context during the ~48ms deferral window
+  // — the identity guard (`pool.get(id)?.addon === ownAddon`) makes each
+  // callback a no-op for any pool entry that has since been replaced or
+  // dropped.
   private schedulePostAttachRefresh(
     id: string,
     managed: ManagedTerminal,
@@ -792,11 +811,44 @@ export class TerminalWebGLManager {
         if (!managed.isOpened || !managed.isVisible) return;
         const { terminal } = managed;
         if (terminal.rows <= 0) return;
+
+        // Perturb .xterm-screen — the element xterm's IntersectionObserver
+        // watches — so the observer is guaranteed to re-evaluate this frame
+        // even if the cold-mount layout settle didn't move it across the
+        // intersection threshold. Fall back to the host element when the
+        // screen sub-tree isn't built yet (defensive — open() should have
+        // created it).
+        const termEl = terminal.element;
+        const screenEl = (termEl?.querySelector(".xterm-screen") as HTMLElement | null) ?? termEl;
+        if (screenEl) {
+          try {
+            forceXtermReflow(screenEl);
+          } catch {
+            // ignore — refresh below will catch up if reflow throws
+          }
+        }
+
         try {
           terminal.refresh(0, terminal.rows - 1);
         } catch {
-          // ignore — a later user-driven paint will catch up regardless
+          // ignore — backup frame below will catch up regardless
         }
+
+        // Backup refresh one frame later. If the refresh above was absorbed
+        // by _isPaused and only the observer's own flush in step 3 of this
+        // frame actually painted, this is a no-op. If the observer hadn't
+        // fired in time, this lands in frame N+3 step 2 after the observer
+        // flush in N+2 step 3 has cleared _isPaused, so the refresh paints.
+        requestAnimationFrame(() => {
+          if (this.pool.get(id)?.addon !== ownAddon) return;
+          if (!managed.isOpened || !managed.isVisible) return;
+          if (terminal.rows <= 0) return;
+          try {
+            terminal.refresh(0, terminal.rows - 1);
+          } catch {
+            // ignore — a later user-driven paint will catch up regardless
+          }
+        });
       });
     });
   }

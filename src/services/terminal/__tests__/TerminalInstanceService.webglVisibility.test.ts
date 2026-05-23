@@ -238,9 +238,12 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
   it("setVisible(true) refreshes after the DOM-to-WebGL swap", () => {
     // WebglAddon.onLoad activates the renderer but does not repaint existing
-    // buffer rows. After the debounced restore, TerminalWebGLManager performs
-    // one full-buffer refresh so terminals revealed after bulk open are not
-    // left blank until the next write/focus/resize event.
+    // buffer rows. After the debounced restore, TerminalWebGLManager runs a
+    // deferred post-attach refresh sequence (inner refresh in frame N+2 plus
+    // a backup refresh in frame N+3 — see #8864) so terminals revealed after
+    // bulk open are not left blank until the next write/focus/resize event.
+    // Under the synchronous rAF shim in this suite, both deferred frames run
+    // inside the timer-advance window, producing two refresh calls.
     const managed = makeMockManaged({ isVisible: false });
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
     (managed.terminal.refresh as ReturnType<typeof vi.fn>).mockClear();
@@ -248,8 +251,34 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", true);
     vi.advanceTimersByTime(100);
 
-    expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
-    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, managed.terminal.rows - 1);
+    expect(managed.terminal.refresh).toHaveBeenCalledTimes(2);
+    expect(managed.terminal.refresh).toHaveBeenNthCalledWith(1, 0, managed.terminal.rows - 1);
+    expect(managed.terminal.refresh).toHaveBeenNthCalledWith(2, 0, managed.terminal.rows - 1);
+  });
+
+  it("setVisible(false) during attach does not arm the WebGL hide timer", () => {
+    // Bulk-opening agent terminals (#8864) can flap the app's
+    // IntersectionObserver to "not intersecting" while the layout settles —
+    // even though the pane is on its way in. Arming the 500ms hide timer
+    // during that cold-mount window would release the WebGL addon mid-attach
+    // and leave xterm with a queued _needsFullRefresh that fires against a
+    // transitioning renderer. The hide branch must mirror the show branch's
+    // existing isAttaching early-return.
+    const managed = makeMockManaged({ isVisible: true, isAttaching: true });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    service.setVisible("t1", false);
+
+    expect(managed.isVisible).toBe(false);
+    expect(managed.webGLHideTimer).toBeUndefined();
+
+    // Even after the full dwell window, the WebGL context is still active —
+    // no timer was ever armed during cold-mount, so the release path can't
+    // race with the reveal rAF's renderer-policy reconciliation.
+    vi.advanceTimersByTime(500);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
   it("rapid hide→show→hide keeps context held through dwell, then releases", () => {

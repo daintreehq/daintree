@@ -666,6 +666,17 @@ class TerminalInstanceService {
           this.webGLManager.ensureContext(id, current);
         }, WEBGL_RESTORE_DEBOUNCE_MS);
       } else {
+        // Cold-mount attach window: a transient visibility flap from the
+        // layout settle (bulk-open of agent terminals in #8864) must NOT arm
+        // the WebGL release timer. The attach reveal rAF reconciles renderer
+        // state when isAttaching clears; releasing the addon mid-cold-mount
+        // leaves xterm with a queued _needsFullRefresh that fires against a
+        // transitioning renderer and short-circuits. Mirrors the show branch
+        // above which already early-returns on isAttaching.
+        if (managed.isAttaching) {
+          return;
+        }
+
         // Going offscreen. Hold the WebGL context for WEBGL_HIDE_DWELL_MS so
         // rapid hide→show cycles (panel toggles, focus oscillation) don't
         // churn the pool. The timer callback re-fetches `managed` to avoid
