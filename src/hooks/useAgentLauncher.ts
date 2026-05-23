@@ -18,7 +18,7 @@ import {
   buildAgentLaunchFlags,
   resolveEffectivePresetId,
 } from "@shared/types";
-import { escapeShellArgOptional } from "@shared/utils/shellEscape";
+import { escapeShellArgOptional, isSafeUnescaped, isWindows } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
   isRegisteredAgent,
@@ -55,7 +55,14 @@ export function resolveAgentLaunchBaseCommand(
   detail: AgentCliDetail | undefined
 ): string {
   const resolvedPath = detail?.state === "ready" ? detail.resolvedPath?.trim() : undefined;
-  return resolvedPath ? escapeShellArgOptional(resolvedPath) : registryCommand;
+  if (!resolvedPath) return registryCommand;
+  // On Windows the terminal shell is PowerShell. A bare double-quoted path is a
+  // string expression, not an invocation. Prefix with the call operator so that
+  // `"C:\path\claude.cmd"` becomes `& "C:\path\claude.cmd"` and actually runs.
+  if (isWindows() && !isSafeUnescaped(resolvedPath)) {
+    return `& ${escapeShellArgOptional(resolvedPath)}`;
+  }
+  return escapeShellArgOptional(resolvedPath);
 }
 
 async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {

@@ -55,7 +55,12 @@ async function dispatchAction<T = unknown>(
 }
 
 function writeFakeAgent(agentId: "claude" | "codex"): void {
-  const scriptPath = path.join(fakeBinDir, agentId);
+  // On Windows the raw (no-extension) script file would be picked up by
+  // probePrependedCliPath before claude.cmd because access() succeeds for
+  // any readable file regardless of execute bit. Use a .js extension so the
+  // no-extension probe misses it, then the .cmd wrapper wins.
+  const implName = process.platform === "win32" ? `${agentId}.js` : agentId;
+  const scriptPath = path.join(fakeBinDir, implName);
   const label = agentId.toUpperCase();
   writeFileSync(
     scriptPath,
@@ -109,7 +114,7 @@ function writeFakeAgent(agentId: "claude" | "codex"): void {
   if (process.platform === "win32") {
     writeFileSync(
       path.join(fakeBinDir, `${agentId}.cmd`),
-      [`@echo off`, `node "%~dp0\\${agentId}" %*`, ""].join("\r\n")
+      [`@echo off`, `node "%~dp0\\${agentId}.js" %*`, ""].join("\r\n")
     );
   }
 }
@@ -132,6 +137,29 @@ function fakeAgentCommand(agentId: "claude" | "codex"): string {
       ? path.join(fakeBinDir, `${agentId}.cmd`)
       : path.join(fakeBinDir, agentId);
   return shellQuote(scriptPath);
+}
+
+/**
+ * Build a terminal command that runs the fake agent script with optional env
+ * vars, compatible with both PowerShell (Windows) and bash/zsh (Unix).
+ *
+ * Unix:  VAR=val '/path/to/script'
+ * Win32: $env:VAR='val'; & 'C:\path\to\script.cmd'
+ */
+function shellInvoke(agentId: "claude" | "codex", env: Record<string, string> = {}): string {
+  const scriptPath =
+    process.platform === "win32"
+      ? path.join(fakeBinDir, `${agentId}.cmd`)
+      : path.join(fakeBinDir, agentId);
+
+  if (process.platform === "win32") {
+    const envParts = Object.entries(env).map(([k, v]) => `$env:${k}='${v.replace(/'/g, "''")}'`);
+    const invoke = `& '${scriptPath.replace(/'/g, "''")}'`;
+    return [...envParts, invoke].join("; ");
+  }
+
+  const envParts = Object.entries(env).map(([k, v]) => `${k}=${shellQuote(v)}`);
+  return [...envParts, shellQuote(scriptPath)].join(" ");
 }
 
 function launchEnv(): Record<string, string> {
@@ -331,7 +359,7 @@ test.describe.serial("Core: Agent preset icon color", () => {
     await runTerminalCommand(
       ctx.window,
       claude.panel,
-      `DAINTREE_E2E_MANUAL_RUN=1 ${fakeAgentCommand("claude")}`
+      shellInvoke("claude", { DAINTREE_E2E_MANUAL_RUN: "1" })
     );
     await waitForTerminalText(claude.panel, "FAKE_CLAUDE_MANUAL=1", T_LONG);
     await waitForTerminalText(claude.panel, `FAKE_CLAUDE_COLOR=${CLAUDE_COLOR}`, T_LONG);

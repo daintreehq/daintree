@@ -11,6 +11,8 @@ function detail(overrides: Partial<AgentCliDetail>): AgentCliDetail {
   };
 }
 
+const isWindows = process.platform === "win32";
+
 describe("resolveAgentLaunchBaseCommand", () => {
   it("uses the availability-resolved executable path when the CLI is ready", () => {
     expect(
@@ -19,12 +21,22 @@ describe("resolveAgentLaunchBaseCommand", () => {
   });
 
   it("quotes resolved paths that need shell escaping", () => {
-    expect(
-      resolveAgentLaunchBaseCommand(
-        "claude",
-        detail({ resolvedPath: "/tmp/Daintree Test/bin/claude" })
-      )
-    ).toBe("'/tmp/Daintree Test/bin/claude'");
+    if (isWindows) {
+      // On Windows the resolved path is wrapped for PowerShell invocation
+      expect(
+        resolveAgentLaunchBaseCommand(
+          "claude",
+          detail({ resolvedPath: "C:\\path\\Daintree Test\\claude.cmd" })
+        )
+      ).toBe('& "C:\\path\\Daintree Test\\claude.cmd"');
+    } else {
+      expect(
+        resolveAgentLaunchBaseCommand(
+          "claude",
+          detail({ resolvedPath: "/tmp/Daintree Test/bin/claude" })
+        )
+      ).toBe("'/tmp/Daintree Test/bin/claude'");
+    }
   });
 
   it("falls back to the registry command when the detail is missing or not ready", () => {
