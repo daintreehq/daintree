@@ -349,8 +349,7 @@ export function WorktreeHeader({
               className={cn(
                 "text-xs font-medium shrink-0 pointer-events-none",
                 gitStateIndicator.tone === "error" && "text-status-error",
-                gitStateIndicator.tone === "warning" && "text-status-warning",
-                gitStateIndicator.tone === "info" && "text-status-info"
+                gitStateIndicator.tone === "warning" && "text-status-warning"
               )}
             >
               {gitStateIndicator.label}

@@ -691,6 +691,46 @@ describe("useWorktreeStatus — reviewState", () => {
   });
 });
 
+describe("useWorktreeStatus — gitStateIndicator", () => {
+  function getIndicator(overrides: Partial<WorktreeState> = {}) {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
+    return result.current.gitStateIndicator;
+  }
+
+  it("is null for a dirty-only worktree (spine + file-count row carry that signal)", () => {
+    expect(
+      getIndicator({
+        worktreeChanges: makeChanges({
+          changedFileCount: 3,
+          changes: [{ path: "a.ts", status: "modified", insertions: 2, deletions: 1 }],
+        }),
+      })
+    ).toBeNull();
+  });
+
+  it("returns conflicted when changes include a conflicted file, even with dirty state", () => {
+    expect(
+      getIndicator({
+        worktreeChanges: makeChanges({
+          changedFileCount: 2,
+          changes: [
+            { path: "a.ts", status: "conflicted", insertions: null, deletions: null },
+            { path: "b.ts", status: "modified", insertions: 1, deletions: 0 },
+          ],
+        }),
+      })
+    ).toEqual({ kind: "conflicted", label: "conflicted", tone: "error" });
+  });
+
+  it("returns detached with warning tone when isDetached and no blocker", () => {
+    expect(getIndicator({ isDetached: true })).toEqual({
+      kind: "detached",
+      label: "detached",
+      tone: "warning",
+    });
+  });
+});
+
 describe("useWorktreeStatus — hasResourceConfig gating", () => {
   function getHasResourceConfig(overrides: Partial<WorktreeState> = {}) {
     const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));

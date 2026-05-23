@@ -664,7 +664,7 @@ export function WorktreeCard({
   };
 
   const ariaStatusParts: string[] = [spineState];
-  if (gitStateIndicator && !(gitStateIndicator.kind === "dirty" && hasChanges)) {
+  if (gitStateIndicator) {
     ariaStatusParts.push(gitStateIndicator.label);
   }
   if (hasChanges) {
