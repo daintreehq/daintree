@@ -109,6 +109,54 @@ describe("UpstreamSyncBadge — value-change flash", () => {
     expect(indicator.className).not.toContain("animate-pulse-immediate");
   });
 
+  it("does not flash across repeated polls with stable counts (issue #8872 regression)", () => {
+    // Simulates the polling loop: lastFetchedAt advances each tick but the
+    // counts are unchanged. The badge must stay still — that was the bug.
+    const { rerender } = renderBadge({ aheadCount: 2, behindCount: 1, lastFetchedAt: 1000 });
+    for (const t of [2000, 3000, 4000, 5000]) {
+      rerender(
+        <TooltipProvider>
+          <UpstreamSyncBadge
+            {...baseProps}
+            aheadCount={2}
+            behindCount={1}
+            lastFetchedAt={t}
+            isFetchInFlight={t % 2000 === 0}
+          />
+        </TooltipProvider>
+      );
+    }
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
+    expect(indicator.className).not.toContain("animate-pulse-immediate");
+  });
+
+  it("does not flash when hidden base counts churn between null and 0", () => {
+    // baseMatchesUpstream=true hides base counts entirely. Backend transitions
+    // null→0 on base counts must not cause a phantom flash on the visible badge.
+    const { rerender } = renderBadge({
+      aheadCount: 2,
+      behindCount: 0,
+      baseAheadCount: null,
+      baseBehindCount: null,
+      baseMatchesUpstream: true,
+    });
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge
+          {...baseProps}
+          aheadCount={2}
+          behindCount={0}
+          baseAheadCount={0}
+          baseBehindCount={0}
+          baseMatchesUpstream={true}
+        />
+      </TooltipProvider>
+    );
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
+  });
+
   it("does not flash when fetch is in-flight without count change", () => {
     const { rerender } = renderBadge({ isFetchInFlight: false });
     rerender(

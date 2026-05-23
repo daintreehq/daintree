@@ -40,33 +40,53 @@ export function UpstreamSyncBadge({
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
 
-  const prevCountsRef = useRef({ aheadCount, behindCount, baseAheadCount, baseBehindCount });
-  const [isFlashing, setIsFlashing] = useState(false);
-
-  useEffect(() => {
-    const prev = prevCountsRef.current;
-    const changed =
-      prev.aheadCount !== aheadCount ||
-      prev.behindCount !== behindCount ||
-      prev.baseAheadCount !== baseAheadCount ||
-      prev.baseBehindCount !== baseBehindCount;
-    prevCountsRef.current = { aheadCount, behindCount, baseAheadCount, baseBehindCount };
-    if (!changed) return;
-    setIsFlashing(true);
-    const safetyTimer = window.setTimeout(() => setIsFlashing(false), 250);
-    return () => window.clearTimeout(safetyTimer);
-  }, [aheadCount, behindCount, baseAheadCount, baseBehindCount]);
-
-  const isStale = useMemo(() => {
-    if (lastFetchedAt == null || fetchIntervalMs == null) return false;
-    return Date.now() - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
-  }, [lastFetchedAt, fetchIntervalMs]);
-
   const showBaseDivergence =
     baseBranchName != null &&
     !baseMatchesUpstream &&
     ((baseAheadCount != null && baseAheadCount > 0) ||
       (baseBehindCount != null && baseBehindCount > 0));
+
+  // Flash only on changes the user can actually see — track display-gated
+  // values so a null→0 transition on hidden base counts doesn't flash, and
+  // a baseMatchesUpstream flip that reveals existing counts does.
+  const displayedAhead = hasAhead ? aheadCount : null;
+  const displayedBehind = hasBehind ? behindCount : null;
+  const displayedBaseAhead =
+    showBaseDivergence && baseAheadCount != null && baseAheadCount > 0 ? baseAheadCount : null;
+  const displayedBaseBehind =
+    showBaseDivergence && baseBehindCount != null && baseBehindCount > 0 ? baseBehindCount : null;
+
+  const prevDisplayedRef = useRef({
+    displayedAhead,
+    displayedBehind,
+    displayedBaseAhead,
+    displayedBaseBehind,
+  });
+  const [isFlashing, setIsFlashing] = useState(false);
+
+  useEffect(() => {
+    const prev = prevDisplayedRef.current;
+    const changed =
+      prev.displayedAhead !== displayedAhead ||
+      prev.displayedBehind !== displayedBehind ||
+      prev.displayedBaseAhead !== displayedBaseAhead ||
+      prev.displayedBaseBehind !== displayedBaseBehind;
+    prevDisplayedRef.current = {
+      displayedAhead,
+      displayedBehind,
+      displayedBaseAhead,
+      displayedBaseBehind,
+    };
+    if (!changed) return;
+    setIsFlashing(true);
+    const safetyTimer = window.setTimeout(() => setIsFlashing(false), 250);
+    return () => window.clearTimeout(safetyTimer);
+  }, [displayedAhead, displayedBehind, displayedBaseAhead, displayedBaseBehind]);
+
+  const isStale = useMemo(() => {
+    if (lastFetchedAt == null || fetchIntervalMs == null) return false;
+    return Date.now() - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
+  }, [lastFetchedAt, fetchIntervalMs]);
 
   const handleSignInClick = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
