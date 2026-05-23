@@ -1,11 +1,12 @@
 import { test } from "@playwright/test";
 import path from "path";
 import { mkdirSync } from "fs";
+import { tmpdir } from "os";
 import { launchApp, closeApp } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 
-const OUT = "/tmp/bondi-screenshots";
+const OUT = path.join(tmpdir(), "bondi-screenshots");
 mkdirSync(OUT, { recursive: true });
 
 async function switchTheme(page: import("@playwright/test").Page, themeId: string) {

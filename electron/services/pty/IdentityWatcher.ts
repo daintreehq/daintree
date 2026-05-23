@@ -17,6 +17,8 @@ const SHELL_PROMPT_PATTERNS = [
   /^\s*[>›❯⟩$#%]\s*$/,
   /^\s*[A-Za-z0-9_.-]+@[\w.-]+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/,
   /^\s*[➜➤➟➔❯›]\s+.*$/,
+  // PowerShell: "PS C:\path> " or "PS > "
+  /^\s*PS(?:\s+[A-Za-z]:[^>]*)?\s*>\s*$/,
 ] as const;
 
 // Locale-independent fallback signals for "command not found" detection. POSIX

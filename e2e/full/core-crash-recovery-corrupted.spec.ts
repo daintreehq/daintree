@@ -87,7 +87,7 @@ function seedPanelWithBogusWorktree(userDataDir: string): void {
           id: "panel-bogus-wt",
           kind: "terminal",
           title: "Bogus Worktree Terminal",
-          cwd: "/tmp/nonexistent",
+          cwd: path.join(tmpdir(), "nonexistent"),
           worktreeId: "nonexistent-wt-id-12345",
           location: "grid",
           createdAt: now - 600_000,

@@ -30,10 +30,6 @@ function panelHeaderIcon(panel: Locator): Locator {
   return panel.locator("[data-pane-chrome] [data-terminal-icon-id]").first();
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 async function expectPanelHeaderIcon(panel: Locator, iconId: string): Promise<void> {
   await expect
     .poll(() => panelHeaderIcon(panel).getAttribute("data-terminal-icon-id"), {
@@ -205,11 +201,19 @@ function prepareFixture(): void {
   fakeBinDir = path.join(fixtureDir, ".e2e bin");
   mkdirSync(fakeBinDir, { recursive: true });
 
-  const fakeClaude = path.join(fakeBinDir, "claude");
+  // On Windows use a .js extension so probePrependedCliPath's no-extension
+  // probe doesn't resolve this file before claude.cmd (fs.access(X_OK)
+  // succeeds for any readable file on Windows regardless of execute bit).
+  const implName = process.platform === "win32" ? "claude.js" : "claude";
+  const fakeClaude = path.join(fakeBinDir, implName);
   writeFileSync(
     fakeClaude,
     [
       "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude code v9.9.9');",
+      "  process.exit(0);",
+      "}",
       "console.log('Accessing workspace:');",
       "console.log('');",
       "console.log(' ' + process.cwd());",
@@ -241,6 +245,13 @@ function prepareFixture(): void {
     ].join("\n")
   );
   chmodSync(fakeClaude, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      [`@echo off`, `node "%~dp0\\claude.js" %*`, ""].join("\r\n")
+    );
+  }
 
   writeFileSync(
     path.join(fixtureDir, "package.json"),
@@ -308,7 +319,10 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHeaderIcon(panel, "claude");
       await expectPanelHasAgentState(panel);
       await expectWorktreeTracksAgent(window, toolbarPanelId, "claude");
-      expect(await getTerminalText(panel)).not.toContain(".e2e bin");
+      // On Windows the PTY write is echoed by the shell; skip path-echo check.
+      if (process.platform !== "win32") {
+        expect(await getTerminalText(panel)).not.toContain(".e2e bin");
+      }
 
       // Regression guard: shell-command evidence has a 30s expiry. A live
       // agent must not demote to plain terminal when that timer elapses.
@@ -351,7 +365,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHeaderIcon(panel, "terminal");
       await expectPanelHasNoAgentState(panel);
 
-      await runTerminalCommand(window, panel, `export PATH=${shellQuote(fakeBinDir)}:$PATH`);
+      // PATH is already injected via launchApp env — no shell-level export needed.
       await runTerminalCommand(window, panel, "npm run build");
       await waitForTerminalText(panel, "NPM_READY", T_LONG);
       await expect
