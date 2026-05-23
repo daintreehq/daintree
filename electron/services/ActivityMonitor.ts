@@ -863,6 +863,10 @@ export class ActivityMonitor {
     this.lastActivityTimestamp = now;
     this.lastDataTimestamp = now;
     if (this.state !== "busy") {
+      // Skip idle→busy on OSC progress while focus suppression is active —
+      // a focus-triggered repaint that also emits OSC 9;4 must not bypass
+      // the suppression window (#8865).
+      if (this.isFocusSuppressed(now)) return;
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
@@ -925,7 +929,7 @@ export class ActivityMonitor {
     this.simpleOutputTemperature.reset();
   }
 
-  private isFocusSuppressed(now: number): boolean {
+  isFocusSuppressed(now: number = Date.now()): boolean {
     return this.focusSuppressUntil > 0 && now < this.focusSuppressUntil;
   }
 

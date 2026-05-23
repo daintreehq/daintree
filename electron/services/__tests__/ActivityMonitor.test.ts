@@ -3497,6 +3497,33 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("suppresses idle→busy from OSC 9;4 progress during the focus window (#8865)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-7", 1000, onStateChange);
+
+      monitor.notifyFocus(2000);
+      monitor.onOscProgressWorking();
+
+      expect(monitor.getState()).toBe("idle");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("isFocusSuppressed() reflects window state and clears after expiry", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("focus-test-8", 1000, onStateChange);
+
+      expect(monitor.isFocusSuppressed()).toBe(false);
+      monitor.notifyFocus(500);
+      expect(monitor.isFocusSuppressed()).toBe(true);
+      vi.advanceTimersByTime(600);
+      expect(monitor.isFocusSuppressed()).toBe(false);
+
+      monitor.dispose();
+    });
   });
 
   describe("Working silence timeout", () => {
