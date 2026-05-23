@@ -1786,4 +1786,178 @@ describe("TerminalWebGLManager", () => {
       expect(manager.isActive("t1")).toBe(false);
     });
   });
+
+  describe("post-attach double-rAF refresh (#8864)", () => {
+    // xterm's RenderService.refreshRows() silently no-ops while _isPaused is
+    // true. _isPaused is driven by an internal IntersectionObserver that, per
+    // the HTML spec, fires AFTER rAF callbacks in the same rendering-pipeline
+    // tick. A synchronous (or single-rAF) refresh issued by the attach path
+    // therefore lands while _isPaused is still true, leaving the pane blank
+    // on bulk-open until the next intersection event — which on a stable
+    // layout may never come. Two rAFs let xterm's observer flush _isPaused in
+    // frame N before the inner refresh fires in frame N+1.
+    //
+    // Frame sequence under `rafMode = "queued"`:
+    //   ensureContext()        → schedules the attach-drain rAF
+    //   flushRafFrame() #1     → drain rAF fires → attaches addon
+    //                            → schedules the post-attach outer rAF
+    //   flushRafFrame() #2     → outer rAF fires (xterm's observer flushes
+    //                            _isPaused in this same frame, step 3)
+    //                            → schedules the post-attach inner rAF
+    //   flushRafFrame() #3     → inner rAF fires in frame N+1 step 2 with
+    //                            _isPaused === false → refresh actually paints
+
+    it("does not refresh synchronously during ensureContext", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("does not refresh after the attach-drain frame alone", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      // Attach happens — but the post-attach refresh has not yet had its
+      // double-rAF window to elapse.
+      expect(flushRafFrame()).toBe(true);
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("does not refresh after only the outer post-attach rAF", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      expect(flushRafFrame()).toBe(true); // outer post-attach rAF (schedules inner)
+
+      // The outer rAF would have fired in the same frame as xterm's
+      // IntersectionObserver. A refresh issued here would still see
+      // _isPaused === true in production.
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("refreshes the full buffer after the second post-attach rAF", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      expect(flushRafFrame()).toBe(true); // outer post-attach rAF
+      expect(flushRafFrame()).toBe(true); // inner post-attach rAF — fires the refresh
+
+      expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+      // Queue drained — no further work was scheduled by the helper.
+      expect(flushRafFrame()).toBe(false);
+    });
+
+    it("skips scheduling entirely for an attach-time invisible terminal", () => {
+      // Hidden terminals never paint until the setVisible / hide-timer path
+      // explicitly reattaches them and issues its own refresh. Scheduling a
+      // double-rAF here would burn frame slots on the shared attach drain
+      // for no useful work.
+      const managed = makeManagedTerminal({ isVisible: false });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain only
+      // No further rAFs were scheduled by the helper.
+      expect(flushRafFrame()).toBe(false);
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("skips scheduling entirely when terminal has zero rows at attach time", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      (managed.terminal as { rows: number }).rows = 0;
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain only
+      expect(flushRafFrame()).toBe(false);
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("skips refresh when the terminal hid during the deferral window", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      // The pane hid (e.g. minimized or scrolled out of view) between attach
+      // and the inner rAF. Painting a hidden pane is wasted work — and on
+      // bulk-open layout, doing so before the visibility-restore path
+      // re-issues ensureContext can race with the hide-timer teardown.
+      managed.isVisible = false;
+      expect(flushRafFrame()).toBe(true); // outer rAF
+      expect(flushRafFrame()).toBe(true); // inner rAF — guards trip, no refresh
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("skips refresh when the pool entry was dropped during the deferral window", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      // A context loss (or releaseContext call) between attach and the inner
+      // rAF drops the pool entry — the captured ownAddon reference no longer
+      // matches pool.get(id)?.addon, so the deferred refresh must be a no-op
+      // rather than painting against a renderer the manager already tore
+      // down.
+      manager.releaseContext("t1");
+      expect(flushRafFrame()).toBe(true); // outer rAF
+      expect(flushRafFrame()).toBe(true); // inner rAF — identity guard trips
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("skips refresh when row count collapses to zero during the deferral window", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      // A reflow that collapses the row count (e.g. parent height → 0)
+      // between attach and the deferred paint would call refresh(0, -1),
+      // which xterm rejects.
+      (managed.terminal as { rows: number }).rows = 0;
+      expect(flushRafFrame()).toBe(true); // outer rAF
+      expect(flushRafFrame()).toBe(true); // inner rAF — rows guard trips
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("skips refresh when the terminal closed during the deferral window", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      managed.isOpened = false;
+      expect(flushRafFrame()).toBe(true); // outer rAF
+      expect(flushRafFrame()).toBe(true); // inner rAF — isOpened guard trips
+
+      expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    });
+
+    it("swallows refresh errors so a transient xterm fault never bubbles", () => {
+      const managed = makeManagedTerminal({ isVisible: true });
+      (managed.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error("simulated xterm refresh failure");
+      });
+      rafMode = "queued";
+
+      manager.ensureContext("t1", managed);
+      expect(flushRafFrame()).toBe(true); // attach drain
+      expect(flushRafFrame()).toBe(true); // outer rAF
+      expect(() => flushRafFrame()).not.toThrow(); // inner rAF — refresh throws
+    });
+  });
 });

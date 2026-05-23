@@ -724,20 +724,17 @@ export class TerminalWebGLManager {
       // renderer but does not repaint the existing buffer — content already
       // painted by the DOM renderer (or written before this rAF-staggered
       // attach landed) stays blank until a focus/resize/write forces a
-      // refresh. On bulk open the reveal refresh in TerminalInstanceService
-      // often fires while the pane is still on DOM, so later terminals swap to
-      // WebGL with nothing repainting them. Mirror the refresh the release,
-      // atlas-resync, and context-loss paths already do after a renderer swap.
-      // pool.set above runs first so a context loss during this paint resolves
-      // against a valid pool entry (the onContextLoss / capture handlers gate
-      // on pool.get(id)?.addon === ownAddon).
-      if (managed.isOpened && managed.isVisible && managed.terminal.rows > 0) {
-        try {
-          managed.terminal.refresh(0, managed.terminal.rows - 1);
-        } catch {
-          // ignore — a later user-driven paint will catch up regardless
-        }
-      }
+      // refresh. Deferred via double-rAF: xterm's RenderService gates
+      // refreshRows() on its internal IntersectionObserver-driven _isPaused
+      // flag, and per the HTML spec rAF callbacks fire in step 2 of the
+      // rendering pipeline while IntersectionObserver callbacks fire in step
+      // 3 of the same frame. A single rAF (or synchronous call) issues the
+      // refresh while _isPaused is still true, and xterm silently buffers it
+      // as _needsFullRefresh until the next intersection event — which on a
+      // stable post-bulk-open layout may never come, leaving the pane blank.
+      // Double-rAF lands the inner callback in frame N+1, after xterm's
+      // observer flushed _isPaused in frame N (see issue #8864).
+      this.schedulePostAttachRefresh(id, managed, ownAddon);
     } catch {
       try {
         clDisposable?.dispose();
@@ -760,6 +757,48 @@ export class TerminalWebGLManager {
         // ignore
       }
     }
+  }
+
+  // Issue the post-attach repaint two frames after loadAddon(). xterm's
+  // RenderService.refreshRows() gates on _isPaused, which is driven by an
+  // internal IntersectionObserver. Per the HTML spec, the rendering pipeline
+  // runs rAF callbacks (step 2) before IntersectionObserver callbacks (step
+  // 3) of the same frame, so a synchronous (or single-rAF) refresh fires
+  // while _isPaused is still true — xterm buffers _needsFullRefresh and the
+  // pane stays blank until the next intersection event, which on a stable
+  // post-bulk-open layout may never come. Two rAFs land the inner callback
+  // in frame N+1 step 2, after xterm's observer flushed _isPaused in frame
+  // N step 3, so the refresh actually paints. All conditions are re-checked
+  // inside the inner callback because the terminal can hide, dispose, or
+  // lose its context during the ~32ms deferral window — the identity guard
+  // (`pool.get(id)?.addon === ownAddon`) makes the callback a no-op for any
+  // pool entry that has since been replaced or dropped.
+  private schedulePostAttachRefresh(
+    id: string,
+    managed: ManagedTerminal,
+    ownAddon: WebglAddonType
+  ): void {
+    // Skip scheduling entirely when the attach-time conditions don't warrant
+    // a paint. The setVisible / hide-timer path issues its own refresh when
+    // the pane returns to view; queuing rAF here for a hidden or zero-row
+    // terminal would do no useful work and would consume a frame slot in the
+    // shared rAF drain.
+    if (!managed.isOpened || !managed.isVisible || managed.terminal.rows <= 0) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this.pool.get(id)?.addon !== ownAddon) return;
+        if (!managed.isOpened || !managed.isVisible) return;
+        const { terminal } = managed;
+        if (terminal.rows <= 0) return;
+        try {
+          terminal.refresh(0, terminal.rows - 1);
+        } catch {
+          // ignore — a later user-driven paint will catch up regardless
+        }
+      });
+    });
   }
 
   // Drop the pool entry for an id without touching the wants set. Internal —
