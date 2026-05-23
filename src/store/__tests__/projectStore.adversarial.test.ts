@@ -8,6 +8,7 @@ type ProjectShape = {
   path: string;
   emoji: string;
   lastOpened: number;
+  status?: "active" | "background" | "closed";
 };
 
 type StorageMock = {
@@ -436,5 +437,46 @@ describe("projectStore adversarial", () => {
     expect(useProjectStore.getState().currentProject).toBeNull();
     expect(useProjectStore.getState().worktreeLoadError).toBeNull();
     expect(projectClientMock.getAll).toHaveBeenCalled();
+  });
+
+  it("ignores stale project reads that finish after active project close", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    window.history.replaceState(null, "", "/?projectId=project-a");
+
+    const staleProjects = deferred<ProjectShape[]>();
+    const staleCurrent = deferred<ProjectShape | null>();
+    const closeResult = { processesKilled: 2, terminalsKilled: 2 };
+    const closedProjectA = { ...projectA, status: "closed" as const };
+
+    projectClientMock.getAll.mockReset();
+    projectClientMock.getAll.mockResolvedValue([closedProjectA]);
+    projectClientMock.getAll
+      .mockImplementationOnce(() => staleProjects.promise)
+      .mockResolvedValueOnce([closedProjectA]);
+    projectClientMock.getCurrent.mockReset();
+    projectClientMock.getCurrent.mockImplementationOnce(() => staleCurrent.promise);
+    projectClientMock.close.mockResolvedValueOnce(closeResult);
+
+    const { useProjectStore } = await import("../projectStore");
+
+    useProjectStore.setState({
+      projects: [projectA],
+      currentProject: projectA,
+    });
+
+    const pendingLoad = useProjectStore.getState().loadProjects();
+    const pendingCurrent = useProjectStore.getState().getCurrentProject();
+
+    await expect(useProjectStore.getState().closeActiveProject(projectA.id)).resolves.toEqual(
+      closeResult
+    );
+
+    staleProjects.resolve([projectA]);
+    staleCurrent.resolve(projectA);
+    await Promise.all([pendingLoad, pendingCurrent]);
+
+    expect(useProjectStore.getState().projects).toEqual([closedProjectA]);
+    expect(useProjectStore.getState().currentProject).toBeNull();
   });
 });

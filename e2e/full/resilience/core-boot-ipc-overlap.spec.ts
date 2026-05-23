@@ -3,7 +3,7 @@ import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../../
 import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { openTerminal, getGridPanelIds } from "../../helpers/panels";
-import { T_LONG } from "../../helpers/timeouts";
+import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -57,6 +57,7 @@ test.describe.serial("Core: Boot IPC overlap", () => {
       expect((await getGridPanelIds(setupWindow)).length).toBeGreaterThan(0);
     }).toPass({ timeout: T_LONG });
     const beforeCount = (await getGridPanelIds(setupWindow)).length;
+    await setupWindow.waitForTimeout(T_SETTLE * 2);
 
     const setupPid = setupCtx.app.process().pid!;
     await closeApp(setupCtx.app);
