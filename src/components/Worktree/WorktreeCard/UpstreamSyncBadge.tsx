@@ -1,8 +1,7 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 
 interface UpstreamSyncBadgeProps {
@@ -40,7 +39,23 @@ export function UpstreamSyncBadge({
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
-  const showPulse = useSkeletonGate(isFetchInFlight);
+
+  const prevCountsRef = useRef({ aheadCount, behindCount, baseAheadCount, baseBehindCount });
+  const [isFlashing, setIsFlashing] = useState(false);
+
+  useEffect(() => {
+    const prev = prevCountsRef.current;
+    const changed =
+      prev.aheadCount !== aheadCount ||
+      prev.behindCount !== behindCount ||
+      prev.baseAheadCount !== baseAheadCount ||
+      prev.baseBehindCount !== baseBehindCount;
+    prevCountsRef.current = { aheadCount, behindCount, baseAheadCount, baseBehindCount };
+    if (!changed) return;
+    setIsFlashing(true);
+    const safetyTimer = window.setTimeout(() => setIsFlashing(false), 250);
+    return () => window.clearTimeout(safetyTimer);
+  }, [aheadCount, behindCount, baseAheadCount, baseBehindCount]);
 
   const isStale = useMemo(() => {
     if (lastFetchedAt == null || fetchIntervalMs == null) return false;
@@ -105,7 +120,7 @@ export function UpstreamSyncBadge({
           className={cn(
             "flex items-center text-[10px] font-mono tabular-nums",
             containerGapClass,
-            isFetchInFlight && showPulse && "animate-pulse-immediate",
+            isFlashing && "animate-upstream-badge-flash",
             fetchNetworkFailed && "opacity-75",
             isStale && !isFetchInFlight && "opacity-50 transition-opacity duration-150"
           )}
@@ -113,15 +128,20 @@ export function UpstreamSyncBadge({
           data-fetch-in-flight={isFetchInFlight ? "true" : undefined}
           data-fetch-network-failed={fetchNetworkFailed ? "true" : undefined}
           data-stale={isStale ? "true" : undefined}
+          onAnimationEnd={() => setIsFlashing(false)}
         >
           {hasAhead && <span className="text-status-success">↑{aheadCount}</span>}
           {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
           {showBaseDivergence && (
-            <span className="text-text-muted/60">
-              &Delta; {baseBranchName}{" "}
-              {baseAheadCount != null && baseAheadCount > 0 && <>↑{baseAheadCount}</>}
-              {baseBehindCount != null && baseBehindCount > 0 && <>↓{baseBehindCount}</>}
-            </span>
+            <>
+              <span className="text-text-muted/60">&Delta; {baseBranchName}</span>
+              {baseAheadCount != null && baseAheadCount > 0 && (
+                <span className="text-status-success">↑{baseAheadCount}</span>
+              )}
+              {baseBehindCount != null && baseBehindCount > 0 && (
+                <span className="text-status-warning">↓{baseBehindCount}</span>
+              )}
+            </>
           )}
         </span>
       </TooltipTrigger>
