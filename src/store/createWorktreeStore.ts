@@ -1031,10 +1031,23 @@ function mergeIssueState(
     issueTitle = manual.issueTitle;
   }
 
-  if (issueNumber === incoming.issueNumber && issueTitle === incoming.issueTitle) {
+  // `linked: undefined` from the host means "PR service hasn't run yet" —
+  // preserve whatever the renderer already has (e.g. `linked.pr` from a
+  // prior session's `pr-detected` event). `linked: null` is an explicit
+  // clear (branch switch) and must propagate. (#8870 regression from #8452.)
+  const linked =
+    incoming.linked === undefined && existing?.linked !== undefined
+      ? existing.linked
+      : incoming.linked;
+
+  if (
+    issueNumber === incoming.issueNumber &&
+    issueTitle === incoming.issueTitle &&
+    linked === incoming.linked
+  ) {
     return incoming;
   }
-  return { ...incoming, issueNumber, issueTitle };
+  return { ...incoming, issueNumber, issueTitle, linked };
 }
 
 function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {

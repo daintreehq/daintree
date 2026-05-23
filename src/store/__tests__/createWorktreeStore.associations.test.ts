@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
+import type { PluginWorktreeLinked } from "@shared/types/plugin";
 
 // Host-minted versions are now `(epoch, seq)` tuples (#8403). Tests mint a
 // monotonic seq under a fixed epoch; each fresh store starts at epoch "" so
@@ -174,5 +175,69 @@ describe("createWorktreeStore — manual issue associations (#8079)", () => {
 
     expect(store.getState().manualAssociations.size).toBe(0);
     expect(store.getState().isInitialized).toBe(false);
+  });
+});
+
+describe("createWorktreeStore — linked PR preservation (#8870)", () => {
+  function makePr(number: number, title: string): PluginWorktreeLinked["pr"] {
+    return {
+      ref: { providerId: "github", owner: "acme", repo: "demo", number, rawData: null },
+      title,
+      url: `https://example/pr/${number}`,
+      state: "open",
+    };
+  }
+
+  const linkedWithPr: PluginWorktreeLinked = {
+    providerId: "github",
+    pr: makePr(123, "Fix the thing"),
+  };
+
+  it("preserves existing linked.pr when an update omits the linked field", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    // Startup-race scenario: a worktree-update fires before initializePRService
+    // populates `_linked`. The host emits the snapshot without a `linked` key.
+    store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "feature/x" }), nextV());
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.linked).toEqual(linkedWithPr);
+    expect(wt?.branch).toBe("feature/x");
+  });
+
+  it("preserves existing linked.pr when an update has linked: undefined", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { branch: "feature/x", linked: undefined }), nextV());
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.linked).toEqual(linkedWithPr);
+  });
+
+  it("clears existing linked when an update has linked: null (explicit clear)", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    // Branch switch -> WorktreeMonitor.clearLinked() emits `linked: null`.
+    store.getState().applyUpdate(makeSnapshot("wt-1", { linked: null }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
+  });
+
+  it("replaces existing linked when an update carries a different linked object", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    const replacement: PluginWorktreeLinked = {
+      providerId: "github",
+      pr: makePr(456, "New PR"),
+    };
+    store.getState().applyUpdate(makeSnapshot("wt-1", { linked: replacement }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")?.linked).toEqual(replacement);
   });
 });

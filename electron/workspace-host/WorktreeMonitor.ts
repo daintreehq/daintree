@@ -150,8 +150,13 @@ export class WorktreeMonitor {
   private prLastUpdatedAt: number | undefined;
   private issueLastUpdatedAt: number | undefined;
 
-  // Provider-agnostic forge linkage (populated alongside legacy fields)
-  private _linked: import("../../shared/types/plugin.js").PluginWorktreeLinked | null = null;
+  // Provider-agnostic forge linkage (populated alongside legacy fields).
+  // Tri-state: `undefined` = PR service hasn't run yet (renderer preserves
+  // its prior value), `null` = ran and found no link (clears renderer),
+  // object = linked. Initial `undefined` avoids racing `pr-detected` state
+  // the renderer holds from a prior session.
+  private _linked: import("../../shared/types/plugin.js").PluginWorktreeLinked | null | undefined =
+    undefined;
 
   // Polling state
   private pollingTimer: NodeJS.Timeout | null = null;
