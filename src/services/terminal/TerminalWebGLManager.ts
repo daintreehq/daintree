@@ -719,6 +719,25 @@ export class TerminalWebGLManager {
         captureDisposable,
         atlasResyncDisposable,
       });
+
+      // Repaint after the DOM→WebGL swap. loadAddon() activates the WebGL
+      // renderer but does not repaint the existing buffer — content already
+      // painted by the DOM renderer (or written before this rAF-staggered
+      // attach landed) stays blank until a focus/resize/write forces a
+      // refresh. On bulk open the reveal refresh in TerminalInstanceService
+      // often fires while the pane is still on DOM, so later terminals swap to
+      // WebGL with nothing repainting them. Mirror the refresh the release,
+      // atlas-resync, and context-loss paths already do after a renderer swap.
+      // pool.set above runs first so a context loss during this paint resolves
+      // against a valid pool entry (the onContextLoss / capture handlers gate
+      // on pool.get(id)?.addon === ownAddon).
+      if (managed.isOpened && managed.isVisible && managed.terminal.rows > 0) {
+        try {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        } catch {
+          // ignore — a later user-driven paint will catch up regardless
+        }
+      }
     } catch {
       try {
         clDisposable?.dispose();
