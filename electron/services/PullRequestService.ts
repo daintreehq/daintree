@@ -3,17 +3,10 @@ import { clearPRCaches } from "./GitHubService.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { resolveForgeProvider } from "./forgeProviderResolver.js";
-import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
-import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { generateProjectId } from "./projectStorePaths.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
-import type {
-  ForgeProviderImpl,
-  RepoRef,
-  PR as ForgePR,
-  RateLimitInfo,
-} from "../../shared/types/forge.js";
+import { getForgeBridge } from "../workspace-host/forgeBridge.js";
+import type { RepoRef, PR as ForgePR, RateLimitInfo } from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
 // users see PR transitions promptly, slower when fully blurred to conserve the
@@ -155,10 +148,12 @@ class PullRequestService {
   private updateDebounceTimer: NodeJS.Timeout | null = null;
   private unsubscribers: (() => void)[] = [];
 
-  // Forge provider resolution (resolved once on init, invalidated on refresh)
+  // Forge provider resolution (resolved once on init, invalidated on refresh).
+  // The impl itself lives in main (registered by `PluginService` on plugin
+  // activate); the workspace-host only holds the resolved identity here and
+  // dispatches calls through the `ForgeBridge` IPC client.
   private projectId: string | null = null;
   private providerNamespacedId: string | null = null;
-  private providerImpl: ForgeProviderImpl | null = null;
   private repoRef: RepoRef | null = null;
   // Forge provider routing settings, pushed in from the main process. The
   // workspace-host can't read `projectStore` or `electron-store` directly —
@@ -353,13 +348,21 @@ class PullRequestService {
     if (!this.projectId) return;
     try {
       const git = createHardenedGit(this.cwd);
-      // simple-git's typed `getConfig` returns a `ConfigGetResult` envelope,
-      // but daintree's wiring already resolves to the bare value string at
-      // runtime (and tests mock it the same way). Treat as `string | null`.
+      // simple-git's typed `getConfig` returns a `ConfigGetResult` envelope at
+      // runtime (`{ key, paths, scopes, value, values }`). Earlier code cast it
+      // straight to `string | null` on the assumption that daintree's wiring
+      // unwrapped to the bare value — that's true under the test mock but not
+      // in the real workspace-host UtilityProcess, where this read silently
+      // returned null and the provider failed to resolve (#8870). Unwrap
+      // explicitly: prefer the envelope's `value`, fall back to a literal
+      // string for callers that genuinely return one.
       const readRemoteUrl = async (remoteName: string): Promise<string | null> => {
-        const raw = (await git.getConfig(`remote.${remoteName}.url`).catch(() => null)) as
-          | string
-          | null;
+        const result = await git.getConfig(`remote.${remoteName}.url`).catch(() => null);
+        if (result === null || result === undefined) return null;
+        const raw =
+          typeof result === "string"
+            ? result
+            : ((result as { value?: string | null }).value ?? null);
         return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
       };
       // Resolve against the user-selected remote (`forgeRemote`, #8456) when
@@ -370,60 +373,38 @@ class PullRequestService {
         (selectedRemote ? await readRemoteUrl(selectedRemote) : null) ??
         (await readRemoteUrl("origin"));
 
-      const registered = resolveForgeProvider({
+      // The bridge does provider resolution and `parseRemote` in one IPC
+      // roundtrip: the registry lives in main (where plugins activate), so
+      // there's no point trying to consult it locally. Returns null when no
+      // provider matches the remote OR no remote URL is available.
+      const resolved = await getForgeBridge().resolveProvider({
         remoteUrl,
         forgeProviderOverride: this.forgeProviderOverride,
         globalDefaultProviderId: this.globalDefaultProviderId,
       });
-      if (!registered?.entry) {
+      if (!resolved) {
         this.providerNamespacedId = null;
-        this.providerImpl = null;
         this.repoRef = null;
         return;
       }
-      const { pluginId, contribution } = registered.entry;
-      const namespacedId = makeForgeProviderId(pluginId, contribution.id);
-      const impl = getForgeProviderImpl(namespacedId);
-      if (!impl) {
-        this.providerNamespacedId = null;
-        this.providerImpl = null;
-        this.repoRef = null;
-        return;
-      }
-      if (!remoteUrl) {
-        this.providerNamespacedId = null;
-        this.providerImpl = null;
-        this.repoRef = null;
-        return;
-      }
-      const repo = impl.parseRemote(remoteUrl);
-      if (!repo) {
-        this.providerNamespacedId = null;
-        this.providerImpl = null;
-        this.repoRef = null;
-        return;
-      }
-      this.providerNamespacedId = namespacedId;
-      this.providerImpl = impl;
-      this.repoRef = repo;
+      this.providerNamespacedId = resolved.namespacedId;
+      this.repoRef = resolved.repo;
       logInfo("PullRequestService resolved forge provider", {
-        namespacedId,
-        owner: repo.owner,
-        repo: repo.repo,
+        namespacedId: resolved.namespacedId,
+        owner: resolved.repo.owner,
+        repo: resolved.repo.repo,
       });
     } catch (error) {
       logWarn("PullRequestService provider resolution failed", {
         error: formatErrorMessage(error, "Provider resolution failed"),
       });
       this.providerNamespacedId = null;
-      this.providerImpl = null;
       this.repoRef = null;
     }
   }
 
   private invalidateProvider(): void {
     this.providerNamespacedId = null;
-    this.providerImpl = null;
     this.repoRef = null;
   }
 
@@ -706,6 +687,22 @@ class PullRequestService {
     // be admitted again, instead of churning through throttled no-op wakeups.
     interval = Math.max(interval, this.msUntilCheckAllowed());
 
+    // Cap the interval when the forge provider hasn't resolved yet. The forge
+    // registry lives in main and is populated asynchronously by
+    // `PluginService.initialize()` — the workspace-host's first poll often
+    // fires before that completes, leaving `providerNamespacedId` null. At the
+    // blurred cadence (120s) the user would otherwise stare at empty PR
+    // sub-rows for two minutes after every cold start. Once the bridge returns
+    // a real provider the next poll uses the normal cadence again.
+    //
+    // Skip this when `consecutiveErrors > 0`: the circuit-breaker backoff is
+    // deliberate (the last call failed against the API), and punching through
+    // it with a 5s retry would burst error-prone calls right when we want to
+    // back off. Resolution will get its chance once the backoff window closes.
+    if (!this.providerNamespacedId && this.consecutiveErrors === 0) {
+      interval = Math.min(interval, FOCUS_CATCHUP_THROTTLE_MS);
+    }
+
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       void this.checkForPRs()
@@ -789,11 +786,16 @@ class PullRequestService {
     blocked: boolean;
     resumeAt: number | null;
   }> {
-    if (!this.providerImpl?.getRateLimit) {
+    if (!this.providerNamespacedId) {
       return { blocked: false, resumeAt: null };
     }
     try {
-      const info: RateLimitInfo = await this.providerImpl.getRateLimit();
+      const info: RateLimitInfo | null = await getForgeBridge().getRateLimit(
+        this.providerNamespacedId
+      );
+      // `null` here means the provider does not implement `getRateLimit` —
+      // fail open, polling proceeds without a rate-limit gate.
+      if (!info) return { blocked: false, resumeAt: null };
       const now = Date.now();
       if (info.secondaryThrottled) {
         const resumeAt = info.resetAt ?? now + RATE_LIMIT_SECONDARY_FALLBACK_MS;
@@ -818,10 +820,10 @@ class PullRequestService {
       return;
     }
 
-    const provider = this.providerImpl;
     const repo = this.repoRef;
     const providerId = this.providerNamespacedId;
-    if (!provider || !repo || !providerId) return;
+    if (!repo || !providerId) return;
+    const bridge = getForgeBridge();
 
     const { blocked, resumeAt } = await this.checkRateLimitGate();
     if (blocked && resumeAt) {
@@ -855,7 +857,7 @@ class PullRequestService {
       const prNumbers = [...uniquePRNumbers];
       const results = await mapWithConcurrencyLimit(prNumbers, 5, async (prNumber) => {
         try {
-          const pr = await provider.getPR(repo, prNumber);
+          const pr = await bridge.getPR(providerId, repo, prNumber);
           return { prNumber, pr, error: false };
         } catch {
           return { prNumber, pr: null, error: true };
@@ -924,7 +926,7 @@ class PullRequestService {
           }
 
           // Revalidate CI status (best-effort, non-blocking)
-          this.enrichPRWithCIStatus(detectedPR, repo, provider);
+          this.enrichPRWithCIStatus(detectedPR, repo, providerId);
         }
       }
 
@@ -941,8 +943,8 @@ class PullRequestService {
         const issueNumber = context.issueNumber;
         const branchAtFetchStart = context.branchName;
         issueRetryLookups.push(
-          provider
-            .getIssue(repo, issueNumber)
+          bridge
+            .getIssue(providerId, repo, issueNumber)
             .then((issue) => {
               const currentBranch = this.candidates.get(worktreeId)?.branchName;
               if (currentBranch !== branchAtFetchStart) return;
@@ -1036,16 +1038,26 @@ class PullRequestService {
 
     logDebug("Checking PRs for candidates", { count: activeCandidates.length });
 
-    const provider = this.providerImpl;
+    // Re-resolve when we don't have a cached provider yet. The forge registry
+    // lives in main and is populated by `PluginService.initialize()`; the
+    // workspace-host UtilityProcess starts polling before that finishes, so a
+    // one-shot resolution at `start()` would lose the race permanently. Each
+    // poll retries until main answers with a real provider — and once resolved
+    // we keep the cache (cleared explicitly by `refresh()`/`setForgeSettings`).
+    if (!this.providerNamespacedId || !this.repoRef) {
+      await this.resolveProvider();
+    }
+
     const repo = this.repoRef;
     const providerId = this.providerNamespacedId;
 
-    if (!provider || !repo || !providerId) {
+    if (!repo || !providerId) {
       // No forge provider resolved — all candidates get null linkage.
       // No error, no toast, no log spam (per issue spec).
       logDebug("Skipping PR check — no forge provider resolved");
       return;
     }
+    const bridge = getForgeBridge();
 
     const { blocked, resumeAt } = await this.checkRateLimitGate();
     if (blocked && resumeAt) {
@@ -1078,8 +1090,8 @@ class PullRequestService {
         const lookupBranch = lookupBranchByWorktreeId.get(c.worktreeId);
         const branchAtFetchStart = this.candidates.get(c.worktreeId)?.branchName;
         issueLookups.push(
-          provider
-            .getIssue(repo, c.issueNumber)
+          bridge
+            .getIssue(providerId, repo, c.issueNumber)
             .then((issue) => {
               // Branch-token check (lesson #2243): if the worktree's branch
               // changed during the fetch, the result is stale — don't write
@@ -1123,10 +1135,29 @@ class PullRequestService {
       // error doesn't blank every row's PR state. Truthiness guard per the
       // forge.ts capability convention.
       const branches = [...uniqueBranches.keys()];
-      const prResults = await this.resolvePRsForBranches(provider, repo, branches);
+      const prResults = await this.resolvePRsForBranches(providerId, repo, branches);
 
       // Fire issue lookups in parallel with PR lookups
       await Promise.allSettled(issueLookups);
+
+      // Stale-in-flight guard: if `setForgeSettings` invalidated the provider
+      // (or refresh() swapped it) while branch/issue lookups were in flight,
+      // the results belong to the OLD provider. Writing them to
+      // detectedPRs/resolvedWorktrees would tag worktrees with a provider
+      // they're no longer routed through. Abandon the cycle quietly — the
+      // next poll picks up the new provider's PRs at the fast cadence.
+      if (
+        this.providerNamespacedId !== providerId ||
+        this.repoRef?.host !== repo.host ||
+        this.repoRef?.owner !== repo.owner ||
+        this.repoRef?.repo !== repo.repo
+      ) {
+        logDebug("Discarding stale PR check results — provider changed mid-cycle", {
+          fromProviderId: providerId,
+          toProviderId: this.providerNamespacedId,
+        });
+        return;
+      }
 
       this.consecutiveErrors = 0;
 
@@ -1190,7 +1221,7 @@ class PullRequestService {
         }
 
         // Fire-and-forget CI status enrichment
-        this.enrichPRWithCIStatus(internalPR, repo, provider);
+        this.enrichPRWithCIStatus(internalPR, repo, providerId);
       }
 
       this.updateBoostFromDetectedPRs();
@@ -1208,15 +1239,20 @@ class PullRequestService {
    * result Map likewise get the per-branch fallback.
    */
   private async resolvePRsForBranches(
-    provider: ForgeProviderImpl,
+    providerId: string,
     repo: RepoRef,
     branches: string[]
   ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
     if (branches.length === 0) return [];
 
-    if (provider.findPRsByBranches) {
-      try {
-        const batchMap = await provider.findPRsByBranches(repo, branches);
+    const bridge = getForgeBridge();
+    // `findPRsByBranches` is capability-gated on the impl. The bridge returns
+    // `null` when the provider does not implement it, so we treat that case
+    // as a fall-through to per-branch (mirrors the old `if (provider.findPRsByBranches)`
+    // truthiness guard, just one IPC hop away).
+    try {
+      const batchMap = await bridge.findPRsByBranches(providerId, repo, branches);
+      if (batchMap) {
         const results: Array<{ branch: string; pr: ForgePR | null }> = [];
         const missing: string[] = [];
         for (const branch of branches) {
@@ -1227,27 +1263,28 @@ class PullRequestService {
           }
         }
         if (missing.length > 0) {
-          const fallback = await this.perBranchFallback(provider, repo, missing);
+          const fallback = await this.perBranchFallback(providerId, repo, missing);
           results.push(...fallback);
         }
         return results;
-      } catch (error) {
-        logWarn("Batched PR lookup failed; retrying per-branch", {
-          branchCount: branches.length,
-          error: formatErrorMessage(error, "findPRsByBranches failed"),
-        });
-        // Fall through to per-branch path below.
       }
+    } catch (error) {
+      logWarn("Batched PR lookup failed; retrying per-branch", {
+        branchCount: branches.length,
+        error: formatErrorMessage(error, "findPRsByBranches failed"),
+      });
+      // Fall through to per-branch path below.
     }
 
-    return this.perBranchFallback(provider, repo, branches);
+    return this.perBranchFallback(providerId, repo, branches);
   }
 
   private perBranchFallback(
-    provider: ForgeProviderImpl,
+    providerId: string,
     repo: RepoRef,
     branches: string[]
   ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
+    const bridge = getForgeBridge();
     return mapWithConcurrencyLimit(
       branches,
       5,
@@ -1256,7 +1293,7 @@ class PullRequestService {
         if (existing) {
           return existing.then((pr) => ({ branch, pr }));
         }
-        const promise = provider.findPRByBranch(repo, branch).catch(() => null);
+        const promise = bridge.findPRByBranch(providerId, repo, branch).catch(() => null);
         this.inFlightBranchLookups.set(branch, promise);
         promise.finally(() => {
           this.inFlightBranchLookups.delete(branch);
@@ -1271,13 +1308,9 @@ class PullRequestService {
    * On success, updates the detectedPRs entry and re-emits sys:pr:detected
    * with the enriched CI status so the renderer can update the badge.
    */
-  private enrichPRWithCIStatus(
-    pr: InternalLinkedPR,
-    repo: RepoRef,
-    provider: ForgeProviderImpl
-  ): void {
-    provider
-      .getCIStatus(repo, pr.number)
+  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef, providerId: string): void {
+    getForgeBridge()
+      .getCIStatus(providerId, repo, pr.number)
       .then((ciStatus) => {
         if (!ciStatus) return;
         pr.ciStatus =

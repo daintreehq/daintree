@@ -25,7 +25,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
 } from "./worktree.js";
-import type { Credentials } from "./forge.js";
+import type { Credentials, RepoRef } from "./forge.js";
 import type { GitHubPRCIStatus } from "./github.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 import type {
@@ -423,7 +423,48 @@ export type WorkspaceHostRequest =
       includeRecentCommits?: boolean;
       forceRefresh?: boolean;
     }
-  | { type: "invalidate-pulse-cache"; worktreeId: string };
+  | { type: "invalidate-pulse-cache"; worktreeId: string }
+  // Forge RPC response (main → workspace-host). Correlated to a prior
+  // `forge:rpc` event by `forgeRequestId`. Carries either a successful return
+  // value or an error message. See `ForgeRpcMethod` for the supported methods.
+  | {
+      type: "forge:rpc-result";
+      forgeRequestId: string;
+      ok: true;
+      value: unknown;
+    }
+  | {
+      type: "forge:rpc-result";
+      forgeRequestId: string;
+      ok: false;
+      error: string;
+    };
+
+/**
+ * Forge RPC methods the workspace-host can request from main. The
+ * implementations live in main's forge provider registry (registered by
+ * plugin activations). The workspace-host never holds impls itself — it
+ * issues IPC calls through {@link ForgeBridge} and routes results by
+ * `forgeRequestId`.
+ *
+ * `resolveProvider` is special-cased: it bundles `parseRemote` into the
+ * lookup so the workspace-host gets `{ namespacedId, repo }` in a single
+ * roundtrip and never needs to call sync provider methods.
+ */
+export type ForgeRpcMethod =
+  | "resolveProvider"
+  | "findPRByBranch"
+  | "findPRsByBranches"
+  | "getPR"
+  | "getIssue"
+  | "getCIStatus"
+  | "getRateLimit";
+
+/** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */
+export interface ForgeResolveProviderResult {
+  namespacedId: string;
+  repo: RepoRef;
+}
 
 /**
  * Events sent from Workspace Host → Main.
@@ -625,6 +666,18 @@ export type WorkspaceHostEvent =
       type: "has-resource-config-result";
       requestId: string;
       hasConfig: boolean;
+    }
+  // Forge RPC request (workspace-host → main). Forge provider impls live in
+  // main (registered by `PluginService` on plugin activate); the workspace-host
+  // dispatches calls here and awaits the matching `forge:rpc-result` request
+  // back. `namespacedId` is omitted for `method === "resolveProvider"` since
+  // that call discovers the provider from the remote URL.
+  | {
+      type: "forge:rpc";
+      forgeRequestId: string;
+      method: ForgeRpcMethod;
+      namespacedId?: string;
+      args: unknown[];
     };
 
 /** Configuration for WorkspaceClient */

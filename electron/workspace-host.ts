@@ -36,30 +36,7 @@ import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
-import {
-  registerForgeProviders,
-  registerForgeProviderImpl,
-} from "./services/forgeProviderRegistry.js";
-import { githubForgeProvider } from "../plugins/builtin/github/main/forgeProvider.js";
-
-// Plugins normally register their forge contributions via `PluginService.activate`
-// in the main process. The workspace-host runs as a separate UtilityProcess
-// with no plugin loader, so its per-process forge registry stays empty and
-// `PullRequestService.resolveProvider` here exits with `hasImpl=false`, leaving
-// every worktree's `linked.pr` permanently undefined (#8870).
-//
-// Pre-registering the built-in `daintree.github` provider unblocks PR detection
-// for the common case. Third-party forge plugins (e.g. GitLab) still won't be
-// visible to PR polling until plugin registrations are propagated from main →
-// workspace-host — tracked as a follow-up.
-registerForgeProviders("daintree.github", [
-  {
-    id: "github",
-    name: "GitHub",
-    matches: ["github.com"],
-  },
-]);
-registerForgeProviderImpl("daintree.github", "github", githubForgeProvider);
+import { initForgeBridge } from "./workspace-host/forgeBridge.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
@@ -345,6 +322,15 @@ const shutdownController = new AbortController();
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
 
+// Forge provider impls live in main (registered by `PluginService` when a
+// plugin activates). This bridge is the workspace-host's only access path —
+// every PR/CI/rate-limit call from `PullRequestService` round-trips here as a
+// `forge:rpc` event and resolves when main answers with `forge:rpc-result`.
+// Initialised before `port.on("message")` is attached so the very first
+// inbound result has a bridge to route to. See
+// `docs/architecture/forge-provider-abstraction.md` for the rationale.
+const forgeBridge = initForgeBridge(sendEvent);
+
 // Convert a GitHubRateLimitPayload (from gitHubRateLimitService.getState())
 // to the provider-agnostic RateLimitInfo shape so the forge-rate-limit-changed
 // event payload is provider-agnostic.
@@ -571,6 +557,11 @@ port.on("message", async (rawMsg: any) => {
       case "dispose":
         shutdownController.abort();
         workspaceService.dispose();
+        // Reject any pending forge calls so awaiting code paths fail fast
+        // instead of waiting on the 30s timeout. Late `forge:rpc-result`
+        // messages after this are still safe — `handleResult` drops unknown
+        // ids — but eagerly clearing the pending map prevents shutdown delays.
+        forgeBridge.dispose();
         break;
 
       case "set-log-level-overrides": {
@@ -760,6 +751,14 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      // Inbound result for a forge RPC the bridge dispatched earlier — route
+      // to the pending promise keyed by `forgeRequestId`. The bridge owns
+      // success/error semantics and any timeout cleanup; main just hands the
+      // raw envelope across.
+      case "forge:rpc-result":
+        forgeBridge.handleResult(request);
+        break;
+
       default:
         console.warn("[WorkspaceHost] Unknown message type:", (request as any).type);
     }
@@ -774,6 +773,7 @@ process.on("SIGTERM", () => {
   console.log("[WorkspaceHost] SIGTERM received, shutting down");
   shutdownController.abort();
   workspaceService.dispose();
+  forgeBridge.dispose();
 });
 
 // Signal ready
