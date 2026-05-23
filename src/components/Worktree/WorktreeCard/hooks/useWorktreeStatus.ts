@@ -25,13 +25,12 @@ export type GitStateKind =
   | "merging"
   | "cherry-picking"
   | "reverting"
-  | "detached"
-  | "dirty";
+  | "detached";
 
 export interface GitStateIndicator {
   kind: GitStateKind;
   label: string;
-  tone: "error" | "warning" | "info";
+  tone: "error" | "warning";
 }
 
 const REPO_STATE_TO_KIND: Record<string, GitStateKind> = {
@@ -48,7 +47,6 @@ const GIT_STATE_LABELS: Record<GitStateKind, string> = {
   "cherry-picking": "cherry-picking",
   reverting: "reverting",
   detached: "detached",
-  dirty: "dirty",
 };
 
 export interface UseWorktreeStatusResult {
@@ -175,7 +173,7 @@ export function useWorktreeStatus({
   }, [hasChanges, worktree.isCurrent, worktree.mood]);
 
   const gitStateIndicator: GitStateIndicator | null = useMemo(() => {
-    // Priority: conflicted > blocking operation > detached > dirty
+    // Priority: conflicted > blocking operation > detached
     if (worktree.worktreeChanges?.changes?.some((c) => c.status === "conflicted")) {
       return { kind: "conflicted", label: GIT_STATE_LABELS.conflicted, tone: "error" };
     }
@@ -188,11 +186,8 @@ export function useWorktreeStatus({
     if (worktree.isDetached) {
       return { kind: "detached", label: GIT_STATE_LABELS.detached, tone: "warning" };
     }
-    if (hasChanges) {
-      return { kind: "dirty", label: GIT_STATE_LABELS.dirty, tone: "info" };
-    }
     return null;
-  }, [worktree.worktreeChanges?.changes, worktree.repoState, worktree.isDetached, hasChanges]);
+  }, [worktree.worktreeChanges?.changes, worktree.repoState, worktree.isDetached]);
 
   const reviewState: WorktreeReviewState = useMemo(() => {
     const changes = worktree.worktreeChanges;
