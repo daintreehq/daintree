@@ -7,7 +7,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { getFocusedPanelId, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
-import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
+import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 interface ActionResult<T = unknown> {
   ok?: boolean;
@@ -43,10 +43,6 @@ async function dispatchAction<T = unknown>(
   ) as Promise<ActionResult<T>>;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 async function startClaudeAgentFromTerminal(page: Page): Promise<{ id: string; panel: Locator }> {
   const beforeIds = new Set(await getGridPanelIds(page));
   await openTerminal(page);
@@ -62,12 +58,16 @@ async function startClaudeAgentFromTerminal(page: Page): Promise<{ id: string; p
 
   const panel = getPanelById(page, terminalId);
   await expect(panel).toBeVisible({ timeout: T_LONG });
-  await runTerminalCommand(page, panel, `export PATH=${shellQuote(fakeBinDir)}:$PATH`);
+  // PATH is already injected via launchApp env + DAINTREE_CLI_PATH_PREPEND —
+  // no shell-level export needed. Just invoke claude directly.
   await runTerminalCommand(page, panel, "claude");
   await waitForTerminalText(panel, "FAKE_FLEET_AGENT_READY", T_LONG);
+  // Give the shell-command identity fallback (~1.2 s commit) and process-tree
+  // cache poll (~2.5 s) time to promote the terminal to the claude agent.
+  await page.waitForTimeout(T_SETTLE);
   await expect
     .poll(() => panel.getAttribute("data-chrome-agent-id"), {
-      timeout: T_MEDIUM,
+      timeout: T_LONG,
       intervals: [250],
     })
     .toBe("claude");
@@ -106,7 +106,7 @@ async function typeDirectlyIntoTerminal(
 
 function prepareFixture(): void {
   fixtureDir = createFixtureRepo({ name: "fleet-broadcast" });
-  fakeBinDir = path.join(fixtureDir, ".e2e bin");
+  fakeBinDir = path.join(fixtureDir, ".e2e-bin");
   mkdirSync(fakeBinDir, { recursive: true });
 
   const fakeClaude = path.join(fakeBinDir, "claude");
@@ -157,6 +157,13 @@ function prepareFixture(): void {
     ].join("\n")
   );
   chmodSync(fakeClaude, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      [`@echo off`, `node "%~dp0\\claude" %*`, ""].join("\r\n")
+    );
+  }
 }
 
 test.describe.serial("Core: Fleet terminal broadcast", () => {
