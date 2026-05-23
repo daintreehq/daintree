@@ -1134,7 +1134,21 @@ class PullRequestService {
         const worktreeIds = uniqueBranches.get(branch);
         if (!worktreeIds) continue;
 
-        if (!pr) continue;
+        if (!pr) {
+          // Authoritative "no PR found" for a fresh candidate. Without this,
+          // `WorktreeMonitor._linked` stays `undefined` (its initial state)
+          // and the renderer's preservation rule (#8870) would hold any
+          // `linked.pr` carried over from a prior session indefinitely.
+          for (const worktreeId of worktreeIds) {
+            events.emit("sys:pr:cleared", {
+              worktreeId,
+              branchName: branch,
+              providerId,
+              timestamp: Date.now(),
+            });
+          }
+          continue;
+        }
 
         const internalPR: InternalLinkedPR = {
           number: pr.number,

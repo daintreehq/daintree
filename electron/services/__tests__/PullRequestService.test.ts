@@ -317,6 +317,43 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("emits sys:pr:cleared for a fresh candidate when the forge has no PR (#8870)", async () => {
+    // Without this clear, WorktreeMonitor._linked stays at its initial
+    // `undefined` and the renderer's preservation rule keeps any prior
+    // session's linked.pr visible indefinitely.
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+    mockForgeProviderResolved(async () => null);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribeCleared = events.on("sys:pr:cleared", (p) => cleared.push(p));
+    const unsubscribeDetected = events.on("sys:pr:detected", (p) => detected.push(p));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/no-pr" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(detected).toHaveLength(0);
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]).toMatchObject({
+      worktreeId: "wt-1",
+      branchName: "feature/no-pr",
+      providerId: "daintree.github.github",
+    });
+
+    unsubscribeCleared();
+    unsubscribeDetected();
+    pullRequestService.destroy();
+  });
+
   it("clears PR state only when branch changes (not when issue number changes)", async () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));

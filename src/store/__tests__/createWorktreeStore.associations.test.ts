@@ -240,4 +240,44 @@ describe("createWorktreeStore — linked PR preservation (#8870)", () => {
 
     expect(store.getState().worktrees.get("wt-1")?.linked).toEqual(replacement);
   });
+
+  it("clears existing linked when a later null arrives after a series of omitted updates", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    // PR service hasn't run yet — several updates omit `linked`.
+    store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "a" }), nextV());
+    store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "b" }), nextV());
+    expect(store.getState().worktrees.get("wt-1")?.linked).toEqual(linkedWithPr);
+
+    // PR service finally finishes and reports "no PR found" — host emits null.
+    store.getState().applyUpdate(makeSnapshot("wt-1", { linked: null }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
+  });
+
+  it("preserves linked.pr when applySnapshot omits the linked field", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    // A later get-all-states snapshot during the startup window omits `linked`.
+    store.getState().applySnapshot([makeSnapshot("wt-1", { branch: "feature/x" })], nextV());
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.linked).toEqual(linkedWithPr);
+    expect(wt?.branch).toBe("feature/x");
+  });
+
+  it("preserves an explicit null clear through a subsequent undefined update", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());
+
+    store.getState().applyUpdate(makeSnapshot("wt-1", { linked: null }), nextV());
+    expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
+
+    // A later update with `linked` omitted must not resurrect the prior linked object.
+    store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "feature/x" }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
+  });
 });
