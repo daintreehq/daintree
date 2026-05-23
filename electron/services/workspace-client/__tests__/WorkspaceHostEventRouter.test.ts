@@ -191,6 +191,117 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("pr-detected IPC payload (#8870)", () => {
+    function makeWebContents() {
+      return {
+        isDestroyed: () => false,
+        send: vi.fn(),
+      } as unknown as Electron.WebContents;
+    }
+
+    it("includes linked, branchName, and providerId on the renderer payload", () => {
+      // Without these fields the renderer's `event.linked ?? existing.linked`
+      // falls back to (typically null) existing.linked and the PR sub-row
+      // never renders. The regression dropped the fields silently after #8452.
+      const wc = makeWebContents();
+      const entry = makeEntry();
+      entry.directPortViews.set(1, wc);
+
+      const linked = {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        pr: {
+          ref: {
+            providerId: BUILTIN_GITHUB_PROVIDER_ID,
+            owner: "acme",
+            repo: "demo",
+            number: 42,
+            rawData: null,
+          },
+          title: "Fix the thing",
+          url: "https://github.com/acme/demo/pull/42",
+          state: "open" as const,
+        },
+      };
+
+      const event: Extract<WorkspaceHostEvent, { type: "pr-detected" }> = {
+        type: "pr-detected",
+        worktreeId: "wt-1",
+        prNumber: 42,
+        prUrl: "https://github.com/acme/demo/pull/42",
+        prState: "open",
+        prTitle: "Fix the thing",
+        branchName: "feature/x",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        linked,
+      };
+
+      router.routeHostEvent(entry, event);
+
+      expect(wc.send).toHaveBeenCalledTimes(1);
+      const [channel, payload] = (wc.send as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(channel).toBe(CHANNELS.PR_DETECTED);
+      expect(payload).toMatchObject({
+        worktreeId: "wt-1",
+        prNumber: 42,
+        branchName: "feature/x",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        linked,
+      });
+    });
+  });
+
+  describe("issue-detected IPC payload (#8870)", () => {
+    function makeWebContents() {
+      return {
+        isDestroyed: () => false,
+        send: vi.fn(),
+      } as unknown as Electron.WebContents;
+    }
+
+    it("includes linked, branchName, and providerId on the renderer payload", () => {
+      const wc = makeWebContents();
+      const entry = makeEntry();
+      entry.directPortViews.set(1, wc);
+
+      const linked = {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        issue: {
+          ref: {
+            providerId: BUILTIN_GITHUB_PROVIDER_ID,
+            owner: "acme",
+            repo: "demo",
+            number: 7,
+            rawData: null,
+          },
+          title: "Reported bug",
+        },
+      };
+
+      const event: Extract<WorkspaceHostEvent, { type: "issue-detected" }> = {
+        type: "issue-detected",
+        worktreeId: "wt-1",
+        issueNumber: 7,
+        issueTitle: "Reported bug",
+        branchName: "feature/issue-7",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        linked,
+      };
+
+      router.routeHostEvent(entry, event);
+
+      expect(wc.send).toHaveBeenCalledTimes(1);
+      const [channel, payload] = (wc.send as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(channel).toBe(CHANNELS.ISSUE_DETECTED);
+      expect(payload).toMatchObject({
+        worktreeId: "wt-1",
+        issueNumber: 7,
+        branchName: "feature/issue-7",
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        linked,
+      });
+    });
+  });
+
   describe("cloud resource teardown failure notifications", () => {
     const lifecycleStatus = (
       phase: WorktreeLifecyclePhase,
