@@ -1298,6 +1298,26 @@ body,
   animation: diagnostics-state-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
+/* Upstream sync badge value-change flash — one-shot opacity dip when the
+ * displayed ahead/behind counts actually change, not while a poll is in flight.
+ * Issue #8872: fetch-in-flight pulse was firing on every poll cycle. */
+@keyframes upstream-badge-update-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-upstream-badge-flash {
+  animation: upstream-badge-update-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: opacity;
+}
+
 /* Activity blip animation - for new activity signals */
 @keyframes activity-blip {
   0% {
@@ -1594,6 +1614,7 @@ body,
   .animate-trash-pulse,
   .animate-all-clear-flash,
   .animate-diagnostics-flash,
+  .animate-upstream-badge-flash,
   .animate-border-flash {
     animation: none;
     opacity: 1;
