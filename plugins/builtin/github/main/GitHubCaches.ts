@@ -11,12 +11,7 @@ import type {
   IssueTooltipData,
   PRTooltipData,
 } from "../../../../shared/types/github.js";
-import type {
-  RepoActivityProbe,
-  RepoContext,
-  RepoStats,
-  RepoStatsAndPageSnapshot,
-} from "./types.js";
+import type { RepoContext, RepoStats, RepoStatsAndPageSnapshot } from "./types.js";
 
 export const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
 export const repoStatsCache = new Cache<string, RepoStats>({ defaultTTL: 60000 });
@@ -38,16 +33,6 @@ const TEN_MINUTES_MS = 10 * 60 * 1000;
  */
 export const velocityCache = new Cache<string, Record<60 | 120 | 180, number>>({
   defaultTTL: FOUR_HOURS_MS,
-});
-
-/**
- * Last seen {@link REPO_ACTIVITY_PROBE_QUERY} result per repo. `getRepoStatsAndPage`
- * compares a fresh probe against this to decide whether the expensive stats
- * query can be skipped. 10-minute TTL caps how long a probe gap can suppress
- * a real fetch.
- */
-export const repoActivityProbeCache = new Cache<string, RepoActivityProbe>({
-  defaultTTL: TEN_MINUTES_MS,
 });
 
 /**
@@ -91,6 +76,42 @@ export const repoPRListETagCache = new Cache<string, string>({
   defaultTTL: ETAG_CACHE_TTL,
 });
 
+/**
+ * ETag for the repo's REST `/events` feed, keyed by `owner/repo`. The activity
+ * probe sends it back as `If-None-Match`; an authenticated `304 Not Modified`
+ * costs zero rate-limit quota, which is the whole point of polling here instead
+ * of the GraphQL stats query. A cleared ETag forces a fresh `200` that
+ * re-establishes the baseline, so this is correctness state and drops with the
+ * other PR caches on a manual refresh.
+ */
+export const repoEventsETagCache = new Cache<string, string>({
+  maxSize: ETAG_CACHE_MAX_SIZE,
+  defaultTTL: ETAG_CACHE_TTL,
+});
+
+/**
+ * Server-advertised `X-Poll-Interval` (ms) for the events feed, keyed by
+ * `owner/repo`. GitHub raises this under load and it is the floor for the
+ * adaptive probe cadence. Rate-shaping state, not correctness — it is not a
+ * plain TTL cache because a stale interval is harmless (it just defaults back
+ * to 60s) and we never want it evicted mid-backoff.
+ */
+export const repoEventsPollIntervalCache = new Map<string, number>();
+
+/**
+ * Count of consecutive no-change (`304`) probes, keyed by `owner/repo`. Drives
+ * the adaptive backoff multiplier; reset to 0 on any real event (`200`) or a
+ * manual refresh so the cadence snaps back to the poll-interval floor.
+ */
+export const repoEventsNoChangeCount = new Map<string, number>();
+
+/**
+ * Wall-clock ms of the last `/events` probe HTTP request, keyed by `owner/repo`.
+ * The gate skips probing (and reuses the snapshot) while inside the adaptive
+ * window so we never poll the events feed faster than `X-Poll-Interval`.
+ */
+export const repoEventsLastProbeAt = new Map<string, number>();
+
 let etagCacheVersion = 0;
 
 export function getETagCacheVersion(): number {
@@ -133,8 +154,11 @@ export function clearGitHubCaches(): void {
   repoStatsCache.clear();
   projectHealthCache.clear();
   velocityCache.clear();
-  repoActivityProbeCache.clear();
   repoStatsAndPageSnapshotCache.clear();
+  repoEventsETagCache.clear();
+  repoEventsPollIntervalCache.clear();
+  repoEventsNoChangeCount.clear();
+  repoEventsLastProbeAt.clear();
   issueListCache.clear();
   prListCache.clear();
   issueTooltipCache.clear();
@@ -171,8 +195,16 @@ export function clearPRCaches(): void {
   // is served — both can resurface a stale PR list after a refresh, so they
   // must drop with the PR caches. `velocityCache` is repo-level metadata on a
   // days timescale, not PR-list state, so it deliberately survives here.
-  repoActivityProbeCache.clear();
   repoStatsAndPageSnapshotCache.clear();
+  // The events ETag is correctness state: a cleared ETag forces a fresh `200`
+  // so the next probe re-checks from scratch. The no-change counter and last
+  // probe time are reset too — a manual refresh is exactly the "window focus"
+  // signal that should snap the adaptive backoff cadence back to its floor.
+  // The poll-interval hint survives; it is a server-advertised value, not
+  // PR-list state.
+  repoEventsETagCache.clear();
+  repoEventsNoChangeCount.clear();
+  repoEventsLastProbeAt.clear();
   prTooltipCache.clear();
   prTooltipWrittenAt.clear();
   prETagCache.clear();

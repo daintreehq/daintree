@@ -17,18 +17,6 @@ export interface RepoStats {
   lastUpdated?: number;
 }
 
-/**
- * Result of {@link REPO_ACTIVITY_PROBE_QUERY} — three timestamps that, taken
- * together, change whenever anything `REPO_STATS_AND_PAGE_QUERY` observes could
- * have changed. `getRepoStatsAndPage` compares a fresh probe against the
- * previous one to decide whether the expensive stats query can be skipped.
- */
-export interface RepoActivityProbe {
-  pushedAt: string | null;
-  issueUpdatedAt: string | null;
-  prUpdatedAt: string | null;
-}
-
 /** One connection page (issues or PRs) as returned by `getRepoStatsAndPage`. */
 export interface RepoConnectionPage<TItem> {
   items: TItem[];

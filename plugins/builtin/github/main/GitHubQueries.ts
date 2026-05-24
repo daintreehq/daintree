@@ -160,33 +160,6 @@ export const MERGE_VELOCITY_QUERY = `
   }
 `;
 
-// Cheap (~3 rate-limit points) change probe. `getRepoStatsAndPage` runs this
-// before the expensive REPO_STATS_AND_PAGE_QUERY (~6+ points): if all three
-// timestamps match the previous probe, nothing the stats query observes can
-// have changed, so the expensive fetch is skipped and the cached snapshot is
-// returned. `repository.updatedAt` is intentionally NOT used — it only
-// advances on repo-metadata edits, not on issue/PR activity. The two
-// `first: 1` connections are ordered by UPDATED_AT and span every state so a
-// close/merge advances the probe just like an open.
-export const REPO_ACTIVITY_PROBE_QUERY = `
-  query GetRepoActivityProbe($owner: String!, $repo: String!) {
-    repository(owner: $owner, name: $repo) {
-      pushedAt
-      issues(first: 1, states: [OPEN, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes { updatedAt }
-      }
-      pullRequests(first: 1, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes { updatedAt }
-      }
-    }
-    rateLimit {
-      cost
-      remaining
-      resetAt
-    }
-  }
-`;
-
 export const LIST_ISSUES_QUERY = `
   query GetIssues($owner: String!, $repo: String!, $states: [IssueState!], $cursor: String, $limit: Int = 20, $orderBy: IssueOrder) {
     repository(owner: $owner, name: $repo) {
