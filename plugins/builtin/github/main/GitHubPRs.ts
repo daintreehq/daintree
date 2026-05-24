@@ -75,7 +75,6 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
 
 export function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
-  const reviewsData = node.reviews as { totalCount?: number };
   const commentsData = node.comments as { totalCount?: number };
   const merged = node.merged as boolean;
   const rawState = node.state as string;
@@ -147,7 +146,6 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
       login: author?.login ?? "unknown",
       avatarUrl: author?.avatarUrl ?? "",
     },
-    reviewCount: reviewsData?.totalCount,
     commentCount: commentsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,

@@ -18,7 +18,6 @@ interface RawPRNode {
   headRepository?: { nameWithOwner?: string } | null;
   baseRepository?: { nameWithOwner?: string } | null;
   author?: { login?: string; avatarUrl?: string } | null;
-  reviews?: { totalCount?: number };
   comments?: { totalCount?: number };
   commits?: {
     nodes?: Array<{
@@ -48,7 +47,6 @@ function normalizeRawState(
 // Inline the logic from parsePRNode to keep tests self-contained
 function parsePRNode(node: RawPRNode) {
   const author = node.author;
-  const reviewsData = node.reviews;
   const commentsData = node.comments;
   const merged = node.merged;
   const rawState = node.state as string;
@@ -77,7 +75,6 @@ function parsePRNode(node: RawPRNode) {
       login: author?.login ?? "unknown",
       avatarUrl: author?.avatarUrl ?? "",
     },
-    reviewCount: reviewsData?.totalCount,
     commentCount: commentsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
@@ -95,7 +92,6 @@ describe("parsePRNode", () => {
     updatedAt: "2025-01-01T00:00:00Z",
     merged: false,
     author: { login: "alice", avatarUrl: "https://avatars.example.com/alice" },
-    reviews: { totalCount: 2 },
   };
 
   it("extracts headRefName from node", () => {
