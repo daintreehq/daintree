@@ -24,6 +24,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
+import { NativePopoverSpikeDemo } from "@/spikes/NativePopoverSpikeDemo";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 function SystemHealthSection() {
@@ -552,6 +553,17 @@ export function TroubleshootingTab() {
           </div>
         )}
       </SettingsSection>
+
+      {developerMode && (
+        <SettingsSection
+          icon={Bug}
+          title="Spike: native [popover] + CSS anchor positioning"
+          description="POC surfaces for issue #8992. Visible only in developer mode."
+          badge="Spike"
+        >
+          <NativePopoverSpikeDemo />
+        </SettingsSection>
+      )}
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-daintree-text">Keyboard Shortcuts</h4>
