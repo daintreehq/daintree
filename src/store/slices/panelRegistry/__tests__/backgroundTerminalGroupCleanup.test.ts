@@ -193,12 +193,14 @@ describe("backgroundPanelGroup", () => {
     expect(bg1.groupRestoreId).toBe(bg2.groupRestoreId);
     expect(bg2.groupRestoreId).toBe(bg3.groupRestoreId);
 
-    // Only anchor (first) gets groupMetadata
-    expect(bg1.groupMetadata).toBeDefined();
-    expect(bg1.groupMetadata!.panelIds).toEqual(["t1", "t2", "t3"]);
-    expect(bg1.groupMetadata!.activeTabId).toBe("t2");
-    expect(bg2.groupMetadata).toBeUndefined();
-    expect(bg3.groupMetadata).toBeUndefined();
+    // Every member carries the full groupMetadata (issue #8944) so the group
+    // survives removal of any single member before restore.
+    for (const bg of [bg1, bg2, bg3]) {
+      expect(bg.groupMetadata).toBeDefined();
+      expect(bg.groupMetadata!.panelIds).toEqual(["t1", "t2", "t3"]);
+      expect(bg.groupMetadata!.activeTabId).toBe("t2");
+      expect(bg.groupMetadata!.location).toBe("grid");
+    }
 
     // Tab group should be deleted
     expect(state.tabGroups.has("group-1")).toBe(false);
@@ -479,5 +481,195 @@ describe("round-trip: backgroundPanelGroup → restoreBackgroundGroup", () => {
       expect(t.location).toBe("dock");
       expect(t.worktreeId).toBe("wt-1");
     }
+  });
+});
+
+describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("preserves order and active tab when the original anchor member is removed before restore", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["t1", "t2", "t3"],
+      activeTabId: "t2",
+      location: "grid",
+    };
+
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().backgroundPanelGroup("t1");
+
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
+
+    // Remove the original anchor (first member) from the backgrounded collection
+    // and from panelsById, simulating individual deletion / hydration loss.
+    usePanelStore.setState((state) => {
+      const backgroundedTerminals = new Map(state.backgroundedTerminals);
+      backgroundedTerminals.delete("t1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["t1"];
+      return {
+        backgroundedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "t1"),
+      };
+    });
+
+    usePanelStore.getState().restoreBackgroundGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.backgroundedTerminals.size).toBe(0);
+    expect(state.tabGroups.size).toBe(1);
+
+    const restored = [...state.tabGroups.values()][0]!;
+    // Order from the surviving members preserved (anchor t1 dropped)
+    expect(restored.panelIds).toEqual(["t2", "t3"]);
+    // Originally-active tab (t2) survived and is still active
+    expect(restored.activeTabId).toBe("t2");
+  });
+
+  it("falls back to first surviving panel when the active tab was the removed anchor", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["t1", "t2", "t3"],
+      activeTabId: "t1",
+      location: "grid",
+    };
+
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().backgroundPanelGroup("t1");
+
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
+
+    // Remove t1 — which was both the anchor and the active tab.
+    usePanelStore.setState((state) => {
+      const backgroundedTerminals = new Map(state.backgroundedTerminals);
+      backgroundedTerminals.delete("t1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["t1"];
+      return {
+        backgroundedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "t1"),
+      };
+    });
+
+    usePanelStore.getState().restoreBackgroundGroup(groupRestoreId);
+
+    const restored = [...usePanelStore.getState().tabGroups.values()][0]!;
+    expect(restored.panelIds).toEqual(["t2", "t3"]);
+    // Active tab t1 is gone, falls back to first surviving panel in original order
+    expect(restored.activeTabId).toBe("t2");
+  });
+
+  it("preserves dock location and worktreeId when the anchor is removed before restore", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["t1", "t2", "t3"],
+      activeTabId: "t2",
+      location: "dock",
+      worktreeId: "wt-1",
+    };
+    setTerminals([
+      { ...makeTerminal("t1", "dock"), worktreeId: "wt-1" },
+      { ...makeTerminal("t2", "dock"), worktreeId: "wt-1" },
+      { ...makeTerminal("t3", "dock"), worktreeId: "wt-1" },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().backgroundPanelGroup("t1");
+
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
+
+    usePanelStore.setState((state) => {
+      const backgroundedTerminals = new Map(state.backgroundedTerminals);
+      backgroundedTerminals.delete("t1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["t1"];
+      return {
+        backgroundedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "t1"),
+      };
+    });
+
+    usePanelStore.getState().restoreBackgroundGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    const restored = [...state.tabGroups.values()][0]!;
+    expect(restored.panelIds).toEqual(["t2", "t3"]);
+    expect(restored.location).toBe("dock");
+    expect(restored.worktreeId).toBe("wt-1");
+    for (const id of ["t2", "t3"]) {
+      expect(state.panelsById[id]!.location).toBe("dock");
+      expect(state.panelsById[id]!.worktreeId).toBe("wt-1");
+    }
+  });
+
+  it("restores a single survivor without recreating a tab group", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["t1", "t2", "t3"],
+      activeTabId: "t2",
+      location: "grid",
+    };
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().backgroundPanelGroup("t1");
+
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
+
+    // Remove two members including the anchor — only t3 survives.
+    usePanelStore.setState((state) => {
+      const backgroundedTerminals = new Map(state.backgroundedTerminals);
+      backgroundedTerminals.delete("t1");
+      backgroundedTerminals.delete("t2");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["t1"];
+      delete panelsById["t2"];
+      return {
+        backgroundedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id === "t3"),
+      };
+    });
+
+    usePanelStore.getState().restoreBackgroundGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.backgroundedTerminals.size).toBe(0);
+    expect(state.tabGroups.size).toBe(0);
+    expect(state.panelsById["t3"]!.location).toBe("grid");
   });
 });

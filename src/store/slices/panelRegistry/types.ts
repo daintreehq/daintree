@@ -48,7 +48,7 @@ export interface TrashedTerminal {
   originalLocation: "dock" | "grid";
   /** Shared ID for panels trashed together as a group */
   groupRestoreId?: string;
-  /** Present on the "anchor" panel of a trashed group, holds metadata for recreation */
+  /** Replicated on every member of a trashed group, holds metadata for recreation */
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
@@ -57,7 +57,7 @@ export interface BackgroundedTerminal {
   originalLocation: "dock" | "grid";
   /** Shared ID for panels backgrounded together as a group */
   groupRestoreId?: string;
-  /** Present on the "anchor" panel of a backgrounded group, holds metadata for recreation */
+  /** Replicated on every member of a backgrounded group, holds metadata for recreation */
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 

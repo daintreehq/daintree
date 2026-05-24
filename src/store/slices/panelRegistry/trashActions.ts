@@ -192,21 +192,22 @@ export const createTrashActions = (
 
       const newTrashed = new Map(state.trashedTerminals);
 
-      for (const [i, id] of trashPanelIds.entries()) {
-        const isAnchor = i === 0;
+      // Store groupMetadata on every member, not just an anchor. If any single
+      // member is removed before restore (expiry, individual deletion, hydration
+      // loss), the surviving members still carry the full restore metadata so
+      // ordering and the active tab are preserved. See issue #8944.
+      for (const id of trashPanelIds) {
         newTrashed.set(id, {
           id,
           expiresAt,
           originalLocation,
           groupRestoreId,
-          ...(isAnchor && {
-            groupMetadata: {
-              panelIds: trashPanelIds,
-              activeTabId: resolvedActiveTabId,
-              location: group.location,
-              worktreeId,
-            },
-          }),
+          groupMetadata: {
+            panelIds: [...trashPanelIds],
+            activeTabId: resolvedActiveTabId,
+            location: group.location,
+            worktreeId,
+          },
         });
       }
 
@@ -295,7 +296,9 @@ export const createTrashActions = (
       for (const [id, trashed] of trashedTerminals.entries()) {
         if (trashed.groupRestoreId === groupRestoreId) {
           groupPanels.push({ id, trashed });
-          if (trashed.groupMetadata) {
+          // Metadata is replicated identically across all members (#8944); take
+          // the first one found so the restore source is deterministic.
+          if (!anchorPanel && trashed.groupMetadata) {
             anchorPanel = trashed;
           }
         }

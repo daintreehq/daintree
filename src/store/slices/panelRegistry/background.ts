@@ -142,22 +142,22 @@ export const createBackgroundActions = (
         }
       }
 
+      // Store groupMetadata on every member, not just an anchor. If any single
+      // member is removed before restore (individual deletion, hydration loss),
+      // the surviving members still carry the full restore metadata so ordering
+      // and the active tab are preserved. See issue #8944.
       const newBackgrounded = new Map(s.backgroundedTerminals);
-      for (let i = 0; i < bgPanelIds.length; i++) {
-        const bid = bgPanelIds[i]!;
-        const isAnchor = i === 0;
+      for (const bid of bgPanelIds) {
         newBackgrounded.set(bid, {
           id: bid,
           originalLocation,
           groupRestoreId,
-          ...(isAnchor && {
-            groupMetadata: {
-              panelIds: bgPanelIds,
-              activeTabId: resolvedActiveTabId,
-              location: group.location,
-              worktreeId,
-            },
-          }),
+          groupMetadata: {
+            panelIds: [...bgPanelIds],
+            activeTabId: resolvedActiveTabId,
+            location: group.location,
+            worktreeId,
+          },
         });
       }
 
@@ -249,7 +249,9 @@ export const createBackgroundActions = (
     for (const [id, backgrounded] of backgroundedTerminals.entries()) {
       if (backgrounded.groupRestoreId === groupRestoreId) {
         groupPanels.push({ id, backgrounded });
-        if (backgrounded.groupMetadata) {
+        // Metadata is replicated identically across all members (#8944); take
+        // the first one found so the restore source is deterministic.
+        if (!anchorPanel && backgrounded.groupMetadata) {
           anchorPanel = backgrounded;
         }
       }
