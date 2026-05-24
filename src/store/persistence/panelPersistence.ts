@@ -16,10 +16,12 @@ export interface PanelPersistenceOptions {
 }
 
 // Base fields that panelToSnapshot always writes. Used to isolate kind-specific
-// fields when preserving a previous snapshot for an unregistered kind. If new
-// base fields are added to the `base` object below, they MUST be added here too,
-// or unknown-kind snapshots will silently carry stale copies of the new field.
-const BASE_PANEL_FIELDS = new Set<string>([
+// fields when preserving a previous snapshot for an unregistered kind. The
+// `satisfies` binding catches key deletions at compile time — removing a key
+// from PanelSnapshot without removing it here is a type error. The ratchet
+// does NOT catch new keys added to PanelSnapshot; a reviewer must ensure new
+// base fields in the `base` object below are listed here.
+const BASE_PANEL_FIELDS = [
   "id",
   "kind",
   "title",
@@ -27,7 +29,8 @@ const BASE_PANEL_FIELDS = new Set<string>([
   "location",
   "extensionState",
   "pluginId",
-]);
+] as const satisfies readonly (keyof PanelSnapshot)[];
+const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
 export function panelToSnapshot(
   t: TerminalInstance,
@@ -53,7 +56,7 @@ export function panelToSnapshot(
       const preserved: Record<string, unknown> = {};
       const prev = previousSnapshot as unknown as Record<string, unknown>;
       for (const key of Object.keys(prev)) {
-        if (!BASE_PANEL_FIELDS.has(key) && prev[key] !== undefined) {
+        if (!BASE_PANEL_FIELD_SET.has(key) && prev[key] !== undefined) {
           preserved[key] = prev[key];
         }
       }
