@@ -188,6 +188,22 @@ function persistedKeys<T extends Record<string, boolean>>(map: T): (keyof T)[] {
   return (Object.keys(map) as (keyof T)[]).filter((k) => map[k]);
 }
 
+// Compile-time carrier-boundary pin (#8957). The renderer store carrier is being
+// drained from `TerminalInstance` (kitchen-sink) to the `PanelInstance` union.
+// Every key on `TerminalInstance` must be coverable by some `PanelInstance`
+// variant plus the two carrier-only timestamps (`createdAt`/`lastActiveAt`,
+// which live on `TerminalInstance` but not `BasePanelData`). If a new field is
+// added to `TerminalInstance` without a home in the union, this assignment
+// fails with a message naming the orphaned key — forcing it onto the proper
+// variant before the carrier flip lands.
+type _KeysOfUnion<T> = T extends unknown ? keyof T : never;
+type _AllowedPanelCarrierKeys = _KeysOfUnion<PanelInstance> | "createdAt" | "lastActiveAt";
+type _OrphanedTerminalInstanceKeys = Exclude<keyof TerminalInstance, _AllowedPanelCarrierKeys>;
+const _terminalInstanceKeysCovered: [_OrphanedTerminalInstanceKeys] extends [never]
+  ? true
+  : _OrphanedTerminalInstanceKeys = true;
+void _terminalInstanceKeysCovered;
+
 const browserHistoryFixture: BrowserHistory = {
   past: ["https://prev.example"],
   present: "https://example.com",

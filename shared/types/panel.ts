@@ -233,6 +233,10 @@ export interface PtyPanelData extends BasePanelData {
   cwd: string;
   /** Process ID of the underlying PTY process */
   pid?: number;
+  /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
+  hasPty?: boolean;
+  /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
+  lastObservedTitle?: string;
   /** Number of columns in the terminal */
   cols: number;
   /** Number of rows in the terminal */
@@ -245,6 +249,14 @@ export interface PtyPanelData extends BasePanelData {
   stateChangeTrigger?: AgentStateChangeTrigger;
   /** Confidence in the most recent state detection (0.0-1.0) */
   stateChangeConfidence?: number;
+  /** Why the agent is waiting (only meaningful while agentState is "waiting") */
+  waitingReason?: WaitingReason;
+  /** Error code or message from agent state transitions (e.g., "ECONNRESET", "EPIPE") */
+  error?: string;
+  /** Extracted session cost in dollars from the last completed agent run */
+  sessionCost?: number;
+  /** Extracted session token count from the last completed agent run */
+  sessionTokens?: number;
   /** AI-generated activity headline (e.g., "Installing dependencies") */
   activityHeadline?: string;
   /** Semantic activity status (working, waiting, success, failure) */
@@ -267,6 +279,8 @@ export interface PtyPanelData extends BasePanelData {
   reconnectError?: TerminalReconnectError;
   /** Scrollback restore failure - set when deferred scrollback replay fails */
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
+  /** Error that occurred when spawning the PTY process */
+  spawnError?: import("./pty-host.js").SpawnError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy.
    *  Excludes `data-loss` (transient pulse only — never persisted as state). */
   flowStatus?: PersistableFlowStatus;
@@ -347,6 +361,13 @@ export interface PtyPanelData extends BasePanelData {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
+   * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;
+   * then "ready". Absent (undefined) on hydrated panels — treat as "ready".
+   * Never serialized — see `serializePtyPanel`.
+   */
+  spawnStatus?: "spawning" | "ready" | "missing-cli";
   /**
    * Original user-selected preset ID. Set on first spawn, never overwritten
    * when a fallback activates. Used to display "was {original} → {active}".
