@@ -414,7 +414,7 @@ export function useRecipeRunner({
 
       void (async () => {
         try {
-          await addPanel({
+          const id = await addPanel({
             kind: "terminal",
             title: suggestion.name,
             cwd: defaultCwd,
@@ -423,6 +423,12 @@ export function useRecipeRunner({
             worktreeId: activeWorktreeId ?? undefined,
             spawnedBy: "quickrun",
           });
+          // addPanel resolves null when the panel is rejected (panel limit,
+          // policy gate, cancelled confirmation). Log so a silent click on a
+          // first-run discovery surface leaves a diagnostic trail.
+          if (id === null) {
+            logError("Suggestion run rejected by panel store", suggestion.command);
+          }
         } catch (error) {
           // Unhandled rejection crashes Electron 41 utility processes.
           logError("Suggestion run failed", error);

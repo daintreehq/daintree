@@ -625,6 +625,23 @@ describe("useRecipeRunner — suggestions", () => {
 
     expect(result.current.suggestions).toEqual([]);
   });
+
+  it("matches the keyword in either the name or the command field", () => {
+    projectSettingsState.allDetectedRunners = [
+      // keyword only in name
+      makeRunCommand({ id: "1", name: "dev", command: "vite" }),
+      // keyword only in command
+      makeRunCommand({ id: "2", name: "watch", command: "npm run dev" }),
+      // neither field matches
+      makeRunCommand({ id: "3", name: "lint", command: "eslint ." }),
+    ];
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.suggestions.map((s) => s.id)).toEqual(["1", "2"]);
+  });
 });
 
 describe("useRecipeRunner — handleRunSuggestion", () => {
@@ -718,5 +735,47 @@ describe("useRecipeRunner — handleRunSuggestion", () => {
 
     expect(addPanelMock).toHaveBeenCalledTimes(2);
     expect(logErrorMock).toHaveBeenCalledWith("Suggestion run failed", expect.any(Error));
+  });
+
+  it("logs and releases the guard when addPanel resolves null (panel rejected)", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev", command: "npm run dev" });
+    addPanelMock.mockResolvedValueOnce(null);
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "Suggestion run rejected by panel store",
+      "npm run dev"
+    );
+
+    // Guard released — a follow-up click fires.
+    addPanelMock.mockResolvedValueOnce("panel-2");
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+    expect(addPanelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes worktreeId: undefined to addPanel when activeWorktreeId is null", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev", command: "npm run dev" });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: null, defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+    expect(addPanelMock.mock.calls[0]?.[0]).toMatchObject({ worktreeId: undefined });
   });
 });
