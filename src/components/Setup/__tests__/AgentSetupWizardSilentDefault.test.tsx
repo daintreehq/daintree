@@ -181,6 +181,18 @@ vi.stubGlobal("window", {
 
 import { AgentSetupWizard } from "../AgentSetupWizard";
 
+// Clicks the visible footer button whose label matches exactly. Only the
+// current step renders, so the match is unambiguous across the wizard flow.
+async function clickButton(label: string) {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === label
+  );
+  expect(button, `expected a "${label}" button to be present`).toBeDefined();
+  await act(async () => {
+    button!.click();
+  });
+}
+
 describe("AgentSetupWizard silent-default privacy notify", () => {
   beforeEach(() => {
     notifyMock.mockClear();
@@ -194,11 +206,11 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
       render(<AgentSetupWizard isOpen onClose={onClose} isFirstRun initialAvailability={{}} />);
     });
 
-    // Click the Skip button (rendered inside the selection-step footer).
+    // Click the Skip button (rendered on the first-run entry step — appearance).
     const skipButton = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent === "Skip"
     );
-    expect(skipButton, "Skip button should be present on selection step").toBeDefined();
+    expect(skipButton, "Skip button should be present on the entry step").toBeDefined();
 
     await act(async () => {
       skipButton!.click();
@@ -218,15 +230,28 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("does NOT fire inbox confirmation when the user touched the privacy toggle before skipping", async () => {
+  it("does NOT fire inbox confirmation when the user touched the privacy toggle before closing", async () => {
     const onClose = vi.fn();
     await act(async () => {
-      render(<AgentSetupWizard isOpen onClose={onClose} isFirstRun initialAvailability={{}} />);
+      render(
+        // A pre-installed agent keeps the agents-step Continue enabled so we
+        // can navigate forward to the privacy step where the toggle now lives.
+        <AgentSetupWizard
+          isOpen
+          onClose={onClose}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
     });
+
+    // appearance -> agents -> privacy
+    await clickButton("Continue");
+    await clickButton("Continue");
 
     // Find the privacy toggle (role="switch", labeled "Enable crash reporting").
     const toggle = document.querySelector('button[role="switch"]') as HTMLButtonElement | null;
-    expect(toggle, "privacy toggle should be present on first-run selection step").not.toBeNull();
+    expect(toggle, "privacy toggle should be present on the privacy step").not.toBeNull();
 
     await act(async () => {
       toggle!.click();
@@ -234,11 +259,12 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
       toggle!.click();
     });
 
-    const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
-    );
+    // Dismiss from the privacy step — the touched toggle suppresses the nag.
+    const dismiss = document.querySelector(
+      '[data-testid="dialog-dismiss"]'
+    ) as HTMLButtonElement | null;
     await act(async () => {
-      skipButton!.click();
+      dismiss!.click();
     });
 
     expect(setTelemetryLevelMock).toHaveBeenCalledWith("off");
@@ -285,7 +311,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("invokes onStepChange with the initial selection step", async () => {
+  it("invokes onStepChange with the initial appearance step", async () => {
     const onStepChange = vi.fn();
     await act(async () => {
       render(
@@ -299,7 +325,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
       );
     });
 
-    expect(onStepChange).toHaveBeenCalledWith({ type: "selection" });
+    expect(onStepChange).toHaveBeenCalledWith({ type: "appearance" });
   });
 
   it("fires inbox confirmation when first-run user dismisses via the dialog (onBeforeClose path)", async () => {
