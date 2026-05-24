@@ -4,6 +4,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -51,7 +52,7 @@ export const createTrashActions = (
 
     const expiresAt = Date.now() + TRASH_TTL_MS;
 
-    if (terminal.kind === "dev-preview") {
+    if (isDevPreviewPanel(terminal)) {
       stopDevPreviewByPanelId(id);
     }
 
@@ -157,7 +158,7 @@ export const createTrashActions = (
     // Trash PTY processes for all PTY-backed panels
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
-      if (terminal?.kind === "dev-preview") {
+      if (terminal && isDevPreviewPanel(terminal)) {
         stopDevPreviewByPanelId(id);
         continue;
       }
