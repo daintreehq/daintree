@@ -108,6 +108,11 @@ export function HelpPanel({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
+  // Ordinary DOM focus (click-to-focus, programmatic) inside the aside — the
+  // macro-focus signal only fires on keyboard region cycling, so without this
+  // the panel shows no "active surface" affordance when the user clicks in.
+  const [hasDomFocus, setHasDomFocus] = useState(false);
+  const isHighlighted = isMacroFocused || hasDomFocus;
   const isVisible = isVisibleProp ?? effectiveWidth > 0;
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
@@ -601,6 +606,13 @@ export function HelpPanel({
       // element per ARIA 1.2 and trips axe's `aria-hidden-focus` rule).
       inert={!isVisible || undefined}
       data-macro-focus={isMacroFocused ? "true" : undefined}
+      onFocus={() => setHasDomFocus(true)}
+      onBlur={(e) => {
+        // Keep the highlight while focus moves between controls inside the
+        // aside (xterm textarea ↔ header buttons). `contains(null)` is false,
+        // so window/page blur correctly clears it.
+        if (!e.currentTarget.contains(e.relatedTarget)) setHasDomFocus(false);
+      }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
         "bg-daintree-bg border-l border-daintree-border",
@@ -635,6 +647,7 @@ export function HelpPanel({
         onNewSession={handleNewSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
+        isFocused={isHighlighted}
       />
 
       {/* Content */}

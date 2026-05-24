@@ -1,6 +1,7 @@
 import { ChevronRight, CircleHelp, Plus } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
+import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 
 // Tier-1 ambient indicator (per CLAUDE.md Runtime Signals): surfaces the
@@ -60,6 +61,7 @@ interface HelpPanelHeaderProps {
   onNewSession: () => void;
   onOpenDocs: () => void;
   onClose: () => void;
+  isFocused?: boolean;
 }
 
 export function HelpPanelHeader({
@@ -68,9 +70,15 @@ export function HelpPanelHeader({
   onNewSession,
   onOpenDocs,
   onClose,
+  isFocused = false,
 }: HelpPanelHeaderProps) {
   return (
-    <div className="flex items-center gap-1 px-3 py-2 border-b border-daintree-border shrink-0">
+    <div
+      className={cn(
+        "flex items-center gap-1 px-3 py-2 border-b border-daintree-border shrink-0 transition-colors",
+        isFocused && "bg-overlay-subtle"
+      )}
+    >
       <div className="flex items-center min-w-0 flex-1">
         <DaintreeIcon className="w-4 h-4 text-daintree-text/50 shrink-0" />
         <span className="ml-1.5 text-xs font-medium text-daintree-text/70 truncate">
