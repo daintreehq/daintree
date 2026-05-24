@@ -220,4 +220,66 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-b" });
     expect(mockStopByPanel).toHaveBeenCalledTimes(2);
   });
+
+  it("stops dev-preview runtime when panel is backgrounded", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-bg": {
+          id: "dev-panel-bg",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        },
+      },
+      panelIds: ["dev-panel-bg"],
+    });
+
+    usePanelStore.getState().backgroundTerminal("dev-panel-bg");
+
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-bg" });
+  });
+
+  it("stops dev-preview runtimes when backgrounding a panel group", () => {
+    const group: TabGroup = {
+      id: "group-bg-dev-preview",
+      panelIds: ["dev-panel-bg-1", "term-bg-1"],
+      activeTabId: "dev-panel-bg-1",
+      location: "grid",
+    };
+
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-bg-1": {
+          id: "dev-panel-bg-1",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        },
+        "term-bg-1": {
+          id: "term-bg-1",
+          kind: "terminal",
+          title: "Terminal",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["dev-panel-bg-1", "term-bg-1"],
+      tabGroups: new Map([["group-bg-dev-preview", group]]),
+    });
+
+    usePanelStore.getState().backgroundPanelGroup("dev-panel-bg-1");
+
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-bg-1" });
+    expect(mockStopByPanel).toHaveBeenCalledTimes(1);
+  });
 });

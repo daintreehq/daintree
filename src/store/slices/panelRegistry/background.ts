@@ -1,10 +1,12 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { stopDevPreviewByPanelId } from "./helpers";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -24,6 +26,10 @@ export const createBackgroundActions = (
     const terminal = get().panelsById[id];
     if (!terminal) return;
     if (terminal.location === "trash" || terminal.location === "background") return;
+
+    if (isDevPreviewPanel(terminal)) {
+      stopDevPreviewByPanelId(id);
+    }
 
     const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
 
@@ -169,6 +175,10 @@ export const createBackgroundActions = (
 
     for (const bid of bgPanelIds) {
       const terminal = state.panelsById[bid];
+      if (terminal && isDevPreviewPanel(terminal)) {
+        stopDevPreviewByPanelId(bid);
+        continue;
+      }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND);
         // See backgroundTerminal: re-arm hibernation for panels already at
