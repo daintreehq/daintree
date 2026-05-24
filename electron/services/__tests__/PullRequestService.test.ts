@@ -624,7 +624,10 @@ describe("PullRequestService", () => {
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
-        map.set(branch, makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch }));
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
       }
       return map;
     });
@@ -661,10 +664,7 @@ describe("PullRequestService", () => {
     // Two PRs detected in one cycle → a single coalesced batch call, never the
     // per-PR path.
     expect(getCIStatuses).toHaveBeenCalledTimes(1);
-    expect(getCIStatuses).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.arrayContaining([1, 2])
-    );
+    expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), expect.arrayContaining([1, 2]));
     expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
 
     // The batched CI result is applied: each worktree gets a re-emit carrying
@@ -682,13 +682,14 @@ describe("PullRequestService", () => {
   it("does not bump consecutiveErrors when the provider is invalidated mid-check", async () => {
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
 
-    let releaseBatch: (() => void) | null = null;
+    let releaseBatch: (() => void) | undefined;
     const batchSpy = vi.fn(
       (_repo: RepoRef, branches: string[]) =>
         new Promise<Map<string, ForgePR | null>>((resolve) => {
           releaseBatch = () => {
             const map = new Map<string, ForgePR | null>();
-            for (const branch of branches) map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+            for (const branch of branches)
+              map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
             resolve(map);
           };
         })
@@ -739,7 +740,10 @@ describe("PullRequestService", () => {
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
-        map.set(branch, makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch }));
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
       }
       return map;
     });
@@ -774,7 +778,10 @@ describe("PullRequestService", () => {
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
-        map.set(branch, makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch }));
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
       }
       return map;
     });
@@ -801,7 +808,9 @@ describe("PullRequestService", () => {
     );
 
     await pullRequestService.refresh();
-    await (pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }).revalidateResolvedPRs();
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
 
     // Both resolved PRs revalidate through one batch call, not per-number getPR.
     expect(findPRsByNumbers).toHaveBeenCalledTimes(1);

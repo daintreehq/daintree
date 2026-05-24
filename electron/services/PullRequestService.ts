@@ -1093,7 +1093,7 @@ class PullRequestService {
           // and redundant API calls.
           if (!enrichedPRNumbers.has(prNumber)) {
             enrichedPRNumbers.add(prNumber);
-            this.enrichPRWithCIStatus(detectedPR, repo, providerId);
+            this.enrichPRWithCIStatus(detectedPR, repo);
           }
         }
       }
@@ -1390,7 +1390,7 @@ class PullRequestService {
         }
 
         // Fire-and-forget CI status enrichment
-        this.enrichPRWithCIStatus(internalPR, repo, providerId);
+        this.enrichPRWithCIStatus(internalPR, repo);
       }
 
       this.updateBoostFromDetectedPRs();
@@ -1443,7 +1443,7 @@ class PullRequestService {
    * On success, updates the detectedPRs entry and re-emits sys:pr:detected
    * with the enriched CI status so the renderer can update the badge.
    */
-  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef, providerId: string): void {
+  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef): void {
     const loader = this.ciStatusLoader;
     if (!loader) return;
     // Synchronous `load()` here: enrichPRWithCIStatus is called fire-and-forget
