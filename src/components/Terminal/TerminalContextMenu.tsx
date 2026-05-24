@@ -13,6 +13,7 @@ import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   ArrowDownFromLine,
@@ -366,12 +367,18 @@ export function TerminalContextMenu({
   const handleDestructiveConfirm = useCallback(() => {
     if (!destructiveConfirm) return;
     const actionId = destructiveConfirm.kind === "kill" ? "terminal.kill" : "terminal.restart";
+    const announcement =
+      destructiveConfirm.kind === "kill" ? "Terminal killed" : "Terminal restarted";
     void actionService.dispatch(
       actionId,
       { terminalId, confirmed: true },
       { source: sourceRef.current }
     );
+    // Close the dialog first so the announce fires after focus returns to the
+    // main tree — VoiceOver suppresses live-region updates from outside the
+    // current modal subtree while focus is trapped.
     setDestructiveConfirm(null);
+    useAnnouncerStore.getState().announce(announcement);
   }, [destructiveConfirm, terminalId]);
 
   const closeDestructiveConfirm = useCallback(() => {

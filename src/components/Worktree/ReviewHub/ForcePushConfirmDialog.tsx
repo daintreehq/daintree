@@ -4,6 +4,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Spinner } from "@/components/ui/Spinner";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface RemoteCommit {
@@ -91,8 +92,10 @@ export function ForcePushConfirmDialog({
     try {
       await window.electron.git.forcePushWithLease(cwd, branchName, leaseSha);
       onSuccess();
+      useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
     } catch (err) {
       onError(err);
+      useAnnouncerStore.getState().announce(`Couldn't force push ${branchName}`, "assertive");
     } finally {
       isExecutingRef.current = false;
       setIsPushing(false);

@@ -307,6 +307,38 @@ describe("ErrorFallback", () => {
     });
   });
 
+  describe("screen-reader announcements (#8937)", () => {
+    beforeEach(() => {
+      vi.stubEnv("DEV", false);
+    });
+
+    it("announces section variant assertively on mount with stopped-working phrasing", () => {
+      render(<ErrorFallback {...baseProps} variant="section" componentName="Git panel" />);
+      const { assertive, polite } = useAnnouncerStore.getState();
+      expect(assertive?.msg).toBe("Git panel stopped working");
+      expect(polite).toBeNull();
+    });
+
+    it("announces component variant politely on mount with error phrasing", () => {
+      render(<ErrorFallback {...baseProps} variant="component" componentName="Recipe runner" />);
+      const { polite, assertive } = useAnnouncerStore.getState();
+      expect(polite?.msg).toBe("Recipe runner error");
+      expect(assertive).toBeNull();
+    });
+
+    it("falls back to a generic name when componentName is missing", () => {
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      expect(useAnnouncerStore.getState().assertive?.msg).toBe("Section stopped working");
+    });
+
+    it("does not announce for fullscreen variant (covered by role=alertdialog + autoFocus)", () => {
+      render(<ErrorFallback {...baseProps} variant="fullscreen" componentName="App" />);
+      const { polite, assertive } = useAnnouncerStore.getState();
+      expect(polite).toBeNull();
+      expect(assertive).toBeNull();
+    });
+  });
+
   describe("incident ID edge cases", () => {
     it("does not render Error ID when incidentId is null", () => {
       vi.stubEnv("DEV", false);

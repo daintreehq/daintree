@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import PQueue from "p-queue";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { notify } from "@/lib/notify";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeState } from "@/types";
@@ -184,30 +185,35 @@ export function useWorktreeBulkRemove({
         })
       );
 
+      const announce = useAnnouncerStore.getState().announce;
       if (failures.length === 0) {
         // Transient: the overview grid already reflects the removed
         // worktrees disappearing — the toast is a one-shot confirmation,
         // not something the user needs to revisit from the notification
         // inbox (#8249).
+        const successTitle = total === 1 ? "Removed 1 worktree" : `Removed ${total} worktrees`;
         notify({
           type: "success",
-          title: total === 1 ? "Removed 1 worktree" : `Removed ${total} worktrees`,
+          title: successTitle,
           message:
             total === 1
               ? "The worktree directory was deleted from disk."
               : `${total} worktree directories were deleted from disk.`,
           transient: true,
         });
+        announce(successTitle);
       } else if (successCount === 0) {
         // Total failure — no recovery action attached because the modal
         // itself is the retry surface (the user can re-select and retry).
         const firstFailure = failures[0];
+        const failureTitle = total === 1 ? "Couldn't remove worktree" : "Couldn't remove worktrees";
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: total === 1 ? "Couldn't remove worktree" : "Couldn't remove worktrees",
+          title: failureTitle,
           message: firstFailure ? firstFailure.reason : "All removals failed.",
         });
+        announce(failureTitle, "assertive");
       } else {
         // Partial — warning type so the success half isn't lost in red.
         // Warning toasts aren't gated by the success-toast rule, so no
@@ -218,11 +224,13 @@ export function useWorktreeBulkRemove({
           failures.length === 1 && firstFailure
             ? `${firstFailure.name} failed: ${firstFailure.reason}`
             : `${failures.length} failed.`;
+        const partialTitle = `Removed ${successCount} of ${total} worktrees`;
         notify({
           type: "warning",
-          title: `Removed ${successCount} of ${total} worktrees`,
+          title: partialTitle,
           message: partialMessage,
         });
+        announce(partialTitle);
       }
     } catch (err) {
       // p-queue timeout escape hatch. Underlying IPC calls may still
@@ -239,6 +247,7 @@ export function useWorktreeBulkRemove({
             ? "A removal exceeded the timeout — re-open the overview to check which worktrees remain."
             : "The removal run failed before completing.",
       });
+      useAnnouncerStore.getState().announce("Bulk remove aborted", "assertive");
     } finally {
       isExecutingRef.current = false;
       setIsExecuting(false);
