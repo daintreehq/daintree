@@ -223,7 +223,7 @@ Settings UI for auth is contributed by each plugin's own `settings` contribution
 
 ## Branch → PR Linkage
 
-`PRIntegrationService` (the worktree-PR linker) becomes provider-routed. The active provider for a worktree is determined by matching the worktree's remote URL against registered providers' `matches` patterns.
+`PRIntegrationService` (the worktree-PR linker) becomes provider-routed. The active provider for a worktree is determined by matching the worktree's remote URL hostname against registered providers' `matches` entries.
 
 The shared interface delegates to each provider's native query. Client-side filtering across paged results is forbidden — GitHub uses GraphQL `pullRequests(headRefName: $branch)`, future GitLab plugins will use REST `/projects/:id/merge_requests?source_branch=`, etc.
 
