@@ -306,6 +306,57 @@ function writeBaseline(report, { force }) {
   );
 }
 
+// Pure four-state classifier for the first-render budget. Does NOT change the
+// gate — `ratio > threshold` still determines `ok` in `compareToBaseline`. The
+// classification is reviewer visibility: it tells the PR author whether their
+// change is a genuine win, a regression, a shift-trap (bytes moved from eager
+// to lazy but total bundle grew), or a watch (eager stable, total creeping up).
+//
+// `stabilityBytes` (default 1024) defines the noise floor — deltas within this
+// band are treated as "stable" rather than meaningful movement.
+export function classifyFirstRenderBudget(
+  { delta, totalDelta, ratio, threshold },
+  { stabilityBytes = 1024 } = {}
+) {
+  const descriptions = {
+    regression: "Eager first-render gzip grew beyond the threshold — this is a gating failure.",
+    win: "Eager closure shrank with no net increase in total bundle size.",
+    "shift-trap":
+      "Eager bytes moved to lazy chunks but total bundle grew — verify the split was intentional.",
+    watch: "Eager bytes are stable but total bundle size crept up — monitor for trend.",
+    pass: "All metrics within thresholds.",
+  };
+
+  if (ratio > threshold) {
+    return {
+      classification: "regression",
+      emoji: "🔴",
+      label: "Regression",
+      description: descriptions.regression,
+    };
+  }
+  if (delta <= -stabilityBytes && totalDelta <= stabilityBytes) {
+    return { classification: "win", emoji: "🟢", label: "Win", description: descriptions.win };
+  }
+  if (delta <= -stabilityBytes && totalDelta > stabilityBytes) {
+    return {
+      classification: "shift-trap",
+      emoji: "⚠️",
+      label: "Shift trap",
+      description: descriptions["shift-trap"],
+    };
+  }
+  if (Math.abs(delta) <= stabilityBytes && totalDelta > stabilityBytes) {
+    return {
+      classification: "watch",
+      emoji: "🟡",
+      label: "Watch",
+      description: descriptions.watch,
+    };
+  }
+  return { classification: "pass", emoji: "✅", label: "Pass", description: descriptions.pass };
+}
+
 function compareToBaseline(report, threshold) {
   if (!existsSync(BASELINE_FILE)) {
     console.error(
@@ -338,11 +389,19 @@ function compareToBaseline(report, threshold) {
   const currentTotalGzip = report.totals.gzip;
   const totalDelta = currentTotalGzip - baselineTotalGzip;
 
+  const classification = classifyFirstRenderBudget({ delta, totalDelta, ratio, threshold });
+
   const markdown = formatBudgetSummary({
     title: "First-render chunk gzip budget",
-    status: overBudget ? "FAIL" : "PASS",
+    status: `${classification.emoji} ${classification.label}`,
     headerLine: `eager gzip ${currentGzip} bytes (${delta >= 0 ? "+" : ""}${delta}, ${(ratio * 100).toFixed(2)}%, threshold +${(threshold * 100).toFixed(1)}%)`,
     sections: [
+      {
+        heading: "Reviewer signal",
+        body: [
+          `${classification.emoji} **${classification.label}** — ${classification.description}`,
+        ],
+      },
       {
         heading: "Eager first-render closure (gated)",
         body: [
@@ -351,7 +410,7 @@ function compareToBaseline(report, threshold) {
           `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`,
           `- threshold:     +${(threshold * 100).toFixed(1)}%`,
           `- eager chunks:  ${report.chunkCount}`,
-          `- result:        ${overBudget ? "OVER BUDGET" : "OK"}`,
+          `- result:        ${overBudget ? "🔴 OVER BUDGET" : "OK"}`,
         ],
       },
       {
@@ -365,9 +424,20 @@ function compareToBaseline(report, threshold) {
     ],
   });
 
-  writeSummary(SUMMARY_FILE, markdown);
+  const markerComment = `<!-- daintree-first-render-budget classification:"${classification.classification}" delta:${delta} -->`;
+  writeSummary(SUMMARY_FILE, markdown + "\n" + markerComment);
 
-  return { ok: !overBudget, delta, ratio, baselineGzip, currentGzip };
+  return {
+    ok: !overBudget,
+    delta,
+    ratio,
+    baselineGzip,
+    currentGzip,
+    totalDelta,
+    baselineTotalGzip,
+    currentTotalGzip,
+    classification,
+  };
 }
 
 function main() {
