@@ -13,10 +13,11 @@
 //   node scripts/check-renderer-bundle-budget.mjs --update --force            # bypass the shrinkage guard
 //   node scripts/check-renderer-bundle-budget.mjs --override                  # suppress failure exit code
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { compareReports, formatMarkdown, validateReport } from "./renderer-bundle-budget-lib.mjs";
+import { writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
@@ -139,9 +140,8 @@ function main() {
   const comparison = compareReports(report, baseline, args.threshold);
   const markdown = formatMarkdown(comparison, args.threshold);
 
-  // Write markdown summary for CI comment posting
-  mkdirSync(path.dirname(SUMMARY_FILE), { recursive: true });
-  writeFileSync(SUMMARY_FILE, markdown + "\n");
+  // Write markdown summary for downstream PR-comment aggregation.
+  writeSummary(SUMMARY_FILE, markdown);
 
   // Emit GitHub annotations
   for (const f of comparison.failures) {

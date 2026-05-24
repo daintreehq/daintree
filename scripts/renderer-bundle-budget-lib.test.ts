@@ -196,12 +196,15 @@ describe("compareReports", () => {
 });
 
 describe("formatMarkdown", () => {
-  it("produces a markdown table with headers", () => {
+  it("produces a collapsible markdown table with headers", () => {
     const baseline = makeReport();
     const current = makeReport();
     const comparison = compareReports(current, baseline, 0.05);
     const md = formatMarkdown(comparison, 0.05);
-    expect(md).toContain("### Renderer Bundle Size Report");
+    expect(md.startsWith("<details>")).toBe(true);
+    expect(md.endsWith("</details>")).toBe(true);
+    expect(md).toContain("<summary>PASS — ");
+    expect(md).toContain("## Renderer Bundle Size Report");
     expect(md).toContain("| Chunk |");
     expect(md).toContain("**Total JS**");
     expect(md).toContain("**Total CSS**");
@@ -219,8 +222,8 @@ describe("formatMarkdown", () => {
     });
     const comparison = compareReports(current, baseline, 0.05);
     const md = formatMarkdown(comparison, 0.05);
-    expect(md).toContain("FAIL");
-    expect(md).toContain("**Regressions**");
+    expect(md).toContain("<summary>FAIL — ");
+    expect(md).toContain("### Regressions");
   });
 
   it("includes improvements section when sizes shrink", () => {
@@ -235,7 +238,7 @@ describe("formatMarkdown", () => {
     });
     const comparison = compareReports(current, baseline, 0.05);
     const md = formatMarkdown(comparison, 0.05);
-    expect(md).toContain("**Improvements**");
+    expect(md).toContain("### Improvements");
     expect(md).toContain("renderer-bundle-budget:update");
   });
 });

@@ -2,6 +2,8 @@
 // so comparison and formatting logic can be exercised by unit tests without
 // needing a Vite build.
 
+import { formatBudgetSummary } from "./budget-summary-lib.mjs";
+
 /**
  * Compare current report against baseline with configurable threshold.
  * Gated metrics: entry chunk gzip, total JS gzip, total CSS gzip.
@@ -164,54 +166,61 @@ function statusLabel(pct, threshold) {
 }
 
 /**
- * Format comparison result as a markdown table for PR comments.
+ * Format comparison result as a collapsible markdown summary for PR comments.
+ * Wrapped via the shared budget-summary helper so all five budget gates emit a
+ * uniform <details> block with a PASS/FAIL one-liner and the comment-size guard.
  */
 export function formatMarkdown(comparison, threshold) {
-  const lines = [
-    "### Renderer Bundle Size Report",
-    "",
-    `**Threshold**: +${(threshold * 100).toFixed(0)}% | **Result**: ${comparison.ok ? "PASS" : "FAIL"}`,
-    "",
+  const s = comparison.summary;
+
+  const tableRows = [
     "| Chunk | Baseline (gzip) | Current (gzip) | Delta | Status |",
     "|-------|-----------------|----------------|-------|--------|",
   ];
-
   for (const d of comparison.chunkDeltas) {
     const label = d.isEntry ? `${d.name} (entry)` : d.name;
-    lines.push(
+    tableRows.push(
       `| ${label} | ${fmtBytes(d.baseline)} | ${fmtBytes(d.current)} | ${fmtDelta(d.delta, d.pct)} | ${statusLabel(d.pct, threshold)} |`
     );
   }
-
-  const s = comparison.summary;
-  lines.push("| | | | | |");
-  lines.push(
+  tableRows.push("| | | | | |");
+  tableRows.push(
     `| **Total JS** | **${fmtBytes(s.js.baseline)}** | **${fmtBytes(s.js.current)}** | **${fmtDelta(s.js.delta, s.js.pct)}** | **${statusLabel(s.js.pct, threshold)}** |`
   );
-  lines.push(
+  tableRows.push(
     `| **Total CSS** | **${fmtBytes(s.css.baseline)}** | **${fmtBytes(s.css.current)}** | **${fmtDelta(s.css.delta, s.css.pct)}** | **${statusLabel(s.css.pct, threshold)}** |`
   );
 
+  const sections = [
+    { body: [`**Threshold**: +${(threshold * 100).toFixed(0)}%`] },
+    { body: tableRows },
+  ];
+
   if (comparison.failures.length > 0) {
-    lines.push("", "**Regressions**:");
-    for (const f of comparison.failures) {
+    const rows = comparison.failures.map((f) => {
       const name = f.name ? ` \`${f.name}\`` : "";
-      lines.push(
-        `- ${f.metric}${name}: ${fmtDelta(f.delta, f.pct)} exceeds +${(threshold * 100).toFixed(0)}% threshold`
-      );
-    }
+      return `- ${f.metric}${name}: ${fmtDelta(f.delta, f.pct)} exceeds +${(threshold * 100).toFixed(0)}% threshold`;
+    });
+    sections.push({ heading: "Regressions", body: rows });
   }
 
   if (comparison.improvements.length > 0) {
-    lines.push("", "**Improvements**:");
-    for (const i of comparison.improvements) {
+    const rows = comparison.improvements.map((i) => {
       const name = i.name ? ` \`${i.name}\`` : "";
-      lines.push(`- ${i.metric}${name}: ${fmtDelta(i.delta, i.pct)}`);
-    }
-    lines.push("", "_Consider `npm run renderer-bundle-budget:update` to lock in improvements._");
+      return `- ${i.metric}${name}: ${fmtDelta(i.delta, i.pct)}`;
+    });
+    rows.push("", "_Consider `npm run renderer-bundle-budget:update` to lock in improvements._");
+    sections.push({ heading: "Improvements", body: rows });
   }
 
-  return lines.join("\n");
+  const headerLine = `JS gzip ${fmtBytes(s.js.current)} (${fmtDelta(s.js.delta, s.js.pct)}), CSS gzip ${fmtBytes(s.css.current)} (${fmtDelta(s.css.delta, s.css.pct)})`;
+
+  return formatBudgetSummary({
+    title: "Renderer Bundle Size Report",
+    status: comparison.ok ? "PASS" : "FAIL",
+    headerLine,
+    sections,
+  });
 }
 
 /**

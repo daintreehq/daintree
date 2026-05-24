@@ -17,10 +17,11 @@
 //   node scripts/check-first-render-chunk-budget.mjs --override        # don't fail exit code
 //   node scripts/check-first-render-chunk-budget.mjs --threshold 0.10  # 10% growth allowed
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
@@ -337,28 +338,34 @@ function compareToBaseline(report, threshold) {
   const currentTotalGzip = report.totals.gzip;
   const totalDelta = currentTotalGzip - baselineTotalGzip;
 
-  const lines = [];
-  lines.push("# First-render chunk gzip budget");
-  lines.push("");
-  lines.push("## Eager first-render closure (gated)");
-  lines.push("");
-  lines.push(`- baseline gzip: ${baselineGzip} bytes`);
-  lines.push(`- current gzip:  ${currentGzip} bytes`);
-  lines.push(
-    `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`
-  );
-  lines.push(`- threshold:     +${(threshold * 100).toFixed(1)}%`);
-  lines.push(`- eager chunks:  ${report.chunkCount}`);
-  lines.push(`- result:        ${overBudget ? "OVER BUDGET" : "OK"}`);
-  lines.push("");
-  lines.push("## Total reachable bundle (report-only)");
-  lines.push("");
-  lines.push(`- baseline gzip: ${baselineTotalGzip} bytes`);
-  lines.push(`- current gzip:  ${currentTotalGzip} bytes`);
-  lines.push(`- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`);
+  const markdown = formatBudgetSummary({
+    title: "First-render chunk gzip budget",
+    status: overBudget ? "FAIL" : "PASS",
+    headerLine: `eager gzip ${currentGzip} bytes (${delta >= 0 ? "+" : ""}${delta}, ${(ratio * 100).toFixed(2)}%, threshold +${(threshold * 100).toFixed(1)}%)`,
+    sections: [
+      {
+        heading: "Eager first-render closure (gated)",
+        body: [
+          `- baseline gzip: ${baselineGzip} bytes`,
+          `- current gzip:  ${currentGzip} bytes`,
+          `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`,
+          `- threshold:     +${(threshold * 100).toFixed(1)}%`,
+          `- eager chunks:  ${report.chunkCount}`,
+          `- result:        ${overBudget ? "OVER BUDGET" : "OK"}`,
+        ],
+      },
+      {
+        heading: "Total reachable bundle (report-only)",
+        body: [
+          `- baseline gzip: ${baselineTotalGzip} bytes`,
+          `- current gzip:  ${currentTotalGzip} bytes`,
+          `- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`,
+        ],
+      },
+    ],
+  });
 
-  mkdirSync(path.dirname(SUMMARY_FILE), { recursive: true });
-  writeFileSync(SUMMARY_FILE, lines.join("\n") + "\n");
+  writeSummary(SUMMARY_FILE, markdown);
 
   return { ok: !overBudget, delta, ratio, baselineGzip, currentGzip };
 }

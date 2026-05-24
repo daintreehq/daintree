@@ -21,11 +21,13 @@ import {
   compareToBaseline,
   formatBaseline,
 } from "./import-budget-lib.mjs";
+import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const METAFILE = path.join(ROOT, "dist-electron", "eager-import-meta.json");
 const BASELINE_FILE = path.join(ROOT, "eager-import-baseline.json");
+const SUMMARY_FILE = path.join(ROOT, "dist", "import-budget-summary.md");
 const ENTRY = "electron/main.ts";
 
 // Refuse to overwrite the baseline in --update mode if the eager module count
@@ -137,6 +139,46 @@ function writeBaseline(report, { force }) {
   );
 }
 
+// Build and write the markdown summary for downstream PR-comment aggregation.
+// Emitted on both pass and fail paths so the aggregated comment always carries
+// a main-import-budget block.
+function emitSummary(report, { ok, errors, notices }) {
+  const headerLine = ok
+    ? `${report.count} eager import(s), ${report.violations.length} known sync call(s)`
+    : `${report.count} eager import(s), ${errors.length} error(s)`;
+
+  const sections = [
+    {
+      heading: "Totals",
+      body: [
+        `- eager imports:       ${report.count}`,
+        `- known sync calls:    ${report.violations.length}`,
+      ],
+    },
+  ];
+
+  if (errors.length > 0) {
+    sections.push({
+      heading: "Errors",
+      body: errors.map((e) => (e.file ? `- \`${e.file}\` — ${e.message}` : `- ${e.message}`)),
+    });
+  }
+  if (notices.length > 0) {
+    sections.push({
+      heading: "Notices",
+      body: notices.map((n) => `- ${n.message}`),
+    });
+  }
+
+  const markdown = formatBudgetSummary({
+    title: "Main-process import budget",
+    status: ok ? "PASS" : "FAIL",
+    headerLine,
+    sections,
+  });
+  writeSummary(SUMMARY_FILE, markdown);
+}
+
 function main() {
   const isUpdate = process.argv.includes("--update");
   const force = process.argv.includes("--force");
@@ -160,6 +202,8 @@ function main() {
   for (const n of notices) {
     console.log(`::notice::${n.message}`);
   }
+
+  emitSummary(report, { ok, errors, notices });
 
   if (ok) {
     console.log(
