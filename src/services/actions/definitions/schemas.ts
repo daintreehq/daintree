@@ -17,6 +17,14 @@ export const LaunchLocationSchema = z
  */
 export const TerminalSpawnSourceSchema = z.enum(["quickrun", "recipe", "agent", "palette", "mcp"]);
 
+/**
+ * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`. `"auto"` (the
+ * effective default) suppresses focus change only when the assistant owns
+ * keyboard input. `"preserve"` always keeps focus where it is. `"take"`
+ * always advances focus to the new panel.
+ */
+export const AddPanelFocusPolicySchema = z.enum(["auto", "preserve", "take"]);
+
 export const SettingsTabSchema = z.enum([
   "general",
   "keyboard",

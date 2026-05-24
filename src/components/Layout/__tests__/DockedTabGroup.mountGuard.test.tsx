@@ -373,7 +373,10 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
 
   it("does not focus an MCP-created active dock tab from Radix open autofocus", () => {
     mockActiveDockTerminalId = "t-1";
-    const panels = [makePanel({ id: "t-1", spawnedBy: "mcp" }), makePanel({ id: "t-2" })];
+    const panels = [
+      makePanel({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" }),
+      makePanel({ id: "t-2" }),
+    ];
     render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />);
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 

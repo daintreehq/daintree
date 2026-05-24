@@ -217,6 +217,7 @@ describe("atomic dock activation on create (#6590)", () => {
         location: "dock",
         bypassLimits: true,
         activateDockOnCreate: true,
+        focusPolicy: "preserve",
         spawnedBy: "mcp",
       });
 
@@ -473,7 +474,10 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
   it("MCP suppression still wins over kind policy (both gates lead to suppressed popover)", async () => {
     const { registerPanelKind, unregisterPanelKind } =
       await import("@shared/config/panelKindRegistry");
-    // Even with dockPopoverOnSpawn: true (default), MCP spawn still suppresses.
+    // Even with dockPopoverOnSpawn: true (default), the MCP bridge stamps
+    // `focusPolicy: "preserve"` alongside `spawnedBy: "mcp"` (see
+    // `useMcpBridge.ts`), so the popover stays suppressed. Provenance no
+    // longer carries focus semantics — the explicit policy does.
     registerPanelKind({
       id: "opt-in-popover-kind",
       name: "Opt-In",
@@ -497,13 +501,14 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
         bypassLimits: true,
         activateDockOnCreate: true,
         spawnedBy: "mcp",
+        focusPolicy: "preserve",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any);
 
       expect(id).toBe("opt-in-1");
       const state = usePanelStore.getState();
       expect(state.panelsById[id!]).toBeDefined();
-      // MCP still suppresses regardless of policy.
+      // MCP-paired preserve policy suppresses regardless of kind policy.
       expect(state.activeDockTerminalId).toBeNull();
     } finally {
       unregisterPanelKind("opt-in-popover-kind");

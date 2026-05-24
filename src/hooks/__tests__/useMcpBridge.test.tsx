@@ -417,7 +417,7 @@ describe("useMcpBridge", () => {
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", location: "grid", spawnedBy: "mcp" },
+        { agentId: "claude", location: "grid", spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
     });
@@ -438,7 +438,7 @@ describe("useMcpBridge", () => {
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "workflow.startWorkOnIssue",
-        { issueNumber: 6959, agentId: "claude", spawnedBy: "mcp" },
+        { issueNumber: 6959, agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
     });
@@ -462,13 +462,13 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenNthCalledWith(
         1,
         "recipe.run",
-        { recipeId: "recipe-1", spawnedBy: "mcp" },
+        { recipeId: "recipe-1", spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
       expect(mocks.dispatch).toHaveBeenNthCalledWith(
         2,
         "terminal.new",
-        { spawnedBy: "mcp" },
+        { spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
     });
@@ -488,7 +488,7 @@ describe("useMcpBridge", () => {
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.claude",
-        { spawnedBy: "mcp" },
+        { spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
     });
@@ -506,7 +506,7 @@ describe("useMcpBridge", () => {
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.terminal",
-        { spawnedBy: "mcp" },
+        { spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
     });

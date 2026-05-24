@@ -214,7 +214,8 @@ export const createAddPanelActions = (
         // matching pattern in panelStore.ts where every fallback site reads
         // policy before the registry mutation.
         const popoverSuppressed =
-          options.spawnedBy === "mcp" || !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
+          options.focusPolicy === "preserve" ||
+          !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
         set((state) => {
           const existing = state.panelsById[id];
           if (existing) {
@@ -242,13 +243,13 @@ export const createAddPanelActions = (
             // after registry.addPanel returns; here we only fold the dock
             // activation into the same set() that commits the panel so the
             // watchdog can't observe an intermediate state.
-            // MCP-initiated spawns should land in the dock without opening the
+            // Focus-preserve spawns should land in the dock without opening the
             // popover. Opening the popover mounts Radix focus management and
             // terminal focus handlers, which is itself a keyboard-focus side
             // effect even if focusedId is preserved. See #6959.
             // The kind's policy may also opt out (e.g., a reading-surface
-            // kind that prefers to land in the dock quietly); same mechanism,
-            // applied per-kind.
+            // kind that prefers to land in the dock quietly); both gates
+            // are folded into `popoverSuppressed` above.
             if (popoverSuppressed) {
               return {
                 panelsById: newById,
@@ -364,6 +365,7 @@ export const createAddPanelActions = (
       extensionState: options.extensionState,
       pluginId: ptyPluginId,
       spawnedBy: options.spawnedBy,
+      focusPolicy: options.focusPolicy,
       ephemeral: options.ephemeral,
       startedAt: Date.now(),
       spawnStatus,
@@ -418,7 +420,8 @@ export const createAddPanelActions = (
       // so a PTY extension kind's policy is honored. `kind` here is collapsed
       // to "terminal" | "dev-preview" for storage-shape purposes only.
       const ptyPopoverSuppressed =
-        options.spawnedBy === "mcp" || !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
+        options.focusPolicy === "preserve" ||
+        !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
       set((state) => {
         const existing = state.panelsById[id];
         if (existing) {
@@ -466,11 +469,13 @@ export const createAddPanelActions = (
           // after registry.addPanel returns; here we only fold the dock
           // activation into the same set() that commits the panel so the
           // watchdog can't observe an intermediate state.
-          // MCP-initiated spawns should land in the dock without opening the
+          // Focus-preserve spawns should land in the dock without opening the
           // popover. Opening the popover mounts Radix focus management and
           // terminal focus handlers, which is itself a keyboard-focus side
           // effect even if focusedId is preserved. See #6959.
-          // The kind's policy may also opt out via `dockPopoverOnSpawn: false`.
+          // Both the explicit preserve policy and the kind's
+          // `dockPopoverOnSpawn: false` opt-out are folded into
+          // `ptyPopoverSuppressed` above.
           if (ptyPopoverSuppressed) {
             return {
               panelsById: newById,
@@ -582,7 +587,7 @@ export const createAddPanelActions = (
     if (
       options.activateDockOnCreate &&
       location === "dock" &&
-      options.spawnedBy !== "mcp" &&
+      options.focusPolicy !== "preserve" &&
       ptyDockPolicy.dockPopoverOnSpawn
     ) {
       try {

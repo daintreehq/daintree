@@ -38,10 +38,12 @@ function shouldTagMcpSpawn(actionId: string): boolean {
 }
 
 /**
- * Stamp `spawnedBy: "mcp"` onto actions that can create panels so the panel
- * store can gate focus capture for MCP-initiated launches (#6959). We override
- * any caller-supplied `spawnedBy` because the dispatch source is authoritative
- * — an MCP client cannot claim a different origin.
+ * Stamp `spawnedBy: "mcp"` and `focusPolicy: "preserve"` onto actions that
+ * can create panels. `spawnedBy` records provenance (MCP bridge is the
+ * dispatch source); `focusPolicy` declares the caller's intent to keep focus
+ * where it is (#6959). We override any caller-supplied values because the
+ * dispatch source is authoritative — an MCP client cannot claim a different
+ * origin or focus policy.
  *
  * Exported for unit tests; importing modules should not call this directly —
  * the bridge is the only authoritative caller.
@@ -49,10 +51,10 @@ function shouldTagMcpSpawn(actionId: string): boolean {
 export function tagMcpSpawnSource(actionId: string, args: unknown): unknown {
   if (!shouldTagMcpSpawn(actionId)) return args;
   if (args && typeof args === "object" && !Array.isArray(args)) {
-    return { ...(args as Record<string, unknown>), spawnedBy: "mcp" };
+    return { ...(args as Record<string, unknown>), spawnedBy: "mcp", focusPolicy: "preserve" };
   }
   if (args === undefined || args === null) {
-    return { spawnedBy: "mcp" };
+    return { spawnedBy: "mcp", focusPolicy: "preserve" };
   }
   return args;
 }

@@ -1,6 +1,6 @@
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import type { Worktree } from "@shared/types/worktree";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 
@@ -63,6 +63,7 @@ export interface ActionCallbacks {
       ephemeral?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
+      focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;
     }

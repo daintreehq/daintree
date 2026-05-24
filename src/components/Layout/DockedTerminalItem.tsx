@@ -350,7 +350,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            if (terminal.spawnedBy === "mcp") {
+            if (terminal.focusPolicy === "preserve") {
               return;
             }
             const focusTarget = getTerminalFocusTarget({

@@ -5,7 +5,7 @@ import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { TerminalSpawnSource } from "@shared/types/panel";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
@@ -19,9 +19,14 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ spawnedBy: TerminalSpawnSourceSchema.optional() }).optional(),
+    argsSchema: z
+      .object({
+        spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
+      })
+      .optional(),
     run: async (args) => {
-      const { spawnedBy } = args ?? {};
+      const { spawnedBy, focusPolicy } = args ?? {};
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
@@ -29,6 +34,7 @@ export function registerTerminalSpawnActions(
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
         spawnedBy,
+        focusPolicy,
       });
       if (!terminalId) return;
       return { terminalId };
@@ -47,11 +53,18 @@ export function registerTerminalSpawnActions(
       .object({
         terminalId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       })
       .optional(),
     run: async (args: unknown) => {
-      const { terminalId, spawnedBy } =
-        (args as { terminalId?: string; spawnedBy?: TerminalSpawnSource } | undefined) ?? {};
+      const { terminalId, spawnedBy, focusPolicy } =
+        (args as
+          | {
+              terminalId?: string;
+              spawnedBy?: TerminalSpawnSource;
+              focusPolicy?: "auto" | "preserve" | "take";
+            }
+          | undefined) ?? {};
       const state = usePanelStore.getState();
       const nonTrashed = state.panelIds
         .map((id) => state.panelsById[id])
@@ -77,6 +90,9 @@ export function registerTerminalSpawnActions(
         }
         if (spawnedBy) {
           options.spawnedBy = spawnedBy;
+        }
+        if (focusPolicy) {
+          options.focusPolicy = focusPolicy;
         }
         await state.addPanel(options);
       } else if (nonTrashed.length === 0) {
