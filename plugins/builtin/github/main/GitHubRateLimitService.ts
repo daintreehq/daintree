@@ -1,6 +1,10 @@
 import { appendFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { app } from "electron";
+// eager-import-allow: sync-fs calls (appendFileSync, existsSync, mkdirSync)
+// are gated behind DAINTREE_DEBUG_GITHUB_GRAPHQL=1 — never executed at import
+// time. The imports resolve three symbols that are only dereferenced inside
+// _logGraphQLCost(), which returns immediately when the env var is absent.
 import type {
   GitHubRateLimitKind,
   GitHubRateLimitPayload,
