@@ -885,6 +885,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   {
+    actionId: "voiceInput.toggleAssistant",
+    combo: "Cmd+Shift+Alt+V",
+    scope: "global",
+    priority: 0,
+    description: "Toggle voice dictation in Daintree Assistant",
+    category: "Voice",
+  },
+  {
     actionId: "find.inFocusedPanel",
     combo: "Cmd+F",
     scope: "global",

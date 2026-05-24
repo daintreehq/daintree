@@ -4564,6 +4564,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Toggle Voice Dictation",
   },
   {
+    "category": "voice",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Start or stop dictation in the Daintree Assistant from anywhere",
+    "examples": undefined,
+    "id": "voiceInput.toggleAssistant",
+    "keywords": [
+      "dictate",
+      "mic",
+      "speech",
+      "assistant",
+    ],
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Toggle Voice Dictation in Assistant",
+  },
+  {
     "category": "system",
     "danger": "safe",
     "dangerRationale": undefined,
