@@ -33,6 +33,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ephemeral: z.boolean().optional(),
       agentLaunchFlags: z.array(z.string()).optional(),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
+      focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
       requestedId: z.string().optional(),
       force: z.boolean().optional(),
     }),
@@ -58,6 +59,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         ephemeral,
         agentLaunchFlags,
         spawnedBy,
+        focusPolicy,
         requestedId,
         force,
       } = args as {
@@ -74,6 +76,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         ephemeral?: boolean;
         agentLaunchFlags?: string[];
         spawnedBy?: TerminalSpawnSource;
+        focusPolicy?: "auto" | "preserve" | "take";
         requestedId?: string;
         force?: boolean;
       };
@@ -90,6 +93,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         ephemeral,
         agentLaunchFlags,
         spawnedBy,
+        focusPolicy,
         requestedId,
         force,
       });
@@ -118,6 +122,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .object({
       location: LaunchLocationSchema.optional(),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
+      focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
     })
     .optional();
 
@@ -141,13 +146,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       argsSchema: shortcutLaunchSchema,
       resultSchema: shortcutResultSchema,
       run: async (args: unknown) => {
-        const { location, spawnedBy } = (args ?? {}) as {
+        const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
           location?: "grid" | "dock";
           spawnedBy?: TerminalSpawnSource;
+          focusPolicy?: "auto" | "preserve" | "take";
         };
         const result = await callbacks.onLaunchAgent(id, {
           location,
           spawnedBy,
+          focusPolicy,
         });
         if (!result) return null;
         return { terminalId: result.terminalId, location: result.location };
@@ -166,13 +173,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: shortcutLaunchSchema,
     resultSchema: shortcutResultSchema,
     run: async (args: unknown) => {
-      const { location, spawnedBy } = (args ?? {}) as {
+      const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
         location?: "grid" | "dock";
         spawnedBy?: TerminalSpawnSource;
+        focusPolicy?: "auto" | "preserve" | "take";
       };
       const result = await callbacks.onLaunchAgent("terminal", {
         location,
         spawnedBy,
+        focusPolicy,
       });
       if (!result) return null;
       return { terminalId: result.terminalId, location: result.location };

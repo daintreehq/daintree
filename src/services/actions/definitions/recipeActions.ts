@@ -58,8 +58,9 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         recipeId: z.string(),
         worktreeId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
       }),
-      run: async ({ recipeId, worktreeId, spawnedBy }, ctx: ActionContext) => {
+      run: async ({ recipeId, worktreeId, spawnedBy, focusPolicy }, ctx: ActionContext) => {
         const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;
         const worktree = targetWorktreeId
           ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
@@ -76,15 +77,10 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
-        if (spawnedBy === undefined) {
-          await useRecipeStore
-            .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext);
-        } else {
-          await useRecipeStore
-            .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, { spawnedBy });
-        }
+        const runOptions = { spawnedBy, focusPolicy };
+        await useRecipeStore
+          .getState()
+          .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, runOptions);
       },
     })
   );

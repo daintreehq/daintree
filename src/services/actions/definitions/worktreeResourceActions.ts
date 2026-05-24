@@ -232,6 +232,7 @@ export function registerWorktreeResourceActions(
         .object({
           worktreeId: z.string().optional(),
           spawnedBy: TerminalSpawnSourceSchema.optional(),
+          focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
         })
         .optional(),
       isEnabled: (ctx: ActionContext) => {
@@ -251,6 +252,7 @@ export function registerWorktreeResourceActions(
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const spawnedBy = args?.spawnedBy;
+        const focusPolicy = args?.focusPolicy;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No worktree selected");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
@@ -267,6 +269,7 @@ export function registerWorktreeResourceActions(
           location: "grid",
           worktreeId: targetWorktreeId,
           spawnedBy,
+          focusPolicy,
         });
       },
     })
