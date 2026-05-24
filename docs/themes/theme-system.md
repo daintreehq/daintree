@@ -121,6 +121,19 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 - Keep terminal colors first-class and independent from workbench surfaces.
 - Keep search highlighting independent from accent when a theme needs it.
 
+## Design review checklist
+
+Before adding a file to `DURABLE_ALLOWLIST` in `src/config/__tests__/accentGuard.contract.test.ts`, answer all four questions:
+
+1. **Is the accent the user's primary action target in this view?** If accent marks a secondary indicator, badge, or membership state, it fails.
+2. **Does it survive grayscale?** Open Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. If the primary CTA stops reading as primary, the view is overusing accent.
+3. **Is it a singleton in its active focus region?** An active focus region is an independent focus trap or arrow-key navigation domain (macro layout zone, modal, popover, dropdown). Only one accent consumer per region.
+4. **Is there a neutral lift alternative?** Preference order: title-bar lift (`bg-overlay-subtle`), focus styling, neutral surface difference. Only use accent when every neutral alternative fails the legibility test.
+
+### Grayscale Test
+
+Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. This is the definitive check for accent overuse. The primary CTA must remain visually dominant even when color is removed. If removing color collapses the hierarchy, the design relies too heavily on accent.
+
 ## File Map
 
 | File | Purpose |
