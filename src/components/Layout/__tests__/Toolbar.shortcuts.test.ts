@@ -8,6 +8,8 @@ const PORTAL_BUTTON_PATH = path.resolve(__dirname, "../ToolbarPortalButton.tsx")
 const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.tsx");
 const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.tsx");
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
+const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+const SHORTCUT_REVEAL_CHIP_PATH = path.resolve(__dirname, "../../ui/ShortcutRevealChip.tsx");
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -17,17 +19,29 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   let settingsSource: string;
   let launcherSource: string;
   let agentSource: string;
+  let voiceSource: string;
+  let chipSource: string;
 
   beforeEach(async () => {
-    [source, problemsSource, portalSource, settingsSource, launcherSource, agentSource] =
-      await Promise.all([
-        fs.readFile(TOOLBAR_PATH, "utf-8"),
-        fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
-        fs.readFile(PORTAL_BUTTON_PATH, "utf-8"),
-        fs.readFile(SETTINGS_BUTTON_PATH, "utf-8"),
-        fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
-        fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
-      ]);
+    [
+      source,
+      problemsSource,
+      portalSource,
+      settingsSource,
+      launcherSource,
+      agentSource,
+      voiceSource,
+      chipSource,
+    ] = await Promise.all([
+      fs.readFile(TOOLBAR_PATH, "utf-8"),
+      fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
+      fs.readFile(PORTAL_BUTTON_PATH, "utf-8"),
+      fs.readFile(SETTINGS_BUTTON_PATH, "utf-8"),
+      fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
+      fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
+      fs.readFile(VOICE_RECORDING_PATH, "utf-8"),
+      fs.readFile(SHORTCUT_REVEAL_CHIP_PATH, "utf-8"),
+    ]);
   });
 
   describe("useKeybindingDisplay hooks", () => {
@@ -246,6 +260,79 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
 
     it("settingsShortcut is in ToolbarSettingsButton", () => {
       expect(settingsSource).toContain('useKeybindingDisplay("app.settings")');
+    });
+  });
+
+  describe("ShortcutRevealChip global gate removed — issue #8938", () => {
+    it("does not gate chip rendering behind a RENDER_CHIPS flag", () => {
+      expect(chipSource).not.toContain("RENDER_CHIPS");
+    });
+
+    it("returns null only when the keybinding display is empty", () => {
+      expect(chipSource).toContain("if (!display) return null;");
+    });
+  });
+
+  describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
+    it("calls useAriaKeyshortcuts with the plugin actionId", () => {
+      expect(source).toContain("useAriaKeyshortcuts(config.actionId)");
+    });
+
+    it("renders aria-keyshortcuts on the plugin Button", () => {
+      // Other aria-keyshortcuts spreads in Toolbar.tsx use named locals
+      // (sidebarAriaShortcut, copyTreeAriaShortcut). Only PluginToolbarButton
+      // uses the plain `ariaShortcut` identifier, so this assertion is
+      // unambiguous without a function-block carve-out.
+      expect(source).toContain("aria-keyshortcuts={ariaShortcut}");
+    });
+
+    it("drops the redundant `as string` cast on the hover hook", () => {
+      expect(source).not.toContain("useShortcutHintHover(config.actionId as string)");
+    });
+  });
+
+  describe("VoiceRecordingToolbarButton hint-hover — issue #8938", () => {
+    it("imports useShortcutHintHover", () => {
+      expect(voiceSource).toContain("useShortcutHintHover");
+    });
+
+    it("calls useShortcutHintHover with the voice-input actionId", () => {
+      expect(voiceSource).toContain('useShortcutHintHover("voiceInput.toggle")');
+    });
+
+    it("spreads hover handlers onto the Button", () => {
+      expect(voiceSource).toContain("{...hover}");
+    });
+  });
+
+  describe("AgentButton hint-hover — issue #8938", () => {
+    it("calls useShortcutHintHover keyed off the agent type", () => {
+      expect(agentSource).toContain("useShortcutHintHover(`agent.${type}`)");
+    });
+
+    it("composes hover.onPointerEnter alongside clearFocusRestoreSuppression", () => {
+      const composed = agentSource.match(
+        /onPointerEnter=\{\(e\) => \{\s*clearFocusRestoreSuppression\(\);\s*hover\.onPointerEnter\(e\);\s*\}\}/g
+      );
+      expect(composed).not.toBeNull();
+      expect(composed!.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("wires the remaining hover handlers explicitly on the primary Button(s)", () => {
+      const leaveMatches = agentSource.match(/onPointerLeave=\{hover\.onPointerLeave\}/g) ?? [];
+      const downMatches = agentSource.match(/onPointerDown=\{hover\.onPointerDown\}/g) ?? [];
+      const focusMatches = agentSource.match(/onFocus=\{hover\.onFocus\}/g) ?? [];
+      const blurMatches = agentSource.match(/onBlur=\{hover\.onBlur\}/g) ?? [];
+      expect(leaveMatches.length).toBeGreaterThanOrEqual(2);
+      expect(downMatches.length).toBeGreaterThanOrEqual(2);
+      expect(focusMatches.length).toBeGreaterThanOrEqual(2);
+      expect(blurMatches.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("leaves the chevron DropdownMenuTrigger Button without hover hint wiring", () => {
+      // Chevron has no ShortcutRevealChip, so it must keep the lone
+      // onPointerEnter={clearFocusRestoreSuppression} form (no hover spread).
+      expect(agentSource).toContain("onPointerEnter={clearFocusRestoreSuppression}");
     });
   });
 });
