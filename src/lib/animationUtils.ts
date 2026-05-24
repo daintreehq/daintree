@@ -42,11 +42,23 @@ export const UI_EXIT_DURATION = 120;
 export const UI_PALETTE_ENTER_DURATION = DURATION_150;
 export const UI_PALETTE_EXIT_DURATION = DURATION_100;
 
+/** Delay before the palette typed-input stale dim and loading-bar fade appear.
+ *  Continuous typed-input feedback sits in the RAIL/INP ~150ms band (Tier 2-fast
+ *  in CLAUDE.md), distinct from the 400ms Doherty discrete-action floor below —
+ *  the two budgets are deliberately separate, don't re-collapse them. Shares the
+ *  150ms value with `UI_PALETTE_ENTER_DURATION` to keep the palette timing
+ *  family coherent.
+ *  CSS counterpart: `--palette-stale-delay` in src/index.css `:root`. The
+ *  drift-contract test in animationUtils.test.ts enforces parity. */
+export const UI_PALETTE_STALE_DELAY = DURATION_150;
+
 // Tooltip hover/skip delays consumed by the Radix `TooltipProvider` at the app
 // root. These are wait times before a tooltip opens, not animation durations.
 /** UX anti-flicker gate: sub-400ms work should show nothing (Doherty threshold).
- *  Used by palette loading bar and stale-result dimming to prevent flashes on
- *  fast renders. Not an animation token — a perceptual floor.
+ *  Gates discrete-action loading affordances (skeletons via `.animate-pulse-delayed`)
+ *  so fast renders never flash a placeholder. Not an animation token — a
+ *  perceptual floor. Typed-input palette feedback uses the shorter
+ *  `UI_PALETTE_STALE_DELAY` instead.
  *  CSS counterpart: `--anti-flicker-delay` in src/index.css `:root`. The
  *  drift-contract test in animationUtils.test.ts enforces parity. */
 export const UI_DOHERTY_THRESHOLD = 400;

@@ -137,7 +137,7 @@ export interface SearchablePaletteProps<T> {
   /**
    * True while a deferred filter pass is catching up to the latest query.
    * Drives a stale-dim on the listbox (via `palette-results-stale`) gated by a
-   * 400ms transition-delay so sub-frame work never flickers. Reduced-motion
+   * 150ms palette-stale-delay so sub-frame work never flickers. Reduced-motion
    * and performance-mode CSS bypasses keep the listbox at full opacity.
    */
   isFiltering?: boolean;

@@ -21,6 +21,7 @@ import {
   TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
+  UI_PALETTE_STALE_DELAY,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
@@ -179,9 +180,46 @@ describe("--anti-flicker-delay CSS contract", () => {
     expect(css).not.toMatch(/\.animate-pulse-delayed\s*\{[\s\S]*?animation-delay:\s*\d+ms/);
   });
 
-  it(".palette-results-stale / .surface-stale transition references the token", () => {
+  it(".surface-stale transition references the Doherty token", () => {
+    // Background-refresh surfaces stay on the 400ms discrete-action gate.
+    // `[^}]*` keeps the match inside the rule so it can't bleed into the
+    // sibling `.palette-results-stale` block (which uses a different token).
     expect(css).toMatch(
-      /\.palette-results-stale,\s*\.surface-stale\s*\{[\s\S]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay\)/
+      /\.surface-stale\s*\{[^}]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay\)/
     );
+    expect(css).toMatch(/\.surface-stale\s*\{[^}]*?opacity:\s*0\.5/);
+  });
+});
+
+describe("--palette-stale-delay CSS contract", () => {
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("declares --palette-stale-delay inside the :root block", () => {
+    expect(css).toMatch(/:root\s*\{[^}]*--palette-stale-delay\s*:\s*\d+ms/);
+  });
+
+  it("declares --palette-stale-delay exactly once", () => {
+    const declarations = css.match(/--palette-stale-delay\s*:/g) ?? [];
+    expect(declarations.length).toBe(1);
+  });
+
+  it("token value matches UI_PALETTE_STALE_DELAY", () => {
+    const match = css.match(/--palette-stale-delay\s*:\s*(\d+)ms/);
+    expect(match).not.toBeNull();
+    if (!match?.[1]) return;
+    const ms = Number.parseInt(match[1], 10);
+    expect(ms).toBe(UI_PALETTE_STALE_DELAY);
+  });
+
+  it(".palette-results-stale transition references the palette token", () => {
+    // `[^}]*` keeps the match inside the rule so it can't bleed into the
+    // sibling `.surface-stale` block (which uses the Doherty token).
+    expect(css).toMatch(
+      /\.palette-results-stale\s*\{[^}]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--palette-stale-delay\)/
+    );
+  });
+
+  it(".palette-results-stale dims to 0.85 (WCAG-safe on keyboard-navigable rows)", () => {
+    expect(css).toMatch(/\.palette-results-stale\s*\{[^}]*?opacity:\s*0\.85/);
   });
 });

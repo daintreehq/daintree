@@ -666,6 +666,12 @@ code.hljs {
    * Mirror of UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts; the contract
    * test in src/lib/__tests__/animationUtils.test.ts enforces parity. */
   --anti-flicker-delay: 400ms;
+  /* Palette typed-input stale budget — separate from the Doherty discrete-action
+   * floor above. Continuous typed-input feedback (palette stale-dim, loading-bar
+   * fade) lives in the ~150ms RAIL/INP band (Tier 2-fast). Mirror of
+   * UI_PALETTE_STALE_DELAY in src/lib/animationUtils.ts; the contract test in
+   * src/lib/__tests__/animationUtils.test.ts enforces parity. */
+  --palette-stale-delay: 150ms;
   --background: var(--theme-surface-canvas);
   --foreground: var(--theme-text-primary);
   --card: var(--theme-surface-panel);
@@ -1139,18 +1145,21 @@ body,
 }
 
 /* Stale-dim for surfaces during a deferred refresh or filter pass.
- * `palette-results-stale` is the original palette-listbox callsite (driven by
- * `useSearchablePalette`'s `isStale` flag); `surface-stale` is the generic
- * alias used by larger surfaces (e.g., the Review and Commit modal during a
- * background `git status` refresh). The 400ms transition-delay matches the
- * Doherty anti-flicker gate: if the deferred work resolves in under one frame
- * (typical for ~258 actions on fast hardware), the dim never starts. On a
- * genuinely overloaded render the surface fades to half opacity as a "still
- * working" cue.
- * The 400ms gate lives in the --anti-flicker-delay token in :root above; the
- * UI_DOHERTY_THRESHOLD constant in src/lib/animationUtils.ts mirrors it for
- * JS consumers. */
-.palette-results-stale,
+ * `palette-results-stale` is the palette-listbox callsite (driven by
+ * `useSearchablePalette`'s `isStale` flag) — a typed-input flow, so it runs on
+ * the shorter `--palette-stale-delay` (150ms) and dims only to 0.85: the rows
+ * stay keyboard-navigable during a filter pass, so halving their contrast at
+ * 0.5 would fail WCAG 1.4.3. `surface-stale` is the generic alias used by larger
+ * surfaces (e.g., the Review and Commit modal during a background `git status`
+ * refresh) — a discrete/background flow, so it keeps the 400ms Doherty gate and
+ * the 0.5 "still working" dim on its non-interactive fill.
+ * Both delays resolve from tokens in :root above (`--palette-stale-delay`,
+ * `--anti-flicker-delay`), mirrored by UI_PALETTE_STALE_DELAY /
+ * UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts for JS consumers. */
+.palette-results-stale {
+  opacity: 0.85;
+  transition: opacity 150ms ease-out var(--palette-stale-delay);
+}
 .surface-stale {
   opacity: 0.5;
   transition: opacity 150ms ease-out var(--anti-flicker-delay);
@@ -1635,9 +1644,9 @@ body,
     will-change: auto;
   }
 
-  /* The global `transition: none` rules below would strip the 400ms delay,
-   * letting any sub-frame stale flip flash the surface to half opacity. Keep
-   * stale surfaces at full opacity instead. WCAG 2.3.3. */
+  /* The global `transition: none` rules below would strip the stale-dim delay,
+   * letting any sub-frame stale flip flash the surface dimmer. Keep stale
+   * surfaces at full opacity instead. WCAG 2.3.3. */
   .palette-results-stale,
   .surface-stale {
     opacity: 1 !important;
@@ -2503,12 +2512,12 @@ body[data-performance-mode="true"] .animate-hint-fade-in {
   opacity: 1 !important;
 }
 
-/* Stale surfaces use a 150ms opacity transition with a 400ms delay (see
- * `.palette-results-stale` definition). The narrowed perf-mode wildcard
- * preserves the `opacity` transition-property, so the delay would still
- * apply — `opacity: 1 !important` alone would wait 400ms before resetting.
- * Kill the transition outright on this scoped selector so the reset is
- * instant when performance mode kicks in mid-stale. */
+/* Stale surfaces use a 150ms opacity transition with a delayed start (see the
+ * `.palette-results-stale` / `.surface-stale` definitions). The narrowed
+ * perf-mode wildcard preserves the `opacity` transition-property, so the delay
+ * would still apply — `opacity: 1 !important` alone would wait out the delay
+ * before resetting. Kill the transition outright on these scoped selectors so
+ * the reset is instant when performance mode kicks in mid-stale. */
 body[data-performance-mode="true"] .palette-results-stale,
 body[data-performance-mode="true"] .surface-stale {
   opacity: 1 !important;
