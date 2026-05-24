@@ -1813,6 +1813,105 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
   });
+
+  it("accounts mixed assignment outcomes correctly in a 3-item batch", async () => {
+    // The original bug surfaced in bulk accounting — every prior test in this
+    // describe block uses a single-item batch. This test guards the regression
+    // that prompted #8975: 2 of 3 must NOT be reported as 3 of 3.
+    prefsHolder.assignWorktreeToSelf = true;
+    githubConfigHolder.config = { username: "me" };
+
+    mockAssignIssue.mockImplementation((_root: string, issueNumber: number, _username: string) => {
+      if (issueNumber === 2) return Promise.reject(new Error("Forbidden"));
+      return Promise.resolve();
+    });
+
+    const props = {
+      ...assignProps,
+      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3)],
+    };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+  });
+
+  it("does not re-run the recipe when retrying an assignment-only failure", async () => {
+    // Pre-fix, handleRetryFailed cleared all terminal tracking, causing the
+    // recipe to re-spawn every terminal on retry of an assignment failure.
+    prefsHolder.assignWorktreeToSelf = true;
+    githubConfigHolder.config = { username: "me" };
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults.mockResolvedValue({
+      spawned: [{ terminalId: "t-1" }],
+      failed: [],
+    });
+    mockTerminals = [{ id: "t-1", exitCode: undefined }];
+
+    let assignCallCount = 0;
+    mockAssignIssue.mockImplementation(() => {
+      assignCallCount++;
+      if (assignCallCount === 1) return Promise.reject(new Error("Forbidden"));
+      return Promise.resolve();
+    });
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+
+    // Click "Retry failed" — recipe must NOT re-spawn terminals.
+    await act(async () => {
+      const buttons = screen.getAllByRole("button");
+      const retryBtn = buttons.find((b) => b.textContent?.includes("Retry"));
+      retryBtn?.click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
+    expect(assignCallCount).toBe(2);
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+  });
+
+  it("assignment failure is not overwritten by post-batch verification", async () => {
+    // Both branches converge on ITEM_FAILED. The post-batch verification loop
+    // must skip items already in failedItems, or it overwrites
+    // failedStep:"assignment" with failedStep:"verification".
+    prefsHolder.assignWorktreeToSelf = true;
+    githubConfigHolder.config = { username: "me" };
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults.mockResolvedValue({
+      spawned: [{ terminalId: "t-crash" }],
+      failed: [],
+    });
+    // Terminal will be observed as crashed during verification.
+    mockTerminals = [{ id: "t-crash", exitCode: 1 }];
+
+    mockAssignIssue.mockRejectedValue(new Error("Forbidden"));
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    expect(screen.queryByText(/Missing terminals/)).toBeNull();
+  });
 });
 
 describe("BulkCreateWorktreeDialog — PR mode", () => {
