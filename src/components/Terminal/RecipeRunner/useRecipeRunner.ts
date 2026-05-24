@@ -6,6 +6,7 @@ import {
 } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
@@ -52,6 +53,7 @@ export interface UseRecipeRunnerResult {
   handleUnpin: (recipeId: string) => void;
   handleDelete: (recipeId: string) => void;
   handleCreate: () => void;
+  handleRunSuggestion: (suggestion: RunCommand) => void;
   handleRetryFailed: () => void;
   dismissSpawnFailures: () => void;
   dismissUnresolvedVars: () => void;
@@ -101,6 +103,7 @@ export function useRecipeRunner({
   const getRecipeById = useRecipeStore((s) => s.getRecipeById);
 
   const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
+  const addPanel = usePanelStore((s) => s.addPanel);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [focusedIndex, setFocusedIndex] = useState(0);
@@ -109,6 +112,7 @@ export function useRecipeRunner({
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
 
   const isRunningRef = useRef(false);
+  const isSpawningSuggestionRef = useRef(false);
   const lastRunRecipeIdRef = useRef<string | null>(null);
   // Generation counter: every run/retry captures the current value, then any
   // resolved async work checks the latest value before calling setState. If a
@@ -170,14 +174,18 @@ export function useRecipeRunner({
     return undefined;
   }, [focusedIndex, getFlatRecipes]);
 
-  // Suggestions from package.json
+  // Suggestions from package.json. Capped at 2 so the empty state stays a
+  // launchpad ("here's the obvious next click") rather than a gallery — the
+  // user can browse the full set after creating a recipe.
   const suggestions = useMemo(() => {
     const keywords = ["dev", "start", "serve", "test", "build"];
-    return allDetectedRunners.filter((r) =>
-      keywords.some(
-        (kw) => r.command.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw)
+    return allDetectedRunners
+      .filter((r) =>
+        keywords.some(
+          (kw) => r.command.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw)
+        )
       )
-    );
+      .slice(0, 2);
   }, [allDetectedRunners]);
 
   const buildContext = useCallback(
@@ -396,6 +404,42 @@ export function useRecipeRunner({
     );
   }, [activeWorktreeId]);
 
+  const handleRunSuggestion = useCallback(
+    (suggestion: RunCommand) => {
+      if (!defaultCwd) return;
+      // Guard with useRef (not useState) — addPanel is async and a state-based
+      // guard would batch and leave a double-fire window. See PR #4703.
+      if (isSpawningSuggestionRef.current) return;
+      isSpawningSuggestionRef.current = true;
+
+      void (async () => {
+        try {
+          const id = await addPanel({
+            kind: "terminal",
+            title: suggestion.name,
+            cwd: defaultCwd,
+            command: suggestion.command,
+            location: "grid",
+            worktreeId: activeWorktreeId ?? undefined,
+            spawnedBy: "quickrun",
+          });
+          // addPanel resolves null when the panel is rejected (panel limit,
+          // policy gate, cancelled confirmation). Log so a silent click on a
+          // first-run discovery surface leaves a diagnostic trail.
+          if (id === null) {
+            logError("Suggestion run rejected by panel store", suggestion.command);
+          }
+        } catch (error) {
+          // Unhandled rejection crashes Electron 41 utility processes.
+          logError("Suggestion run failed", error);
+        } finally {
+          isSpawningSuggestionRef.current = false;
+        }
+      })();
+    },
+    [defaultCwd, activeWorktreeId, addPanel]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "ArrowDown") {
@@ -456,6 +500,7 @@ export function useRecipeRunner({
     handleUnpin,
     handleDelete,
     handleCreate,
+    handleRunSuggestion,
     handleRetryFailed,
     dismissSpawnFailures,
     dismissUnresolvedVars,

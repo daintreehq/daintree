@@ -2869,9 +2869,9 @@
   "src/components/Terminal/RecipeRunner/useRecipeRunner.ts": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 3,
     "pipeline": 0,
-    "hintCount": 2,
+    "hintCount": 3,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
