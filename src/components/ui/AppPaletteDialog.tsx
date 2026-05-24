@@ -19,7 +19,7 @@ import {
   UI_PALETTE_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
-  UI_DOHERTY_THRESHOLD,
+  UI_PALETTE_STALE_DELAY,
   getUiPaletteTransitionDuration,
 } from "@/lib/animationUtils";
 
@@ -263,7 +263,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
           transitionDuration: isLoading
             ? `${UI_PALETTE_ENTER_DURATION}ms`
             : `${UI_PALETTE_EXIT_DURATION}ms`,
-          transitionDelay: isLoading ? `${UI_DOHERTY_THRESHOLD}ms` : "0ms",
+          transitionDelay: isLoading ? `${UI_PALETTE_STALE_DELAY}ms` : "0ms",
         }}
       >
         <div className="palette-loading-bar__sweep" />
