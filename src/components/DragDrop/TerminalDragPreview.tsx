@@ -112,7 +112,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         {StateIcon && displayAgentState && (
           <StateIcon
             className={cn(
-              "w-3 h-3",
+              "w-3 h-3 shrink-0",
               getEffectiveStateColor(displayAgentState),
               displayAgentState === "working" && "animate-spin-slow",
               "motion-reduce:animate-none"
