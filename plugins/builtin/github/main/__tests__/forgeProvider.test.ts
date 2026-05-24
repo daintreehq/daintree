@@ -477,6 +477,55 @@ describe("listPRs caching", () => {
     expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBeDefined();
   });
 
+  it("a superseded slow fetch does not clobber a newer bypass result", async () => {
+    let resolveP1!: (v: unknown) => void;
+    const p1 = new Promise((r) => {
+      resolveP1 = r;
+    });
+    mockGraphQLClient
+      .mockReturnValueOnce(p1) // P1: normal call, left hanging
+      .mockResolvedValueOnce({
+        repository: {
+          pullRequests: {
+            nodes: [makePRNode(42, "feature/a")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      });
+
+    const call1 = githubForgeProvider.listPRs(repo, { state: "open" });
+    // Let the deferred dedupe microtask register P1 as the in-flight entry.
+    await Promise.resolve();
+    const call2 = githubForgeProvider.listPRs(repo, { state: "open", bypassCache: true });
+    await call2; // P2 (bypass) resolves with #42 and writes the cache.
+
+    resolveP1({
+      repository: {
+        pullRequests: {
+          nodes: [makePRNode(17, "feature/a")],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await call1; // P1 resolves with stale #17 but is superseded → must not write.
+
+    const after = await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(after.items[0]?.number).toBe(42);
+  });
+
+  it("evicts a rejected in-flight promise so the next call retries", async () => {
+    mockGraphQLClient
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(prListResponse());
+
+    await expect(githubForgeProvider.listPRs(repo, { state: "open" })).rejects.toThrow();
+    const ok = await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(ok.items[0]?.number).toBe(1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
   it("updates the repo stats count on a first-page open list with a totalCount", async () => {
     mockGraphQLClient.mockResolvedValue(prListResponse(42));
     await githubForgeProvider.listPRs(repo, { state: "open" });

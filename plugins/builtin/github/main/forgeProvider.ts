@@ -319,18 +319,27 @@ const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>
  * active promise, so a bypass replacement isn't deleted by the request it
  * superseded. Failures evict immediately so a transient error doesn't pin a
  * rejected promise for later callers.
+ *
+ * `fn` receives an `isCurrent()` guard: it returns `true` only while this call
+ * is still the active in-flight entry. A request that was superseded by a newer
+ * bypass call sees `false` and must skip any shared-cache write, so a slow
+ * stale fetch can't overwrite the fresher result the bypass already committed.
  */
 function dedupe<T>(
   inflight: Map<string, Promise<T>>,
   key: string,
   bypass: boolean,
-  fn: () => Promise<T>
+  fn: (isCurrent: () => boolean) => Promise<T>
 ): Promise<T> {
   if (!bypass) {
     const pending = inflight.get(key);
     if (pending) return pending;
   }
-  const promise = fn();
+  const holder: { promise: Promise<T> | null } = { promise: null };
+  // Defer `fn` one microtask so `holder.promise` is assigned before it runs;
+  // `isCurrent` can then compare against this call's own promise identity.
+  const promise = Promise.resolve().then(() => fn(() => inflight.get(key) === holder.promise));
+  holder.promise = promise;
   inflight.set(key, promise);
   const cleanup = () => {
     if (inflight.get(key) === promise) inflight.delete(key);
@@ -427,12 +436,16 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
+  // The GitHub forge list path issues the unfiltered repository query and
+  // ignores `opts.search` (advisory — see ListOptions). Keep `search` out of
+  // the cache key so it reflects what the query actually varies on; wiring
+  // search would mean routing to SEARCH_QUERY and re-adding it here together.
   const cacheKey = buildListCacheKey(
     "issue",
     repo.owner,
     repo.repo,
     state,
-    opts.search ?? "",
+    "",
     sortOrder,
     opts.cursor ?? ""
   );
@@ -442,7 +455,7 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
     if (cached) return cached;
   }
 
-  return dedupe(listIssuesInflight, cacheKey, bypass, async () => {
+  return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
     const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
 
@@ -474,9 +487,13 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
       ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
     };
 
-    forgeIssueListCache.set(cacheKey, page);
-    if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
+    // Skip the shared-cache write when a newer bypass call has superseded us,
+    // so a slow stale fetch can't clobber the fresher committed result.
+    if (isCurrent()) {
+      forgeIssueListCache.set(cacheKey, page);
+      if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
+      }
     }
     return page;
   });
@@ -486,12 +503,14 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
+  // See listIssuesImpl: the forge list query ignores `opts.search`, so it's
+  // kept out of the cache key.
   const cacheKey = buildListCacheKey(
     "pr",
     repo.owner,
     repo.repo,
     state,
-    opts.search ?? "",
+    "",
     sortOrder,
     opts.cursor ?? ""
   );
@@ -501,7 +520,7 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
     if (cached) return cached;
   }
 
-  return dedupe(listPRsInflight, cacheKey, bypass, async () => {
+  return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
 
@@ -533,9 +552,11 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
       ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
     };
 
-    forgePRListCache.set(cacheKey, page);
-    if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
+    if (isCurrent()) {
+      forgePRListCache.set(cacheKey, page);
+      if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
+      }
     }
     return page;
   });
