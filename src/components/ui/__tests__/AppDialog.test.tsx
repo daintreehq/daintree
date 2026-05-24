@@ -307,6 +307,103 @@ describe("AppDialog focus trapping", () => {
     document.body.removeChild(root);
   });
 
+  describe("restoreFocusTo logical successor", () => {
+    type FocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+
+    function setupTriggerAndRoot() {
+      const root = document.createElement("div");
+      root.id = "root";
+      const fallbackButton = document.createElement("button");
+      fallbackButton.textContent = "Fallback";
+      root.appendChild(fallbackButton);
+      document.body.appendChild(root);
+
+      const trigger = document.createElement("button");
+      trigger.textContent = "Trigger";
+      document.body.appendChild(trigger);
+      trigger.focus();
+
+      return { root, fallbackButton, trigger };
+    }
+
+    async function openCloseWith(restoreFocusTo: FocusTarget, trigger: HTMLButtonElement) {
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={restoreFocusTo}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      // The trigger is removed by the action that ran inside the dialog.
+      document.body.removeChild(trigger);
+
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={restoreFocusTo}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+    }
+
+    it("focuses a connected ref target instead of the #root fallback", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(successor);
+      expect(document.activeElement).not.toBe(fallbackButton);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to the #root fallback when the ref target is disconnected", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      // Never appended to the document — disconnected.
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+
+    it("focuses the element returned by a function target", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith(() => successor, trigger);
+
+      expect(document.activeElement).toBe(successor);
+      expect(document.activeElement).not.toBe(fallbackButton);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to the #root fallback when the function returns null", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+
+      await openCloseWith(() => null, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+  });
+
   describe("AppDialog Footer a11y", () => {
     it("sets aria-busy on primary button when loading", async () => {
       render(

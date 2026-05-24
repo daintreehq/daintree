@@ -29,6 +29,14 @@ type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
 type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
 
+/**
+ * A caller-supplied "logical successor" to receive focus when the dialog's
+ * trigger has been unmounted before close. Either a ref to a stable element or
+ * a function resolving the target at restoration time (for targets whose
+ * identity changes while the dialog is open, e.g. the next row after a delete).
+ */
+type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+
 interface AppDialogContextValue {
   onClose: () => void;
   titleId: string;
@@ -50,10 +58,11 @@ export interface AppDialogProps {
   maxHeight?: string;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
+  restoreFocusTo?: RestoreFocusTarget;
   "data-testid"?: string;
 }
 
-export type { DialogSize, DialogVariant, DialogZIndex, DialogInitialFocus };
+export type { DialogSize, DialogVariant, DialogZIndex, DialogInitialFocus, RestoreFocusTarget };
 
 const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
@@ -77,6 +86,7 @@ export function AppDialog({
   maxHeight = "max-h-[80vh]",
   zIndex = "modal",
   initialFocus,
+  restoreFocusTo,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   const effectiveInitialFocus: DialogInitialFocus =
@@ -101,14 +111,22 @@ export function AppDialog({
       el.focus();
       return;
     }
-    // Trigger was unmounted before close (e.g., the row that opened
-    // a destructive confirm dialog was removed by the action itself).
-    // Hand focus to the first tabbable child of the app shell rather
+    // Trigger was unmounted before close. Prefer a caller-supplied logical
+    // successor (e.g. the next row after a delete) when one is still connected.
+    if (restoreFocusTo) {
+      const target =
+        typeof restoreFocusTo === "function" ? restoreFocusTo() : restoreFocusTo.current;
+      if (target instanceof HTMLElement && target.isConnected) {
+        target.focus();
+        return;
+      }
+    }
+    // Otherwise hand focus to the first tabbable child of the app shell rather
     // than letting it silently fall to <body>.
     const root = document.getElementById("root");
     const fallback = root ? getVisibleTabbableElements(root)[0] : undefined;
     fallback?.focus();
-  }, []);
+  }, [restoreFocusTo]);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,
