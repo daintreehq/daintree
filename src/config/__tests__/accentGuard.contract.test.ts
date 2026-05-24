@@ -96,20 +96,30 @@ function collectSourceFiles(dir: string): string[] {
 
 // ── Allowlists ─────────────────────────────────────────────────────────
 
+// Cleanup issues that have been closed/completed. ALLOWLIST_BY_ISSUE must not
+// contain any single-issue key matching ^#\d+$ that appears here — add new
+// entries as cleanup issues close. Compound sentinel keys (e.g.
+// "#5978-5986-pre-existing") are exempt from the check.
+const KNOWN_CLOSED_ISSUES = new Set([
+  "#5978",
+  "#5979",
+  "#5980",
+  "#5981",
+  "#5982",
+  "#5983",
+  "#5984",
+  "#5985",
+  "#5986",
+]);
+
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
-  // Text-link CTAs (Change theme, Reset, Export, Import, Random theme) — separate cleanup
-  "src/components/Settings/AppThemePicker.tsx",
-
   // Theme browser accent display (theme content, not app chrome)
   "src/components/ThemeBrowser/ThemeBrowser.tsx",
 
   // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
   "src/components/Project/QuickRun.tsx",
-
-  // HealthChip accent tone routing + color-mix CSS custom property usage
-  "src/components/Pulse/ProjectPulseCard.tsx",
 
   // Current worktree card left-edge accent bar (single primary anchor per view)
   "src/components/Worktree/WorktreeCard.tsx",
@@ -127,80 +137,38 @@ const DURABLE_ALLOWLIST = new Set([
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 ]);
 
-// Files with accent usage that cleanup PRs #5978-5986 will address.
-// Organized by cleanup issue for easy batch removal as each PR lands.
-// When a cleanup PR removes accent from a file, delete its entry here.
+// Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
+// closed/completed as of 2026-04-28). New cleanup PRs should remove files
+// from this sentinel as accent is migrated away — the stale-file ratchet
+// (`allowlist hygiene > no stale allowlist entries`) fails if an allowlisted
+// file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
-  // #5978: [settings] In-repo toggle uses triple-accent for ON state
-  "#5978": [
-    "src/components/Settings/SettingsCheckbox.tsx",
-    "src/components/Settings/SettingsChoicebox.tsx",
-    "src/components/Settings/SettingsSwitch.tsx",
-    "src/components/Settings/SettingsSwitchCard.tsx",
-  ],
-
-  // #5979: [pulse] Time-range toggle group uses accent for active selection
-  "#5979": [],
-
-  // #5980: [toolbar] Agent buttons use accent on routine hover and focus
-  "#5980": [
-    "src/components/Layout/Sidebar.tsx",
-    "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-  ],
-
-  // #5981: [editor] Theme paints caret, headings, and list bullets in chrome accent
-  "#5981": [],
-
-  // #5982: [quick-run] Command launcher stacks five accent surfaces
-  "#5982": ["src/components/Project/QuickRun.tsx"],
-
-  // #5983: [panels] Inline title-edit border duplicates focus outline
-  "#5983": ["src/components/Panel/PanelHeader.tsx", "src/components/Panel/TabButton.tsx"],
-
-  // #5984: [worktree] Drag handle goes accent during sort
-  "#5984": [
-    "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
-    "src/components/Worktree/NewWorktreeDialog.tsx",
-    "src/components/Worktree/views/ExistingBranchPicker.tsx",
-    "src/components/Worktree/views/HighlightBranchText.tsx",
-    "src/components/Worktree/views/IssueSelectorView.tsx",
-    "src/components/Worktree/views/RecipePickerPopover.tsx",
-  ],
-
-  // #5985: [panels] Exit Focus badge competes with macro-focus ring
-  "#5985": ["src/components/Panel/PanelTransitionOverlay.tsx"],
-
-  // #5986: [onboarding] Theme card checkmark uses accent inconsistent with #5955
-  "#5986": [
-    "src/components/Onboarding/GettingStartedChecklist.tsx",
-    "src/components/ThemePalette/ThemePalette.tsx",
-  ],
-
-  // Pre-existing accent usage in components not yet covered by a specific cleanup issue.
-  // Each cleanup PR should move its files into the matching issue bucket above,
-  // then remove them entirely once accent is migrated away.
   "#5978-5986-pre-existing": [
+    "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
+    "plugins/builtin/github/renderer/components/CommitList.tsx",
+    "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
+    "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     "src/components/ActionPalette/ActionPaletteItem.tsx",
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
     "src/components/Commands/CommandPickerHost.tsx",
-    "src/components/Browser/BrowserPane.tsx",
     "src/components/DevPreview/DevPreviewPane.tsx",
     "src/components/Diagnostics/DiagnosticsDock.tsx",
     "src/components/Diagnostics/TelemetryContent.tsx",
     "src/components/Fleet/FleetArmingRibbon.tsx",
     "src/components/Fleet/FleetPickerContent.tsx",
-    "plugins/builtin/github/renderer/components/BulkActionBar.tsx",
-    "plugins/builtin/github/renderer/components/GitHubDropdownSkeletons.tsx",
-    "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
-    "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
-    "src/components/LogLevelPalette/LogLevelPalette.tsx",
-    "src/components/Notifications/NotificationCenterEntry.tsx",
+    "src/components/Layout/DockedTabGroup.tsx",
+    "src/components/Layout/DockedTerminalItem.tsx",
+    "src/components/Layout/Sidebar.tsx",
+    "src/components/Layout/VoiceRecordingToolbarButton.tsx",
+    "src/components/Onboarding/GettingStartedChecklist.tsx",
+    "src/components/Panel/PanelHeader.tsx",
+    "src/components/Panel/PanelTransitionOverlay.tsx",
+    "src/components/Panel/TabButton.tsx",
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
-    "src/components/Project/AutomationTab.tsx",
     "src/components/Project/CloneRepoDialog.tsx",
     "src/components/Project/CreateProjectFolderDialog.tsx",
     "src/components/Project/GeneralTab.tsx",
@@ -209,71 +177,50 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Project/WelcomeScreen.tsx",
     "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/AddPresetDialog.tsx",
-    "src/components/Settings/AgentHelpOutput.tsx",
     "src/components/Settings/AgentSelectorDropdown.tsx",
-    "src/components/Settings/AgentSettings.tsx",
-    "src/components/Settings/ColorSchemePicker.tsx",
-    "src/components/Settings/CommandOverridesTab.tsx",
     "src/components/Settings/DiagnosticsReviewDialog.tsx",
     "src/components/Settings/EditorIntegrationTab.tsx",
     "src/components/Settings/EnvVarEditor.tsx",
-    "src/components/Settings/GeneralTab.tsx",
-    "src/components/Settings/GitHubSettingsTab.tsx",
     "src/components/Settings/ImageViewerTab.tsx",
     "src/components/Settings/ImportEnvDialog.tsx",
-    "src/components/Settings/KeybindingProfileActions.tsx",
     "src/components/Settings/KeyboardShortcutsTab.tsx",
     "src/components/Settings/PortalSettingsTab.tsx",
     "src/components/Settings/PresetSelector.tsx",
     "src/components/Settings/PrivacyDataTab.tsx",
-    "src/components/Settings/ResourceEnvironmentsSection.tsx",
+    "src/components/Settings/SettingsCheckbox.tsx",
     "src/components/Settings/SettingsDialog.tsx",
-    "src/components/Settings/SettingsInput.tsx",
-    "src/components/Settings/SettingsSelect.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
-    "src/components/Settings/SettingsTextarea.tsx",
+    "src/components/Settings/SettingsSwitch.tsx",
+    "src/components/Settings/SettingsSwitchCard.tsx",
     "src/components/Settings/TerminalSettingsTab.tsx",
     "src/components/Settings/ToolbarSettingsTab.tsx",
-    "src/components/Settings/VoiceInputSettingsTab.tsx",
     "src/components/Settings/WorktreeSettingsTab.tsx",
     "src/components/Setup/AgentCliStep.tsx",
-    "src/components/Setup/SystemToolsStep.tsx",
-    "src/components/Sidebar/SidebarContent.tsx",
-    "src/components/Terminal/ContentGrid.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
-    "src/components/Terminal/InlineStatusBanner.tsx",
     "src/components/Terminal/PromptHistoryPalette.tsx",
-    "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
     "src/components/Terminal/SendToAgentPalette.tsx",
-    "src/components/Terminal/TerminalPane.tsx",
     "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/UpdateCwdDialog.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalPalette/NewTerminalPalette.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/ui/ReEntrySummary.tsx",
-    "src/components/ui/toaster.tsx",
-    "src/components/Worktree/IssuePickerDialog.tsx",
+    "src/components/ThemePalette/ThemePalette.tsx",
+    "src/components/Worktree/NewWorktreeDialog.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
-    "src/components/Worktree/QuickStateFilterBar.tsx",
-    "src/components/Worktree/WorktreeCard/GitHubTooltipContent.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
     "src/components/Worktree/WorktreeDeleteDialog.tsx",
     "src/components/Worktree/WorktreeFilterPopover.tsx",
     "src/components/Worktree/WorktreePalette.tsx",
+    "src/components/Worktree/views/ExistingBranchPicker.tsx",
+    "src/components/Worktree/views/HighlightBranchText.tsx",
+    "src/components/Worktree/views/IssueSelectorView.tsx",
+    "src/components/Worktree/views/RecipePickerPopover.tsx",
     "src/hooks/useUpdateListener.tsx",
-    "src/components/agents/AgentCard.tsx",
-    "plugins/builtin/github/renderer/components/CommitList.tsx",
-    "src/components/Layout/ContentDock.tsx",
-    "src/components/Layout/DockedTabGroup.tsx",
-    "src/components/Layout/DockedTerminalItem.tsx",
-    "src/components/Pulse/PulseHeatmap.tsx",
   ],
 };
 
@@ -480,6 +427,72 @@ describe("accent guard", () => {
     });
   });
 
+  // ── Allowlist hygiene ────────────────────────────────────────────────
+
+  describe("allowlist hygiene", () => {
+    it("has no closed-issue keys in ALLOWLIST_BY_ISSUE", () => {
+      const offenders = Object.keys(ALLOWLIST_BY_ISSUE).filter(
+        (key) => /^#\d+$/.test(key) && KNOWN_CLOSED_ISSUES.has(key)
+      );
+
+      expect(
+        offenders,
+        `ALLOWLIST_BY_ISSUE contains keys referencing closed issues:\n  ${offenders.join(", ")}\n\n` +
+          `Move entries to DURABLE_ALLOWLIST (with rationale) or a sentinel bucket, then delete the key.`
+      ).toEqual([]);
+    });
+
+    it("has no stale allowlist entries", () => {
+      const entries: Array<{ file: string; bucket: string }> = [
+        ...Array.from(DURABLE_ALLOWLIST).map((file) => ({
+          file,
+          bucket: "DURABLE_ALLOWLIST",
+        })),
+        ...Object.entries(ALLOWLIST_BY_ISSUE).flatMap(([key, files]) =>
+          files.map((file) => ({ file, bucket: `ALLOWLIST_BY_ISSUE["${key}"]` }))
+        ),
+      ];
+
+      const stale: Array<{ file: string; bucket: string; reason: string }> = [];
+
+      for (const { file, bucket } of entries) {
+        const abs = path.join(REPO_ROOT, file);
+        let source: string;
+        try {
+          source = fs.readFileSync(abs, "utf8");
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            stale.push({ file, bucket, reason: "file deleted" });
+            continue;
+          }
+          throw err;
+        }
+
+        const matches = Array.from(source.matchAll(FORBIDDEN_PATTERN));
+        const violations = matches.filter((m) => {
+          const { index, utility } = assertAccentMatch(m);
+          return !isFocusRing(source, index, utility);
+        });
+
+        if (violations.length === 0) {
+          stale.push({ file, bucket, reason: "no forbidden utility remains" });
+        }
+      }
+
+      if (stale.length === 0) return;
+
+      const report = stale
+        .sort((a, b) => a.file.localeCompare(b.file))
+        .map((s) => `  ${s.bucket}: ${s.file} (${s.reason})`)
+        .join("\n");
+
+      expect(
+        stale,
+        `Found ${stale.length} stale allowlist entries — remove them from their bucket:\n${report}`
+      ).toEqual([]);
+    });
+  });
+
   // ── Repository scan ──────────────────────────────────────────────────
 
   it("has no non-allowlisted accent token usages", () => {
@@ -530,9 +543,12 @@ describe("accent guard", () => {
     expect(
       Object.fromEntries(violations),
       `Found ${violations.size} files with non-allowlisted accent tokens:\n${report}\n\n` +
-        `Add files to ALLOWLIST_BY_ISSUE (keyed by cleanup issue #) if they will be addressed ` +
-        `by cleanup PRs #5978-5986, or to DURABLE_ALLOWLIST if the accent usage is legitimate ` +
-        `per the Accent Color Restraint policy in CLAUDE.md.`
+        `Add files to ALLOWLIST_BY_ISSUE (keyed by an open cleanup issue # or the existing ` +
+        `pre-existing sentinel) if they will be addressed by follow-up cleanup PRs, or to ` +
+        `DURABLE_ALLOWLIST with a rationale comment if the accent usage is legitimate per the ` +
+        `Accent Color Restraint policy in CLAUDE.md. When a cleanup lands, remove its file ` +
+        `entry — the stale-file ratchet (allowlist hygiene > no stale allowlist entries) ` +
+        `will fail until you do.`
     ).toEqual({});
   });
 });
