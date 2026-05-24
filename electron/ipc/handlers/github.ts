@@ -475,6 +475,28 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber));
 
+  const handleGitHubGetIssuesByNumbers = async (payload: { cwd: string; numbers: number[] }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, 20, 10_000);
+    if (!payload || typeof payload !== "object") return [];
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return [];
+    if (!path.isAbsolute(payload.cwd)) return [];
+    if (!Array.isArray(payload.numbers)) return [];
+    const { getIssuesByNumbers } = await import("../../services/github/index.js");
+    return getIssuesByNumbers(payload.cwd.trim(), payload.numbers);
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, handleGitHubGetIssuesByNumbers));
+
+  const handleGitHubGetPRsByNumbers = async (payload: { cwd: string; numbers: number[] }) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, 20, 10_000);
+    if (!payload || typeof payload !== "object") return [];
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return [];
+    if (!path.isAbsolute(payload.cwd)) return [];
+    if (!Array.isArray(payload.numbers)) return [];
+    const { getPRsByNumbers } = await import("../../services/github/index.js");
+    return getPRsByNumbers(payload.cwd.trim(), payload.numbers);
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, handleGitHubGetPRsByNumbers));
+
   const handleGitHubGetPRReviewThreads = async (payload: { cwd: string; prNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, 10, 10_000);
     if (!payload || typeof payload !== "object") {

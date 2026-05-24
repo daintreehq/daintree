@@ -1,6 +1,12 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
-import { LIST_ISSUES_QUERY, SEARCH_QUERY, GET_ISSUE_QUERY } from "./GitHubQueries.js";
+import {
+  LIST_ISSUES_QUERY,
+  SEARCH_QUERY,
+  GET_ISSUE_QUERY,
+  buildBatchIssuesQuery,
+  GRAPHQL_BATCH_CHUNK_SIZE,
+} from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
@@ -474,6 +480,55 @@ export async function getIssueByNumber(
     }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}
+
+export async function getIssuesByNumbers(
+  cwd: string,
+  numbers: number[]
+): Promise<Array<GitHubIssue | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  try {
+    return await withRepoContextRetry(cwd, async (context) => {
+      const results: Array<GitHubIssue | null> = [];
+
+      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+        const query = buildBatchIssuesQuery(context.owner, context.repo, chunk);
+        if (!query) continue;
+
+        const response = (await client(query, {
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
+
+        gitHubRateLimitService.updateFromGraphQL(response);
+
+        const repo = response?.repository as Record<string, unknown> | undefined;
+        for (const num of chunk) {
+          const alias = `i${num}`;
+          const node = repo?.[alias] as Record<string, unknown> | null;
+          results.push(node ? parseIssueNode(node) : null);
+        }
+      }
+
+      return results;
+    });
+  } catch (error) {
+    const message = formatErrorMessage(error, "Failed to fetch GitHub issues");
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return [];
     }
     throw new Error(parseGitHubError(error));
   }
