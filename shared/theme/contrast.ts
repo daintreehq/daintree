@@ -110,6 +110,10 @@ const ACCENT_SURFACE_BACKGROUNDS: AppThemeTokenKey[] = [
 
 const ACCENT_MIN_CONTRAST = 4.5;
 
+// WCAG 1.4.11 Non-text Contrast: UI components (≥2px outlines, focus indicators)
+// must hit 3:1 against the adjacent surface they're drawn over.
+const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
+
 /**
  * Returns true when the scheme's accent fails WCAG AA 4.5:1 either as button-label
  * text (`accent-foreground` over `accent-primary`) or as accent-tinted text on any
@@ -173,6 +177,37 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
           message: `text-primary on ${pair.background} at ${Math.round(opacity * 100)}% opacity (${tier}) is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
         });
       }
+    }
+  }
+
+  // Focus-ring visibility: `accent-primary` is the canonical focus-ring color, so it
+  // must hit WCAG 1.4.11 (3:1) against every surface it can land on. A separate loop
+  // (rather than rows in CONTRAST_PAIRS) keeps the message text distinguishable from
+  // the 4.5:1 text-on-accent check and the `accentOverrideHasLowContrast` semantics.
+  //
+  // Note: this checks the opaque accent. Many focus rings in the codebase use
+  // partial opacity (`ring-daintree-accent/40` etc.), where the rendered contrast
+  // is meaningfully lower than the value reported here. Opacity composition is
+  // out of scope for this token-level check.
+  const accent = scheme.tokens["accent-primary"];
+  const accentHex = isHexColor(accent);
+  for (const surfaceKey of ACCENT_SURFACE_BACKGROUNDS) {
+    const surface = scheme.tokens[surfaceKey];
+    const surfaceHex = isHexColor(surface);
+    if (!accentHex || !surfaceHex) {
+      const unevaluable: string[] = [];
+      if (!accentHex) unevaluable.push(`accent-primary="${accent}"`);
+      if (!surfaceHex) unevaluable.push(`${surfaceKey}="${surface}"`);
+      warnings.push({
+        message: `Cannot evaluate accent-primary outline contrast on ${surfaceKey}: non-hex token value(s) ${unevaluable.join(", ")}`,
+      });
+      continue;
+    }
+    const ratio = contrastRatio(accent, surface);
+    if (ratio < ACCENT_OUTLINE_MIN_CONTRAST) {
+      warnings.push({
+        message: `accent-primary outline on ${surfaceKey} is ${ratio.toFixed(2)}:1; target is ${ACCENT_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
     }
   }
 

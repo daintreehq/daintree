@@ -299,6 +299,77 @@ describe("getThemeContrastWarnings", () => {
     const statusFailures = warnings.filter((w) => w.message.includes("status-"));
     expect(statusFailures).toHaveLength(0);
   });
+
+  it("emits a 3:1 outline warning when accent-primary fails against a surface", () => {
+    // #A28224 (Serengeti pre-bump accent) on #F0E8D0 (surface-grid) is ~2.98:1, just below 3.0.
+    const scheme = makeScheme({
+      "accent-primary": "#A28224" as AppColorSchemeTokens["accent-primary"],
+      "surface-grid": "#F0E8D0" as AppColorSchemeTokens["surface-grid"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("accent-primary outline on surface-grid") &&
+        w.message.includes("target is 3.0:1") &&
+        w.message.includes("WCAG 1.4.11")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("emits no outline warning when accent-primary meets 3:1 across all surfaces", () => {
+    // Pure black accent on white surfaces yields 21:1 — well above 3.0.
+    const scheme = makeScheme({
+      "accent-primary": "#000000" as AppColorSchemeTokens["accent-primary"],
+      "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#ffffff" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#ffffff" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const outlineWarnings = warnings.filter((w) => w.message.includes("accent-primary outline on"));
+    expect(outlineWarnings).toHaveLength(0);
+  });
+
+  it("emits an unevaluable warning when accent-primary is non-hex for the outline check", () => {
+    const scheme = makeScheme({
+      "accent-primary": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-primary"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const outlineUnevaluable = warnings.filter(
+      (w) =>
+        w.message.includes("Cannot evaluate accent-primary outline contrast") &&
+        w.message.includes("oklch(0.5 0.1 200)")
+    );
+    // 5 surfaces × 1 non-hex accent = 5 unevaluable outline warnings.
+    expect(outlineUnevaluable.length).toBe(5);
+  });
+
+  it("emits an unevaluable warning when a surface is non-hex for the outline check", () => {
+    const scheme = makeScheme({
+      "surface-canvas": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["surface-canvas"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const failure = warnings.find(
+      (w) =>
+        w.message.includes("Cannot evaluate accent-primary outline contrast on surface-canvas") &&
+        w.message.includes("oklch(0.5 0.1 200)")
+    );
+    expect(failure).toBeDefined();
+  });
+
+  it("produces zero accent-primary outline warnings across all built-in themes", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme);
+      const outlineFailures = warnings.filter((w) =>
+        w.message.includes("accent-primary outline on")
+      );
+      expect(
+        outlineFailures,
+        `${scheme.id}: accent-primary must hit 3:1 against all surfaces`
+      ).toHaveLength(0);
+    }
+  });
 });
 
 describe("accentOverrideHasLowContrast", () => {
