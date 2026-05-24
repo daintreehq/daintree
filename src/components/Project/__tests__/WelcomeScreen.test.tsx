@@ -193,7 +193,7 @@ Object.defineProperty(window, "electron", {
   writable: true,
 });
 
-import { WelcomeScreen } from "../WelcomeScreen";
+import { WelcomeScreen, isAgentWelcomeCardEligible } from "../WelcomeScreen";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 import type { ChecklistState } from "@shared/types/ipc/maps";
 
@@ -1062,6 +1062,107 @@ describe("WelcomeScreen", () => {
       expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
       expect(screen.queryByText("Getting Started")).toBeNull();
+    });
+  });
+
+  describe("isAgentWelcomeCardEligible", () => {
+    it("returns false when agentSettings is null", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: null,
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when hasRealData is false", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: false,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when welcomeCardDismissed is true", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: true,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when no built-in agent is launchable", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "missing", codex: "missing" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when a built-in agent is already pinned", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: { claude: { pinned: true } } },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns true when ready agents exist and none are pinned", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready", codex: "ready" },
+        })
+      ).toBe(true);
+    });
+
+    it("returns true for unauthenticated agent (launchable)", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "unauthenticated" },
+        })
+      ).toBe(true);
+    });
+
+    it("returns false for blocked agent (not launchable)", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "blocked" },
+        })
+      ).toBe(false);
+    });
+
+    it("ignores custom agent pins when checking built-in eligibility", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: { "my-custom-agent": { pinned: true } } },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(true);
     });
   });
 });
