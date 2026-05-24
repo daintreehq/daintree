@@ -198,7 +198,7 @@ describe("Radix overlay animation classes — wrapper source", () => {
     render(
       <SelectPrimitive.Root open>
         <SelectPrimitive.Trigger>trigger</SelectPrimitive.Trigger>
-        <SelectContent forceMount>
+        <SelectContent>
           <SelectPrimitive.Item value="a">a</SelectPrimitive.Item>
         </SelectContent>
       </SelectPrimitive.Root>
