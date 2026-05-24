@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileDecorationProviderImpl } from "../../../../../shared/types/forge.js";
-import type {
-  PluginHostApi,
-  PluginPluginWorktreeSnapshot,
-} from "../../../../../shared/types/plugin.js";
+import type { PluginHostApi, PluginWorktreeSnapshot } from "../../../../../shared/types/plugin.js";
 
 const mockGetPRReviewThreads = vi.fn();
 
