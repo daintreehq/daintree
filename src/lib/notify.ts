@@ -8,8 +8,10 @@ import {
 } from "@/store/notificationStore";
 import {
   useNotificationHistoryStore,
+  getEntriesByCorrelationId,
   type NotificationHistoryAction,
 } from "@/store/slices/notificationHistorySlice";
+import { shouldReToast } from "@/lib/notificationSeverity";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
@@ -684,6 +686,21 @@ export function notify(payload: NotifyPayload): string {
   const shouldToast = priority === "watch" || (priority === "high" && isFocused && !originVisible);
   const shouldNative = priority === "watch";
 
+  // Thread re-promotion: a notification that shares a `correlationId` with an
+  // existing thread re-toasts even when the normal gate would route it
+  // inbox-only, but only when it escalates the thread's worst severity or
+  // un-snoozes a fully-archived thread. Routine same/lower-severity child
+  // updates keep updating the inbox row silently. Evaluated against the
+  // pre-commit thread state (before the `addEntry` write below), so
+  // `getWorstSeverity` compares the incoming severity against the existing
+  // entries rather than itself. `transient` payloads have no inbox thread, so
+  // there is nothing to re-promote against.
+  const shouldToastThread =
+    !shouldToast && correlationId && !payload.transient
+      ? shouldReToast(type, getEntriesByCorrelationId(correlationId))
+      : false;
+  const effectiveShouldToast = shouldToast || shouldToastThread;
+
   // Per-source rate-limit gate. Only consumes a token (and routes to the
   // overflow summary inbox row) when the notification would actually toast
   // in the current state — blurred/quiet/disabled paths already deliver
@@ -693,9 +710,10 @@ export function notify(payload: NotifyPayload): string {
   // critical override — `isQuiet` is already false here when `urgent`),
   // and `coalesce` (its own gate over a shorter window). Runs before the
   // history-entry write so overflowed events aren't double-recorded as
-  // both an original row and a summary row.
+  // both an original row and a summary row. Re-promoted toasts layer on top
+  // of this gate — they still consume a token rather than bypassing it.
   if (
-    shouldToast &&
+    effectiveShouldToast &&
     notificationsEnabled &&
     !isQuiet &&
     !payload.transient &&
@@ -713,7 +731,7 @@ export function notify(payload: NotifyPayload): string {
           title,
           message: historyMessage,
           correlationId,
-          seenAsToast: !isQuiet && notificationsEnabled && (shouldToast || originVisible),
+          seenAsToast: !isQuiet && notificationsEnabled && (effectiveShouldToast || originVisible),
           countable: payload.countable,
           actions: historyActions.length > 0 ? historyActions : undefined,
           context,
@@ -736,7 +754,7 @@ export function notify(payload: NotifyPayload): string {
     return "";
   }
 
-  if (shouldToast && payload.coalesce) {
+  if (effectiveShouldToast && payload.coalesce) {
     const { coalesce } = payload;
     const windowMs = coalesce.windowMs ?? 2000;
     const now = Date.now();
@@ -806,7 +824,7 @@ export function notify(payload: NotifyPayload): string {
     return id;
   }
 
-  if (shouldToast) {
+  if (effectiveShouldToast) {
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,

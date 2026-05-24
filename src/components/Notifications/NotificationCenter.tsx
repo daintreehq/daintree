@@ -29,14 +29,7 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import type { NotificationType } from "@/store/notificationStore";
-
-const SEVERITY_WEIGHTS: Record<NotificationType, number> = {
-  error: 3,
-  warning: 2,
-  info: 1,
-  success: 0,
-} as const;
+import { getWorstSeverity } from "@/lib/notificationSeverity";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
@@ -45,13 +38,6 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
-
-function getWorstSeverity(entries: NotificationHistoryEntry[]): NotificationType {
-  if (entries.length === 0) return "success";
-  return entries.reduce((highest, current) =>
-    SEVERITY_WEIGHTS[current.type] > SEVERITY_WEIGHTS[highest.type] ? current : highest
-  ).type;
-}
 
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
