@@ -3699,12 +3699,18 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/PRBadge.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
     "hintCount": 0,
-    "errorBailouts": [],
+    "errorBailouts": [
+      {
+        "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
+      }
+    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
