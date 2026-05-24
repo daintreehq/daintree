@@ -86,7 +86,7 @@ describe("SettingsSwitchCard", () => {
   it("applies accent color scheme by default", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-accent");
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
   });
 
   it("wraps content in subgrid container", () => {

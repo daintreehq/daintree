@@ -130,7 +130,7 @@ export function DiagnosticsReviewDialog({
                   className={cn(
                     "flex shrink-0 w-3.5 h-3.5 rounded border transition-colors",
                     "bg-daintree-bg border-border-strong",
-                    "data-[state=checked]:bg-daintree-accent data-[state=checked]:border-daintree-accent",
+                    "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                   )}
                 >

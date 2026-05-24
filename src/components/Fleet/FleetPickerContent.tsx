@@ -496,8 +496,8 @@ function PickerCheckbox({
       className={cn(
         "relative flex shrink-0 w-4 h-4 rounded border transition-colors duration-150",
         "bg-daintree-bg border-border-strong",
-        "data-[state=checked]:bg-daintree-accent data-[state=checked]:border-daintree-accent",
-        "data-[state=indeterminate]:bg-border-strong data-[state=indeterminate]:border-border-strong",
+        "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
+        "data-[state=indeterminate]:bg-daintree-text data-[state=indeterminate]:border-daintree-text",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
       )}
     >
