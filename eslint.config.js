@@ -563,6 +563,44 @@ export default tseslint.config(
               message:
                 "Importing githubClient from the barrel is restricted. If this file is in the allowlist, import from @/clients/githubClient directly. Otherwise use forgeClient or dispatch forge.* actions. See #8460.",
             },
+            // TerminalInstance is the legacy kitchen-sink carrier interface being
+            // drained from the renderer store (#8957). New code should read the
+            // PanelInstance discriminated union via the getNarrowPanel/getNarrowPanels
+            // adapter selectors in src/store/slices/panelRegistry/selectors.ts.
+            // Restriction is a warning so the existing ~50 call sites are ratcheted
+            // down domain-by-domain in follow-up PRs rather than blocked all at once.
+            // Note: relative imports (e.g. `./types` inside panelRegistry/) are not
+            // matched by these alias entries — a known gap for slice-internal files.
+            {
+              name: "@shared/types",
+              importNames: ["TerminalInstance"],
+              message:
+                "TerminalInstance is the legacy carrier interface. Use PanelInstance from @shared/types/panel plus the getNarrowPanel/getNarrowPanels adapter selectors. See #8957.",
+            },
+            {
+              name: "@shared/types/panel",
+              importNames: ["TerminalInstance"],
+              message:
+                "TerminalInstance is the legacy carrier interface. Use PanelInstance from @shared/types/panel plus the getNarrowPanel/getNarrowPanels adapter selectors. See #8957.",
+            },
+            {
+              name: "@/types",
+              importNames: ["TerminalInstance"],
+              message:
+                "TerminalInstance is the legacy carrier interface. Use PanelInstance from @shared/types/panel plus the getNarrowPanel/getNarrowPanels adapter selectors. See #8957.",
+            },
+            {
+              name: "@/store",
+              importNames: ["TerminalInstance"],
+              message:
+                "TerminalInstance is the legacy carrier interface. Use PanelInstance from @shared/types/panel plus the getNarrowPanel/getNarrowPanels adapter selectors. See #8957.",
+            },
+            {
+              name: "@/store/panelStore",
+              importNames: ["TerminalInstance"],
+              message:
+                "TerminalInstance is the legacy carrier interface. Use PanelInstance from @shared/types/panel plus the getNarrowPanel/getNarrowPanels adapter selectors. See #8957.",
+            },
           ],
           patterns: [
             {
