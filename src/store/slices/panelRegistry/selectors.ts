@@ -54,7 +54,10 @@ export function getNarrowPanel(
     // record lands here. Backfill the literal discriminant when it's missing so
     // the returned `PtyPanelData` is sound for downstream `switch (kind)`;
     // preserve object identity when the panel already carries it.
-    return panel.kind === "terminal" ? panel : { ...panel, kind: "terminal" };
+    if ("kind" in panel && panel.kind) {
+      return panel;
+    }
+    return { ...panel, kind: "terminal" };
   }
   return undefined;
 }
