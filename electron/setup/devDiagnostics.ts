@@ -1,3 +1,4 @@
+// eager-import-allow: writes dev diagnostics via sync fs during setup
 import { app, ipcMain } from "electron";
 import fs from "node:fs";
 

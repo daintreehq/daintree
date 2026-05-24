@@ -1,3 +1,4 @@
+// eager-import-allow: reads the CLI-availability cache via store.get synchronously
 import { execFile, execFileSync } from "child_process";
 import { access, constants } from "fs/promises";
 import { delimiter, dirname, join, win32 as pathWin32 } from "path";

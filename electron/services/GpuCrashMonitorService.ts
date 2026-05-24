@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the GPU-crash sentinel via sync fs
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";

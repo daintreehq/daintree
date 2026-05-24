@@ -1,3 +1,4 @@
+// eager-import-allow: writes emergency logs via sync fs so they survive a crash before async transports exist
 import { appendFileSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";

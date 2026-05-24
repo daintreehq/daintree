@@ -1,3 +1,4 @@
+// eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
 import { typedHandle } from "../utils.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads diagnostics files via sync fs in the IPC handler
 import { app, dialog, shell } from "electron";
 import os from "node:os";
 import v8 from "node:v8";

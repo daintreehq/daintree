@@ -1,3 +1,4 @@
+// eager-import-allow: reads privacy settings via store.get synchronously in the IPC handler
 import { app, shell, session } from "electron";
 import { store } from "../../store.js";
 import {

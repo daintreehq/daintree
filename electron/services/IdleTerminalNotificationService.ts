@@ -1,3 +1,4 @@
+// eager-import-allow: reads idle-notification settings via store.get synchronously
 import type { AgentState } from "../../shared/types/agent.js";
 import type {
   IdleTerminalNotifyConfig,

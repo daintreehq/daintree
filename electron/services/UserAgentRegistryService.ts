@@ -1,3 +1,4 @@
+// eager-import-allow: reads the user-agent registry via store.get synchronously during init
 import { store } from "../store.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../../shared/types/index.js";
 import { UserAgentConfigSchema, SAFE_AGENT_ID_PATTERN } from "../../shared/types/index.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads error-reporting config via store.get synchronously while handling IPC errors
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";

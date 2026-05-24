@@ -1,3 +1,4 @@
+// eager-import-allow: reads terminal config via store.get synchronously at module scope
 import { dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";

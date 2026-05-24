@@ -1,3 +1,4 @@
+// eager-import-allow: reads GPU info files via sync fs during detection
 import { app } from "electron";
 import fs from "node:fs";
 

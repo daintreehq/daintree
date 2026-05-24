@@ -1,3 +1,4 @@
+// eager-import-allow: reads demo fixture files via sync fs while servicing the IPC request
 import { ipcMain, session } from "electron";
 import { randomBytes } from "crypto";
 import * as fs from "fs";

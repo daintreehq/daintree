@@ -1,3 +1,4 @@
+// eager-import-allow: reads worktree config via store.get synchronously at module scope
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { WorktreeConfig } from "../../../shared/types/index.js";

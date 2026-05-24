@@ -1,3 +1,4 @@
+// eager-import-allow: reads milestone state via store.get synchronously at module scope
 import { store } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { MILESTONES_METHOD_CHANNELS } from "./milestones.preload.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes crash-recovery state via sync fs and store.get during early startup
 import { app, BrowserWindow } from "electron";
 import fs from "node:fs";
 import path from "node:path";

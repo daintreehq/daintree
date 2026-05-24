@@ -1,3 +1,4 @@
+// eager-import-allow: reads agent CLI config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { getAgentIds } from "../../../shared/config/agentRegistry.js";
 import type {

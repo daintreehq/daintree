@@ -1,3 +1,4 @@
+// eager-import-allow: performs sync fs checks while resolving git metadata
 import { dirname, resolve } from "path";
 import { realpathSync, promises as fs } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads last-project state via store.get synchronously during project switching
 import path from "path";
 import type { Project } from "../types/index.js";
 import type { HandlerDependencies } from "../ipc/types.js";

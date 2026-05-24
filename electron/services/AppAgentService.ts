@@ -1,3 +1,4 @@
+// eager-import-allow: reads app-agent config via store.get synchronously during service init
 import { store } from "../store.js";
 import type { AppAgentConfig } from "../../shared/types/appAgent.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";

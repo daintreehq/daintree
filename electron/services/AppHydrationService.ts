@@ -1,3 +1,4 @@
+// eager-import-allow: reads persisted hydration state via store.get synchronously during startup
 import { app } from "electron";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";

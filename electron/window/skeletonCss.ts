@@ -1,3 +1,4 @@
+// eager-import-allow: reads theme tokens via store.get synchronously to inline first-paint skeleton CSS
 /**
  * Injects CSS custom properties into a WebContents so the HTML skeleton
  * in index.html renders with the correct theme and layout dimensions

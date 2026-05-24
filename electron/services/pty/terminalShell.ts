@@ -1,3 +1,4 @@
+// eager-import-allow: resolves the login shell via a sync fs check
 import { existsSync } from "fs";
 import { execFileSync } from "child_process";
 import { isPowerShellShell } from "../../../shared/utils/shellEscape.js";
