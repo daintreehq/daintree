@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Lets each test dictate what the deferred query lags behind, so we can
@@ -15,12 +16,18 @@ vi.mock("react", async () => {
   };
 });
 
-const emptyStateProps: Array<Record<string, unknown>> = [];
+interface CapturedEmptyStateProps {
+  instant?: boolean;
+  variant?: string;
+  title?: ReactNode;
+}
+
+const emptyStateProps: CapturedEmptyStateProps[] = [];
 
 vi.mock("@/components/ui/EmptyState", () => ({
-  EmptyState: (props: Record<string, unknown>) => {
+  EmptyState: (props: CapturedEmptyStateProps) => {
     emptyStateProps.push(props);
-    return <div data-instant={String(props.instant)}>{props.title as string}</div>;
+    return <div data-instant={String(props.instant)}>{props.title}</div>;
   },
 }));
 
@@ -38,7 +45,11 @@ vi.mock("@/store/paletteStore", () => ({
 
 import { AppPaletteDialog } from "../AppPaletteDialog";
 
-const lastProps = () => emptyStateProps[emptyStateProps.length - 1];
+const lastProps = (): CapturedEmptyStateProps => {
+  const props = emptyStateProps.at(-1);
+  if (!props) throw new Error("EmptyState was not rendered");
+  return props;
+};
 
 describe("AppPaletteDialog.Empty instant derivation", () => {
   beforeEach(() => {
