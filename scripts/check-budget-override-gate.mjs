@@ -47,9 +47,12 @@ export function hasLinkedIssueReference(body) {
 }
 
 // Parse the JSON array of label names. toJson() on an empty label set yields
-// "[]"; a truly empty PR body field can surface as the string "null". Anything
-// that isn't a JSON array of strings is treated as a hard parse failure so the
-// caller can fail closed rather than silently waving the gate through.
+// "[]"; an empty/absent label field can surface as the string "null". Anything
+// that isn't a JSON array of strings — non-JSON, a non-array, or an array with
+// a non-string member — returns { error } so the caller fails closed rather
+// than silently waving the gate through. The non-string-member guard matters
+// if the workflow expression ever drifts from `labels.*.name` (string names) to
+// the full label-object array: that would otherwise parse to [] and pass.
 export function parseLabels(raw) {
   if (raw === undefined || raw === null || raw === "") return [];
   let parsed;
@@ -62,7 +65,10 @@ export function parseLabels(raw) {
   if (!Array.isArray(parsed)) {
     return { error: `PR_LABELS is not a JSON array: ${raw}` };
   }
-  return parsed.filter((l) => typeof l === "string");
+  if (!parsed.every((l) => typeof l === "string")) {
+    return { error: `PR_LABELS is not an array of strings: ${raw}` };
+  }
+  return parsed;
 }
 
 // Pure gate decision. Returns { skipped } when there's no PR context, otherwise
@@ -115,6 +121,6 @@ function main() {
   process.exit(1);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
