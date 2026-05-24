@@ -160,6 +160,17 @@ function reactCompilerReportPlugin(command: "build" | "serve"): {
                   typeof detail.reason === "string" ? detail.reason : String(detail.reason ?? ""),
               });
             }
+          } else {
+            // Malformed CompileError (absent/non-object detail). The raw
+            // entry.error count no longer gates CI, so a silent drop here would
+            // be invisible coverage loss. Land it in the strict gate under an
+            // unknown category so it fails loud rather than vanishing — most
+            // likely an upstream plugin event-shape change.
+            entry.errorBailouts.push({
+              category: "(unknown)",
+              severity: "Error",
+              reason: "malformed CompileError event (no detail object)",
+            });
           }
           break;
         }

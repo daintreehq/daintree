@@ -4,17 +4,20 @@
 // ──────────────────────────────────────
 // Tier 1 — Budget gate (this script): diffs dist/compiler-bailout-report.json
 //   against compiler-bailout-baseline.json and fails on any per-file regression.
-//   The baseline records ALL CompileError events (cosmetic + critical) so
-//   nothing slips past code review. Most entries are cosmetic "Todo" noise
-//   (e.g. `Todo: (BuildHIR::lowerExpression) Handle Import expressions` on
-//   anonymous arrows inside `React.lazy(() => import(...))`).
+//   Severity-aware (#8892): Hint-severity "Todo" noise collapses to a per-file
+//   hintCount gated by a global budget; Error+Warning bailouts are tracked
+//   verbatim in errorBailouts and gated strictly (any per-file/global increase
+//   or new strict category fails). The Hint noise is the bulk of events (e.g.
+//   `Todo: (BuildHIR::lowerExpression) Handle Import expressions` on anonymous
+//   arrows inside `React.lazy(() => import(...))`).
 //
 // Tier 2 — Critical-errors triage: `npm run compiler-budget:critical` runs
 //   scripts/find-critical-compiler-errors.mjs, which re-runs the React Compiler
 //   across src/ with a severity: "Error" filter. It surfaces only the
-//   load-bearing bailouts (the 2 out of ~196 that actually matter). Use it
-//   when the budget gate fires to triage whether the new bailout is cosmetic
-//   or needs attention.
+//   load-bearing Error-severity bailouts. NOTE: it does NOT surface
+//   Warning-severity bailouts (IncompatibleLibrary, UnsupportedSyntax), which
+//   also trip the strict gate — for those, read the errorBailouts detail
+//   printed by this script on failure.
 //
 // Update the baseline when the regression is intentional (genuine new code
 // that can't be optimized, or the React Compiler adds new categories):
@@ -74,6 +77,32 @@ function getStrictBailouts(entry) {
         (b) => b && typeof b === "object" && !HINT_CATEGORIES.has(b.category)
       )
     : [];
+}
+
+// Per-category counts of strict (Error+Warning) bailouts. The gate diffs these
+// rather than the raw length so a count-neutral category swap (e.g. a file's
+// lone Refs violation becoming a Hooks violation) still fails — that's a new
+// strict violation, not a wash, and "verbatim tracking" means the taxonomy is
+// load-bearing, not just the total.
+function strictCategoryCounts(entry) {
+  const counts = new Map();
+  for (const b of getStrictBailouts(entry)) {
+    counts.set(b.category, (counts.get(b.category) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// Returns the strict categories whose per-file count increased (or newly
+// appeared) in `entry` relative to `base`. Empty array = no strict regression.
+function regressedStrictCategories(entry, base) {
+  const current = strictCategoryCounts(entry);
+  const prior = strictCategoryCounts(base);
+  const regressed = [];
+  for (const [category, count] of current) {
+    if (count > (prior.get(category) ?? 0))
+      regressed.push({ category, from: prior.get(category) ?? 0, to: count });
+  }
+  return regressed;
 }
 
 // Refuse to overwrite the baseline in --update mode if the report shrinks by
@@ -347,8 +376,8 @@ function main() {
         from: 0,
         to: entry[k],
       }));
-      if (strictCount > 0) {
-        deltas.push({ key: "strictErrors", from: 0, to: strictCount });
+      for (const { category, from, to } of regressedStrictCategories(entry, undefined)) {
+        deltas.push({ key: `strictErrors[${category}]`, from, to });
       }
       if (deltas.length > 0) {
         regressions.push({ file, deltas, isNew: true });
@@ -363,8 +392,10 @@ function main() {
       from: base[k],
       to: entry[k],
     }));
-    if (strictCount > baseStrictCount) {
-      deltas.push({ key: "strictErrors", from: baseStrictCount, to: strictCount });
+    // Category-aware: catches both a count increase and a count-neutral swap
+    // to a different strict category.
+    for (const { category, from, to } of regressedStrictCategories(entry, base)) {
+      deltas.push({ key: `strictErrors[${category}]`, from, to });
     }
     if (deltas.length > 0) regressions.push({ file, deltas, isNew: false });
     const improvedKeys = REGRESSION_KEYS.filter((k) => entry[k] < base[k]);
@@ -503,7 +534,7 @@ function main() {
   if (hintBudgetExceeded) parts.push("Hint budget exceeded");
   console.error(
     `\n[check-compiler-budget] FAILED — ${total} issue(s): ${parts.join(", ")}. ` +
-      `For investigation, run \`npm run compiler-budget:critical\` to list only critical (Error-severity) compiler diagnostics. ` +
+      `For Error-severity diagnostics, run \`npm run compiler-budget:critical\`; Warning-severity bailouts (which also trip the strict gate) appear only in the errorBailouts detail printed above. ` +
       `If the change is intentional (e.g. files were genuinely deleted, or new cosmetic Hint noise is unavoidable), run \`npm run compiler-budget:update\` to refresh the baseline.`
   );
   process.exit(1);

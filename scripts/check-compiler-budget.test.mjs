@@ -33,18 +33,35 @@ function getStrictBailouts(entry) {
     : [];
 }
 
+function strictCategoryCounts(entry) {
+  const counts = new Map();
+  for (const b of getStrictBailouts(entry)) {
+    counts.set(b.category, (counts.get(b.category) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function regressedStrictCategories(entry, base) {
+  const current = strictCategoryCounts(entry);
+  const prior = strictCategoryCounts(base);
+  const regressed = [];
+  for (const [category, count] of current) {
+    if (count > (prior.get(category) ?? 0)) regressed.push(category);
+  }
+  return regressed;
+}
+
 // Mirror the per-file regression decision: returns the delta keys that would
-// fail CI for a single file given its baseline (or null baseline = new file).
+// fail CI for a single file given its baseline (or null/undefined baseline =
+// new file). Strict-error keys are category-aware (`strictErrors[Category]`).
 function fileRegressionKeys(entry, base) {
   const REGRESSION_KEYS = ["skip", "pipeline"];
-  const strictCount = getStrictBailouts(entry).length;
-  if (!base) {
-    const keys = REGRESSION_KEYS.filter((k) => entry[k] > 0);
-    if (strictCount > 0) keys.push("strictErrors");
-    return keys;
+  const keys = base
+    ? REGRESSION_KEYS.filter((k) => entry[k] > base[k])
+    : REGRESSION_KEYS.filter((k) => entry[k] > 0);
+  for (const category of regressedStrictCategories(entry, base)) {
+    keys.push(`strictErrors[${category}]`);
   }
-  const keys = REGRESSION_KEYS.filter((k) => entry[k] > base[k]);
-  if (strictCount > getStrictBailouts(base).length) keys.push("strictErrors");
   return keys;
 }
 
@@ -441,7 +458,7 @@ describe("strict Error per-file gate (#8892)", () => {
       hintCount: 0,
       errorBailouts: [{ category: "Hooks", severity: "Error", reason: "x" }],
     };
-    expect(fileRegressionKeys(entry, null)).toContain("strictErrors");
+    expect(fileRegressionKeys(entry, null)).toEqual(["strictErrors[Hooks]"]);
   });
 
   it("passes a new file with only Hint noise (Hints gate globally, not per-file)", () => {
@@ -457,10 +474,39 @@ describe("strict Error per-file gate (#8892)", () => {
       hintCount: 0,
       errorBailouts: [{ category: "Refs", severity: "Error", reason: "x" }],
     };
-    expect(fileRegressionKeys(entry, base)).toEqual(["strictErrors"]);
+    expect(fileRegressionKeys(entry, base)).toEqual(["strictErrors[Refs]"]);
   });
 
-  it("passes when a file's strict count is unchanged but Hint count grows", () => {
+  it("fails a count-neutral category swap (Refs → Hooks, count stays 1)", () => {
+    // The taxonomy is load-bearing: a different strict violation is a new
+    // violation even if the total count is unchanged.
+    const base = {
+      skip: 0,
+      pipeline: 0,
+      hintCount: 0,
+      errorBailouts: [{ category: "Refs", severity: "Error", reason: "x" }],
+    };
+    const entry = {
+      skip: 0,
+      pipeline: 0,
+      hintCount: 0,
+      errorBailouts: [{ category: "Hooks", severity: "Error", reason: "y" }],
+    };
+    expect(fileRegressionKeys(entry, base)).toEqual(["strictErrors[Hooks]"]);
+  });
+
+  it("fails a Warning-severity bailout against a clean baseline (Warning folds into the strict gate)", () => {
+    const base = { skip: 0, pipeline: 0, hintCount: 0, errorBailouts: [] };
+    const entry = {
+      skip: 0,
+      pipeline: 0,
+      hintCount: 0,
+      errorBailouts: [{ category: "IncompatibleLibrary", severity: "Warning", reason: "x" }],
+    };
+    expect(fileRegressionKeys(entry, base)).toEqual(["strictErrors[IncompatibleLibrary]"]);
+  });
+
+  it("passes when a file's strict categories are unchanged but Hint count grows", () => {
     const base = {
       skip: 0,
       pipeline: 0,
@@ -482,6 +528,30 @@ describe("strict Error per-file gate (#8892)", () => {
     const base = { skip: 0, pipeline: 0, error: 0, hintCount: 0, errorBailouts: [] };
     const entry = { skip: 0, pipeline: 0, error: 6, hintCount: 6, errorBailouts: [] };
     expect(fileRegressionKeys(entry, base)).toEqual([]);
+  });
+
+  it("KNOWN GAP: a malformed CompileError with no detail is invisible if it never reaches errorBailouts", () => {
+    // The vite reporter lands malformed details under category "(unknown)" so
+    // they DO gate. But a hypothetical report that recorded only the raw error
+    // count (error: 1, empty errorBailouts) would slip through — documents that
+    // the gate trusts errorBailouts, not the raw error count.
+    const base = { skip: 0, pipeline: 0, error: 0, hintCount: 0, errorBailouts: [] };
+    const entry = { skip: 0, pipeline: 0, error: 1, hintCount: 0, errorBailouts: [] };
+    expect(fileRegressionKeys(entry, base)).toEqual([]);
+  });
+
+  it("gates a malformed CompileError once the reporter lands it under (unknown)", () => {
+    const base = { skip: 0, pipeline: 0, error: 0, hintCount: 0, errorBailouts: [] };
+    const entry = {
+      skip: 0,
+      pipeline: 0,
+      error: 1,
+      hintCount: 0,
+      errorBailouts: [
+        { category: "(unknown)", severity: "Error", reason: "malformed CompileError event" },
+      ],
+    };
+    expect(fileRegressionKeys(entry, base)).toEqual(["strictErrors[(unknown)]"]);
   });
 });
 
