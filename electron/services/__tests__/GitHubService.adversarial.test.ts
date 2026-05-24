@@ -500,8 +500,10 @@ describe("GitHubService adversarial", () => {
   });
 
   it("BATCHCHECK_ANY_CHANGED_FALLS_THROUGH_TO_GRAPHQL", async () => {
-    // Two PRs: one unchanged, one changed. Must still call GraphQL for both.
+    // Repo-level probe (cold 200) proceeds, then two per-PR probes: one
+    // unchanged, one changed. Must still call GraphQL for both.
     vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'))
       .mockResolvedValueOnce(createETagResponse(304))
       .mockResolvedValueOnce(createETagResponse(200, 'W/"new-etag"'));
     shared.graphqlClient.mockResolvedValueOnce({
@@ -531,20 +533,25 @@ describe("GitHubService adversarial", () => {
   });
 
   it("BATCHCHECK_DISCOVERY_WITHOUT_BRANCHNAME_SKIPS_PROBE", async () => {
-    // Discovery candidate without a branchName cannot be probed via the REST
-    // pulls list — the helper falls straight through to GraphQL.
+    // Discovery candidate without a branchName cannot be probed via the per-branch
+    // pulls list. The repo-level probe still fires (cold 200 → proceed); there is
+    // no second-tier branch probe, so the helper falls through to GraphQL.
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'));
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
 
     await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1" }]);
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledTimes(1); // repo-level probe only
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
   });
 
   it("BATCHCHECK_SECOND_PROBE_SENDS_IF_NONE_MATCH", async () => {
-    // Cycle 1 populates the ETag cache.
-    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"xyz-789"'));
+    // Cycle 1: repo-level probe (fetch #1) proceeds, then the per-PR probe
+    // (fetch #2) populates the per-PR ETag cache.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c1"'))
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"xyz-789"'));
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
@@ -552,9 +559,11 @@ describe("GitHubService adversarial", () => {
       { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
     ]);
 
-    // Cycle 2 must send the If-None-Match header and target the correct URL.
+    // Cycle 2: repo-level probe (fetch #1) proceeds with a fresh ETag; the per-PR
+    // probe (fetch #2) must send If-None-Match and target the correct URL.
     let capturedUrl: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c2"'));
     vi.mocked(global.fetch).mockImplementationOnce(async (url, init) => {
       capturedUrl = typeof url === "string" ? url : String(url);
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
@@ -571,14 +580,17 @@ describe("GitHubService adversarial", () => {
 
   it("BATCHCHECK_MIXED_DISCOVERY_AND_REVALIDATION_BYPASSES_FAST_PATH", async () => {
     // One candidate with knownPRNumber, one without → all-revalidation fast
-    // path must be skipped. The discovery candidate's branch-list probe
-    // returns a PR (changed), so GraphQL runs for the full batch.
-    vi.mocked(global.fetch).mockResolvedValueOnce(
-      createBranchListResponse(200, {
-        etag: 'W/"branch-etag"',
-        body: [{ number: 99 }],
-      })
-    );
+    // path must be skipped. The repo-level probe (fetch #1) proceeds, then the
+    // discovery candidate's branch-list probe (fetch #2) returns a PR (changed),
+    // so GraphQL runs for the full batch.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'))
+      .mockResolvedValueOnce(
+        createBranchListResponse(200, {
+          etag: 'W/"branch-etag"',
+          body: [{ number: 99 }],
+        })
+      );
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
       wt_1_branch: { pullRequests: { nodes: [] } },
@@ -589,24 +601,28 @@ describe("GitHubService adversarial", () => {
       { worktreeId: "wt-2", branchName: "feature/discovery" },
     ]);
 
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(2); // repo-level probe + branch probe
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
     expect(result.results.size).toBe(2);
   });
 
   it("BATCHCHECK_DISCOVERY_BRANCH_304_SKIPS_GRAPHQL", async () => {
-    // Cycle 1: 200 with empty array seeds the ETag and skips GraphQL.
-    vi.mocked(global.fetch).mockResolvedValueOnce(
-      createBranchListResponse(200, { etag: 'W/"seed"', body: [] })
-    );
+    // Cycle 1: repo-level probe (fetch #1) proceeds, then the branch probe's
+    // 200 with empty array seeds the ETag and skips GraphQL.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c1"'))
+      .mockResolvedValueOnce(createBranchListResponse(200, { etag: 'W/"seed"', body: [] }));
     const cycleOne = await github.batchCheckLinkedPRs("/repo", [
       { worktreeId: "wt-1", branchName: "feature/discovery" },
     ]);
     expect(cycleOne.results.size).toBe(0);
     expect(shared.graphqlClient).not.toHaveBeenCalled();
 
-    // Cycle 2: 304 — must still skip GraphQL, no quota burned.
-    vi.mocked(global.fetch).mockResolvedValueOnce(createBranchListResponse(304));
+    // Cycle 2: repo-level probe proceeds, then the branch probe 304 — must
+    // still skip GraphQL, no quota burned.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c2"'))
+      .mockResolvedValueOnce(createBranchListResponse(304));
     const cycleTwo = await github.batchCheckLinkedPRs("/repo", [
       { worktreeId: "wt-1", branchName: "feature/discovery" },
     ]);
@@ -676,15 +692,18 @@ describe("GitHubService adversarial", () => {
   });
 
   it("BATCHCHECK_DISCOVERY_BRANCH_PROBE_SENDS_IF_NONE_MATCH", async () => {
-    // Cycle 1 seeds the branch-list ETag.
-    vi.mocked(global.fetch).mockResolvedValueOnce(
-      createBranchListResponse(200, { etag: 'W/"seed-2"', body: [] })
-    );
+    // Cycle 1: repo-level probe (fetch #1) proceeds, then the branch probe
+    // (fetch #2) seeds the branch-list ETag.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c1"'))
+      .mockResolvedValueOnce(createBranchListResponse(200, { etag: 'W/"seed-2"', body: [] }));
     await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
-    // Cycle 2 must send If-None-Match and target the filtered pulls URL.
+    // Cycle 2: repo-level probe (fetch #1) proceeds; the branch probe (fetch #2)
+    // must send If-None-Match and target the filtered pulls URL.
     let capturedUrl: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c2"'));
     vi.mocked(global.fetch).mockImplementationOnce(async (url, init) => {
       capturedUrl = typeof url === "string" ? url : String(url);
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
@@ -718,6 +737,7 @@ describe("GitHubService adversarial", () => {
     // Mixed discovery batch: one branch has no PR (skip), the other has a PR
     // (fall through). Only the changed candidate should be queried via GraphQL.
     vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'))
       .mockResolvedValueOnce(createBranchListResponse(200, { etag: 'W/"a"', body: [] }))
       .mockResolvedValueOnce(
         createBranchListResponse(200, { etag: 'W/"b"', body: [{ number: 11 }] })
@@ -753,6 +773,7 @@ describe("GitHubService adversarial", () => {
     // NOT skip GraphQL for this candidate even on an empty 200, otherwise
     // cross-referenced PRs would never be discovered.
     const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'));
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
@@ -761,7 +782,9 @@ describe("GitHubService adversarial", () => {
       { worktreeId: "wt-1", issueNumber: 6541, branchName: "feature/x" },
     ]);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Repo-level probe fires (fetch #1) but no second-tier branch probe runs for
+    // an issue-linked candidate, so GraphQL still performs the issue lookup.
+    expect(fetchMock).toHaveBeenCalledTimes(1); // repo-level probe only
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
     expect(result.results.size).toBe(1);
   });
@@ -771,19 +794,24 @@ describe("GitHubService adversarial", () => {
     // object). The probe must not retain the ETag, so the next cycle issues
     // an unconditional GET rather than revalidating against an unparseable
     // shape.
-    vi.mocked(global.fetch).mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers({ etag: 'W/"poison"' }),
-      json: () => Promise.resolve({ message: "not an array" }),
-    } as unknown as Response);
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c1"'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers({ etag: 'W/"poison"' }),
+        json: () => Promise.resolve({ message: "not an array" }),
+      } as unknown as Response);
     shared.graphqlClient.mockResolvedValueOnce({
       wt_0_branch: { pullRequests: { nodes: [] } },
     });
     await github.batchCheckLinkedPRs("/repo", [{ worktreeId: "wt-1", branchName: "feature/x" }]);
 
+    // Cycle 2: repo-level probe (fetch #1) proceeds, then the branch probe
+    // (fetch #2) must NOT send If-None-Match — the poison ETag was dropped.
     let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"repo-c2"'));
     vi.mocked(global.fetch).mockImplementationOnce(async (_url, init) => {
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
       return createBranchListResponse(200, { etag: 'W/"fresh"', body: [] });
@@ -794,18 +822,19 @@ describe("GitHubService adversarial", () => {
   });
 
   it("BATCHCHECK_DISCOVERY_DUPLICATE_BRANCHES_PROBED_ONCE", async () => {
-    // Two candidates with identical branchName must dedupe to a single REST
-    // probe — avoids wasteful concurrent requests for the same resource.
-    vi.mocked(global.fetch).mockResolvedValueOnce(
-      createBranchListResponse(200, { etag: 'W/"shared"', body: [] })
-    );
+    // Two candidates with identical branchName must dedupe to a single branch
+    // probe — avoids wasteful concurrent requests for the same resource. The
+    // repo-level probe (fetch #1) proceeds, then a single branch probe (fetch #2).
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(createETagResponse(200, 'W/"repo"'))
+      .mockResolvedValueOnce(createBranchListResponse(200, { etag: 'W/"shared"', body: [] }));
 
     await github.batchCheckLinkedPRs("/repo", [
       { worktreeId: "wt-1", branchName: "feature/shared" },
       { worktreeId: "wt-2", branchName: "feature/shared" },
     ]);
 
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(2); // repo-level probe + 1 deduped branch probe
   });
 
   it("BATCHCHECK_DISCOVERY_BRANCH_ETAG_CLEARED_ON_TOKEN_ROTATION", async () => {
