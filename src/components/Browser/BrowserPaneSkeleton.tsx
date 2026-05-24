@@ -53,7 +53,7 @@ export function BrowserPaneSkeleton({ label = "Loading browser panel" }: Browser
       </div>
 
       {/* Long-tail loading hint — sibling of role="status" so the live region
-       * isn't silenced by aria-busy. Stays invisible until 5s, then fades in. */}
+       * isn't silenced by aria-busy. Stays invisible until 8s, then fades in. */}
       <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
     </div>
   );

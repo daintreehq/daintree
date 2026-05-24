@@ -1,5 +1,5 @@
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { SkeletonHint } from "@/components/ui/Skeleton";
+import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 
 interface DevPreviewLoadingStateProps {
   variant: "full" | "overlay";
@@ -9,16 +9,15 @@ interface DevPreviewLoadingStateProps {
   className?: string;
 }
 
-function SkeletonBone({ className }: { className?: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={`bg-muted rounded animate-pulse-delayed ${className ?? ""}`}
-    />
-  );
-}
-
-function FullSkeleton({ phaseLabel, isLoading }: { phaseLabel: string; isLoading: boolean }) {
+function FullSkeleton({
+  phaseLabel,
+  isLoading,
+  onCancel,
+}: {
+  phaseLabel: string;
+  isLoading: boolean;
+  onCancel?: () => void;
+}) {
   const showPhaseLabel = useDohertyGate(isLoading);
 
   return (
@@ -45,14 +44,21 @@ function FullSkeleton({ phaseLabel, isLoading }: { phaseLabel: string; isLoading
           </div>
         </div>
 
+        {/* Visible caption only — the role=status wrapper above owns the AT
+            announcement, and an aria-live here would be silenced by its
+            aria-busy="true" anyway. The phase also flows through the hint. */}
         {showPhaseLabel && (
-          <p aria-live="polite" className="mt-6 text-xs text-daintree-text/60">
+          <p aria-hidden="true" className="mt-6 text-xs text-daintree-text/60">
             {phaseLabel}
           </p>
         )}
       </div>
 
-      <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+      <SkeletonHint
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={phaseLabel}
+        onCancel={onCancel}
+      />
     </div>
   );
 }
@@ -80,13 +86,16 @@ function OverlaySkeleton({
       >
         <span className="sr-only">{phaseLabel}</span>
 
-        <p aria-live="polite" className="text-xs text-daintree-text/60">
+        {/* Visible caption only (aria-hidden) — the wrapper owns the AT
+            announcement; the phase also flows through the hint. */}
+        <p aria-hidden="true" className="text-xs text-daintree-text/60">
           {phaseLabel}
         </p>
       </div>
 
       <SkeletonHint
         className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={phaseLabel}
         onCancel={onCancel}
       />
     </div>
@@ -106,7 +115,7 @@ export function DevPreviewLoadingState({
 
   return (
     <div className={className}>
-      <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} />
+      <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />
     </div>
   );
 }

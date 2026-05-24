@@ -162,9 +162,13 @@ export function SkeletonText({
   );
 }
 
-const DEFAULT_FIRST_THRESHOLD_MS = 5_000;
-const DEFAULT_SECOND_THRESHOLD_MS = 10_000;
-const DEFAULT_ACTION_THRESHOLD_MS = 15_000;
+// First hint lands at 8s — NN/g's research puts the attention-break boundary at
+// ~10s, so 8s preempts it with headroom while staying late enough not to draw
+// attention to a delay the user would otherwise tolerate. Second and action
+// thresholds keep a ~5s/~7s spacing above it so the ladder doesn't compress.
+const DEFAULT_FIRST_THRESHOLD_MS = 8_000;
+const DEFAULT_SECOND_THRESHOLD_MS = 13_000;
+const DEFAULT_ACTION_THRESHOLD_MS = 20_000;
 
 const FIRST_HINT_COPY = "Still working…";
 const SECOND_HINT_COPY = "Taking longer than usual…";
@@ -179,23 +183,41 @@ function safeThreshold(value: number | undefined, fallback: number): number {
   return value;
 }
 
-function hintCopy(phase: HintPhase): string {
-  if (phase === "first") return FIRST_HINT_COPY;
-  if (phase === "second" || phase === "action") return SECOND_HINT_COPY;
+// A caller-supplied `message` (e.g. "Fetching 3 of 12 files…") replaces the
+// generic copy at the first/second phases. The action phase always keeps the
+// generic "Taking longer than usual…" — past the stall threshold that signal is
+// accurate regardless of where the operation's own progress string sits.
+function hintCopy(phase: HintPhase, message?: string): string {
+  // Use the caller copy only when it carries non-whitespace content; a blank or
+  // whitespace-only string falls back to the generic copy rather than rendering
+  // an empty hint.
+  const custom = message?.trim() ? message : undefined;
+  if (phase === "first") return custom ?? FIRST_HINT_COPY;
+  if (phase === "second") return custom ?? SECOND_HINT_COPY;
+  if (phase === "action") return SECOND_HINT_COPY;
   return "";
 }
 
-function actionAffordanceCopy(hasCancel: boolean, hasRetry: boolean): string {
-  if (hasCancel && hasRetry) return "Cancel and retry options available.";
-  if (hasCancel) return "Cancel option available.";
-  if (hasRetry) return "Retry option available.";
+function actionAffordanceCopy(showCancel: boolean, showRetry: boolean): string {
+  if (showCancel && showRetry) return "Cancel and retry options available.";
+  if (showCancel) return "Cancel option available.";
+  if (showRetry) return "Retry option available.";
   return "";
 }
 
-function liveRegionCopy(phase: HintPhase, hasCancel: boolean, hasRetry: boolean): string {
-  const base = hintCopy(phase);
-  if (phase !== "action") return base;
-  const action = actionAffordanceCopy(hasCancel, hasRetry);
+// Announces the visible copy plus whichever affordances are currently surfaced.
+// Receives the computed `showCancel`/`showRetry` flags (not raw handler
+// presence) so Retry is never announced before it actually appears — Cancel
+// surfaces at the first phase, Retry only at the action phase.
+function liveRegionCopy(
+  phase: HintPhase,
+  showCancel: boolean,
+  showRetry: boolean,
+  message?: string
+): string {
+  const base = hintCopy(phase, message);
+  if (phase === "hidden") return base;
+  const action = actionAffordanceCopy(showCancel, showRetry);
   return action ? `${base} ${action}` : base;
 }
 
@@ -203,24 +225,32 @@ export interface SkeletonHintProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   "role" | "aria-live" | "children"
 > {
-  /** Delay before "Still working…" appears. Default 5000ms. */
+  /** Delay before the first hint appears. Default 8000ms. */
   firstThreshold?: number;
-  /** Delay before copy escalates to "Taking longer than usual…". Default 10000ms. */
+  /** Delay before copy escalates to "Taking longer than usual…". Default 13000ms. */
   secondThreshold?: number;
-  /** Delay before Cancel/Retry buttons surface (only when handlers are passed). Default 15000ms. */
+  /** Delay before the Retry button surfaces (only when onRetry is passed). Default 20000ms. */
   actionThreshold?: number;
-  /** When provided, a Cancel button appears at actionThreshold and fires this handler. */
+  /**
+   * Caller-supplied status copy (e.g. "Fetching 3 of 12 files…"). When set, it
+   * replaces the generic first/second-phase copy. The action phase still shows
+   * the generic stall copy.
+   */
+  message?: string;
+  /** When provided, a Cancel button surfaces with the first hint and fires this handler. */
   onCancel?: () => void;
   /** When provided, a Retry button appears at actionThreshold and fires this handler. */
   onRetry?: () => void;
 }
 
 /**
- * Companion to `<Skeleton>` for long-tail loads (>5s). Stays invisible until the
- * first threshold, then fades in escalating copy and surfaces a Cancel/Retry
- * affordance at the action threshold. Place as a sibling to the `<Skeleton>`
- * wrapper — never nested inside, because the wrapper's `aria-busy="true"`
- * silences mutations within its subtree on modern screen readers.
+ * Companion to `<Skeleton>` for long-tail loads (>8s). Stays invisible until the
+ * first threshold, then fades in escalating copy. A Cancel affordance surfaces
+ * with the first hint (so the user can bail as soon as the wait registers);
+ * Retry waits for the later action threshold, where "try again" is the
+ * meaningful recovery. Place as a sibling to the `<Skeleton>` wrapper — never
+ * nested inside, because the wrapper's `aria-busy="true"` silences mutations
+ * within its subtree on modern screen readers.
  *
  * The sr-only span is always rendered so screen readers register the live
  * region up front; only its text content updates on phase change.
@@ -229,6 +259,7 @@ export function SkeletonHint({
   firstThreshold,
   secondThreshold,
   actionThreshold,
+  message,
   onCancel,
   onRetry,
   className,
@@ -256,20 +287,24 @@ export function SkeletonHint({
 
   const hasCancel = onCancel !== undefined;
   const hasRetry = onRetry !== undefined;
-  const visibleCopy = hintCopy(phase);
-  const showActions = phase === "action" && (hasCancel || hasRetry);
+  // Cancel surfaces as soon as the hint is visible; Retry stays gated to the
+  // action threshold where re-trying is the meaningful recovery.
+  const showCancel = phase !== "hidden" && hasCancel;
+  const showRetry = phase === "action" && hasRetry;
+  const visibleCopy = hintCopy(phase, message);
 
   // Key the visible row on its rendered state, not the raw phase. When phase
   // moves "second" → "action" with no handlers, the visible content is
   // identical, so React preserves the DOM node and the fade-in does NOT
   // re-fire. The key only changes when the user-visible content actually
-  // changes (copy escalation, or buttons appearing).
-  const visibleKey = `${visibleCopy}|${showActions ? "actions" : "noactions"}`;
+  // changes (copy escalation, or a button surfacing). Cancel and Retry are
+  // tracked independently so each one's appearance re-fires the fade.
+  const visibleKey = `${visibleCopy}|${showCancel ? "cancel" : ""}|${showRetry ? "retry" : ""}`;
 
   return (
     <div {...rest} className={className}>
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {liveRegionCopy(phase, hasCancel, hasRetry)}
+        {liveRegionCopy(phase, showCancel, showRetry, message)}
       </span>
       {phase !== "hidden" && (
         <div
@@ -277,12 +312,12 @@ export function SkeletonHint({
           className="animate-hint-fade-in flex items-center gap-2 text-text-secondary text-xs"
         >
           <span aria-hidden="true">{visibleCopy}</span>
-          {showActions && hasCancel && (
+          {showCancel && (
             <Button variant="ghost" size="sm" onClick={onCancel} type="button">
               {CANCEL_LABEL}
             </Button>
           )}
-          {showActions && hasRetry && (
+          {showRetry && (
             <Button variant="ghost" size="sm" onClick={onRetry} type="button">
               {RETRY_LABEL}
             </Button>
