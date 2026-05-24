@@ -61,8 +61,15 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--update") args.isUpdate = true;
     else if (arg === "--force") args.force = true;
-    else if (arg === "--threshold" && argv[i + 1]) {
+    else if (arg === "--threshold") {
       const val = argv[i + 1];
+      // Strict numeric form — parseFloat("0.05x") would return 0.05 and a bare
+      // trailing `--threshold` would be silently ignored, both of which would
+      // run CI against the wrong threshold without any signal.
+      if (val === undefined || !/^\d*\.?\d+$/.test(val)) {
+        console.error(`::error::--threshold requires a numeric value 0–1 (got: ${val ?? "(none)"})`);
+        process.exit(1);
+      }
       args.threshold = parseFloat(val);
       if (!Number.isFinite(args.threshold) || args.threshold < 0 || args.threshold > 1) {
         console.error(`::error::invalid threshold: ${val} (must be 0–1)`);

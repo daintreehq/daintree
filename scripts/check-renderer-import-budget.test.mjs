@@ -321,6 +321,32 @@ describe("compareReport", () => {
       ]);
     });
 
+    it("reports diffs in both chunks when a module migrates across T0 chunks", () => {
+      const baseline = {
+        ...base,
+        chunkModules: {
+          "vendor-react": ["node_modules/react/a.js", "node_modules/shared/x.js"],
+          "vendor-xterm": ["node_modules/xterm/y.js"],
+        },
+      };
+      const report = {
+        ...base,
+        chunkModules: {
+          // shared/x.js hopped from vendor-react into vendor-xterm — net count
+          // across the two chunks is unchanged, but composition shifted.
+          "vendor-react": ["node_modules/react/a.js"],
+          "vendor-xterm": ["node_modules/shared/x.js", "node_modules/xterm/y.js"],
+        },
+      };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(false);
+      expect(result.moduleSetChanged).toBe(true);
+      expect(result.moduleDiffs).toEqual([
+        { chunk: "vendor-react", added: [], removed: ["node_modules/shared/x.js"] },
+        { chunk: "vendor-xterm", added: ["node_modules/shared/x.js"], removed: [] },
+      ]);
+    });
+
     it("flags staleBuild when the baseline has module sets but the report has none", () => {
       const baseline = { ...base, chunkModules: { "vendor-react": ["node_modules/react/a.js"] } };
       // Report lacks chunkModules entirely — sidecar missing on a stale dist/.
@@ -357,6 +383,27 @@ describe("compareReport", () => {
       expect(result.t0ByteFailures).toHaveLength(1);
       expect(result.t0ByteFailures[0].chunk).toBe("vendor-react");
       expect(result.t0ByteFailures[0].ratio).toBeCloseTo(1.0);
+    });
+
+    it("catches a T0 chunk doubling even when the aggregate gzip shrinks (the #8890 bug class)", () => {
+      // This is the exact escape path the per-T0 gate exists to close: the
+      // aggregate eagerGzip is *down* (well within budget), yet vendor-react
+      // doubled — a compensating shrink elsewhere masked it from the aggregate.
+      const report = {
+        ...base,
+        eagerGzip: 900,
+        chunkGzip: { "vendor-react": 2000, "vendor-xterm": 500 },
+      };
+      const baseline = {
+        ...base,
+        eagerGzip: 1000,
+        chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 },
+      };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.grewBytes).toBeUndefined(); // aggregate gate stayed green
+      expect(result.t0ByteFailures).toHaveLength(1);
+      expect(result.t0ByteFailures[0].chunk).toBe("vendor-react");
     });
 
     it("flags t0Missing when a gated chunk left the eager set", () => {

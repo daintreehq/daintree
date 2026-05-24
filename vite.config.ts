@@ -373,7 +373,11 @@ function chunkModulesPlugin(): Plugin {
         const name = output.name || output.fileName;
         // Normalize to repo-relative forward-slash paths so the baseline is
         // stable across machines and OSes (absolute paths and "\" would churn).
+        // Drop Rolldown virtual modules ("\0"-prefixed, e.g. the modulepreload
+        // polyfill) — they normalize to machine-dependent "../" paths and would
+        // produce spurious module-set diffs.
         chunkModules[name] = (output.moduleIds ?? [])
+          .filter((id) => !id.startsWith("\0"))
           .map((id) => path.relative(root, id).split(path.sep).join("/"))
           .sort();
       }
