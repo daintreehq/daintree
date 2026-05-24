@@ -153,6 +153,10 @@ class GitHubRateLimitServiceImpl {
   // One-shot timer that sweeps stale budget state just after the window
   // resets, so a stretched cadence doesn't defer throttle recovery.
   private _budgetResetTimer: ReturnType<typeof setTimeout> | null = null;
+  // One-shot timer that sweeps the soonest-expiring REST/secondary block.
+  // Without it, a renderer that short-circuits while blocked never triggers
+  // the lazy `autoClearExpired` poll, so the block lingers until app restart.
+  private _blockResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Register a subscriber that fires on every state transition (entering a
@@ -426,6 +430,36 @@ class GitHubRateLimitServiceImpl {
     }
   }
 
+  /**
+   * Arm a one-shot timer that runs {@link autoClearExpired} just after the
+   * soonest active block's `resumeAt`. Re-arms itself from the callback so
+   * stacked blocks across multiple resources each clear on time even when
+   * the renderer's blocked-state short-circuit suppresses lazy sweeps.
+   */
+  private scheduleBlockResetSweep(): void {
+    this.clearBlockResetTimer();
+    if (this.states.size === 0) return;
+    let minResumeAt = Number.POSITIVE_INFINITY;
+    for (const state of this.states.values()) {
+      if (state.resumeAt < minResumeAt) minResumeAt = state.resumeAt;
+    }
+    const delay = Math.max(0, minResumeAt - Date.now());
+    const timer = setTimeout(() => {
+      this._blockResetTimer = null;
+      this.autoClearExpired();
+      this.scheduleBlockResetSweep();
+    }, delay);
+    timer.unref?.();
+    this._blockResetTimer = timer;
+  }
+
+  private clearBlockResetTimer(): void {
+    if (this._blockResetTimer) {
+      clearTimeout(this._blockResetTimer);
+      this._blockResetTimer = null;
+    }
+  }
+
   /** Snapshot for push/pull consumers. Collapses multi-resource state to a single payload. */
   getState(): GitHubRateLimitPayload {
     this.autoClearExpired();
@@ -483,6 +517,7 @@ class GitHubRateLimitServiceImpl {
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
     this.clearBudgetResetTimer();
+    this.clearBlockResetTimer();
     if (this.states.size === 0) {
       // Still surface the cleared budget so consumers snap back to baseline.
       if (hadBudget) this.notifyListeners();
@@ -501,6 +536,7 @@ class GitHubRateLimitServiceImpl {
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
     this.clearBudgetResetTimer();
+    this.clearBlockResetTimer();
   }
 
   /** Test-only inspector. */
@@ -518,6 +554,7 @@ class GitHubRateLimitServiceImpl {
     this.states.delete(resource);
     logInfo("GitHub rate limit cleared for resource", { resource });
     this.notifyListeners();
+    this.scheduleBlockResetSweep();
   }
 
   private markBlocked(
@@ -548,6 +585,7 @@ class GitHubRateLimitServiceImpl {
     } else {
       logDebug("GitHub rate limit refreshed", { kind, resumeAt, resource });
     }
+    this.scheduleBlockResetSweep();
   }
 
   private autoClearExpired(): void {

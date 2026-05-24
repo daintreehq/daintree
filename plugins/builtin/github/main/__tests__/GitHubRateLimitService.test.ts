@@ -148,6 +148,122 @@ describe("GitHubRateLimitService", () => {
     });
   });
 
+  describe("proactive block expiry timer", () => {
+    it("clears the block on its own when the reset elapses without any lazy call", () => {
+      vi.useFakeTimers();
+      try {
+        const resetSeconds = Math.floor(Date.now() / 1000) + 60;
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(resetSeconds),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(listener).toHaveBeenCalledWith(
+          expect.objectContaining({ blocked: false, kind: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-arms to the next-soonest expiry after the first block clears", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "graphql",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+        expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(true);
+
+        listener.mockClear();
+        vi.advanceTimersByTime(540_000);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(false);
+        expect(listener).toHaveBeenCalledWith(
+          expect.objectContaining({ blocked: false, kind: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not fire stale callbacks after clear()", () => {
+      vi.useFakeTimers();
+      try {
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.clear();
+        listener.mockClear();
+
+        vi.advanceTimersByTime(120_000);
+
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a later block does not delay an earlier block's timer", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "graphql",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("onStateChange listeners", () => {
     it("notifies on transition into blocked state", () => {
       gitHubRateLimitService.update(makeHeaders({ "retry-after": "30" }), 429);
