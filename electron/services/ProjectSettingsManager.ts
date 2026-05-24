@@ -1,3 +1,4 @@
+// eager-import-allow: reads project settings via store.get and settings files via sync fs
 import type { ProjectSettings } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import type Store from "electron-store";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the watchdog heartbeat via sync fs in the host process
 /**
  * Pure watchdog logic, extracted for testability. The runtime entry point
  * (watchdog-host.ts) is a thin wrapper that injects the real ping/timer/

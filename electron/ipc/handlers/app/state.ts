@@ -1,3 +1,4 @@
+// eager-import-allow: reads persisted app state via store.get synchronously in the IPC handler
 import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";

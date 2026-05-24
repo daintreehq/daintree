@@ -1,3 +1,4 @@
+// eager-import-allow: reads boot-critical config via store.get synchronously during main-process startup
 // Environment setup must run first (GC exposure, userData, flags, sandbox)
 import "./setup/environment.js";
 

@@ -1,3 +1,4 @@
+// eager-import-allow: reads MCP server settings via store.get synchronously during service init
 import { randomUUID } from "node:crypto";
 import { webContents as webContentsModule } from "electron";
 import { store } from "../store.js";

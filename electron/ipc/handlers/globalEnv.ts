@@ -1,3 +1,4 @@
+// eager-import-allow: reads the persisted global env via store.get synchronously at module scope
 import { defineIpcNamespace, op } from "../define.js";
 import { GLOBAL_ENV_METHOD_CHANNELS } from "./globalEnv.preload.js";
 import { store } from "../../store.js";

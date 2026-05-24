@@ -1,3 +1,4 @@
+// eager-import-allow: performs sync fs existence checks while resolving git paths
 import type { SimpleGit, BranchSummary } from "simple-git";
 import { resolve, dirname, normalize, sep, isAbsolute } from "path";
 import { existsSync } from "fs";

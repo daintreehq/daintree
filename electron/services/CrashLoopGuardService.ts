@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the crash-loop sentinel via sync fs before async IO is safe
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";

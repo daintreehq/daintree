@@ -1,3 +1,4 @@
+// eager-import-allow: reads bundled help content via sync fs at module scope
 import fs from "fs";
 import path from "path";
 import { app } from "electron";

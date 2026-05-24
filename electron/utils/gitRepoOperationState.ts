@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the git-operation lock via sync fs
 import { existsSync } from "fs";
 import { join as pathJoin } from "path";
 import type { RepoState } from "../../shared/types/git.js";

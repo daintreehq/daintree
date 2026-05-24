@@ -1,3 +1,4 @@
+// eager-import-allow: reads forge-resolution config via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
 import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";

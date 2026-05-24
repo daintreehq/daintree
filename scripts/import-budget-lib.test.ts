@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import {
   walkEagerGraph,
   scanSyncViolations,
+  scanAllowlistMarkers,
+  hasAllowlistMarker,
   compareToBaseline,
   formatBaseline,
+  ALLOWLIST_MARKER_RE,
   SYNC_FS_RE,
   SYNC_STORE_RE,
   SYNC_SQLITE_RE,
@@ -335,13 +338,67 @@ describe("compareToBaseline", () => {
     expect(r.errors[0].message).toMatch(/line 4/);
   });
 
-  it("flags unused allowlist entries as a notice", () => {
+  it("flags unused allowlist entries as an error", () => {
     const r = compareToBaseline(
       { count: 10, moduleCount: 10, violations: [] },
       { count: 10, allowlist: ["electron/old.ts"], syncViolations: [] }
     );
+    expect(r.ok).toBe(false);
+    expect(
+      r.errors.some((e) => e.kind === "unused-allowlist" && e.file === "electron/old.ts")
+    ).toBe(true);
+    expect(r.notices.some((n) => n.kind === "unused-allowlist")).toBe(false);
+  });
+
+  it("skips the marker check when markedFiles is not provided", () => {
+    const r = compareToBaseline(
+      {
+        count: 10,
+        moduleCount: 10,
+        violations: [{ file: "electron/a.ts", line: 1, pattern: "sync-fs" }],
+      },
+      { count: 10, allowlist: ["electron/a.ts"], syncViolations: [] }
+    );
     expect(r.ok).toBe(true);
-    expect(r.notices.some((n) => n.kind === "unused-allowlist")).toBe(true);
+    expect(r.errors.some((e) => e.kind === "missing-allow-comment")).toBe(false);
+  });
+
+  it("passes when a used allowlisted file carries the allow comment", () => {
+    const r = compareToBaseline(
+      {
+        count: 10,
+        moduleCount: 10,
+        violations: [{ file: "electron/a.ts", line: 1, pattern: "sync-fs" }],
+      },
+      { count: 10, allowlist: ["electron/a.ts"], syncViolations: [] },
+      { markedFiles: new Set(["electron/a.ts"]) }
+    );
+    expect(r.ok).toBe(true);
+    expect(r.errors.some((e) => e.kind === "missing-allow-comment")).toBe(false);
+  });
+
+  it("fails when a used allowlisted file lacks the allow comment", () => {
+    const r = compareToBaseline(
+      {
+        count: 10,
+        moduleCount: 10,
+        violations: [{ file: "electron/a.ts", line: 1, pattern: "sync-fs" }],
+      },
+      { count: 10, allowlist: ["electron/a.ts"], syncViolations: [] },
+      { markedFiles: new Set() }
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors[0]).toMatchObject({ kind: "missing-allow-comment", file: "electron/a.ts" });
+  });
+
+  it("stale allowlist entry emits only unused-allowlist, not missing-allow-comment", () => {
+    const r = compareToBaseline(
+      { count: 10, moduleCount: 10, violations: [] },
+      { count: 10, allowlist: ["electron/stale.ts"], syncViolations: [] },
+      { markedFiles: new Set() }
+    );
+    expect(r.errors.some((e) => e.kind === "unused-allowlist")).toBe(true);
+    expect(r.errors.some((e) => e.kind === "missing-allow-comment")).toBe(false);
   });
 
   it("ignores baseline.syncViolations — allowlist is the sole gate", () => {
@@ -406,5 +463,61 @@ describe("formatBaseline", () => {
       ],
     });
     expect(result.syncViolations.map((v) => v.pattern)).toEqual(["sync-fs", "sync-store-get"]);
+  });
+});
+
+describe("allowlist markers", () => {
+  it("matches a valid marker with a reason", () => {
+    expect(ALLOWLIST_MARKER_RE.test("// eager-import-allow: boot-critical sync")).toBe(true);
+    expect(ALLOWLIST_MARKER_RE.test("  // eager-import-allow: indented reason")).toBe(true);
+    expect(ALLOWLIST_MARKER_RE.test("//eager-import-allow:tight")).toBe(true);
+  });
+
+  it("rejects a marker with an empty reason", () => {
+    expect(ALLOWLIST_MARKER_RE.test("// eager-import-allow:")).toBe(false);
+    expect(ALLOWLIST_MARKER_RE.test("// eager-import-allow: ")).toBe(false);
+  });
+
+  it("rejects block-comment markers", () => {
+    expect(ALLOWLIST_MARKER_RE.test("/* eager-import-allow: reason */")).toBe(false);
+  });
+
+  it("hasAllowlistMarker finds a marker among other header lines", () => {
+    const source = "#!/usr/bin/env node\n// eager-import-allow: boot sync\nimport x from 'x';\n";
+    expect(hasAllowlistMarker(source)).toBe(true);
+  });
+
+  it("scanAllowlistMarkers returns the set of files carrying a marker", () => {
+    const reader = (absPath: string) =>
+      absPath.endsWith("a.ts") ? "// eager-import-allow: reason\n" : "no marker here\n";
+    const result = scanAllowlistMarkers(["electron/a.ts", "electron/b.ts"], "/root", reader);
+    expect(result.has("electron/a.ts")).toBe(true);
+    expect(result.has("electron/b.ts")).toBe(false);
+  });
+
+  it("scanAllowlistMarkers ignores a marker past the header window", () => {
+    const lines = Array.from({ length: 21 }, (_, i) => `// line ${i + 1}`);
+    lines[20] = "// eager-import-allow: too far down";
+    const result = scanAllowlistMarkers(["electron/a.ts"], "/root", () => lines.join("\n"));
+    expect(result.has("electron/a.ts")).toBe(false);
+  });
+
+  it("scanAllowlistMarkers handles CRLF line endings", () => {
+    const result = scanAllowlistMarkers(
+      ["electron/a.ts"],
+      "/root",
+      () => "// eager-import-allow: reason\r\nimport x from 'x';\r\n"
+    );
+    expect(result.has("electron/a.ts")).toBe(true);
+  });
+
+  it("scanAllowlistMarkers warns and skips unreadable files", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = scanAllowlistMarkers(["electron/missing.ts"], "/root", () => {
+      throw new Error("ENOENT");
+    });
+    expect(result.size).toBe(0);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("missing.ts"));
+    warnSpy.mockRestore();
   });
 });

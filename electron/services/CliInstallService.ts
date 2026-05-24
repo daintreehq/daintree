@@ -1,3 +1,4 @@
+// eager-import-allow: performs sync fs checks while detecting and installing the agent CLI
 import fs from "fs";
 import path from "path";
 import os from "os";

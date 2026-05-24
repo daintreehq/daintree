@@ -29,6 +29,57 @@ const SYNC_PATTERNS = [
   { name: "sync-sqlite", re: SYNC_SQLITE_RE },
 ];
 
+// Each allowlisted file must carry a one-line header marker naming why the sync
+// exception is permitted, so the justification lives next to the code it covers
+// instead of in `git blame`. Shape mirrors `// biome-ignore <rule>: <reason>`:
+// a `// eager-import-allow:` prefix followed by a non-empty reason. Presence is
+// enforced; the reason text is for humans and is not validated.
+export const ALLOWLIST_MARKER_RE = /^\s*\/\/\s*eager-import-allow\s*:\s*\S/m;
+
+// How many leading lines of a file are scanned for the marker. Keeps the
+// convention "near the top" (after a shebang / license banner) without matching
+// an incidental occurrence deep in the file (e.g. inside a string literal).
+const ALLOWLIST_MARKER_HEADER_LINES = 20;
+
+/**
+ * True if `source` contains a `// eager-import-allow: <reason>` marker.
+ * @param {string} source
+ * @returns {boolean}
+ */
+export function hasAllowlistMarker(source) {
+  return ALLOWLIST_MARKER_RE.test(source);
+}
+
+/**
+ * Read each allowlisted file and return the set of files whose header carries
+ * the `// eager-import-allow:` marker. Only the first
+ * `ALLOWLIST_MARKER_HEADER_LINES` lines are inspected. Unreadable files are
+ * warned about and treated as unmarked, mirroring `scanSyncViolations`.
+ *
+ * @param {Iterable<string>} allowlistFiles — repo-relative paths
+ * @param {string} root — absolute repo root
+ * @param {(file: string) => string} [readFile] — override for tests
+ * @returns {Set<string>}
+ */
+export function scanAllowlistMarkers(allowlistFiles, root, readFile) {
+  const reader = readFile ?? ((f) => fs.readFileSync(f, "utf8"));
+  const marked = new Set();
+  for (const file of allowlistFiles) {
+    let source;
+    try {
+      source = reader(`${root}/${file}`);
+    } catch (err) {
+      console.warn(
+        `[import-budget] could not read ${file} for allowlist-marker scan: ${err?.message ?? err}`
+      );
+      continue;
+    }
+    const header = source.split(/\r?\n/).slice(0, ALLOWLIST_MARKER_HEADER_LINES).join("\n");
+    if (hasAllowlistMarker(header)) marked.add(file);
+  }
+  return marked;
+}
+
 /**
  * Walk the eager (statically-imported) subgraph of an esbuild metafile, rooted
  * at `entry`. Follows only `import-statement` / `require-call` edges; stops at
@@ -115,10 +166,20 @@ export function scanSyncViolations(files, root, readFile) {
  * for humans to diff — it does NOT gate CI. The allowlist is the sole gate.
  * This keeps line-number refactors from churning the baseline.
  *
+ * Allowlist hygiene (hard errors, not notices):
+ * - An allowlist entry with no matching current violation is stale and fails —
+ *   the PR that removes a sync call must remove its allowlist entry in the same
+ *   change (same shape as ESLint `reportUnusedDisableDirectives: "error"`).
+ * - A still-used allowlist entry whose file lacks the
+ *   `// eager-import-allow: <reason>` header marker fails, when marker data is
+ *   supplied via `opts.markedFiles`. Omitting `markedFiles` skips that check so
+ *   the comparison stays pure and unit-testable without filesystem access.
+ *
  * @param {{ count: number, violations: {file:string, line:number, pattern:string}[], moduleCount: number }} current
  * @param {{ count: number, allowlist: string[], syncViolations: {file:string, line:number, pattern:string}[] }} baseline
+ * @param {{ markedFiles?: Set<string> }} [opts] — set of allowlisted files that carry the header marker
  */
-export function compareToBaseline(current, baseline) {
+export function compareToBaseline(current, baseline, opts = {}) {
   const errors = [];
   const notices = [];
 
@@ -154,17 +215,24 @@ export function compareToBaseline(current, baseline) {
     });
   }
 
-  const unusedAllowlist = [];
+  const { markedFiles } = opts;
   for (const file of allowlist) {
-    if (!current.violations.some((v) => v.file === file)) {
-      unusedAllowlist.push(file);
+    const isUsed = current.violations.some((v) => v.file === file);
+    if (!isUsed) {
+      errors.push({
+        kind: "unused-allowlist",
+        file,
+        message: `allowlist entry no longer has sync calls (or is no longer on the eager path). Remove it from the \`allowlist\` in eager-import-baseline.json, or run \`npm run import-budget:update\` to tidy.`,
+      });
+      continue;
     }
-  }
-  if (unusedAllowlist.length > 0) {
-    notices.push({
-      kind: "unused-allowlist",
-      message: `allowlist entries no longer have sync calls (or no longer on eager path): ${unusedAllowlist.join(", ")}. Consider \`npm run import-budget:update\` to tidy.`,
-    });
+    if (markedFiles !== undefined && !markedFiles.has(file)) {
+      errors.push({
+        kind: "missing-allow-comment",
+        file,
+        message: `on the eager-import allowlist but missing a \`// eager-import-allow: <reason>\` header comment. Add one near the top of the file naming why the sync exception is permitted.`,
+      });
+    }
   }
 
   return { ok: errors.length === 0, errors, notices };

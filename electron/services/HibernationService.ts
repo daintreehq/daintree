@@ -1,3 +1,4 @@
+// eager-import-allow: reads hibernation settings via store.get synchronously
 import { readdir, stat } from "fs/promises";
 import path from "path";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";

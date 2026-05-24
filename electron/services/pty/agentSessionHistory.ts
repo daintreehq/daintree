@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes agent session history via sync fs
 import { readFileSync } from "fs";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";

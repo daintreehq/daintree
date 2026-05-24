@@ -1,3 +1,4 @@
+// eager-import-allow: reads notification settings via store.get synchronously in the IPC handler
 import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import {

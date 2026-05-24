@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   walkEagerGraph,
   scanSyncViolations,
+  scanAllowlistMarkers,
   compareToBaseline,
   formatBaseline,
 } from "./import-budget-lib.mjs";
@@ -197,7 +198,8 @@ function main() {
   );
   validateBaseline(baseline);
 
-  const { ok, errors, notices } = compareToBaseline(report, baseline);
+  const markedFiles = scanAllowlistMarkers(baseline.allowlist, ROOT);
+  const { ok, errors, notices } = compareToBaseline(report, baseline, { markedFiles });
 
   for (const n of notices) {
     console.log(`::notice::${n.message}`);

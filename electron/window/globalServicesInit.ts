@@ -1,3 +1,4 @@
+// eager-import-allow: reads boot config via store.get synchronously while wiring global services
 import { app, dialog, session } from "electron";
 import {
   LATEST_SCHEMA_VERSION,

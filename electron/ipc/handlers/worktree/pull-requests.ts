@@ -1,3 +1,4 @@
+// eager-import-allow: reads PR/auth settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import type { HandlerDependencies } from "../../types.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads the worktree-path pattern via store.get synchronously at module scope
 import { store } from "../store.js";
 import { projectStore } from "../services/ProjectStore.js";
 import {

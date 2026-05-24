@@ -1,3 +1,4 @@
+// eager-import-allow: reads process memory stats via sync fs
 import os from "os";
 import v8 from "node:v8";
 import path from "node:path";

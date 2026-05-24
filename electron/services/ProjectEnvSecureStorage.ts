@@ -1,3 +1,4 @@
+// eager-import-allow: reads the secure-storage key map via store.get synchronously at module scope
 import { store } from "../store.js";
 
 /**

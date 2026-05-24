@@ -1,3 +1,4 @@
+// eager-import-allow: reads help-assistant settings via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";

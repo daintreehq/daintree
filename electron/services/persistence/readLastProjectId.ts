@@ -1,3 +1,4 @@
+// eager-import-allow: reads the last-active project id from SQLite synchronously before the window opens
 /**
  * Synchronous, standalone reader for the last-active projectId.
  *

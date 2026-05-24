@@ -1,3 +1,4 @@
+// eager-import-allow: reads onboarding state via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
 import type { StoreSchema } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
