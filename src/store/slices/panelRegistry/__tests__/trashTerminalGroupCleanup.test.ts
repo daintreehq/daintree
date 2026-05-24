@@ -795,4 +795,85 @@ describe("trashPanelGroup anchor-removal regression (#8944)", () => {
     // Active tab term-1 is gone, falls back to first surviving panel in original order
     expect(restored.activeTabId).toBe("term-2");
   });
+
+  it("preserves dock location and worktreeId when the anchor is removed before restore", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-2",
+      location: "dock",
+      worktreeId: "wt-1",
+    };
+    setTerminals([
+      { ...makeTerm("term-1", "dock"), worktreeId: "wt-1" },
+      { ...makeTerm("term-2", "dock"), worktreeId: "wt-1" },
+      { ...makeTerm("term-3", "dock"), worktreeId: "wt-1" },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    usePanelStore.setState((state) => {
+      const trashedTerminals = new Map(state.trashedTerminals);
+      trashedTerminals.delete("term-1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      return {
+        trashedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "term-1"),
+      };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    const restored = [...state.tabGroups.values()][0]!;
+    expect(restored.panelIds).toEqual(["term-2", "term-3"]);
+    expect(restored.location).toBe("dock");
+    expect(restored.worktreeId).toBe("wt-1");
+    for (const id of ["term-2", "term-3"]) {
+      expect(state.panelsById[id]!.location).toBe("dock");
+      expect(state.panelsById[id]!.worktreeId).toBe("wt-1");
+    }
+  });
+
+  it("restores a single survivor without recreating a tab group", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-2",
+      location: "grid",
+    };
+    setTerminals([makeTerm("term-1"), makeTerm("term-2"), makeTerm("term-3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    // Remove two members including the anchor — only term-3 survives.
+    usePanelStore.setState((state) => {
+      const trashedTerminals = new Map(state.trashedTerminals);
+      trashedTerminals.delete("term-1");
+      trashedTerminals.delete("term-2");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      delete panelsById["term-2"];
+      return {
+        trashedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id === "term-3"),
+      };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.trashedTerminals.size).toBe(0);
+    expect(state.tabGroups.size).toBe(0);
+    expect(state.panelsById["term-3"]!.location).toBe("grid");
+  });
 });

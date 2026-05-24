@@ -153,7 +153,7 @@ export const createBackgroundActions = (
           originalLocation,
           groupRestoreId,
           groupMetadata: {
-            panelIds: bgPanelIds,
+            panelIds: [...bgPanelIds],
             activeTabId: resolvedActiveTabId,
             location: group.location,
             worktreeId,
@@ -249,7 +249,9 @@ export const createBackgroundActions = (
     for (const [id, backgrounded] of backgroundedTerminals.entries()) {
       if (backgrounded.groupRestoreId === groupRestoreId) {
         groupPanels.push({ id, backgrounded });
-        if (backgrounded.groupMetadata) {
+        // Metadata is replicated identically across all members (#8944); take
+        // the first one found so the restore source is deterministic.
+        if (!anchorPanel && backgrounded.groupMetadata) {
           anchorPanel = backgrounded;
         }
       }

@@ -203,7 +203,7 @@ export const createTrashActions = (
           originalLocation,
           groupRestoreId,
           groupMetadata: {
-            panelIds: trashPanelIds,
+            panelIds: [...trashPanelIds],
             activeTabId: resolvedActiveTabId,
             location: group.location,
             worktreeId,
@@ -296,7 +296,9 @@ export const createTrashActions = (
       for (const [id, trashed] of trashedTerminals.entries()) {
         if (trashed.groupRestoreId === groupRestoreId) {
           groupPanels.push({ id, trashed });
-          if (trashed.groupMetadata) {
+          // Metadata is replicated identically across all members (#8944); take
+          // the first one found so the restore source is deterministic.
+          if (!anchorPanel && trashed.groupMetadata) {
             anchorPanel = trashed;
           }
         }
