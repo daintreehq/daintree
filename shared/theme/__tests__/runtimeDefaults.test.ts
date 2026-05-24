@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { PANEL_KIND_BRAND_COLORS } from "../entityColors.js";
 import type { ThemePalette } from "../palette.js";
 import { createSemanticTokens } from "../semantic.js";
-import { ANSI_CYAN_FALLBACK, ANSI_MAGENTA_FALLBACK, normalizeAppColorScheme } from "../themes.js";
+import {
+  ANSI_CYAN_FALLBACK,
+  ANSI_MAGENTA_FALLBACK,
+  BUILT_IN_APP_SCHEMES,
+  normalizeAppColorScheme,
+} from "../themes.js";
 
 function makePaletteWithoutTerminal(): ThemePalette {
   return {
@@ -122,6 +127,25 @@ describe("ANSI terminal fallbacks for plugin themes without a terminal sub-palet
     expect(tokens["terminal-cyan"]).toBe("#00ffff");
     expect(tokens["terminal-bright-magenta"]).toBe("#ff88ff");
     expect(tokens["terminal-bright-cyan"]).toBe("#88ffff");
+  });
+});
+
+describe("scrollbar-track default — subtle gutter tint", () => {
+  it("every built-in theme resolves a non-transparent, derived track tint", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const track = scheme.tokens["scrollbar-track"];
+      expect(track, scheme.id).not.toBe("transparent");
+      // withAlpha(text-primary, 0.03) emits an rgba() triplet at 3% opacity.
+      expect(track, scheme.id).toMatch(/^rgba\(\d+, \d+, \d+, 0\.03\)$/);
+    }
+  });
+
+  it("an explicit scrollbar-track override wins over the derived default", () => {
+    const scheme = normalizeAppColorScheme({
+      palette: makePaletteWithoutTerminal(),
+      tokens: { "scrollbar-track": "#abcdef" },
+    });
+    expect(scheme.tokens["scrollbar-track"]).toBe("#abcdef");
   });
 });
 
