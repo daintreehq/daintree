@@ -66,7 +66,7 @@ Added to `plugin.json`'s `contributes` field. Status: **Planned**, ships in this
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The built-in GitHub plugin uses bare `github`. |
 | `name` | yes | Display label in Preferences → Forge Integrations. |
-| `matches` | yes | Hostname or glob patterns for git remote URLs. The first registered provider whose pattern matches a project's remote wins. |
+| `matches` | yes | Exact hostnames for git remote URLs; first matching provider wins. Matching is case-insensitive and strips a leading `www.` from both the remote URL hostname and each entry. Glob, wildcard, suffix, and regular-expression patterns are not supported. |
 | `capabilities` | no | Free-form strings the host does not interpret. UI consumers query them to decide what affordances to surface. Suggested vocabulary: `issues`, `pulls`, `reviews`, `approvals`, `merge-trains`, `required-checks`, `draft-prs`, `assignees`, `releases`, `project-boards`, `milestones`. |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions—used to group provider settings under one heading. |
 | `viewRefs` | no | IDs of `views` contributions that should appear under this provider's panel section. |

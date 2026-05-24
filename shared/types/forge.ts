@@ -417,7 +417,14 @@ export interface ForgeProviderContribution {
   id: string;
   /** Display label in Preferences → Forge Integrations. */
   name: string;
-  /** Hostname or glob patterns for git remote URLs; first matching provider wins. */
+  /**
+   * Exact hostnames for git remote URLs; first matching provider wins.
+   *
+   * Matching is case-insensitive and strips a leading `www.` from both the
+   * remote URL hostname and each pattern. Glob, wildcard, suffix, and
+   * regular-expression patterns are not supported — list every distinct
+   * hostname your forge serves as a separate entry.
+   */
   matches: string[];
   /** Informational capability hints; the host does not interpret these. */
   capabilities?: ForgeCapabilityHint[];
