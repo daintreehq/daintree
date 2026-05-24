@@ -33,7 +33,8 @@ import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -1149,6 +1150,12 @@ export function ReviewHubContent({
     return () => scope.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [isOpen, keyboardScope]);
 
+  // Shape-matched skeletons replace the old full-area spinners. Doherty-gate
+  // both so sub-400ms loads render nothing (no flash); bones inside use
+  // `immediate` since the gate already absorbs the threshold.
+  const showWorkingTreeSkeleton = useDohertyGate(loading && !status);
+  const showBaseBranchSkeleton = useDohertyGate(baseBranchLoading);
+
   if (!isOpen) return null;
 
   const totalChanges =
@@ -1499,9 +1506,30 @@ export function ReviewHubContent({
           {diffMode === "base-branch" ? (
             /* Base-branch diff panel */
             baseBranchLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <Spinner size="lg" className="text-daintree-text/40" />
-              </div>
+              showBaseBranchSkeleton ? (
+                <>
+                  <Skeleton label={`Loading changes vs ${mainBranch}`}>
+                    <SkeletonBone immediate className="h-8 mx-4 my-2" />
+                    <div className="px-2 py-1 flex flex-col gap-0.5">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-2 px-1.5 py-1.5">
+                          <SkeletonBone immediate className="h-4 w-4 shrink-0 rounded-sm" />
+                          <SkeletonBone
+                            immediate
+                            className={cn(
+                              "h-2.5",
+                              ["w-48", "w-32", "w-56", "w-24", "w-40", "w-36", "w-52", "w-28"][
+                                i % 8
+                              ]
+                            )}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </Skeleton>
+                  <SkeletonHint className="px-4 py-2" onRetry={() => void fetchBaseBranch()} />
+                </>
+              ) : null
             ) : baseBranchError ? (
               <div className="p-4 text-xs text-status-error">
                 <p className="mb-2">{baseBranchError}</p>
@@ -1555,9 +1583,26 @@ export function ReviewHubContent({
             /* Working-tree panel */
             <>
               {loading && !status ? (
-                <div className="flex items-center justify-center py-12">
-                  <Spinner size="lg" className="text-daintree-text/40" />
-                </div>
+                showWorkingTreeSkeleton ? (
+                  <>
+                    <Skeleton label="Loading review changes">
+                      {/* File-list disclosure header */}
+                      <div className="px-4 py-2 bg-overlay-subtle border-b border-divider">
+                        <SkeletonBone immediate className="h-3.5 w-28" />
+                      </div>
+                      {/* Commit panel chrome */}
+                      <div className="border-t border-divider p-3 space-y-2">
+                        <SkeletonBone immediate className="h-14 w-full" />
+                        <SkeletonBone immediate className="h-2.5 w-8 ml-auto" />
+                        <div className="flex items-center gap-2">
+                          <SkeletonBone immediate className="h-7 flex-1" />
+                          <SkeletonBone immediate className="h-7 w-7 shrink-0" />
+                        </div>
+                      </div>
+                    </Skeleton>
+                    <SkeletonHint className="px-4 py-2" onRetry={() => void refresh()} />
+                  </>
+                ) : null
               ) : loadError ? (
                 <div className="p-4 text-xs text-status-error">
                   <p className="mb-2">{loadError}</p>

@@ -3647,4 +3647,38 @@ describe("ReviewHub", () => {
       expect(textarea.value).toBe("human override");
     });
   });
+
+  describe("loading skeleton states (#8908)", () => {
+    it("suppresses the skeleton during the sub-400ms Doherty window, then shows a shape-matched skeleton", async () => {
+      // Never resolves → `loading` stays true and `status` stays null, so the
+      // working-tree loading branch renders for the duration of the test.
+      getStagingStatusMock.mockReturnValue(new Promise<StagingStatus>(() => {}));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      // Before the Doherty threshold elapses, nothing renders (no flash).
+      expect(screen.queryByRole("status", { name: /loading review changes/i })).toBeNull();
+
+      // After the 400ms gate, the shape-matched skeleton appears.
+      await waitFor(() =>
+        expect(screen.getByRole("status", { name: /loading review changes/i })).toBeTruthy()
+      );
+    });
+
+    it("shows a shape-matched skeleton while the base-branch diff loads", async () => {
+      // Initial working-tree status resolves; the base-branch comparison hangs.
+      compareWorktreesMock.mockReturnValue(
+        new Promise<{ branch1: string; branch2: string; files: never[] }>(() => {})
+      );
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+
+      await waitFor(() =>
+        expect(screen.getByRole("status", { name: /loading changes vs main/i })).toBeTruthy()
+      );
+    });
+  });
 });
