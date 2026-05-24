@@ -200,6 +200,30 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.history).toEqual([]);
   });
 
+  it("routes installed-but-not-launchable agents (installed/blocked) to cli, not complete", () => {
+    // `installed` and `blocked` pass isAgentInstalled but fail isAgentLaunchable
+    // — the binary exists yet still needs setup, so the cli step must run.
+    const avail = { claude: "installed", gemini: "blocked" } as CliAvailability;
+    let state = buildInitialState(avail);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
+    expect(state.step).toEqual({ type: "cli" });
+  });
+
+  it("treats unauthenticated agents as launchable and skips to complete", () => {
+    const avail = { claude: "unauthenticated" } as CliAvailability;
+    let state = buildInitialState(avail);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true },
+    });
+    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+  });
+
   it("goes to cli when availability changes after init to mark agent uninstalled", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled);

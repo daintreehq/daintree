@@ -271,6 +271,39 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
+  it("commits 'errors' (not 'off') when the user enables crash reporting and clicks Continue on the privacy step", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={onClose}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    // appearance -> agents -> privacy
+    await clickButton("Continue");
+    await clickButton("Continue");
+
+    const toggle = document.querySelector('button[role="switch"]') as HTMLButtonElement | null;
+    expect(toggle, "privacy toggle should be present on the privacy step").not.toBeNull();
+    await act(async () => {
+      toggle!.click(); // enable crash reporting
+    });
+
+    await clickButton("Continue");
+
+    expect(setTelemetryLevelMock).toHaveBeenCalledWith("errors");
+    expect(markPromptShownMock).toHaveBeenCalledTimes(1);
+    // Continue is an explicit, informed choice — no silent-default nag.
+    expect(notifyMock).not.toHaveBeenCalled();
+    // The wizard advances (all agents installed -> complete) rather than closing.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("does not fire when isFirstRun is false (commit path is bypassed entirely)", async () => {
     const onClose = vi.fn();
     await act(async () => {
