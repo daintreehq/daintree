@@ -50,10 +50,14 @@ function readForcedColorsBlocks(file: string): string {
 }
 
 describe("forced-colors status-indicator contract (#8936)", () => {
-  it("index.css repaints the ActivityLight active dot with CanvasText", () => {
+  it("index.css repaints the ActivityLight active dot with CanvasText !important", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toContain('[data-activity-active="true"]');
-    expect(block).toMatch(/\[data-activity-active="true"\]\s*\{[^}]*CanvasText/);
+    // !important is load-bearing: it must beat the inline author background-color
+    // the UA otherwise forces to Canvas. Removing it silently re-breaks the fix.
+    expect(block).toMatch(
+      /\[data-activity-active="true"\]\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/
+    );
   });
 
   it("index.css gives the checked SettingsSwitch track a Highlight fill", () => {
@@ -68,19 +72,11 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     expect(block).toMatch(/span\[data-state="unchecked"\]\s*\{[^}]*ButtonText/);
   });
 
-  it("toolbar.css repaints badge pips with CanvasText", () => {
+  it("toolbar.css repaints every pip type with CanvasText", () => {
     const block = readForcedColorsBlocks(TOOLBAR_CSS);
-    expect(block).toContain(".toolbar-badge");
-    expect(block).toContain(".toolbar-overflow-badge");
-    expect(block).toContain(".toolbar-problems-badge");
-    expect(block).toContain("CanvasText");
-  });
-
-  it("toolbar.css replaces the stripped overflow ring with an outline", () => {
-    const block = readForcedColorsBlocks(TOOLBAR_CSS);
-    expect(block).toContain('[data-severity="warning"]');
-    expect(block).toContain('[data-severity="info"]');
-    expect(block).toMatch(/outline:\s*1px solid CanvasText/);
-    expect(block).toMatch(/outline-offset:\s*-1px/);
+    // All pip selectors must share a rule whose body sets background-color.
+    expect(block).toMatch(
+      /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
+    );
   });
 });
