@@ -672,3 +672,127 @@ describe("trash expiry visibility sweep", () => {
     expect(afterState.panelsById["term-3"]?.location).toBe("trash");
   });
 });
+
+describe("trashPanelGroup anchor-removal regression (#8944)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function makeTerm(id: string, location: "grid" | "dock" = "grid"): MockTerminal {
+    return { id, title: `Shell ${id}`, cwd: "/test", cols: 80, rows: 24, location };
+  }
+
+  it("replicates groupMetadata onto every trashed member", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-2",
+      location: "grid",
+    };
+    setTerminals([makeTerm("term-1"), makeTerm("term-2"), makeTerm("term-3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const state = usePanelStore.getState();
+    for (const id of ["term-1", "term-2", "term-3"]) {
+      const trashed = state.trashedTerminals.get(id)!;
+      expect(trashed.groupMetadata).toBeDefined();
+      expect(trashed.groupMetadata!.panelIds).toEqual(["term-1", "term-2", "term-3"]);
+      expect(trashed.groupMetadata!.activeTabId).toBe("term-2");
+    }
+  });
+
+  it("preserves order and active tab when the original anchor member is removed before restore", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-2",
+      location: "grid",
+    };
+    setTerminals([makeTerm("term-1"), makeTerm("term-2"), makeTerm("term-3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    // Remove the original anchor (first member) from trash + panelsById,
+    // simulating expiry / individual deletion / hydration loss.
+    usePanelStore.setState((state) => {
+      const trashedTerminals = new Map(state.trashedTerminals);
+      trashedTerminals.delete("term-1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      return {
+        trashedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "term-1"),
+      };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.trashedTerminals.size).toBe(0);
+    expect(state.tabGroups.size).toBe(1);
+
+    const restored = [...state.tabGroups.values()][0]!;
+    // Order from surviving members preserved (anchor term-1 dropped)
+    expect(restored.panelIds).toEqual(["term-2", "term-3"]);
+    // Originally-active tab (term-2) survived and is still active
+    expect(restored.activeTabId).toBe("term-2");
+  });
+
+  it("falls back to first surviving panel when the active tab was the removed anchor", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-1",
+      location: "grid",
+    };
+    setTerminals([makeTerm("term-1"), makeTerm("term-2"), makeTerm("term-3")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    // Remove term-1 — both the anchor and the active tab.
+    usePanelStore.setState((state) => {
+      const trashedTerminals = new Map(state.trashedTerminals);
+      trashedTerminals.delete("term-1");
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      return {
+        trashedTerminals,
+        panelsById,
+        panelIds: state.panelIds.filter((id) => id !== "term-1"),
+      };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const restored = [...usePanelStore.getState().tabGroups.values()][0]!;
+    expect(restored.panelIds).toEqual(["term-2", "term-3"]);
+    // Active tab term-1 is gone, falls back to first surviving panel in original order
+    expect(restored.activeTabId).toBe("term-2");
+  });
+});
