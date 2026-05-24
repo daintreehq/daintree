@@ -7,7 +7,7 @@ import type {
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId } from "./agent.js";
-import type { TerminalSpawnSource } from "./panel.js";
+import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 
 /** Fields shared by all panel creation requests */
@@ -33,6 +33,13 @@ export interface AddPanelOptionsBase {
   pluginId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * Focus policy for the new panel. `"auto"` (default) suppresses focus change
+   * only when the assistant has keyboard focus. `"preserve"` always keeps focus
+   * where it is (MCP spawns, background batch operations). `"take"` always
+   * advances focus to the new panel regardless of context.
+   */
+  focusPolicy?: AddPanelFocusPolicy;
   /** Bypass rate limiter during session restore (consumes main-process quota) */
   restore?: boolean;
   /** Bypass panel limit checks (used during hydration/state restoration) */

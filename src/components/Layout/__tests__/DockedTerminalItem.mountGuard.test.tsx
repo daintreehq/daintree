@@ -256,7 +256,11 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
 
   it("does not focus an MCP-created dock terminal from Radix open autofocus", () => {
     mockActiveDockTerminalId = "t-1";
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1", spawnedBy: "mcp" })} />);
+    render(
+      <DockedTerminalItem
+        terminal={makeTerminal({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" })}
+      />
+    );
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 
     const preventDefault = vi.fn();

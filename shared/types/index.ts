@@ -52,6 +52,7 @@ export type {
   TerminalRuntimeStatus,
   PersistableFlowStatus,
   TerminalSpawnSource,
+  AddPanelFocusPolicy,
   TerminalInstance,
   PtySpawnOptions,
   TerminalDimensions,

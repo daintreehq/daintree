@@ -564,7 +564,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            if (activePanel.spawnedBy === "mcp") {
+            if (activePanel.focusPolicy === "preserve") {
               return;
             }
             const focusTarget = getTerminalFocusTarget({

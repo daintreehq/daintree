@@ -102,6 +102,9 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
 /** Origin that spawned a terminal */
 export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp";
 
+/** Focus policy for newly-created panels — orthogonal to provenance. */
+export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
+
 /**
  * Live process identity detected inside a PTY. This is transient runtime state,
  * not a launch hint and not persisted.
@@ -333,6 +336,8 @@ export interface PtyPanelData extends BasePanelData {
   agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** Focus policy applied when this panel was created. */
+  focusPolicy?: AddPanelFocusPolicy;
   /**
    * When true, this panel is excluded from persisted layout snapshots and is
    * never rehydrated on app restart (e.g. Daintree assistant dock terminals).
@@ -570,6 +575,8 @@ export interface TerminalInstance {
   agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** Focus policy applied when this panel was created. */
+  focusPolicy?: AddPanelFocusPolicy;
   /**
    * When true, this panel is excluded from persisted layout snapshots and is
    * never rehydrated on app restart (e.g. Daintree assistant dock terminals).

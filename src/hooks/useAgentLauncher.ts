@@ -14,7 +14,12 @@ import { logError, logWarn } from "@/utils/logger";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import type { AgentSettings, CliAvailability, TerminalSpawnSource } from "@shared/types";
+import type {
+  AgentSettings,
+  CliAvailability,
+  TerminalSpawnSource,
+  AddPanelFocusPolicy,
+} from "@shared/types";
 import {
   generateAgentCommand,
   buildAgentLaunchFlags,
@@ -72,12 +77,17 @@ export interface LaunchAgentOptions {
    */
   agentLaunchFlags?: string[];
   /**
-   * Origin tag stamped onto the resulting panel's `spawnedBy` field. The
-   * panel store uses this to gate focus capture — `"mcp"` spawns never steal
-   * focus from the user, even if the assistant isn't currently focused
-   * (#6959).
+   * Origin tag stamped onto the resulting panel's `spawnedBy` field. Purely
+   * provenance — no focus-policy meaning. Use `focusPolicy` to control
+   * whether the new panel captures keyboard focus.
    */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * Focus policy for the new panel. `"preserve"` keeps focus where it is
+   * (background/MCP spawns). Omitted defaults to the resolved policy from
+   * `panelStore.addPanel` (respects `mcpSpawnFocusSuppression` depth).
+   */
+  focusPolicy?: AddPanelFocusPolicy;
   /**
    * Pre-reserved terminal ID passed through to `addPanel` so the dock filter
    * is active the moment the panel commits, preventing a one-frame visual
@@ -460,8 +470,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const presetTitle = isAgent && preset ? preset.name : title;
-        const spawnedBy =
-          launchOptions?.spawnedBy ?? (isMcpSpawnFocusSuppressed() ? "mcp" : undefined);
+        const spawnedBy = launchOptions?.spawnedBy;
+        const focusPolicy =
+          launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
 
         const options: AddPanelOptions = isAgent
           ? {
@@ -480,6 +491,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               ephemeral: launchOptions?.ephemeral,
               spawnedBy,
+              focusPolicy,
               requestedId: launchOptions?.requestedId,
             }
           : {
@@ -492,6 +504,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               ephemeral: launchOptions?.ephemeral,
               spawnedBy,
+              focusPolicy,
               requestedId: launchOptions?.requestedId,
             };
 
@@ -526,6 +539,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               extensionState: presetEnv ? { presetEnv } : undefined,
               ephemeral: launchOptions?.ephemeral,
               spawnedBy,
+              focusPolicy,
             };
             usePanelStore.setState((state) => {
               const next: Partial<typeof state> = {
@@ -539,9 +553,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
                 const prevFocusedId = state.focusedId ?? null;
                 const focusActuallyChanged = gateId !== prevFocusedId;
                 next.activeDockTerminalId = gateId;
-                // MCP-initiated launches still expose the gate panel in the
+                // Focus-preserve launches still expose the gate panel in the
                 // dock but never claim keyboard focus. See #6959.
-                if (spawnedBy !== "mcp") {
+                if (focusPolicy !== "preserve") {
                   next.focusedId = gateId;
                   if (focusActuallyChanged) {
                     next.previousFocusedId = prevFocusedId;

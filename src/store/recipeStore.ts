@@ -6,7 +6,7 @@ import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -28,6 +28,7 @@ export interface RecipeSpawnResults {
 
 export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
+  focusPolicy?: AddPanelFocusPolicy;
   terminalIndices?: number[];
 }
 
@@ -534,6 +535,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const indicesToSpawn = options?.terminalIndices ?? recipe.terminals.map((_, i) => i);
     const spawnedBy = options?.spawnedBy;
+    const focusPolicy = options?.focusPolicy ?? "preserve";
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
@@ -575,6 +577,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
           if (terminalId) {
             results.spawned.push({ index, terminalId });
@@ -615,6 +618,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
         } else {
           terminalId = await terminalStore.addPanel({
@@ -626,6 +630,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
         }
         if (terminalId) {
