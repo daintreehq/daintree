@@ -1533,6 +1533,36 @@ body,
   z-index: 2;
 }
 
+/* Fleet preview enter cue — a one-shot tint flash on the title bar that
+ * fires when a pane enters the preview set. Distinguishes the transient
+ * hover-preview state from the durable multi-select state, which share
+ * neutral surface tints and would otherwise read identically. Kinetic-only
+ * cue: the static `bg-tint/[0.05]` tint persists; this overlay just
+ * announces the entry. Mounted on a span keyed by a per-pane generation
+ * counter so each false→true transition re-fires the animation cleanly
+ * without forced reflow.
+ */
+@keyframes fleet-preview-enter {
+  0% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fleet-preview-enter-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
+  animation: fleet-preview-enter 150ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  will-change: opacity;
+}
+
 /* FileChangeList row-recency cue — a transient left-edge gutter bar that
  * acknowledges rows freshly arrived between renders. The 2000ms duration is a
  * semantic exception to Tier 1 (150ms): the decay IS the "newness" signal,
@@ -1639,6 +1669,12 @@ body,
   }
 
   .fleet-exit-pulse-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  .fleet-preview-enter-overlay {
     animation: none;
     opacity: 0;
     will-change: auto;
