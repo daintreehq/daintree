@@ -380,11 +380,12 @@ export function PortalDock() {
       <ContextMenuTrigger asChild>
         <aside
           ref={dockRef}
+          role="region"
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
             "flex flex-col h-full bg-daintree-bg relative portal-dock outline-hidden",
-            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
+            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset"
           )}
           style={{ width }}
           onFocus={handleDockFocus}

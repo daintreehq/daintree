@@ -604,6 +604,7 @@ export function HelpPanel({
     <aside
       ref={panelRef}
       id="daintree-assistant-panel"
+      role="region"
       tabIndex={-1}
       aria-label="Daintree Assistant"
       // `inert` removes descendants from focus / a11y tree while the aside
@@ -622,7 +623,7 @@ export function HelpPanel({
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
         "bg-daintree-bg border-l border-daintree-border",
-        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
         !isVisible && "pointer-events-none"
       )}
       style={{ width: effectiveWidth }}
