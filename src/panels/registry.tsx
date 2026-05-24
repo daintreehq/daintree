@@ -142,15 +142,8 @@ const BUILT_IN_SERIALIZE_DEFAULTS = {
 export function initBuiltInPanelKinds(): void {
   for (const [kindId, hooks] of Object.entries(BUILT_IN_SERIALIZE_DEFAULTS)) {
     const existing = requirePanelKindConfig(kindId);
-    // Narrow per-kind hooks are widened to the shared PanelKindConfig contract
-    // here — this is the single seam between the typed registry map above and
-    // the extension-friendly wide interface. Function parameter contravariance
-    // makes this cast necessary; it is intentionally isolated to this function.
-    // Do NOT change PanelKindConfig.serialize / createDefaults to method syntax
-    // (`serialize(panel: …): …`). Method syntax is bivariant under
-    // strictFunctionTypes and would silently accept the unsafe widening this
-    // cast deliberately isolates — the property-syntax form is what makes the
-    // cast meaningful instead of redundant.
+    // Narrow per-kind hooks widened to PanelKindConfig — property-syntax
+    // invariant enforced by @typescript-eslint/method-signature-style.
     const serialize = hooks.serialize as PanelKindConfig["serialize"];
     const createDefaults = hooks.createDefaults as PanelKindConfig["createDefaults"];
     if (existing.serialize !== serialize || existing.createDefaults !== createDefaults) {
