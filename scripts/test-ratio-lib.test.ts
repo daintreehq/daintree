@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
+import { test as fcTest, fc } from "@fast-check/vitest";
 import {
   TEST_FILE_RE,
+  MIN_FIX_COUNT_FLOOR,
   isFixTitle,
   isReleaseOrVersionBump,
   isEligiblePR,
   classifyPR,
   shouldRemindAboutTests,
   computeTestRatioReport,
+  wilsonLowerBound,
   validateBaseline,
   compareToBaseline,
   formatBaseline,
@@ -307,6 +310,69 @@ describe("computeTestRatioReport", () => {
   });
 });
 
+// ── wilsonLowerBound ─────────────────────────────────────────────────────
+
+describe("wilsonLowerBound", () => {
+  it("returns 0 for a zero or invalid sample size", () => {
+    expect(wilsonLowerBound(0, 0)).toBe(0);
+    expect(wilsonLowerBound(5, 0)).toBe(0);
+    expect(wilsonLowerBound(5, -3)).toBe(0);
+  });
+
+  it("returns 0 when there are no successes", () => {
+    expect(wilsonLowerBound(0, 50)).toBe(0);
+  });
+
+  it("stays strictly below 1 even when every observation is a success", () => {
+    const lb = wilsonLowerBound(50, 50);
+    expect(lb).toBeGreaterThan(0);
+    expect(lb).toBeLessThan(1);
+  });
+
+  it("matches the known value for 40/44 (≈0.788)", () => {
+    expect(wilsonLowerBound(40, 44)).toBeCloseTo(0.7884, 3);
+  });
+
+  // The lower bound must never exceed the point estimate it bounds.
+  fcTest.prop([
+    fc.integer({ min: 1, max: 2000 }).chain((n) =>
+      fc.record({
+        n: fc.constant(n),
+        s: fc.integer({ min: 0, max: n }),
+      })
+    ),
+  ])("never exceeds the point estimate", ({ n, s }) => {
+    expect(wilsonLowerBound(s, n)).toBeLessThanOrEqual(s / n);
+  });
+
+  // The result is always a valid proportion.
+  fcTest.prop([
+    fc.integer({ min: 1, max: 2000 }).chain((n) =>
+      fc.record({
+        n: fc.constant(n),
+        s: fc.integer({ min: 0, max: n }),
+      })
+    ),
+  ])("is always within [0, 1] and finite", ({ n, s }) => {
+    const lb = wilsonLowerBound(s, n);
+    expect(Number.isFinite(lb)).toBe(true);
+    expect(lb).toBeGreaterThanOrEqual(0);
+    expect(lb).toBeLessThanOrEqual(1);
+  });
+
+  // For a fixed sample size, fewer successes weakly lowers the bound.
+  fcTest.prop([
+    fc.integer({ min: 2, max: 2000 }).chain((n) =>
+      fc.record({
+        n: fc.constant(n),
+        s: fc.integer({ min: 1, max: n }),
+      })
+    ),
+  ])("is monotonic in successes for a fixed n", ({ n, s }) => {
+    expect(wilsonLowerBound(s - 1, n)).toBeLessThanOrEqual(wilsonLowerBound(s, n));
+  });
+});
+
 // ── validateBaseline ─────────────────────────────────────────────────────
 
 describe("validateBaseline", () => {
@@ -428,7 +494,28 @@ describe("compareToBaseline", () => {
     expect(r.errors).toEqual([]);
   });
 
-  it("fails when fixWithTestRatio drops", () => {
+  it("fails when fixWithTestRatio falls below the Wilson lower bound", () => {
+    // Baseline 36/50 → Wilson lower bound ≈ 0.583. 0.50 is below it.
+    const current = {
+      fixWithTestRatio: 0.5,
+      fixCount: 50,
+      fixWithTestCount: 25,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.ok).toBe(false);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0].kind).toBe("fix-with-test-regression");
+  });
+
+  it("tolerates a drop within the Wilson noise band (no false alarm)", () => {
+    // 0.60 is below the 0.72 baseline point estimate but above the ≈0.583
+    // Wilson lower bound — this is the sampling-noise case the gate must allow.
     const current = {
       fixWithTestRatio: 0.6,
       fixCount: 50,
@@ -441,9 +528,8 @@ describe("compareToBaseline", () => {
       skippedCount: 0,
     };
     const r = compareToBaseline(current, baseline);
-    expect(r.ok).toBe(false);
-    expect(r.errors).toHaveLength(1);
-    expect(r.errors[0].kind).toBe("fix-with-test-regression");
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
   });
 
   it("fails when allWithTestRatio drops", () => {
@@ -464,11 +550,11 @@ describe("compareToBaseline", () => {
     expect(r.errors[0].kind).toBe("all-with-test-regression");
   });
 
-  it("reports both error kinds when both ratios drop", () => {
+  it("reports both error kinds when both ratios fall below their lower bounds", () => {
     const current = {
-      fixWithTestRatio: 0.6,
+      fixWithTestRatio: 0.5,
       fixCount: 50,
-      fixWithTestCount: 30,
+      fixWithTestCount: 25,
       allWithTestRatio: 0.55,
       totalCount: 100,
       allWithTestCount: 55,
@@ -516,6 +602,136 @@ describe("compareToBaseline", () => {
     const r = compareToBaseline(current, baseline);
     expect(r.notices.some((n) => n.kind === "window-size-change")).toBe(true);
   });
+
+  it("skips the gate entirely when the window is incomplete", () => {
+    const current = {
+      fixWithTestRatio: 0.1,
+      fixCount: 50,
+      fixWithTestCount: 5,
+      allWithTestRatio: 0.1,
+      totalCount: 30,
+      allWithTestCount: 3,
+      rollingWindowSize: 100,
+      windowCompleted: false,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.notices).toHaveLength(1);
+    expect(r.notices[0].kind).toBe("window-incomplete");
+  });
+
+  it("skips the fix-only gate below the fix-count floor", () => {
+    const current = {
+      fixWithTestRatio: 0.1,
+      fixCount: MIN_FIX_COUNT_FLOOR - 1,
+      fixWithTestCount: 1,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.notices.some((n) => n.kind === "fix-count-floor")).toBe(true);
+  });
+
+  it("runs the fix-only gate at exactly the fix-count floor", () => {
+    const current = {
+      fixWithTestRatio: 0.1,
+      fixCount: MIN_FIX_COUNT_FLOOR,
+      fixWithTestCount: 2,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.kind === "fix-with-test-regression")).toBe(true);
+  });
+
+  it("still evaluates the all-with-test gate below the fix-count floor", () => {
+    const current = {
+      fixWithTestRatio: 1,
+      fixCount: MIN_FIX_COUNT_FLOOR - 1,
+      fixWithTestCount: MIN_FIX_COUNT_FLOOR - 1,
+      allWithTestRatio: 0.4,
+      totalCount: 100,
+      allWithTestCount: 40,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.kind === "all-with-test-regression")).toBe(true);
+    expect(r.notices.some((n) => n.kind === "fix-count-floor")).toBe(true);
+  });
+
+  it("recomputes the lower bound from counts for baselines without stored bounds", () => {
+    // The `baseline` fixture has no *LowerBound fields → fallback recomputes
+    // from fixWithTestCount/fixCount (36/50 → ≈0.583). 0.5 is below it.
+    const current = {
+      fixWithTestRatio: 0.5,
+      fixCount: 50,
+      fixWithTestCount: 25,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.errors.some((e) => e.kind === "fix-with-test-regression")).toBe(true);
+  });
+
+  it("uses the stored lower bound when present instead of recomputing", () => {
+    // Stored bound deliberately lower than the recomputed value (36/50 ≈ 0.583).
+    // A current ratio of 0.5 is above the stored 0.45 → must pass.
+    const baselineWithBounds = {
+      ...baseline,
+      fixWithTestLowerBound: 0.45,
+      allWithTestLowerBound: 0.45,
+    };
+    const current = {
+      fixWithTestRatio: 0.5,
+      fixCount: 50,
+      fixWithTestCount: 25,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baselineWithBounds);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("names the Wilson lower bound in the regression message", () => {
+    const current = {
+      fixWithTestRatio: 0.5,
+      fixCount: 50,
+      fixWithTestCount: 25,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baseline);
+    expect(r.errors[0].message).toContain("Wilson lower bound");
+  });
 });
 
 // ── formatBaseline ───────────────────────────────────────────────────────
@@ -526,10 +742,12 @@ describe("formatBaseline", () => {
       allWithTestCount: 66,
       totalCount: 100,
       fixCount: 50,
+      allWithTestLowerBound: 0.56,
       allWithTestRatio: 0.66,
       fixWithTestRatio: 0.72,
       updatedAt: "2026-01-01",
       fixWithTestCount: 36,
+      fixWithTestLowerBound: 0.58,
       rollingWindowSize: 100,
     });
     expect(Object.keys(result)).toEqual([
@@ -538,9 +756,11 @@ describe("formatBaseline", () => {
       "fixWithTestRatio",
       "fixCount",
       "fixWithTestCount",
+      "fixWithTestLowerBound",
       "allWithTestRatio",
       "totalCount",
       "allWithTestCount",
+      "allWithTestLowerBound",
     ]);
   });
 
