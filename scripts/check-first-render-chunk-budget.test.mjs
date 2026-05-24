@@ -203,14 +203,16 @@ describe("classifyFirstRenderBudget", () => {
     expect(result.emoji).toBe("🔴");
   });
 
-  it("returns pass (not regression) when ratio equals threshold exactly", () => {
+  it("returns pass when ratio equals threshold exactly", () => {
+    // ratio === threshold: not > threshold, so not regression.
+    // delta=5000 > stabilityBytes and ratio <= threshold → falls through to pass.
     const result = classifyFirstRenderBudget({
       delta: 5000,
       totalDelta: 1000,
       ratio: 0.05,
       threshold: THRESHOLD,
     });
-    expect(result.classification).not.toBe("regression");
+    expect(result.classification).toBe("pass");
   });
 
   it("returns win when eager shrinks meaningfully and total is stable/down", () => {
@@ -358,5 +360,59 @@ describe("classifyFirstRenderBudget", () => {
     });
     expect(pass.label).toBe("Pass");
     expect(pass.description).toBeTruthy();
+  });
+
+  it("returns watch when eager is stable-negative but total is creeping up", () => {
+    // Eager slightly down (within stability band), total growing — still a watch
+    // because the total-bundle trend is what matters.
+    const result = classifyFirstRenderBudget({
+      delta: -500,
+      totalDelta: 5000,
+      ratio: -0.005,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("watch");
+  });
+
+  describe("stabilityBytes boundary", () => {
+    it("delta -1024, totalDelta 1024 → win (exactly at stability boundary)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: -1024,
+        totalDelta: 1024,
+        ratio: -0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("win");
+    });
+
+    it("delta -1024, totalDelta 1025 → shift-trap (total just past stability)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: -1024,
+        totalDelta: 1025,
+        ratio: -0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("shift-trap");
+    });
+
+    it("delta 1024, totalDelta 1025 → watch (eager at stability edge, total up)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: 1024,
+        totalDelta: 1025,
+        ratio: 0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("watch");
+    });
+
+    it("delta 1025, totalDelta 1025 → pass (eager grew beyond noise but within budget)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: 1025,
+        totalDelta: 1025,
+        ratio: 0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("pass");
+    });
   });
 });

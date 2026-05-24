@@ -215,7 +215,7 @@ jobs:
           exit $failed
 
       - name: Post first-render budget comment
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         continue-on-error: true
         uses: actions/github-script@v8
         with:
