@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+    # labeled/unlabeled/edited are needed so the budget override gate
+    # re-evaluates when a `*-override` label or the PR body changes without a
+    # new commit — otherwise a label added after a green run would never be
+    # re-checked. The heavyweight build job skips those label/edit-only events
+    # (see the build job `if:`).
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
   workflow_dispatch:
     inputs:
       os:
@@ -61,6 +67,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fast-fail before the slow check: a budget `*-override` label must be
+      # backed by a linked tracking issue in the PR body. PR-only — push and
+      # workflow_dispatch have no PR context, so the step is skipped there.
+      # PR body and label names are injected via env (never the shell) so PR
+      # body metacharacters can't reach a command line.
+      - name: Budget override gate
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-budget-override-gate.mjs
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+
       - name: Check (typecheck + lint + format)
         run: npm run check
 
@@ -68,6 +86,13 @@ jobs:
         run: npm run test
 
   build:
+    # Skip the full build on label/description-only PR events — those only need
+    # the budget override gate (in the check job) to re-evaluate, not a fresh
+    # electron build. ci-ok treats a skipped build as non-failing.
+    if: >-
+      !(github.event_name == 'pull_request' && contains(fromJSON('["labeled","unlabeled","edited"]'), github.event.action))
+
+
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

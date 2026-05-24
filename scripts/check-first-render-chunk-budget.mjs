@@ -6,15 +6,16 @@
 // "what the user actually downloads before they can interact" — eager imports
 // plus the lazy chunks for any panel restored from the previous session.
 //
-// Compares against the checked-in first-render-chunk-baseline.json. Warn-only
-// for the first nightly week per #7576 — use --override in CI until the
-// staged-rollout window expires.
+// Compares against the checked-in first-render-chunk-baseline.json.
+//
+// There is no override flag: an intentional regression is accepted by applying
+// the `first-render-chunk-override` label to the PR with a linked tracking
+// issue (enforced by scripts/check-budget-override-gate.mjs in CI).
 //
 // Usage:
 //   node scripts/check-first-render-chunk-budget.mjs                   # check (CI)
 //   node scripts/check-first-render-chunk-budget.mjs --update          # write baseline
 //   node scripts/check-first-render-chunk-budget.mjs --update --force  # bypass shrink guard
-//   node scripts/check-first-render-chunk-budget.mjs --override        # don't fail exit code
 //   node scripts/check-first-render-chunk-budget.mjs --threshold 0.10  # 10% growth allowed
 
 import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
@@ -59,12 +60,11 @@ export function shrinkageGuardError(priorGzip, nextGzip, threshold) {
 }
 
 function parseArgs(argv) {
-  const args = { isUpdate: false, force: false, override: false, threshold: DEFAULT_THRESHOLD };
+  const args = { isUpdate: false, force: false, threshold: DEFAULT_THRESHOLD };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--update") args.isUpdate = true;
     else if (arg === "--force") args.force = true;
-    else if (arg === "--override") args.override = true;
     else if (arg === "--threshold" && argv[i + 1]) {
       const val = argv[i + 1];
       args.threshold = parseFloat(val);
@@ -394,14 +394,9 @@ function main() {
     `::error::first-render chunk gzip grew from ${result.baselineGzip} to ${result.currentGzip} (+${result.delta}, ${(result.ratio * 100).toFixed(2)}%, threshold +${(args.threshold * 100).toFixed(1)}%)`
   );
   console.error(
-    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline.`
+    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline, ` +
+      `or apply the \`first-render-chunk-override\` label to the PR with a linked tracking issue (\`Fixes #N\`, \`Resolves #N\`, or \`Closes #N\` in the PR body).`
   );
-  if (args.override) {
-    console.log(
-      "[check-first-render-chunk-budget] override active — exiting successfully despite regression"
-    );
-    return;
-  }
   process.exit(1);
 }
 
