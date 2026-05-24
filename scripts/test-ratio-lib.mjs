@@ -133,6 +133,7 @@ export function wilsonLowerBound(successes, n, z = WILSON_Z) {
   if (!Number.isFinite(n) || n <= 0) return 0;
   if (!Number.isFinite(successes) || successes < 0 || successes > n) return 0;
   if (!Number.isFinite(z)) return 0;
+  if (successes === 0) return 0;
   const p = successes / n;
   const zSq = z * z;
   const numerator = p + zSq / (2 * n) - z * Math.sqrt((p * (1 - p)) / n + zSq / (4 * n * n));
