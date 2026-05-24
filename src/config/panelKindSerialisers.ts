@@ -6,7 +6,9 @@ type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalAr
 
 /** Coerce a persisted viewport-preset string to a known id, dropping stale values. */
 function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | undefined {
-  return value !== undefined && value in VIEWPORT_PRESETS ? (value as ViewportPresetId) : undefined;
+  return value !== undefined && Object.hasOwn(VIEWPORT_PRESETS, value)
+    ? (value as ViewportPresetId)
+    : undefined;
 }
 
 /**
@@ -53,7 +55,7 @@ for (const [kind, fn] of Object.entries(BUILT_IN_DESERIALIZERS)) {
 }
 
 export function getDeserializer(kind: PanelKind): PanelKindDeserializer | undefined {
-  return DESERIALIZERS[kind];
+  return Object.hasOwn(DESERIALIZERS, kind) ? DESERIALIZERS[kind] : undefined;
 }
 
 export function registerDeserializer(kind: PanelKind, deserializer: PanelKindDeserializer): void {
