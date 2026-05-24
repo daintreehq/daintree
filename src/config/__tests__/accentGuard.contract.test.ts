@@ -502,7 +502,7 @@ describe("accent guard", () => {
     const testFile = fs.readFileSync(path.join(TEST_DIR, "accentGuard.contract.test.ts"), "utf8");
     // Extract DURABLE_ALLOWLIST entries: from `const DURABLE_ALLOWLIST = new Set([` to `]);`
     const allowlistMatch = testFile.match(/const DURABLE_ALLOWLIST = new Set\(\[([\s\S]*?)\]\);/);
-    if (!allowlistMatch) return;
+    if (!allowlistMatch?.[1]) return;
 
     const violations: number[] = [];
     const lines = allowlistMatch[1].split("\n");
