@@ -356,6 +356,19 @@ function PanelHeaderComponent({
     }
   }, [id, isWatched, unwatchPanel, watchPanel, terminal]);
 
+  // Bump a generation counter on each false→true transition of
+  // `isFleetPreviewed` so the enter-cue overlay (keyed by this counter)
+  // remounts and re-runs its keyframe. Avoids a per-pane `void offsetWidth`
+  // forced reflow that would thrash layout across a fleet of headers.
+  const prevFleetPreviewedRef = useRef(isFleetPreviewed);
+  const [previewEnterGen, setPreviewEnterGen] = useState(0);
+  useEffect(() => {
+    if (!prevFleetPreviewedRef.current && isFleetPreviewed) {
+      setPreviewEnterGen((g) => g + 1);
+    }
+    prevFleetPreviewedRef.current = isFleetPreviewed;
+  }, [isFleetPreviewed]);
+
   // In dock, show shortened title without command summary for space efficiency
   const displayTitle = location === "dock" ? getBaseTitle(title) : title;
 
@@ -1141,6 +1154,14 @@ function PanelHeaderComponent({
         {/* Kind-specific header content slot */}
         {headerContent}
       </div>
+      {isFleetPreviewed ? (
+        <span
+          key={previewEnterGen}
+          className="fleet-preview-enter-overlay"
+          aria-hidden="true"
+          data-testid="fleet-preview-enter-overlay"
+        />
+      ) : null}
     </div>
   );
 }
