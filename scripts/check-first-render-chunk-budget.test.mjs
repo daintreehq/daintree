@@ -8,6 +8,7 @@ import { collectClosure, shrinkageGuardError } from "./check-first-render-chunk-
 const LAZY_FIRST_RENDER_SEEDS = [
   "src/components/Browser/BrowserPane.tsx",
   "src/components/DevPreview/DevPreviewPane.tsx",
+  "src/panels/review/ReviewPane.tsx",
 ];
 
 // Synthetic manifest mirroring the Vite 8 / Rolldown shape: top-level keys are
@@ -52,6 +53,12 @@ function makeManifest(extra = {}) {
       imports: [],
       dynamicImports: [],
     },
+    "src/panels/review/ReviewPane.tsx": {
+      file: "assets/ReviewPane-yz0.js",
+      imports: ["_vendor-review.js"],
+      dynamicImports: [],
+    },
+    "_vendor-review.js": { file: "assets/vendor-review-123.js", imports: [], dynamicImports: [] },
     ...extra,
   };
 }
@@ -98,6 +105,10 @@ describe("collectClosure — first-render seeds", () => {
     const eager = collectClosure(manifest, seeds, { followDynamic: false });
     expect(eager.has("src/components/Browser/BrowserPane.tsx")).toBe(true);
     expect(eager.has("src/components/DevPreview/DevPreviewPane.tsx")).toBe(true);
+    // ReviewPane is the seed that previously drifted out of the list (#8895) —
+    // it must be enqueued and its static vendor dep pulled into the closure.
+    expect(eager.has("src/panels/review/ReviewPane.tsx")).toBe(true);
+    expect(eager.has("_vendor-review.js")).toBe(true);
     // And the BrowserPane's own static import is reachable from the seed.
     expect(eager.has("_vendor-browser.js")).toBe(true);
     // domMax is still excluded — it isn't a seed and only the dynamic edge
