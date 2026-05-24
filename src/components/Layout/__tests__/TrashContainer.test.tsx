@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { TrashContainer } from "../TrashContainer";
+import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { TerminalInstance } from "@/store";
@@ -194,6 +195,7 @@ describe("TrashContainer", () => {
     dndMocks.isOver = false;
     confirmDialogProps = null;
     emptyTrashSpy = vi.fn();
+    vi.spyOn(usePanelStore.getState(), "emptyTrash").mockImplementation(emptyTrashSpy);
   });
 
   afterEach(() => {
@@ -504,6 +506,34 @@ describe("TrashContainer", () => {
 
       const body = getByTestId("confirm-dialog-body");
       expect(body.textContent).toContain("Untitled");
+    });
+
+    it("calls emptyTrash with all trashed panel IDs on confirm", () => {
+      const items = [makeTrashedItem("a"), makeTrashedItem("b")];
+      const { getByTestId } = render(<TrashContainer trashedTerminals={items} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      act(() => {
+        getByTestId("confirm-dialog-confirm").click();
+      });
+
+      expect(emptyTrashSpy).toHaveBeenCalledTimes(1);
+      expect(emptyTrashSpy).toHaveBeenCalledWith(["a", "b"]);
+    });
+
+    it("does not call emptyTrash on cancel", () => {
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      act(() => {
+        getByTestId("confirm-dialog-cancel").click();
+      });
+
+      expect(emptyTrashSpy).not.toHaveBeenCalled();
     });
 
     it("closes dialog on cancel", () => {
