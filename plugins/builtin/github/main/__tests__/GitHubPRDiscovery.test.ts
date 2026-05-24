@@ -92,6 +92,19 @@ describe("probeRepoPRListChange", () => {
     expect(repoPRListETagCache.get("o/r")).toBe('W/"new"');
   });
 
+  it("returns 'unknown' (idempotent) when a 200 carries the same ETag as the cache", async () => {
+    repoPRListETagCache.set("o/r", 'W/"same"');
+    setFetch(
+      () =>
+        new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"same"' } })
+    );
+
+    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+
+    expect(result).toBe("unknown");
+    expect(repoPRListETagCache.get("o/r")).toBe('W/"same"');
+  });
+
   it("does not send If-None-Match on a cold cache", async () => {
     const mock = setFetch(
       () => new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"x"' } })
@@ -177,7 +190,7 @@ describe("batchCheckLinkedPRs repo-level probe gate", () => {
     expect(client).not.toHaveBeenCalled();
   });
 
-  it("falls through to GraphQL when the repo probe reports a change (cold cache 200)", async () => {
+  it("falls through to GraphQL on a cold-cache 200 (probe returns 'unknown')", async () => {
     setFetch(
       () => new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"e"' } })
     );
@@ -188,6 +201,62 @@ describe("batchCheckLinkedPRs repo-level probe gate", () => {
       { worktreeId: "w1", issueNumber: 5, branchName: "feature/x" },
     ]);
 
+    expect(client).toHaveBeenCalledTimes(1);
+    expect(result.results.size).toBe(1);
+  });
+
+  it("falls through to GraphQL when a warm-cache 200 reports a changed ETag", async () => {
+    repoPRListETagCache.set("o/r", 'W/"old"');
+    setFetch(
+      () => new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"new"' } })
+    );
+    const client = vi.fn().mockResolvedValue({});
+    vi.spyOn(GitHubAuth, "createClient").mockReturnValue(client as never);
+
+    const result = await batchCheckLinkedPRs("/tmp/repo", [
+      { worktreeId: "w1", issueNumber: 5, branchName: "feature/x" },
+    ]);
+
+    expect(client).toHaveBeenCalledTimes(1);
+    expect(result.results.size).toBe(1);
+  });
+
+  it("returns a rate-limit error and skips GraphQL when the probe's 200 exhausts the core bucket", async () => {
+    setFetch(
+      () =>
+        new Response("[]", {
+          status: 200,
+          headers: {
+            etag: 'W/"e"',
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 60),
+            "x-ratelimit-resource": "core",
+          },
+        })
+    );
+    const client = vi.fn().mockResolvedValue({});
+    vi.spyOn(GitHubAuth, "createClient").mockReturnValue(client as never);
+
+    const result = await batchCheckLinkedPRs("/tmp/repo", [
+      { worktreeId: "w1", issueNumber: 5, branchName: "feature/x" },
+    ]);
+
+    expect(result.error).toBeDefined();
+    expect(result.rateLimit).toBeDefined();
+    expect(client).not.toHaveBeenCalled();
+  });
+
+  it("skips the repo probe entirely when no token is configured", async () => {
+    GitHubAuth.clearToken();
+    const mock = setFetch(() => new Response(null, { status: 304, headers: RATE_LIMIT_HEADERS }));
+    const client = vi.fn().mockResolvedValue({});
+    vi.spyOn(GitHubAuth, "createClient").mockReturnValue(client as never);
+
+    const result = await batchCheckLinkedPRs("/tmp/repo", [
+      { worktreeId: "w1", issueNumber: 5, branchName: "feature/x" },
+    ]);
+
+    expect(mock).not.toHaveBeenCalled();
     expect(client).toHaveBeenCalledTimes(1);
     expect(result.results.size).toBe(1);
   });

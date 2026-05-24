@@ -283,7 +283,9 @@ export async function probeRepoPRListChange(
       repoPRListETagCache.set(cacheKey, etag);
       // Cold cache: a 200 only seeds the cache, it is not a change signal, so
       // report "unknown" to avoid a spurious first-cycle bypass of the prefilters.
-      return cachedETag ? "changed" : "unknown";
+      // An unchanged ETag on a 200 (shouldn't happen per HTTP semantics, but is
+      // cheap to guard) is likewise not a change.
+      return cachedETag && cachedETag !== etag ? "changed" : "unknown";
     }
     return "unknown";
   } catch {
@@ -459,8 +461,9 @@ export async function batchCheckLinkedPRs(
       return { results: new Map() };
     }
     // The probe hits the `core` REST bucket (not `graphql`); a 200 that consumed
-    // a point may have tripped a block, so re-check before any further work.
-    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest();
+    // a point may have tripped a block, so re-check that bucket before any
+    // further work.
+    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest("core");
     if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
       return {
         results: new Map(),
