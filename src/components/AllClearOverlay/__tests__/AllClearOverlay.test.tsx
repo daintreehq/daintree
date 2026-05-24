@@ -66,26 +66,32 @@ describe("AllClearOverlay", () => {
 
   it("suppresses the overlay when data-reduce-animations is true", () => {
     document.body.setAttribute("data-reduce-animations", "true");
-    render(<AllClearOverlay />);
+    try {
+      render(<AllClearOverlay />);
 
-    act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
-    });
+      act(() => {
+        onAllAgentsClearCb?.({ timestamp: Date.now() });
+      });
 
-    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
-    document.body.removeAttribute("data-reduce-animations");
+      expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
+    } finally {
+      document.body.removeAttribute("data-reduce-animations");
+    }
   });
 
   it("suppresses the overlay when data-performance-mode is true", () => {
     document.body.setAttribute("data-performance-mode", "true");
-    render(<AllClearOverlay />);
+    try {
+      render(<AllClearOverlay />);
 
-    act(() => {
-      onAllAgentsClearCb?.({ timestamp: Date.now() });
-    });
+      act(() => {
+        onAllAgentsClearCb?.({ timestamp: Date.now() });
+      });
 
-    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
-    document.body.removeAttribute("data-performance-mode");
+      expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
+    } finally {
+      document.body.removeAttribute("data-performance-mode");
+    }
   });
 
   it("hides via safety timeout when animationend never fires", () => {
