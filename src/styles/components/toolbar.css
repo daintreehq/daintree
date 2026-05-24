@@ -52,11 +52,11 @@
   --_hover-shadow: var(--toolbar-control-hover-shadow, none);
   /* Press-scale is owned by the base Button cva (`active:scale-[0.98] active:duration-[1ms]`),
    * so transform is intentionally absent from this transition list — adding it would slow
-   * the snap to 150ms and override the cva's intent. */
+   * the snap to 150ms and override the cva's intent. Same for box-shadow: the armed-state
+   * inset ring is the result of an intentional click or keypress and should snap too. */
   transition:
     color 150ms ease,
-    background-color 150ms ease,
-    box-shadow 150ms ease;
+    background-color 150ms ease;
 }
 
 .toolbar-icon-button:hover {

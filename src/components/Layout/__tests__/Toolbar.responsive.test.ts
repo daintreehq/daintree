@@ -219,6 +219,22 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(activeBlock).not.toMatch(/transform\s*:\s*scale/);
     });
 
+    it("armed-state ring is excluded from toolbar transition list so it snaps — same pattern as press transform", () => {
+      // The .toolbar-icon-button transition list must NOT include `box-shadow` —
+      // arming is the result of an intentional click/keypress; the ring should snap,
+      // not crossfade over 150ms. `color` and `background-color` remain at 150ms
+      // for visual cohesion with hover.
+      const baseBlock = css.match(
+        /\.toolbar-icon-button,\s*\n\s*\.toolbar-agent-button\s*\{[\s\S]*?\}/
+      )?.[0];
+      expect(baseBlock).toBeDefined();
+      expect(baseBlock).toMatch(/transition:[\s\S]*?;/);
+      const transitionMatch = baseBlock!.match(/transition:[\s\S]*?;/)![0];
+      expect(transitionMatch).not.toContain("box-shadow");
+      expect(transitionMatch).toContain("color");
+      expect(transitionMatch).toContain("background-color");
+    });
+
     it("overflow severity dot uses a non-color shape differentiator per tier — WCAG 1.4.1", () => {
       // Tier 1 evidence: each severity owns its own border-radius in CSS, so
       // critical/warning/info are distinguishable without relying on color.
