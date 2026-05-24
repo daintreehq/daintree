@@ -310,6 +310,17 @@ export default tseslint.config(
     },
   },
 
+  // Enforce property syntax on interface method signatures to preserve
+  // function parameter contravariance under strictFunctionTypes. Method
+  // syntax is bivariant and would silently accept unsafe widening casts.
+  // See #8961.
+  {
+    files: ["shared/config/**/*.ts"],
+    rules: {
+      "@typescript-eslint/method-signature-style": ["error", "property"],
+    },
+  },
+
   // Catch un-awaited promises in renderer code. `safeFireAndForget` is the
   // sanctioned escape hatch for fire-and-forget IPC — see issue #6029.
   {
