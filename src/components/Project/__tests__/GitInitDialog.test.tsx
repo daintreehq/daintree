@@ -104,7 +104,15 @@ describe("GitInitDialog", () => {
     await waitFor(() => expect(onInitGitProgressMock).toHaveBeenCalled());
     expect(initGitGuidedMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    const button = screen.getByRole("button", {
+      name: /initialize repository/i,
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
+    fireEvent.click(button);
 
     await waitFor(() => {
       expect(initGitGuidedMock).toHaveBeenCalledWith(
@@ -113,7 +121,7 @@ describe("GitInitDialog", () => {
           createInitialCommit: true,
           createGitignore: true,
           gitignoreTemplate: "node",
-          initialCommitMessage: "Initial commit",
+          initialCommitMessage: "feat: init",
         })
       );
     });
@@ -166,6 +174,9 @@ describe("GitInitDialog", () => {
     renderDialog();
 
     fireEvent.change(screen.getByLabelText(/gitignore template/i), { target: { value: "none" } });
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
 
     await waitFor(() => {
@@ -180,6 +191,9 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
     const button = screen.getByRole("button", { name: /initialize repository/i });
     fireEvent.click(button);
     fireEvent.click(button);
@@ -191,6 +205,9 @@ describe("GitInitDialog", () => {
     const onSuccess = vi.fn();
     renderDialog({ onSuccess });
 
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
@@ -209,6 +226,9 @@ describe("GitInitDialog", () => {
   it("surfaces the git config commands and offers Try again on identity error", async () => {
     renderDialog();
 
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
