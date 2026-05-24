@@ -13,6 +13,7 @@ import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   ArrowDownFromLine,
@@ -371,6 +372,9 @@ export function TerminalContextMenu({
       { terminalId, confirmed: true },
       { source: sourceRef.current }
     );
+    useAnnouncerStore
+      .getState()
+      .announce(destructiveConfirm.kind === "kill" ? "Terminal killed" : "Terminal restarted");
     setDestructiveConfirm(null);
   }, [destructiveConfirm, terminalId]);
 

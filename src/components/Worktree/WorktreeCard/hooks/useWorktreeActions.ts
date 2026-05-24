@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type ConfirmDialogState =
@@ -244,6 +245,7 @@ export function useWorktreeActions({
           { worktreeId: worktree.id, confirmed: true },
           { source: "user" }
         );
+        useAnnouncerStore.getState().announce("Trashed all sessions");
         setConfirmDialog({ isOpen: false });
       },
     });
@@ -264,6 +266,7 @@ export function useWorktreeActions({
           { worktreeId: worktree.id },
           { source: "user" }
         );
+        useAnnouncerStore.getState().announce("Terminated all sessions");
         setConfirmDialog({ isOpen: false });
       },
     });

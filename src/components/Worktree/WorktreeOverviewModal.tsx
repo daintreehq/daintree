@@ -15,6 +15,7 @@ import {
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -608,12 +609,18 @@ export function WorktreeOverviewModal({
 
   const handleCloseSessionsConfirm = useCallback(() => {
     const state = usePanelStore.getState();
+    const count = closeSessionsIdsRef.current.length;
     for (const id of closeSessionsIdsRef.current) {
       state.bulkCloseByWorktree(id);
     }
     closeSessionsIdsRef.current = [];
     setIsCloseSessionsConfirmOpen(false);
     clearSelection();
+    useAnnouncerStore
+      .getState()
+      .announce(
+        count === 1 ? "Closed sessions for 1 worktree" : `Closed sessions for ${count} worktrees`
+      );
   }, [clearSelection]);
 
   const handleCloseSessionsCancel = useCallback(() => {

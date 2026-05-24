@@ -19,6 +19,8 @@ function getAgentStateMessage(
       return { msg: `${title} is waiting for input`, priority: "polite" };
     case "completed":
       return { msg: `${title} finished`, priority: "polite" };
+    case "exited":
+      return { msg: `${title} exited`, priority: "polite" };
     default:
       return null;
   }

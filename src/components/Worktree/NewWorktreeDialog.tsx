@@ -13,6 +13,7 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
 import { useProjectStore } from "@/store/projectStore";
@@ -641,6 +642,7 @@ export function NewWorktreeDialog({
         }
 
         onWorktreeCreated?.(worktreeId);
+        useAnnouncerStore.getState().announce(`Created worktree ${fullBranchName}`);
       } catch (err: unknown) {
         const message = formatErrorMessage(err, "Failed to create worktree");
         if (placeholderPath) {
@@ -657,6 +659,7 @@ export function NewWorktreeDialog({
             message,
           });
         }
+        useAnnouncerStore.getState().announce("Couldn't create worktree", "assertive");
       } finally {
         isCreatingRef.current = false;
       }

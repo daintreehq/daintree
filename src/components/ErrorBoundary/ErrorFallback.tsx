@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TriangleAlert } from "lucide-react";
 
 export interface ErrorFallbackProps {
@@ -56,6 +58,18 @@ export function ErrorFallback({
   const { copied: incidentIdCopied, copy: copyIncidentId } = useCopyWithFeedback({
     announcement: "Error ID copied",
   });
+
+  // Fullscreen carries role="alertdialog" + autoFocus on its primary button —
+  // AT already gets a focus shift + accessible-name read, so a duplicate
+  // announce() would over-narrate. Section/component variants are inline and
+  // need an explicit live-region message.
+  useEffect(() => {
+    if (variant === "fullscreen") return;
+    const name = componentName || (variant === "section" ? "Section" : "Component");
+    const msg = variant === "section" ? `${name} stopped working` : `${name} error`;
+    useAnnouncerStore.getState().announce(msg, variant === "section" ? "assertive" : "polite");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only announcement
+  }, []);
 
   const handleOpenLogs = () => {
     void actionService.dispatch("logs.openFile", undefined, { source: "user" });

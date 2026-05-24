@@ -6,6 +6,7 @@ import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // Fire-and-forget — progress and any failure surface on the card, not the
     // modal (#8417). The dialog closes immediately so the user keeps flow.
     getCurrentViewStore().getState().startDelete(worktree.id, options);
+    useAnnouncerStore.getState().announce("Deleting worktree");
     onClose();
   };
 

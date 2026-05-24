@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { usePanelStore, type TerminalInstance } from "@/store";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
@@ -218,10 +219,14 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
 
   const handleKillConfirm = useCallback(() => {
     if (killConfirmId) {
+      const target = terminals.find((t) => t.id === killConfirmId);
       removePanel(killConfirmId);
+      useAnnouncerStore
+        .getState()
+        .announce(target?.title ? `${target.title} killed` : "Terminal killed");
     }
     setKillConfirmId(null);
-  }, [killConfirmId, removePanel]);
+  }, [killConfirmId, removePanel, terminals]);
 
   if (terminals.length === 0) return null;
 

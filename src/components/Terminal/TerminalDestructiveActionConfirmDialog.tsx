@@ -1,6 +1,7 @@
 import { type ReactElement, useCallback } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionSnapshot,
@@ -95,6 +96,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
 
   const handleConfirm = useCallback(() => {
     if (pending === null) return;
+    const announce = useAnnouncerStore.getState().announce;
     switch (pending.kind) {
       case "kill":
         // Defensive: refuse to dispatch when the snapshot lost the target.
@@ -106,6 +108,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { terminalId: pending.terminalId, confirmed: true },
           { source: "user" }
         );
+        announce("Terminal killed");
         break;
       case "restart":
         if (!pending.terminalId) break;
@@ -114,29 +117,42 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { terminalId: pending.terminalId, confirmed: true },
           { source: "user" }
         );
+        announce("Terminal restarted");
         break;
-      case "killAll":
+      case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source: "user" });
+        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+        announce(`Killed ${pending.targetCount} ${noun}`);
         break;
-      case "restartAll":
+      }
+      case "restartAll": {
         void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source: "user" });
+        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+        announce(`Restarted ${pending.targetCount} ${noun}`);
         break;
-      case "worktreeRestartAll":
+      }
+      case "worktreeRestartAll": {
         if (!pending.worktreeId) break;
         void actionService.dispatch(
           "worktree.sessions.restartAll",
           { worktreeId: pending.worktreeId, confirmed: true },
           { source: "user" }
         );
+        const noun = pending.targetCount === 1 ? "session" : "sessions";
+        announce(`Restarted ${pending.targetCount} ${noun}`);
         break;
-      case "worktreeTrashAll":
+      }
+      case "worktreeTrashAll": {
         if (!pending.worktreeId) break;
         void actionService.dispatch(
           "worktree.sessions.trashAll",
           { worktreeId: pending.worktreeId, confirmed: true },
           { source: "user" }
         );
+        const noun = pending.targetCount === 1 ? "session" : "sessions";
+        announce(`Trashed ${pending.targetCount} ${noun}`);
         break;
+      }
     }
     clear();
   }, [pending, clear]);
