@@ -14,6 +14,7 @@ export function TerminalDockRegion() {
 
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("dock", hasDocked);
+    return () => useMacroFocusStore.getState().setVisibility("dock", false);
   }, [hasDocked]);
 
   useEffect(() => {
