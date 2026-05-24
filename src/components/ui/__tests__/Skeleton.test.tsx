@@ -273,17 +273,17 @@ describe("SkeletonHint", () => {
     expect(live?.textContent).toBe("");
   });
 
-  it('shows "Still working…" at exactly 5000ms', () => {
+  it('shows "Still working…" at exactly 8000ms', () => {
     render(<SkeletonHint />);
-    advance(4_999);
+    advance(7_999);
     expect(screen.queryByText("Still working…")).toBeNull();
     advance(1);
     expect(screen.getAllByText("Still working…").length).toBeGreaterThan(0);
   });
 
-  it('escalates to "Taking longer than usual…" at 10000ms', () => {
+  it('escalates to "Taking longer than usual…" at 13000ms', () => {
     render(<SkeletonHint />);
-    advance(10_000);
+    advance(13_000);
     expect(screen.getAllByText("Taking longer than usual…").length).toBeGreaterThan(0);
     expect(screen.queryByText("Still working…")).toBeNull();
   });
@@ -293,7 +293,7 @@ describe("SkeletonHint", () => {
     const live = container.querySelector('[aria-live="polite"]')!;
     expect(live.textContent).toBe("");
 
-    advance(5_000);
+    advance(8_000);
     expect(live.textContent).toBe("Still working…");
 
     advance(5_000);
@@ -303,63 +303,86 @@ describe("SkeletonHint", () => {
   it("appends an action affordance announcement to the live region at the action phase", () => {
     const { container } = render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
     const live = container.querySelector('[aria-live="polite"]')!;
-    advance(15_000);
+    advance(20_000);
     expect(live.textContent).toBe("Taking longer than usual… Cancel and retry options available.");
+  });
+
+  it("announces the Cancel affordance at the first phase, before Retry exists", () => {
+    const { container } = render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(8_000);
+    // Cancel surfaces with the first hint; Retry is still gated to the action
+    // phase, so only Cancel is announced here.
+    expect(live.textContent).toBe("Still working… Cancel option available.");
   });
 
   it("scopes the action affordance announcement to the handlers actually passed", () => {
     const { container, rerender } = render(<SkeletonHint onCancel={() => {}} />);
     const live = container.querySelector('[aria-live="polite"]')!;
-    advance(15_000);
+    advance(20_000);
     expect(live.textContent).toBe("Taking longer than usual… Cancel option available.");
     rerender(<SkeletonHint onRetry={() => {}} />);
-    advance(15_000);
+    advance(20_000);
     expect(live.textContent).toBe("Taking longer than usual… Retry option available.");
   });
 
   it("does not append an action affordance announcement when no handlers are passed", () => {
     const { container } = render(<SkeletonHint />);
     const live = container.querySelector('[aria-live="polite"]')!;
-    advance(15_000);
+    advance(20_000);
     expect(live.textContent).toBe("Taking longer than usual…");
   });
 
-  it("does not show action buttons at 15000ms when no handlers are passed", () => {
+  it("does not show action buttons at the action threshold when no handlers are passed", () => {
     render(<SkeletonHint />);
-    advance(15_000);
+    advance(20_000);
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("renders Cancel at 15000ms and fires the handler when clicked", () => {
+  it("renders Cancel at the first threshold and fires the handler when clicked", () => {
     const onCancel = vi.fn();
     render(<SkeletonHint onCancel={onCancel} />);
-    advance(15_000);
+    advance(7_999);
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    advance(1);
     const button = screen.getByRole("button", { name: "Cancel" });
     fireEvent.click(button);
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("renders Retry at 15000ms and fires the handler when clicked", () => {
+  it("keeps Cancel visible as the copy escalates through later phases", () => {
+    render(<SkeletonHint onCancel={() => {}} />);
+    advance(8_000);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    advance(5_000); // second phase
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    advance(7_000); // action phase
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("renders Retry only at the action threshold and fires the handler when clicked", () => {
     const onRetry = vi.fn();
     render(<SkeletonHint onRetry={onRetry} />);
-    advance(15_000);
+    advance(13_000);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    advance(7_000);
     const button = screen.getByRole("button", { name: "Retry" });
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("renders both Cancel and Retry when both handlers are passed", () => {
+  it("renders both Cancel and Retry at the action threshold when both handlers are passed", () => {
     render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
-    advance(15_000);
+    advance(20_000);
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("does not show buttons before the action threshold even with handlers", () => {
+  it("shows Cancel but withholds Retry before the action threshold", () => {
     render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
-    advance(10_000);
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    advance(13_000); // second phase — past first, before action
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
@@ -378,16 +401,23 @@ describe("SkeletonHint", () => {
     expect(screen.getAllByText("Taking longer than usual…").length).toBeGreaterThan(0);
   });
 
-  it("clamps out-of-order thresholds to monotonic ascending so phase can't regress", () => {
-    // actionThreshold is intentionally smaller than secondThreshold's default —
-    // without clamping, buttons would flash at 6s then disappear at 10s when
+  it("clamps out-of-order actionThreshold to monotonic ascending so Retry can't flash early", () => {
+    // actionThreshold is intentionally smaller than secondThreshold —
+    // without clamping, Retry would flash at 2s then disappear at 3s when
     // setPhase("second") fires. With clamping, action is held to >= second.
-    render(<SkeletonHint actionThreshold={6_000} onCancel={() => {}} />);
-    advance(6_000);
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-    advance(4_000);
-    // At 10s the clamped action threshold finally fires alongside second.
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    render(
+      <SkeletonHint
+        firstThreshold={1_000}
+        secondThreshold={3_000}
+        actionThreshold={2_000}
+        onRetry={() => {}}
+      />
+    );
+    advance(2_000);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    advance(1_000);
+    // At 3s the clamped action threshold finally fires alongside second.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("clamps secondThreshold below firstThreshold to firstThreshold (no backward jump)", () => {
@@ -407,7 +437,7 @@ describe("SkeletonHint", () => {
         actionThreshold={Number.POSITIVE_INFINITY}
       />
     );
-    advance(4_999);
+    advance(7_999);
     expect(screen.queryByText("Still working…")).toBeNull();
     advance(1);
     expect(screen.getAllByText("Still working…").length).toBeGreaterThan(0);
@@ -415,7 +445,7 @@ describe("SkeletonHint", () => {
 
   it("marks the visible copy span as aria-hidden so AT only hears the live region", () => {
     const { container } = render(<SkeletonHint />);
-    advance(5_000);
+    advance(8_000);
     const visible = container.querySelector(".animate-hint-fade-in > span[aria-hidden='true']");
     expect(visible).toBeTruthy();
     expect(visible?.textContent).toBe("Still working…");
@@ -440,7 +470,7 @@ describe("SkeletonHint", () => {
 
   it("re-keys the visible row when copy escalates so the fade-in re-fires", () => {
     const { container } = render(<SkeletonHint />);
-    advance(5_000);
+    advance(8_000);
     const first = container.querySelector(".animate-hint-fade-in");
     expect(first).toBeTruthy();
     advance(5_000);
@@ -453,25 +483,25 @@ describe("SkeletonHint", () => {
 
   it("preserves the visible node at action phase when no handlers are passed (no spurious re-fade)", () => {
     const { container } = render(<SkeletonHint />);
-    advance(10_000);
+    advance(13_000);
     const before = container.querySelector(".animate-hint-fade-in");
     expect(before).toBeTruthy();
     // Crossing the action threshold with no handlers must NOT remount the node:
     // visible content is identical, key is stable, fade-in does not re-fire.
-    advance(5_000);
+    advance(7_000);
     const after = container.querySelector(".animate-hint-fade-in");
     expect(after).toBe(before);
   });
 
-  it("re-keys at action phase when handlers appear so the fade-in re-fires", () => {
-    const { container } = render(<SkeletonHint onCancel={() => {}} />);
-    advance(10_000);
+  it("re-keys at the action phase when Retry surfaces so the fade-in re-fires", () => {
+    const { container } = render(<SkeletonHint onRetry={() => {}} />);
+    advance(13_000);
     const before = container.querySelector(".animate-hint-fade-in");
     expect(before).toBeTruthy();
-    advance(5_000);
+    advance(7_000);
     const after = container.querySelector(".animate-hint-fade-in");
     expect(after).toBeTruthy();
-    // Buttons appearing is a meaningful visual change — re-fade is desired.
+    // Retry appearing is a meaningful visual change — re-fade is desired.
     expect(after).not.toBe(before);
   });
 
@@ -483,7 +513,7 @@ describe("SkeletonHint", () => {
 
   it("Cancel/Retry buttons use the ghost variant (no accent color)", () => {
     render(<SkeletonHint onCancel={() => {}} onRetry={() => {}} />);
-    advance(15_000);
+    advance(20_000);
     const cancel = screen.getByRole("button", { name: "Cancel" });
     const retry = screen.getByRole("button", { name: "Retry" });
     // Ghost variant uses text-text-secondary, not text-accent-* / bg-primary
@@ -498,6 +528,53 @@ describe("SkeletonHint", () => {
     const { container } = render(<SkeletonHint className="my-hint" data-testid="hint" />);
     const hint = container.querySelector('[data-testid="hint"]')!;
     expect(hint.className).toContain("my-hint");
+  });
+
+  it("prefers a custom message over the generic first-phase copy", () => {
+    const { container } = render(<SkeletonHint message="Fetching 3 of 12 files…" />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(8_000);
+    expect(screen.getAllByText("Fetching 3 of 12 files…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Still working…")).toBeNull();
+    expect(live.textContent).toBe("Fetching 3 of 12 files…");
+  });
+
+  it("keeps the custom message through the second phase", () => {
+    render(<SkeletonHint message="Fetching 3 of 12 files…" />);
+    advance(13_000);
+    expect(screen.getAllByText("Fetching 3 of 12 files…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Taking longer than usual…")).toBeNull();
+  });
+
+  it("falls back to the generic stall copy at the action phase even with a message", () => {
+    render(<SkeletonHint message="Fetching 3 of 12 files…" />);
+    advance(20_000);
+    expect(screen.getAllByText("Taking longer than usual…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Fetching 3 of 12 files…")).toBeNull();
+  });
+
+  it("includes the Cancel affordance after a custom message in the live region", () => {
+    const { container } = render(
+      <SkeletonHint message="Fetching 3 of 12 files…" onCancel={() => {}} />
+    );
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(8_000);
+    expect(live.textContent).toBe("Fetching 3 of 12 files… Cancel option available.");
+  });
+
+  it("falls back to the generic copy when message is an empty string", () => {
+    render(<SkeletonHint message="" />);
+    advance(8_000);
+    expect(screen.getAllByText("Still working…").length).toBeGreaterThan(0);
+  });
+
+  it("reflects a changed message immediately while visible", () => {
+    const { rerender } = render(<SkeletonHint message="Fetching 1 of 12 files…" />);
+    advance(8_000);
+    expect(screen.getAllByText("Fetching 1 of 12 files…").length).toBeGreaterThan(0);
+    rerender(<SkeletonHint message="Fetching 7 of 12 files…" />);
+    expect(screen.getAllByText("Fetching 7 of 12 files…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Fetching 1 of 12 files…")).toBeNull();
   });
 });
 

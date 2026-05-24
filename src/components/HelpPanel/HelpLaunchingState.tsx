@@ -7,7 +7,7 @@ interface HelpLaunchingStateProps {
   phase: HelpSessionPhase;
   /** Drives the 400ms Doherty gate — keep true while the launch is in flight. */
   isLoading: boolean;
-  /** Aborts the in-flight launch. Surfaced as a Cancel button by `SkeletonHint` at 15s. */
+  /** Aborts the in-flight launch. Surfaced as a Cancel button by `SkeletonHint` with the first hint. */
   onCancel: () => void;
 }
 
@@ -34,8 +34,8 @@ function phaseLabel(phase: HelpSessionPhase): string {
  * Phase-labeled loading skeleton for the assistant launch sequence. Replaces
  * the static empty state while auto-launch / select-agent runs (6–45s), so the
  * panel proves it's working instead of looking idle. Gated behind the 400ms
- * Doherty threshold to avoid flicker on fast launches; `SkeletonHint` escalates
- * copy at 5s/10s and surfaces Cancel at 15s for the long tail.
+ * Doherty threshold to avoid flicker on fast launches; `SkeletonHint` surfaces
+ * Cancel with the first hint (8s) and escalates copy for the long tail.
  */
 export function HelpLaunchingState({ phase, isLoading, onCancel }: HelpLaunchingStateProps) {
   const show = useDohertyGate(isLoading);

@@ -1,5 +1,5 @@
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { SkeletonHint } from "@/components/ui/Skeleton";
+import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 
 interface DevPreviewLoadingStateProps {
   variant: "full" | "overlay";
@@ -9,18 +9,7 @@ interface DevPreviewLoadingStateProps {
   className?: string;
 }
 
-function SkeletonBone({ className }: { className?: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={`bg-muted rounded animate-pulse-delayed ${className ?? ""}`}
-    />
-  );
-}
-
-function FullSkeleton({ phaseLabel, isLoading }: { phaseLabel: string; isLoading: boolean }) {
-  const showPhaseLabel = useDohertyGate(isLoading);
-
+function FullSkeleton({ phaseLabel }: { phaseLabel: string }) {
   return (
     <div className="relative flex flex-col items-center justify-center h-full bg-daintree-bg px-6">
       <div
@@ -44,15 +33,15 @@ function FullSkeleton({ phaseLabel, isLoading }: { phaseLabel: string; isLoading
             <SkeletonBone className="h-2.5 w-3/5" />
           </div>
         </div>
-
-        {showPhaseLabel && (
-          <p aria-live="polite" className="mt-6 text-xs text-daintree-text/60">
-            {phaseLabel}
-          </p>
-        )}
       </div>
 
-      <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+      {/* The phase label flows through the hint's message rather than a separate
+          live region — the wrapper's aria-busy="true" would silence an inner
+          aria-live anyway. The role=status wrapper still announces it on mount. */}
+      <SkeletonHint
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={phaseLabel}
+      />
     </div>
   );
 }
@@ -72,21 +61,13 @@ function OverlaySkeleton({
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg">
-      <div
-        className="flex flex-col items-center gap-3"
-        role="status"
-        aria-busy="true"
-        aria-label={phaseLabel}
-      >
+      <div role="status" aria-busy="true" aria-label={phaseLabel}>
         <span className="sr-only">{phaseLabel}</span>
-
-        <p aria-live="polite" className="text-xs text-daintree-text/60">
-          {phaseLabel}
-        </p>
       </div>
 
       <SkeletonHint
         className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={phaseLabel}
         onCancel={onCancel}
       />
     </div>
@@ -106,7 +87,7 @@ export function DevPreviewLoadingState({
 
   return (
     <div className={className}>
-      <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} />
+      <FullSkeleton phaseLabel={phaseLabel} />
     </div>
   );
 }
