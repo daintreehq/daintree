@@ -498,6 +498,35 @@ describe("accent guard", () => {
 
   // ── Repository scan ──────────────────────────────────────────────────
 
+  it("has no 'per view' phrasing in DURABLE_ALLOWLIST comments", () => {
+    const testFile = fs.readFileSync(path.join(TEST_DIR, "accentGuard.contract.test.ts"), "utf8");
+    // Extract DURABLE_ALLOWLIST entries: from `const DURABLE_ALLOWLIST = new Set([` to `]);`
+    const allowlistMatch = testFile.match(/const DURABLE_ALLOWLIST = new Set\(\[([\s\S]*?)\]\);/);
+    if (!allowlistMatch) return;
+
+    const violations: number[] = [];
+    const lines = allowlistMatch[1].split("\n");
+    for (const line of lines) {
+      if (line.includes("//") && /\bper view\b/.test(line)) {
+        const lineNum = testFile.substring(0, testFile.indexOf(line)).split("\n").length;
+        violations.push(lineNum);
+      }
+    }
+
+    if (violations.length > 0) {
+      expect(
+        violations,
+        `${violations.length} DURABLE_ALLOWLIST comment(s) still use "per view". ` +
+          `Replace with "per active focus region".`
+      ).toEqual([]);
+    }
+  });
+
+  it("has DURABLE_ALLOWLIST checklist reference in error message", () => {
+    const testFile = fs.readFileSync(path.join(TEST_DIR, "accentGuard.contract.test.ts"), "utf8");
+    expect(testFile).toContain("See Design review checklist in docs/themes/theme-system.md.");
+  });
+
   it("has no non-allowlisted accent token usages", () => {
     const fullAllowlist = new Set([
       ...DURABLE_ALLOWLIST,

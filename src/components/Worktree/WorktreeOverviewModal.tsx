@@ -148,7 +148,7 @@ function OverviewWorktreeCard({
  * The wrapper is the actual rendered box (the card's chrome). Selection
  * styling uses `bg-overlay-subtle` + a neutral inset ring per CLAUDE.md's
  * accent-color restraint — accent is reserved for one load-bearing signal
- * per view and is never used as a multi-select indicator.
+ * per active focus region and is never used as a multi-select indicator.
  */
 function OverviewGridCell(props: OverviewWorktreeCardProps) {
   const cellId = getWorktreeOverviewCellId(props.worktreeId);

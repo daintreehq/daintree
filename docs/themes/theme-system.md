@@ -127,7 +127,7 @@ Before adding a file to `DURABLE_ALLOWLIST` in `src/config/__tests__/accentGuard
 
 1. **Is the accent the user's primary action target in this view?** If accent marks a secondary indicator, badge, or membership state, it fails.
 2. **Does it survive grayscale?** Open Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. If the primary CTA stops reading as primary, the view is overusing accent.
-3. **Is it a singleton in its active focus region?** An active focus region is an independent focus trap or arrow-key navigation domain (macro layout zone, modal, popover, dropdown). Only one accent consumer per region.
+3. **Is it a singleton in its active focus region?** An active focus region is an independent focus trap or arrow-key navigation domain (macro layout zone, modal, popover, dropdown). Only one accent consumer per region. When focus regions overlay (modal over popover over panel), only the topmost active region claims accent; background regions defer to neutral alternatives (`bg-overlay-subtle`, focus styling).
 4. **Is there a neutral lift alternative?** Preference order: title-bar lift (`bg-overlay-subtle`), focus styling, neutral surface difference. Only use accent when every neutral alternative fails the legibility test.
 
 ### Grayscale Test
