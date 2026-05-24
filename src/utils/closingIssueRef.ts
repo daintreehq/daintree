@@ -11,8 +11,11 @@
  */
 export function extractClosingIssueNumber(bodyText?: string | null): number | undefined {
   if (!bodyText) return undefined;
+  // Negative lookbehind so the keyword isn't matched inside a longer token
+  // ("hotfixes #1", "discloses #2", "prefix-fix #3" must not match), while
+  // still allowing leading punctuation ("(closes #4)", "- Fixes #5").
   const match =
-    /(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+#|#)(\d+)/i.exec(
+    /(?<![\w-])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+(?:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+#|#)(\d+)/i.exec(
       bodyText
     );
   const captured = match?.[1];

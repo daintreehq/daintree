@@ -640,6 +640,11 @@ export class WorktreeMonitor {
     this.prCiStatus = undefined;
     this.prTitle = undefined;
     this.prLastUpdatedAt = undefined;
+    // Drop the PR-originated discriminator too (#8888): clearing PR info means
+    // the branch no longer maps to its source PR (branch rename, or detection
+    // found no PR), so the inverted PR-title headline must not linger with a
+    // stale number and no title.
+    this._sourcePrNumber = undefined;
   }
 
   setLinked(linked: import("../../shared/types/plugin.js").PluginWorktreeLinked | null): void {

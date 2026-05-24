@@ -257,7 +257,8 @@ export function WorktreeHeader({
 
   // PR-originated worktrees (created from the PR dropdown, #8888) invert the
   // default issue-first headline: the PR title leads, with the linked issue
-  // shown underneath. `sourcePrNumber` is the persisted discriminator.
+  // shown underneath. `sourcePrNumber` is the in-memory discriminator seeded at
+  // creation time.
   const isPrOriginated = !!worktree.sourcePrNumber;
   const prHeadlineTitle = worktree.linked?.pr?.title ?? worktree.prTitle;
   const displayTitle = isPrOriginated

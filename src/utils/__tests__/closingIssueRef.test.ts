@@ -43,4 +43,16 @@ describe("extractClosingIssueNumber", () => {
   it("is case-insensitive on the keyword", () => {
     expect(extractClosingIssueNumber("CLOSES #77")).toBe(77);
   });
+
+  it.each(["This hotfixes #123", "discloses #300", "prefix-fix #456", "unresolved #5"])(
+    "does not match a keyword embedded in a longer word: %s",
+    (body) => {
+      expect(extractClosingIssueNumber(body)).toBeUndefined();
+    }
+  );
+
+  it("still matches a keyword preceded by punctuation", () => {
+    expect(extractClosingIssueNumber("(closes #88)")).toBe(88);
+    expect(extractClosingIssueNumber("- Fixes #9")).toBe(9);
+  });
 });

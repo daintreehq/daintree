@@ -239,6 +239,21 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(issueBadgeProps.at(-1)?.issueNumber).toBe(123);
   });
 
+  it("PR-originated with no linked issue: renders no issue badge", () => {
+    issueBadgeProps.length = 0;
+    const { queryByTestId } = renderRow({
+      worktree: {
+        ...baseWorktree,
+        sourcePrNumber: 10,
+        issueNumber: undefined,
+      } as unknown as WorktreeState,
+      hasDisplayTitle: true,
+      isPrOriginated: true,
+    });
+    expect(queryByTestId("issue-badge")).toBeNull();
+    expect(queryByTestId("pr-badge")).toBeNull();
+  });
+
   it("CI 'pending' does not flip the order (transient — no spatial churn)", () => {
     const pendingLinked = ciFailureLinked();
     pendingLinked.pr.ciStatus.state = "pending" as never;

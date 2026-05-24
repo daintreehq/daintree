@@ -183,6 +183,37 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
     });
     expect(screen.getByText("Eager PR title")).toBeDefined();
   });
+
+  it("drops the PR headline once sourcePrNumber is cleared (branch rename)", () => {
+    const { rerender } = renderHeader({
+      worktree: {
+        ...baseWorktree,
+        sourcePrNumber: 314,
+        prTitle: "Eager PR title",
+      } as WorktreeState,
+      badges: { onOpenPR: noop },
+    });
+    expect(screen.getByText("Eager PR title")).toBeDefined();
+
+    // Simulate clearPRInfo() firing on a branch change: sourcePrNumber and the
+    // flat PR fields are gone, so the headline must revert to the branch label.
+    rerender(
+      <TooltipProvider>
+        <WorktreeHeader
+          worktree={{ ...baseWorktree } as WorktreeState}
+          isActive={false}
+          isMainWorktree={false}
+          isPinned={false}
+          branchLabel="feature/test"
+          badges={{}}
+          gitStateIndicator={null}
+          menu={baseMenu}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByText("Eager PR title")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open pull request/ })).toBeNull();
+  });
 });
 
 describe("WorktreeHeader issue title headline", () => {
