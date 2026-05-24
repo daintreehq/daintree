@@ -2604,6 +2604,21 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
+  /* The active panel tab marks itself with a background tint plus a
+     framer-motion underline (both background-color based, stripped here).
+     Fall back to a system-color bottom border so the active tab stays visible. */
+  [role="tab"][aria-selected="true"] {
+    border-bottom: 2px solid SelectedItem;
+  }
+
+  /* Radix submenu triggers signal their open state with a background tint via
+     data-state="open"; that is stripped here. Scope to [role="menuitem"] so the
+     fallback doesn't collide with dialog/popover/combobox open states. */
+  [role="menuitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
   button,
   [role="button"],
   [type="button"],

@@ -392,3 +392,19 @@ html[data-shortcut-reveal] .shortcut-reveal-chip {
       opacity 200ms ease;
   }
 }
+
+/* The armed/pressed control state relies on a background tint plus an inset
+   box-shadow ring, both stripped in forced-colors mode. Fall back to a
+   ButtonText border so armed buttons stay distinguishable from idle ones.
+   Selectors mirror the armed-state rule above (including the sidebar-toggle
+   opt-out) to keep the same scope. */
+@media (forced-colors: active) {
+  .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+  .toolbar-icon-button[aria-expanded="true"],
+  .toolbar-icon-button[data-state="open"],
+  .toolbar-agent-button[aria-pressed="true"],
+  .toolbar-agent-button[aria-expanded="true"],
+  .toolbar-agent-button[data-state="open"] {
+    border: 2px solid ButtonText;
+  }
+}
