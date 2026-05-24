@@ -337,9 +337,14 @@ export async function getIssueTooltip(
       })();
 
       inFlightIssueTooltips.set(cacheKey, promise);
-      promise.finally(() => {
-        inFlightIssueTooltips.delete(cacheKey);
-      });
+      promise.then(
+        () => {
+          inFlightIssueTooltips.delete(cacheKey);
+        },
+        () => {
+          inFlightIssueTooltips.delete(cacheKey);
+        }
+      );
 
       return promise;
     });

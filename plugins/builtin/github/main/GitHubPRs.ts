@@ -246,9 +246,14 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
       })();
 
       inFlightPRTooltips.set(cacheKey, promise);
-      promise.finally(() => {
-        inFlightPRTooltips.delete(cacheKey);
-      });
+      promise.then(
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
+        },
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
+        }
+      );
 
       return promise;
     });

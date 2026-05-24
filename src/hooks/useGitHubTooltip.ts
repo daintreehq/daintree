@@ -78,9 +78,14 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     })();
 
     inFlightIssues.set(cacheKey, promise);
-    promise.finally(() => {
-      inFlightIssues.delete(cacheKey);
-    });
+    promise.then(
+      () => {
+        inFlightIssues.delete(cacheKey);
+      },
+      () => {
+        inFlightIssues.delete(cacheKey);
+      }
+    );
 
     try {
       const data = await promise;
@@ -166,9 +171,14 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
     })();
 
     inFlightPRs.set(cacheKey, promise);
-    promise.finally(() => {
-      inFlightPRs.delete(cacheKey);
-    });
+    promise.then(
+      () => {
+        inFlightPRs.delete(cacheKey);
+      },
+      () => {
+        inFlightPRs.delete(cacheKey);
+      }
+    );
 
     try {
       const data = await promise;
