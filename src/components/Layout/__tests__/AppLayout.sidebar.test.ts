@@ -305,8 +305,19 @@ describe("AppLayout CSS layout containment — issue #9014", () => {
     // recalc to this subtree during continuous resize instead of invalidating
     // the whole page. `layout paint` (not `strict`/`size`) is deliberate — size
     // containment would break the flex column sizing.
-    expect(source).toMatch(/width:\s*effectiveSidebarWidth,[\s\S]{0,80}contain:\s*"layout paint"/);
-    expect(source).not.toMatch(/width:\s*effectiveSidebarWidth,[\s\S]{0,80}contain:\s*"strict"/);
+    expect(source).toMatch(/width:\s*effectiveSidebarWidth,[\s\S]{0,160}contain:\s*"layout paint"/);
+    // Size containment (strict/size) would collapse the flex column to 0×0.
+    expect(source).not.toContain('contain: "strict"');
+    expect(source).not.toMatch(/contain:\s*"[^"]*size/);
+  });
+
+  it("gives the contained sidebar wrapper a z-index so the resize handle stays visible", () => {
+    // The contain boundary turns the sidebar wrapper into a stacking context.
+    // Its resize handle overhangs the right edge by 6px (-right-1.5, z-50);
+    // without an explicit z-index the wrapper paints below the later <main>
+    // sibling (both z-index auto, DOM order wins) and <main>'s opaque
+    // background occludes the handle overhang.
+    expect(source).toMatch(/contain:\s*"layout paint",[\s\S]{0,400}zIndex:\s*1/);
   });
 
   it("preserves the sidebar wrapper's overflow-clip-margin alongside containment", () => {
