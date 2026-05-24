@@ -119,7 +119,7 @@ async function fetchMergeVelocity(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "MERGE_VELOCITY_QUERY");
     return extractMergedCounts(result);
   } catch (error) {
     console.warn("[github] merged-PR velocity fetch failed:", error);
@@ -245,7 +245,7 @@ export async function getProjectHealth(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "PROJECT_HEALTH_QUERY");
 
     const repository = result?.repository;
     if (!repository) {

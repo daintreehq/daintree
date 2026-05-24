@@ -190,7 +190,7 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
 
       const pr = response?.repository?.pullRequest;
       if (!pr) {
@@ -275,7 +275,7 @@ async function enrichPRsWithRequiredStatus(
         const response = (await client(query, {
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as Record<string, unknown>;
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "BATCH_REQUIRED_CHECKS_QUERY");
         fetched = parseBatchRequiredChecksResponse(response, numbersToFetch);
         for (const [num, entry] of fetched) {
           prRequiredStatusCache.set(cacheKeyFor(num), entry);
@@ -387,7 +387,7 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_PRS_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
@@ -419,7 +419,7 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "LIST_PRS_QUERY");
 
         if (!response?.repository) {
           throw new Error("Repository not found or token lacks access.");
@@ -491,7 +491,7 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
 
       const pr = response?.repository?.pullRequest;
       if (!pr) {
@@ -542,7 +542,7 @@ export async function getPRReviewThreads(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_REVIEW_THREADS_QUERY");
 
         const threads = response?.repository?.pullRequest?.reviewThreads;
         const nodes = (threads?.nodes ?? []) as Array<{

@@ -215,7 +215,8 @@ function buildOrderBy(opts: ListOptions): { field: string; direction: string } {
 
 async function runQuery(
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  queryLabel: string
 ): Promise<GraphQlQueryResponseData> {
   const client = requireClient();
   try {
@@ -223,7 +224,7 @@ async function runQuery(
       ...variables,
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
-    gitHubRateLimitService.updateFromGraphQL(response);
+    gitHubRateLimitService.updateFromGraphQL(response, queryLabel);
     return response;
   } catch (error) {
     throw new Error(parseGitHubError(error), { cause: error });
@@ -234,14 +235,18 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
   const limit = opts.perPage ?? 20;
   const orderBy = buildOrderBy(opts);
 
-  const response = await runQuery(LIST_ISSUES_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    states: mapIssueGraphQLStates(opts.state),
-    cursor: opts.cursor ?? null,
-    limit,
-    orderBy,
-  });
+  const response = await runQuery(
+    LIST_ISSUES_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+      states: mapIssueGraphQLStates(opts.state),
+      cursor: opts.cursor ?? null,
+      limit,
+      orderBy,
+    },
+    "LIST_ISSUES_QUERY"
+  );
 
   const issues = (response?.repository as Record<string, unknown> | undefined)?.issues as
     | {
@@ -263,14 +268,18 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
   const limit = opts.perPage ?? 20;
   const orderBy = buildOrderBy(opts);
 
-  const response = await runQuery(LIST_PRS_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    states: mapPRGraphQLStates(opts.state),
-    cursor: opts.cursor ?? null,
-    limit,
-    orderBy,
-  });
+  const response = await runQuery(
+    LIST_PRS_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+      states: mapPRGraphQLStates(opts.state),
+      cursor: opts.cursor ?? null,
+      limit,
+      orderBy,
+    },
+    "LIST_PRS_QUERY"
+  );
 
   const prs = (response?.repository as Record<string, unknown> | undefined)?.pullRequests as
     | {
@@ -289,11 +298,15 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
 }
 
 async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
-  const response = await runQuery(GET_ISSUE_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    number,
-  });
+  const response = await runQuery(
+    GET_ISSUE_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+      number,
+    },
+    "GET_ISSUE_QUERY"
+  );
   const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
     | Record<string, unknown>
     | null
@@ -302,11 +315,15 @@ async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null
 }
 
 async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
-  const response = await runQuery(GET_PR_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    number,
-  });
+  const response = await runQuery(
+    GET_PR_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+      number,
+    },
+    "GET_PR_QUERY"
+  );
   const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
     | Record<string, unknown>
     | null
@@ -341,7 +358,7 @@ async function findPRsByBranchesImpl(
     const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
     let response: Record<string, unknown>;
     try {
-      response = (await runQuery(query, {})) as Record<string, unknown>;
+      response = (await runQuery(query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
     } catch {
       // Omit this chunk's branches from the result — caller's missing-key
       // fallback path handles them.
@@ -374,12 +391,16 @@ async function findPRByBranchImpl(repo: RepoRef, branchName: string): Promise<PR
   // `is:`) don't override the intended search semantics.
   const escapedBranch = branchName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const searchQuery = `repo:${repo.owner}/${repo.repo} is:pr head:"${escapedBranch}" sort:created-desc`;
-  const response = await runQuery(SEARCH_QUERY, {
-    searchQuery,
-    type: "ISSUE",
-    cursor: null,
-    limit: 1,
-  });
+  const response = await runQuery(
+    SEARCH_QUERY,
+    {
+      searchQuery,
+      type: "ISSUE",
+      cursor: null,
+      limit: 1,
+    },
+    "SEARCH_QUERY"
+  );
   const nodes = ((response?.search as { nodes?: unknown[] } | undefined)?.nodes ?? []) as Array<
     Record<string, unknown>
   >;
@@ -388,11 +409,15 @@ async function findPRByBranchImpl(repo: RepoRef, branchName: string): Promise<PR
 }
 
 async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatus | null> {
-  const response = await runQuery(PR_CI_STATUS_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-    number: prNumber,
-  });
+  const response = await runQuery(
+    PR_CI_STATUS_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+      number: prNumber,
+    },
+    "PR_CI_STATUS_QUERY"
+  );
 
   const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
     | Record<string, unknown>
@@ -445,10 +470,14 @@ async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatu
 }
 
 async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
-  const response = await runQuery(REPO_METADATA_QUERY, {
-    owner: repo.owner,
-    repo: repo.repo,
-  });
+  const response = await runQuery(
+    REPO_METADATA_QUERY,
+    {
+      owner: repo.owner,
+      repo: repo.repo,
+    },
+    "REPO_METADATA_QUERY"
+  );
 
   const repository = (response?.repository as Record<string, unknown> | undefined) ?? {};
   const defaultBranch =
@@ -481,12 +510,16 @@ async function getReviewThreadsImpl(repo: RepoRef, prNumber: number): Promise<Re
   const threads: ReviewThread[] = [];
   let cursor: string | null = null;
   while (true) {
-    const response = await runQuery(GET_PR_REVIEW_THREADS_QUERY, {
-      owner: repo.owner,
-      repo: repo.repo,
-      number: prNumber,
-      cursor,
-    });
+    const response = await runQuery(
+      GET_PR_REVIEW_THREADS_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        number: prNumber,
+        cursor,
+      },
+      "GET_PR_REVIEW_THREADS_QUERY"
+    );
     const reviewThreads = (
       (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
         | {

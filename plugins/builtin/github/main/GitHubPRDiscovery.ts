@@ -459,7 +459,7 @@ export async function batchCheckLinkedPRs(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as Record<string, unknown>;
 
-    gitHubRateLimitService.updateFromGraphQL(response);
+    gitHubRateLimitService.updateFromGraphQL(response, "BATCH_DISCOVERY_PR_QUERY");
 
     const results = parseBatchPRResponse(response, candidatesForGraphQL);
     prewarmPRTooltipCache(context.owner, context.repo, results, requestedAt);
@@ -482,7 +482,7 @@ export async function batchCheckLinkedPRs(
           const retryResponse = (await client(retryQuery, {
             request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
           })) as Record<string, unknown>;
-          gitHubRateLimitService.updateFromGraphQL(retryResponse);
+          gitHubRateLimitService.updateFromGraphQL(retryResponse, "BATCH_DISCOVERY_PR_RETRY");
           const retryResults = parseBatchPRResponse(retryResponse, candidatesForGraphQL);
           prewarmPRTooltipCache(
             freshContext.owner,

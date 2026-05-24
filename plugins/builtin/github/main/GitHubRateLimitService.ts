@@ -1,3 +1,6 @@
+import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
+import { app } from "electron";
 import type {
   GitHubRateLimitKind,
   GitHubRateLimitPayload,
@@ -314,7 +317,7 @@ class GitHubRateLimitServiceImpl {
    *
    * Ignores missing or malformed rateLimit objects silently.
    */
-  updateFromGraphQL(data: Record<string, unknown>): void {
+  updateFromGraphQL(data: Record<string, unknown>, queryLabel?: string): void {
     const rateLimit = data?.rateLimit as
       | { cost?: number; remaining?: number; resetAt?: string; limit?: number }
       | undefined;
@@ -327,7 +330,12 @@ class GitHubRateLimitServiceImpl {
     const resetMs = Date.parse(resetAt);
     if (!Number.isFinite(resetMs)) return;
 
+    const cost = typeof rateLimit.cost === "number" ? rateLimit.cost : null;
     const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
+
+    if (queryLabel && cost !== null) {
+      this._logGraphQLCost(queryLabel, cost, remaining, limit);
+    }
 
     // Budget exhausted (or within the hard-stop band): hard-block GraphQL
     // until the window resets, exactly as the legacy `remaining === 0` path.
@@ -351,6 +359,26 @@ class GitHubRateLimitServiceImpl {
     if (limit === null || limit <= 0) return;
 
     this.recordBudgetReading(remaining, limit, resetMs);
+  }
+
+  private _logGraphQLCost(
+    queryLabel: string,
+    cost: number,
+    remaining: number,
+    limit: number | null
+  ): void {
+    if (process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL !== "1") return;
+    try {
+      const dir = join(app.getPath("userData"), "debug");
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const escaped = queryLabel.replace(/["\n\r]/g, "");
+      const line = `[${new Date().toISOString()}] label="${escaped}" cost=${cost} remaining=${remaining} limit=${limit ?? "null"}\n`;
+      appendFileSync(join(dir, "github-graphql-costs.log"), line, "utf-8");
+    } catch {
+      // Must never throw — diagnostic logging is best-effort.
+    }
   }
 
   /**
