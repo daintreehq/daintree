@@ -72,8 +72,10 @@ export function useSkeletonDisplayFloor(
   const [showing, setShowing] = useState(isShowing);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Timestamp the placeholder first became visible; the floor is measured from
-  // here so re-renders and a true→false flap can't reset or escape it.
-  const shownAtRef = useRef<number | null>(null);
+  // here so re-renders and a true→false flap can't reset or escape it. Seeded
+  // at mount so the floor still applies if isShowing flips false before the
+  // first effect commits (standalone use without a paired onset gate).
+  const shownAtRef = useRef<number | null>(isShowing ? Date.now() : null);
 
   useEffect(() => {
     const floor = getEffectiveFloor(floorMs);

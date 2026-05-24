@@ -152,18 +152,61 @@ describe("useSkeletonDisplayFloor", () => {
     expect(result.current).toBe(false);
   });
 
-  it("does not update state after unmount", () => {
+  it("clears the pending floor timer on unmount", () => {
     const { unmount, rerender } = renderHook(
       ({ isShowing }) => useSkeletonDisplayFloor(isShowing, FLOOR),
       { initialProps: { isShowing: true } }
     );
     rerender({ isShowing: false });
+    expect(vi.getTimerCount()).toBe(1);
+
     unmount();
+    expect(vi.getTimerCount()).toBe(0);
     expect(() => {
       act(() => {
         vi.advanceTimersByTime(FLOOR * 2);
       });
     }).not.toThrow();
+  });
+
+  it("reveals after a false→true transition", () => {
+    const { result, rerender } = renderHook(
+      ({ isShowing }) => useSkeletonDisplayFloor(isShowing, FLOOR),
+      { initialProps: { isShowing: false } }
+    );
+    expect(result.current).toBe(false);
+
+    rerender({ isShowing: true });
+    expect(result.current).toBe(true);
+  });
+
+  it("releases immediately on a hide that arrives after the floor already elapsed", () => {
+    const { result, rerender } = renderHook(
+      ({ isShowing }) => useSkeletonDisplayFloor(isShowing, FLOOR),
+      { initialProps: { isShowing: true } }
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(FLOOR + 10);
+    });
+    rerender({ isShowing: false });
+    expect(result.current).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drops to zero floor mid-hold without leaving a stale timer", () => {
+    const { result, rerender } = renderHook(
+      ({ isShowing, floorMs }) => useSkeletonDisplayFloor(isShowing, floorMs),
+      { initialProps: { isShowing: true, floorMs: FLOOR } }
+    );
+
+    rerender({ isShowing: false, floorMs: FLOOR });
+    expect(result.current).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+
+    rerender({ isShowing: false, floorMs: 0 });
+    expect(result.current).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
