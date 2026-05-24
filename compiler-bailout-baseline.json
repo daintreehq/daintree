@@ -4,6 +4,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -13,32 +14,8 @@
     "skip": 0,
     "error": 6,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 6,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -47,16 +24,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -65,6 +34,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -74,6 +44,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -83,6 +54,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -92,6 +64,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -101,6 +74,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -110,34 +84,18 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/App.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 2,
+    "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle Import expressions"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle Import expressions"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -146,15 +104,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/ActionPalette/ActionPalette.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -164,6 +124,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -173,6 +134,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -182,6 +144,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -191,6 +154,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -200,12 +164,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -214,6 +174,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -223,6 +184,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -232,6 +194,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -241,15 +204,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Commands/CommandPickerButton.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -259,6 +214,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -268,12 +224,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -282,12 +234,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -296,20 +244,53 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/BlockedNavBanner.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [
       {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
+        "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
       }
     ],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/DevPreview/ConsoleDrawer.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/ConsolePanel.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/DevPreviewLoadingState.tsx": {
+    "success": 4,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -319,27 +300,66 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/ObjectInspector.tsx": {
+    "success": 2,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/StackTrace.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/DevPreview/useDevPreviewConsoleCapture.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/DevPreview/useDevPreviewLoadLifecycle.ts": {
     "success": 0,
     "skip": 0,
-    "error": 1,
+    "error": 4,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [
       {
         "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
+      },
+      {
+        "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
+      },
+      {
+        "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
+      },
+      {
+        "category": "Refs",
+        "severity": "Error",
         "reason": "Cannot access refs during render"
       }
     ],
@@ -351,6 +371,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -360,12 +381,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -374,6 +391,7 @@
     "skip": 1,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": ["Skipped due to '[object Object]' directive."],
     "pipelineErrors": []
@@ -383,6 +401,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -392,6 +411,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -401,6 +421,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -410,12 +431,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -424,6 +441,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -433,6 +451,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -442,6 +461,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -451,6 +471,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -460,6 +481,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -469,6 +491,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -478,6 +501,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -487,6 +511,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -496,6 +521,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -505,6 +531,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -514,6 +541,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -523,6 +551,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -532,6 +561,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -541,6 +571,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -550,6 +581,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -559,6 +591,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -568,12 +601,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -582,6 +611,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -591,6 +621,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -600,6 +631,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -609,6 +641,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -618,6 +651,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -627,6 +661,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Fleet/FleetFailureBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -636,6 +681,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -645,6 +691,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -654,6 +701,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -663,6 +711,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -672,6 +721,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -681,6 +731,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -690,6 +741,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -699,6 +751,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -708,6 +761,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -717,6 +771,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -726,6 +781,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -735,6 +791,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/HelpPanel/HelpLaunchingState.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -744,6 +811,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -753,6 +821,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -762,6 +831,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -771,6 +841,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -780,6 +851,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -789,28 +861,8 @@
     "skip": 0,
     "error": 5,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 5,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -819,6 +871,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -828,6 +881,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -837,6 +891,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -846,6 +901,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -855,6 +911,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -864,6 +921,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -873,6 +931,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -882,6 +941,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -891,6 +951,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -900,12 +961,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -914,6 +971,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -923,6 +981,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -932,15 +991,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Layout/FreshnessUtils.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -950,6 +1001,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -959,12 +1011,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Expected Identifier, got TSAsExpression key in ObjectExpression"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -973,6 +1021,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -982,15 +1031,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Layout/PRDetectionPausedIndicator.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Layout/RateLimitDetails.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1000,6 +1061,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1009,6 +1071,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1018,6 +1081,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1027,12 +1091,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1041,6 +1101,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Layout/ToolbarCommandPaletteButton.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1050,6 +1121,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1059,6 +1131,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1068,6 +1141,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1077,6 +1151,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1086,6 +1161,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1095,6 +1171,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1104,6 +1181,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1113,6 +1191,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1122,6 +1201,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1131,6 +1211,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1140,6 +1221,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1149,6 +1231,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1158,6 +1241,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1167,6 +1251,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1176,6 +1261,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1185,6 +1271,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1194,6 +1281,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1203,6 +1291,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1212,6 +1301,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1221,6 +1311,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1230,6 +1321,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1239,6 +1331,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1248,6 +1341,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1257,6 +1351,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1266,6 +1361,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1275,6 +1371,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1284,6 +1381,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1293,6 +1391,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1302,6 +1401,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1311,6 +1411,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Plugin/PluginConfirmDialog.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Portal/PortalCloseConfirmDialog.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1320,12 +1441,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1334,6 +1451,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1343,12 +1461,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1357,6 +1471,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1366,12 +1481,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1380,6 +1491,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1389,12 +1501,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Project/CodeForgeTab.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1403,12 +1521,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1417,12 +1531,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1431,20 +1541,7 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Project/ForgeProviderTab.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1454,16 +1551,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1472,12 +1561,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1486,6 +1571,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1495,20 +1581,7 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Project/ProjectSwitcher.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1518,6 +1591,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1527,12 +1601,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1541,6 +1611,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1550,6 +1621,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1559,12 +1631,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1573,6 +1641,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1582,6 +1651,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1591,6 +1661,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1600,6 +1671,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1609,6 +1681,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1618,6 +1691,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1627,6 +1701,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1636,12 +1711,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1650,6 +1721,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1659,6 +1731,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Recovery/RecoveryBannerCoordinator.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1668,6 +1751,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1675,8 +1759,29 @@
   "src/components/Recovery/SafeModeBanner.tsx": {
     "success": 1,
     "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Recovery/WatchdogDisabledBanner.tsx": {
+    "success": 1,
+    "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Recovery/useRecoveryPriority.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1686,6 +1791,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1695,12 +1801,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1709,6 +1811,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1718,6 +1821,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1727,6 +1831,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1736,6 +1841,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1745,6 +1851,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1754,6 +1861,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1763,6 +1871,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1772,12 +1881,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1786,6 +1891,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1795,12 +1901,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1809,12 +1911,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/CodeForgeSettingsTab.tsx": {
+    "success": 3,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1823,6 +1931,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1832,6 +1941,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1841,30 +1951,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Settings/DaintreeAssistantSettingsTab.tsx": {
     "success": 1,
     "skip": 0,
-    "error": 2,
+    "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1873,6 +1971,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1882,6 +1981,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1891,20 +1991,8 @@
     "skip": 0,
     "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1913,6 +2001,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -1922,12 +2011,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1936,12 +2021,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/ForgeProviderSelectorDropdown.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -1950,86 +2041,18 @@
     "skip": 0,
     "error": 10,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 10,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Settings/GitHubSettingsTab.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
     "error": 7,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 7,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2038,12 +2061,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2052,6 +2071,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2061,6 +2081,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2070,16 +2091,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2088,12 +2101,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2102,6 +2111,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2111,6 +2121,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2118,18 +2129,10 @@
   "src/components/Settings/McpServerSettingsTab.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 5,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 5,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2138,6 +2141,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2147,6 +2151,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2156,6 +2161,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2165,6 +2171,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2174,6 +2181,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2183,12 +2191,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2197,6 +2201,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2206,6 +2211,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2215,20 +2221,17 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Unexpected terminal kind `ternary` for logical test block"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Settings/SettingsDialog.tsx": {
-    "success": 11,
+    "success": 12,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2238,6 +2241,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2247,12 +2251,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Unexpected terminal kind `ternary` for logical test block"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/SettingsLoadErrorBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2261,6 +2271,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2270,6 +2281,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2279,12 +2291,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Unexpected terminal kind `ternary` for logical test block"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2293,6 +2301,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2302,6 +2311,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2311,6 +2321,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2320,12 +2331,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Unexpected terminal kind `ternary` for logical test block"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2334,6 +2341,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2343,16 +2351,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2361,32 +2361,8 @@
     "skip": 0,
     "error": 6,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 6,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2395,6 +2371,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2404,32 +2381,18 @@
     "skip": 0,
     "error": 6,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 6,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/TurnOutcomeDiagnostics.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0,
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2438,16 +2401,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2456,16 +2411,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2474,6 +2421,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2483,12 +2431,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2497,16 +2441,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2515,6 +2451,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2524,6 +2461,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2533,6 +2471,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2542,6 +2481,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2551,6 +2491,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2560,12 +2501,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2574,25 +2511,18 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Sidebar/SidebarContent.tsx": {
-    "success": 0,
+    "success": 4,
     "skip": 0,
-    "error": 2,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2601,6 +2531,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2610,6 +2541,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Sidebar/WorktreeCardPlaceholder.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Sidebar/WorktreeLoadErrorBanner.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2619,6 +2571,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2628,15 +2581,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Sidebar/useWorktreeGridRovingFocus.ts": {
+  "src/components/Sidebar/useWorktreeSidebarKeyboard.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2646,6 +2601,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2655,6 +2611,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2664,6 +2621,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2673,6 +2631,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2682,6 +2641,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2691,6 +2651,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2700,6 +2661,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2709,6 +2671,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2718,6 +2681,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2727,6 +2691,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2736,15 +2701,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Terminal/GridFullOverlay.tsx": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2754,6 +2711,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2763,6 +2721,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Terminal/GridScrollRootContext.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Terminal/GridScrollbar.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2772,6 +2751,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2781,6 +2761,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2790,6 +2771,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2799,6 +2781,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2808,6 +2791,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2817,6 +2801,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2826,6 +2811,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2835,6 +2821,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2844,6 +2831,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2853,6 +2841,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2862,6 +2851,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2871,12 +2861,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2885,16 +2871,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -2903,6 +2881,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Terminal/ScrollbackRestoreErrorBanner.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2912,6 +2901,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2921,6 +2911,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2930,6 +2921,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2939,6 +2931,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2948,6 +2941,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2957,6 +2951,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2966,6 +2961,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2975,6 +2971,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -2984,16 +2981,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3002,15 +2991,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Terminal/TerminalPane.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3020,6 +3011,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3029,6 +3021,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3038,6 +3031,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3047,12 +3041,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3061,6 +3051,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3070,6 +3061,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3079,12 +3071,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3093,6 +3081,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3102,6 +3091,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3111,6 +3101,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3120,6 +3111,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3129,6 +3121,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3138,6 +3131,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3147,6 +3141,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3156,6 +3151,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3165,6 +3161,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3174,6 +3171,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3183,12 +3181,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3197,6 +3191,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3206,9 +3201,11 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [
       {
         "category": "Refs",
+        "severity": "Error",
         "reason": "Cannot access refs during render"
       }
     ],
@@ -3220,6 +3217,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3229,6 +3227,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3238,6 +3237,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3247,6 +3247,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3256,6 +3257,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3265,12 +3267,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3279,6 +3277,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3288,30 +3287,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Terminal/useContentGridContext.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3320,12 +3307,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3334,6 +3317,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3343,16 +3327,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3361,12 +3337,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3375,6 +3347,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3384,6 +3357,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3393,6 +3367,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3402,6 +3377,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3411,6 +3387,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3420,16 +3397,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3438,12 +3407,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3452,21 +3417,18 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Worktree/FileDiffModal.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3475,12 +3437,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3489,6 +3447,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3498,16 +3457,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3516,6 +3467,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3525,6 +3477,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3534,12 +3487,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3548,20 +3497,8 @@
     "skip": 0,
     "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3570,24 +3507,8 @@
     "skip": 0,
     "error": 4,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 4,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3596,6 +3517,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3605,12 +3527,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3619,6 +3537,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3628,44 +3547,8 @@
     "skip": 0,
     "error": 9,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 9,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3674,6 +3557,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3683,6 +3567,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/WorktreeCard/CollapsedAlarmPill.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3692,6 +3587,37 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/WorktreeCard/CommitAuthorAvatar.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/WorktreeCard/CommitChip.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/WorktreeCard/CommitInfoTooltip.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3701,6 +3627,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3710,6 +3637,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3719,6 +3647,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3728,9 +3657,11 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [
       {
         "category": "Refs",
+        "severity": "Error",
         "reason": "Cannot access refs during render"
       }
     ],
@@ -3742,6 +3673,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3751,6 +3683,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3760,16 +3693,24 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/PRBadge.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
-    "errorBailouts": [],
+    "hintCount": 0,
+    "errorBailouts": [
+      {
+        "category": "Refs",
+        "severity": "Error",
+        "reason": "Cannot access refs during render"
+      }
+    ],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3778,6 +3719,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3787,6 +3729,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3794,8 +3737,9 @@
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": {
     "success": 1,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3805,15 +3749,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3823,6 +3769,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3832,16 +3779,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3850,6 +3789,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3859,6 +3799,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3868,6 +3809,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3877,12 +3819,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3891,6 +3829,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3900,25 +3839,18 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeDeleteDialog.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 2,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -3927,6 +3859,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3936,6 +3869,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3945,6 +3879,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3954,6 +3889,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3963,6 +3899,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3972,6 +3909,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3981,6 +3919,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3990,6 +3929,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -3999,6 +3939,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4008,6 +3949,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4017,6 +3959,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4026,6 +3969,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4035,6 +3979,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4044,6 +3989,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4053,6 +3999,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/useWorktreeBulkRemove.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 2,
+    "pipeline": 0,
+    "hintCount": 2,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Worktree/useWorktreeOverviewKeyboard.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4062,12 +4029,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4076,6 +4039,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4085,6 +4049,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4094,6 +4059,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4103,6 +4069,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4112,6 +4079,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4121,12 +4089,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Unexpected terminal kind `ternary` for logical test block"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4135,6 +4099,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4144,6 +4109,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4153,6 +4119,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4162,6 +4129,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4171,6 +4139,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4180,6 +4149,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4189,6 +4159,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4198,6 +4169,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4207,6 +4179,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4216,6 +4189,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/icons/brands/AntigravityIcon.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4225,6 +4209,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4234,6 +4219,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4243,6 +4229,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4252,6 +4239,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4261,6 +4249,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4270,6 +4259,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4279,6 +4269,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4288,6 +4279,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4297,6 +4289,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4306,6 +4299,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4315,6 +4309,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4324,6 +4319,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4333,6 +4329,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4342,6 +4339,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4351,6 +4349,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4360,6 +4359,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4369,6 +4369,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4378,6 +4379,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4387,6 +4389,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4396,6 +4399,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4405,6 +4409,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4414,6 +4419,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4423,6 +4429,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4432,6 +4439,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4441,6 +4449,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4450,6 +4459,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4459,6 +4469,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4468,6 +4479,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4477,6 +4489,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4486,6 +4499,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4495,6 +4509,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4504,6 +4519,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4513,6 +4529,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4522,6 +4539,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4531,12 +4549,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4545,6 +4559,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4554,6 +4569,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4563,6 +4579,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4572,6 +4589,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4581,6 +4599,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4590,6 +4609,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4599,6 +4619,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4608,6 +4629,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4617,6 +4639,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4626,6 +4649,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4635,6 +4659,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4644,6 +4669,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4653,6 +4679,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4662,6 +4689,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4671,6 +4699,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4680,6 +4709,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4689,6 +4719,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4698,6 +4729,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4707,6 +4739,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4716,6 +4749,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4725,24 +4759,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/ui/context-menu.tsx": {
-    "success": 15,
+    "success": 16,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/components/ui/dropdown-menu.tsx": {
-    "success": 15,
+    "success": 16,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4752,6 +4789,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4761,6 +4799,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/ui/menu-source.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4770,6 +4819,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4779,6 +4829,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4788,6 +4839,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4797,12 +4849,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4811,6 +4859,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4820,16 +4869,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Handle UpdateExpression to variables captured within lambdas."
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4838,6 +4879,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4847,6 +4889,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4856,6 +4899,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4865,12 +4909,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4879,6 +4919,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4888,12 +4929,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4902,15 +4939,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/app/useCrashRecoveryGate.ts": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4920,12 +4959,18 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/app/useFocusOnActivateIntent.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -4934,6 +4979,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4943,6 +4989,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4952,6 +4999,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4961,6 +5009,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4970,6 +5019,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4979,6 +5029,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4988,6 +5039,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -4997,6 +5049,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5006,6 +5059,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5015,6 +5069,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5024,15 +5079,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/useActionRegistry.ts": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5042,6 +5099,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5051,12 +5109,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5065,6 +5119,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5074,6 +5129,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5083,40 +5139,8 @@
     "skip": 0,
     "error": 8,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 8,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5125,6 +5149,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5134,6 +5159,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5143,6 +5169,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5152,20 +5179,7 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/hooks/useConnectivity.ts": {
-    "success": 2,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5175,20 +5189,8 @@
     "skip": 0,
     "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5197,6 +5199,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5206,15 +5209,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/useDeferredLoading.ts": {
-    "success": 1,
+    "success": 3,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5224,12 +5229,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5238,6 +5239,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5247,6 +5249,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5256,6 +5259,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5265,12 +5269,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5279,6 +5279,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5288,6 +5289,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useFileDecorations.ts": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5297,6 +5309,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5306,6 +5319,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5313,26 +5327,10 @@
   "src/hooks/useFleetPicker.ts": {
     "success": 0,
     "skip": 0,
-    "error": 4,
+    "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Support UpdateExpression where argument is a global"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Support UpdateExpression where argument is a global"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Support UpdateExpression where argument is a global"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerExpression) Support UpdateExpression where argument is a global"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5341,6 +5339,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useForgeAuthorAvatar.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5350,6 +5359,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5359,6 +5369,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5368,6 +5379,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5377,16 +5389,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5395,6 +5399,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5404,6 +5409,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5413,22 +5419,19 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/useGridNavigation.ts": {
     "success": 0,
-    "skip": 0,
-    "error": 1,
+    "skip": 1,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Refs",
-        "reason": "Cannot access refs during render"
-      }
-    ],
-    "skipReasons": [],
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": ["Skipped due to '[object Object]' directive."],
     "pipelineErrors": []
   },
   "src/hooks/useHasBeenVisible.ts": {
@@ -5436,6 +5439,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5445,6 +5449,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5454,6 +5459,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5463,6 +5469,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5472,6 +5479,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5481,6 +5489,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useIsHibernated.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5490,6 +5509,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5499,6 +5519,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5508,6 +5529,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5517,6 +5539,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5526,12 +5549,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5540,6 +5559,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5549,15 +5569,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/useMenuActions.ts": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5567,6 +5589,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5576,12 +5599,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5590,21 +5609,18 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
   "src/hooks/usePanelHandlers.ts": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
-    "error": 1,
+    "error": 0,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 0,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5613,6 +5629,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5622,12 +5639,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5636,6 +5649,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5645,6 +5659,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5654,6 +5669,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5663,16 +5679,8 @@
     "skip": 0,
     "error": 2,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement without a catch clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "Unsupported declaration type for hoisting"
-      }
-    ],
+    "hintCount": 2,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5681,6 +5689,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5690,12 +5699,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5704,6 +5709,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5713,6 +5719,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5722,12 +5729,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5736,12 +5739,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5750,20 +5749,8 @@
     "skip": 0,
     "error": 3,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      },
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 3,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5772,6 +5759,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5781,12 +5769,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5795,6 +5779,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5804,6 +5789,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5813,12 +5799,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5827,6 +5809,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5836,6 +5819,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5845,6 +5829,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5854,6 +5839,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5863,6 +5849,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5872,6 +5859,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5881,15 +5869,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/hooks/useSlowCall.ts": {
-    "success": 1,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5899,6 +5879,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5908,6 +5889,17 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/useTabLoad.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5917,6 +5909,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5926,6 +5919,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5935,6 +5929,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5944,12 +5939,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Handle TryStatement with a finalizer ('finally') clause"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -5958,6 +5949,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5967,6 +5959,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5976,6 +5969,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5985,6 +5979,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -5994,6 +5989,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6003,6 +5999,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6012,6 +6009,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6021,6 +6019,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6030,6 +6029,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6039,6 +6039,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6048,12 +6049,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "Support value blocks (conditional, logical, optional chaining, etc) within a try/catch statement"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -6062,6 +6059,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6071,6 +6069,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6080,6 +6079,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6089,12 +6089,8 @@
     "skip": 0,
     "error": 1,
     "pipeline": 0,
-    "errorBailouts": [
-      {
-        "category": "Todo",
-        "reason": "(BuildHIR::lowerStatement) Support ThrowStatement inside of try/catch"
-      }
-    ],
+    "hintCount": 1,
+    "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
   },
@@ -6103,6 +6099,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6112,6 +6109,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6121,6 +6119,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6130,6 +6129,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6139,6 +6139,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6148,6 +6149,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6157,6 +6159,27 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/store/githubRateLimitStore.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/store/githubTokenHealthStore.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6166,6 +6189,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
@@ -6175,6 +6199,7 @@
     "skip": 0,
     "error": 0,
     "pipeline": 0,
+    "hintCount": 0,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
