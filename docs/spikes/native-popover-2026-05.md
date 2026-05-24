@@ -40,7 +40,7 @@ The `vendor-radix-overlay` chunk (32 kB gzipped) is the realistic prize. The def
 | --- | --- | --- | --- |
 | Anchored positioning (4 sides + 3 aligns) | `position-area` + `anchor-name` | Floating UI middlewares | ✅ parity |
 | Collision flip | `position-try-fallbacks: flip-block, flip-inline` | `collisionBoundary` + auto flip | ✅ parity |
-| Hide-when-anchor-scrolled-offscreen | `position-visibility: anchor-visible` | `hideWhenDetached` | ✅ parity |
+| Hide-when-anchor-scrolled-offscreen | `position-visibility: anchors-visible` | `hideWhenDetached` | ✅ parity |
 | Top-layer escape from transform / overflow ancestors | top-layer promotion (automatic) | Portal to body | ✅ parity (better — no portal allocation) |
 | Entry / exit animation | `@starting-style` + `transition-behavior: allow-discrete` + `overlay` in transition list | Radix Presence + data-state | ✅ works, with caveat (see Gap #1) |
 | Light-dismiss (click-outside) | native via `popover="auto"` | `DismissableLayer` | ✅ parity |
@@ -114,7 +114,7 @@ Tooltip leak fix #8001 relies on the dropdown's `FixedDropdownVisibleContext` to
 
 - **Bundle size — until the LAST consumer migrates.** `vendor-radix-overlay` (32 kB gzip) is a single chunk that loads when any of `Tooltip | Popover | DropdownMenu | Select | ContextMenu` is rendered. Migrating only Tooltip + simple Dropdown does not reduce the gzip cost. `Select` and `ContextMenu` are the hardest to replace (Select has scroll-button behavior, ContextMenu has long-press coordination on touch). Pragmatically: the bundle savings ceiling is real but the path to claim it is long.
 - **Test ergonomics** — jsdom does not implement top-layer, `:popover-open`, `overlay`, anchor positioning, or CloseWatcher. Everything has to be Playwright. The existing Tooltip/Popover unit tests use Radix's data-state attributes for assertions; those go away.
-- **TypeScript ergonomics** — `CSSProperties` does not yet type `anchorName`, `positionAnchor`, `positionArea`, `positionVisibility`, `positionTryFallbacks`. The POC uses a local intersection type; long-term this needs a `lib.dom.d.ts` augmentation or the React team to ship it.
+- **TypeScript ergonomics — non-issue.** The installed `csstype` ships `anchorName`, `positionAnchor`, `positionArea`, `positionVisibility`, `positionTryFallbacks` as typed `CSSProperties`; `@types/react` exposes `popover`, `popoverTarget`, and `popoverTargetAction` on `HTMLAttributes`. No augmentation needed — the POC uses plain `React.CSSProperties` throughout.
 - **Past institutional knowledge** — `dialogEscapeBackstop`, `FixedDropdownVisibleContext`, `useIsDockPopoverChild`, `primeOnEvent`, AppDialog focus-trap guards all have at least one issue tag in their history (#8001, #8008, #4588, #2828, #3831). A migration re-opens every one of those design questions in the native idiom.
 
 ## Recommendation: **HOLD**

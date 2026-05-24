@@ -4,10 +4,6 @@ import { cn } from "@/lib/utils";
 type Side = "top" | "right" | "bottom" | "left";
 type Align = "start" | "center" | "end";
 
-type AnchorPositionStyle = React.CSSProperties & {
-  anchorName?: string;
-};
-
 type NativeTooltipProps = {
   content: React.ReactNode;
   side?: Side;
@@ -74,7 +70,10 @@ export function NativeTooltip({
 
   React.useEffect(() => clearShowTimer, [clearShowTimer]);
 
-  const triggerStyle: AnchorPositionStyle = {
+  // The consumer-provided `style` is spread last so an explicit
+  // `anchorName` on a child trigger wins — surprising, but matches normal
+  // React style-merge precedence and keeps the POC predictable.
+  const triggerStyle: React.CSSProperties = {
     anchorName,
     ...(children.props as { style?: React.CSSProperties }).style,
   };

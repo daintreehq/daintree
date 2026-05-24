@@ -4,10 +4,6 @@ import { cn } from "@/lib/utils";
 type Side = "top" | "right" | "bottom" | "left";
 type Align = "start" | "center" | "end";
 
-type AnchorPositionStyle = React.CSSProperties & {
-  anchorName?: string;
-};
-
 type NativeDropdownItem = {
   id: string;
   label: React.ReactNode;
@@ -76,7 +72,7 @@ export function NativeDropdown({
     popoverRef.current?.hidePopover();
   }, []);
 
-  const triggerStyle: AnchorPositionStyle = { anchorName };
+  const triggerStyle: React.CSSProperties = { anchorName };
 
   const popoverStyle = {
     "--np-anchor": anchorName,

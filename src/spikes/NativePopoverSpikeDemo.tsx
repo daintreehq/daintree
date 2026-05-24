@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { NativeTooltip } from "@/components/ui/NativeTooltip";
 import { NativeDropdown } from "@/components/ui/NativeDropdown";
@@ -6,6 +6,21 @@ import { NativeDropdown } from "@/components/ui/NativeDropdown";
 export function NativePopoverSpikeDemo() {
   const [reduceLocal, setReduceLocal] = useState(false);
   const [lastSelected, setLastSelected] = useState<string | null>(null);
+  // Capture the attribute value at mount so we can restore it on unmount —
+  // the app-wide setting may already be on, and the demo must not clobber
+  // it when the developer-mode gate is toggled off.
+  const initialReduceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    initialReduceRef.current = document.body.getAttribute("data-reduce-animations");
+    return () => {
+      if (initialReduceRef.current === null) {
+        document.body.removeAttribute("data-reduce-animations");
+      } else {
+        document.body.setAttribute("data-reduce-animations", initialReduceRef.current);
+      }
+    };
+  }, []);
 
   const toggleReduce = () => {
     const next = !reduceLocal;

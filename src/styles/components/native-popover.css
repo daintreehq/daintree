@@ -22,7 +22,11 @@
   position-anchor: var(--np-anchor);
   position-area: var(--np-position-area, bottom);
   position-try-fallbacks: var(--np-position-try, flip-block, flip-inline, flip-block flip-inline);
-  position-visibility: anchor-visible;
+  position-visibility: anchors-visible;
+  /* `margin-block-start` only adds a gap on the block-axis side. For
+   * left/right placement the offset belongs on the inline axis — the POC
+   * does not exercise side="left"/"right" interactively, so this is left
+   * uniaxial to keep the spike small. Document and split if migrated. */
   margin-block-start: var(--np-side-offset, 0);
 }
 
