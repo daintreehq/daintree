@@ -73,6 +73,7 @@ const LazyHybridInputBar = lazy(() =>
 );
 import {
   getTerminalFocusTarget,
+  isLikelyAtSynthesizedPointer,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
@@ -760,6 +761,15 @@ function TerminalPaneComponent({
     setFocused(id);
   };
 
+  // Timestamp of the last pointermove over the xterm wrapper, used to tell a
+  // physical click (preceded by movement) from an AT-synthesized routing event
+  // (a bare pointerdown). Uses the event `timeStamp` clock for monotonicity.
+  const lastXtermPointerMoveAtRef = useRef<number | null>(null);
+
+  const handleXtermPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    lastXtermPointerMoveAtRef.current = e.timeStamp;
+  };
+
   const handleXtermPointerDownCapture = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
 
@@ -767,9 +777,22 @@ function TerminalPaneComponent({
     const xtermElement = target?.closest(".xterm");
     if (!xtermElement) return;
 
-    // Clicking xterm is an explicit "I want the terminal" gesture — record it
-    // so subsequent Cmd-Opt-Arrow navigation stays on xterm across panes.
-    setPreferredTerminalFocusTarget("xterm");
+    // A bare pointerdown with no recent pointermove is likely screen reader
+    // cursor routing (VoiceOver/NVDA), not a physical click. AT routing events
+    // are indistinguishable from real clicks by their properties, so we infer
+    // it from the absence of preceding movement.
+    const isAtSynthesized = isLikelyAtSynthesizedPointer(
+      lastXtermPointerMoveAtRef.current,
+      e.timeStamp
+    );
+
+    // A physical click on xterm is an explicit "I want the terminal" gesture —
+    // record it so subsequent Cmd-Opt-Arrow navigation stays on xterm across
+    // panes. Skip for AT routing so a screen reader reaching terminal output
+    // doesn't silently clobber the user's hybrid-input focus preference.
+    if (!isAtSynthesized) {
+      setPreferredTerminalFocusTarget("xterm");
+    }
 
     const shouldSuppress = shouldSuppressUnfocusedClick({
       location,
@@ -782,6 +805,14 @@ function TerminalPaneComponent({
       // Already-focused panes: let the click through so xterm selection,
       // cursor positioning, and mouse reporting work natively. The xterm
       // focus listener (TerminalInstanceService) records the focus event.
+      return;
+    }
+
+    if (isAtSynthesized) {
+      // Activate the pane but let the event reach xterm — preventDefault /
+      // stopPropagation / setPointerCapture would swallow the routing event and
+      // break cursor positioning for screen reader users.
+      setFocused(id);
       return;
     }
 
@@ -838,23 +869,21 @@ function TerminalPaneComponent({
     });
 
     if (focusTarget === "hybridInput") {
-      let cancelled = false;
-      let innerRafId: number | undefined;
-      const outerRafId = requestAnimationFrame(() => {
-        if (cancelled) return;
-        innerRafId = requestAnimationFrame(() => {
-          if (cancelled) return;
-          // xterm v6 clears selection on blur. Don't steal focus from
-          // xterm when the user has an active text selection.
-          const managed = terminalInstanceService.get(id);
-          if (managed?.terminal.hasSelection()) return;
-          inputBarRef.current?.focusWithCursorAtEnd();
-        });
+      // xterm v6 clears selection on blur, so read selection state
+      // synchronously here — before any focus handoff. Don't steal focus from
+      // xterm when the user has an active text selection. Checking up front
+      // (rather than inside a deferred double-RAF) also avoids focus briefly
+      // landing on the ContentPanel container, which made screen readers
+      // announce the container instead of the input bar. A RAF then defers the
+      // handoff until the pane has painted; focus never lands on the container.
+      const managed = terminalInstanceService.get(id);
+      if (managed?.terminal.hasSelection()) return;
+
+      const rafId = requestAnimationFrame(() => {
+        inputBarRef.current?.focusWithCursorAtEnd();
       });
       return () => {
-        cancelled = true;
-        cancelAnimationFrame(outerRafId);
-        if (innerRafId !== undefined) cancelAnimationFrame(innerRafId);
+        cancelAnimationFrame(rafId);
         inputBarRef.current?.cancelPendingFocus();
       };
     }
@@ -1223,7 +1252,7 @@ function TerminalPaneComponent({
                   (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
                 )}
                 onPointerDownCapture={handleXtermPointerDownCapture}
-                onPointerMove={handleXtermPointerNoop}
+                onPointerMove={handleXtermPointerMove}
                 onPointerUp={handleXtermPointerNoop}
               >
                 <Suspense fallback={null}>

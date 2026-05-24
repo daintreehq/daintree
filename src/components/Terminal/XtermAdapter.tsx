@@ -13,6 +13,7 @@ import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProto
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { resolveTerminalTabEscape } from "./terminalFocus";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
@@ -257,6 +258,36 @@ export function XtermAdapter({
         // Only process keydown events to avoid double-firing
         if (event.type !== "keydown") {
           return true;
+        }
+
+        // Tab/Shift+Tab escape: xterm otherwise transmits Tab to the PTY as \t,
+        // trapping keyboard-only users in the terminal. Mirror F6 region cycling
+        // by dispatching the same navigation actions, then suppress the PTY
+        // write. Handled before the repeat guard so a held Tab can't leak \t on
+        // key-repeat; the focus move only dispatches on the initial keydown.
+        // resolveTerminalTabEscape itself ignores IME composition and
+        // Ctrl/Alt/Meta combos, so this stays ahead of the guards below. (#8935)
+        const tabEscape = resolveTerminalTabEscape(event);
+        if (tabEscape) {
+          if (!event.repeat) {
+            void actionService
+              .dispatch(
+                tabEscape === "prev" ? "nav.focusRegion.prev" : "nav.focusRegion.next",
+                undefined,
+                { source: "keybinding" }
+              )
+              .then((dispatchResult) => {
+                if (!dispatchResult.ok) {
+                  logError("[XtermTabEscape] Failed to move focus region", undefined, {
+                    error: dispatchResult.error,
+                  });
+                }
+              })
+              .catch((error) => {
+                logError("[XtermTabEscape] Unexpected error", error);
+              });
+          }
+          return false;
         }
 
         // Skip repeat events
@@ -615,6 +646,7 @@ export function XtermAdapter({
         ref={containerRef}
         className="w-full h-full min-h-0 min-w-0"
         aria-label="Terminal output"
+        aria-keyshortcuts="F6 Tab Shift+Tab"
         role="application"
       />
     </div>
