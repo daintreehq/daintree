@@ -188,7 +188,10 @@ function resolveEventPolicyDefaults(payload: NotifyPayload): NotifyPayload {
   if (next.priority === undefined) {
     next = { ...next, priority: INTERRUPTION_TO_PRIORITY[policy.baseInterruption] };
   }
-  if (next.urgent === undefined && policy.baseInterruption === "time-sensitive") {
+  if (
+    next.urgent === undefined &&
+    (policy.baseInterruption === "time-sensitive" || policy.baseInterruption === "critical")
+  ) {
     next = { ...next, urgent: true };
   }
   if (next.placement === undefined && policy.preferredSurface !== "auto") {
@@ -974,9 +977,16 @@ export function notify(payload: NotifyPayload): string {
         // type default — that signals an intentional UX choice.
         const resultingActionsCount =
           (patchAction ? 1 : 0) + (coalesce.buildAction ? 0 : (notification.actions?.length ?? 0));
+        // A duration is "default" if it's the per-type fallback, the policy's
+        // defaultDurationMs for the kind, or unset — any of these means the
+        // caller didn't pin a duration, so the sticky promotion is safe.
+        const policyDefaultDuration = notification.context?.eventKind
+          ? EVENT_POLICY[notification.context.eventKind]?.defaultDurationMs
+          : undefined;
         const storedDurationIsDefault =
           notification.duration === undefined ||
-          notification.duration === TOAST_DURATION[notification.type];
+          notification.duration === TOAST_DURATION[notification.type] ||
+          notification.duration === policyDefaultDuration;
         if (resultingActionsCount > 0 && storedDurationIsDefault) {
           patch.duration = 0;
         }

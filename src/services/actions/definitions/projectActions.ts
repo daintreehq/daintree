@@ -295,6 +295,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           message: "Project notifications muted",
           priority: "high",
           duration: 5000,
+          context: { eventKind: "settings" },
           // One-shot Undo confirmation; mute is reversible from the project's
           // notification settings tab, so the 5s Undo window plus the settings
           // surface make inbox persistence redundant.
@@ -391,6 +392,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           message: `Silenced ${label}${scopeSuffix}`,
           priority: "high",
           duration: 5000,
+          context: { eventKind: "settings" },
           // One-shot Undo confirmation; silenced kinds are reversible from
           // notification settings, so the 5s Undo plus the settings surface
           // make inbox persistence redundant.

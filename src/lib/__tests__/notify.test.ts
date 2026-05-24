@@ -2846,6 +2846,16 @@ describe("EVENT_POLICY manifest routing", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
     });
 
+    it.each(["workingPulse", "uiFeedback"] as const)(
+      "keeps passive sound kind %s inbox-only when no priority supplied",
+      (eventKind) => {
+        // Guards against a passive→active regression that would start toasting.
+        notify({ type: "info", message: "x", context: { eventKind } });
+        expect(useNotificationStore.getState().notifications).toHaveLength(0);
+        expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      }
+    );
+
     it("lets an explicit caller priority win over the policy default", () => {
       // git policy → high, but the caller pins low, so it must route to inbox only.
       notify({
