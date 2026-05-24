@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
-import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
@@ -25,10 +25,6 @@ const SECTION_HEADER_CLASS =
 // Module-level so SearchablePalette receives a stable reference and skips
 // re-renders driven only by a freshly-created callback identity.
 const getActionItemId = (item: ActionPaletteItemType): string => item.id;
-
-// Verb-noun derived from the highlighted action's title — empty selection
-// falls back to a generic "run action" so the chip never goes blank.
-const getActionLabel = (item: ActionPaletteItemType | null): string => item?.title ?? "Run action";
 
 type ActionPaletteMode = "commands";
 
@@ -57,6 +53,32 @@ const COMMANDS_LABEL = PREFIX_MAP[">"]!.label;
 function looksLikePath(query: string): boolean {
   if (!query) return false;
   return /[/\\]/.test(query) || /^[.~]/.test(query);
+}
+
+// Compact prefix table surfaced in the default empty-query footer so users can
+// discover the mode-routing characters without having to type one first. Drops
+// out as soon as a query or mode is active so it never competes with the
+// primary "↵ to {action}" hint.
+function PrefixDiscoverabilityRow() {
+  return (
+    <div
+      className="@max-[420px]/palette-footer:hidden flex items-center gap-2 flex-wrap text-[11px] text-daintree-text/45"
+      aria-label="Prefix shortcuts"
+    >
+      <span className="text-daintree-text/40">Type</span>
+      {Object.entries(PREFIX_MAP).map(([prefix, route], i) => (
+        <span key={prefix} className="inline-flex items-baseline">
+          <kbd className={KBD_CLASS}>{prefix}</kbd>
+          <span className="ml-1.5">{route.label.toLowerCase()}</span>
+          {i < Object.entries(PREFIX_MAP).length - 1 && (
+            <span aria-hidden="true" className="ml-2 text-daintree-text/25">
+              ·
+            </span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 type ModeChipProps = {
@@ -138,6 +160,10 @@ export function ActionPalette({
 
   const actionPaletteShortcut = useEffectiveCombo("action.palette.open");
   const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
+  // Stable id wraps the rendered footer hint and gets pointed at by every
+  // option's aria-describedby — mirrors QuickSwitcher.tsx so screen readers
+  // announce what Enter does for each row.
+  const footerHintId = useId();
 
   // The sectioned empty-query body renders headers as siblings of the row list,
   // so the listbox children stay 1:1 with `results` for the parent's
@@ -172,6 +198,7 @@ export function ActionPalette({
             onPin={pinAction}
             onUnpin={unpinAction}
             onHide={hideAction}
+            footerHintId={footerHintId}
           />
         </div>
       );
@@ -184,6 +211,7 @@ export function ActionPalette({
       pinAction,
       unpinAction,
       hideAction,
+      footerHintId,
     ]
   );
 
@@ -203,7 +231,21 @@ export function ActionPalette({
         >
           {pinnedRows.length > 0 && (
             <>
-              <div className={SECTION_HEADER_CLASS} role="presentation">
+              {/*
+                Listbox children must be role="option" or role="group" per ARIA.
+                role="group" inside role="listbox" is broken under Chromium 146 +
+                VoiceOver (label is dropped, "empty group" is announced), so the
+                separator masquerades as a non-interactive option instead — AT
+                announces the section name, arrow keys still skip it because it
+                isn't in `results`.
+              */}
+              <div
+                className={SECTION_HEADER_CLASS}
+                role="option"
+                aria-disabled="true"
+                aria-selected="false"
+                aria-label="Favorites"
+              >
                 Favorites
               </div>
               {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
@@ -211,7 +253,13 @@ export function ActionPalette({
           )}
           {recentRows.length > 0 && (
             <>
-              <div className={SECTION_HEADER_CLASS} role="presentation">
+              <div
+                className={SECTION_HEADER_CLASS}
+                role="option"
+                aria-disabled="true"
+                aria-selected="false"
+                aria-label="Recently used"
+              >
                 Recently used
               </div>
               {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
@@ -288,37 +336,63 @@ export function ActionPalette({
     [activeMode, query]
   );
 
-  const footer = useMemo<React.ReactNode>(() => {
-    // Mode-active footer: name what Enter does in the current scope so the
-    // user can't accidentally fire the wrong primary action.
-    if (activeMode === "commands") {
-      return (
-        <PaletteFooterHints
-          primaryHint={{ keys: ["↵"], label: "to run command" }}
-          hints={[
-            { keys: ["⌫"], label: "exit scope" },
-            { keys: ["Esc"], label: "close" },
-          ]}
-        />
-      );
-    }
+  const getFooter = useCallback(
+    (selectedItem: ActionPaletteItemType | null): React.ReactNode => {
+      let body: React.ReactNode;
 
-    // Default empty-mode hint: surface the projects prefix when the query
-    // resembles a path or filename. Per-query-shape only — no auto-routing.
-    if (results.length === 0 && looksLikePath(query)) {
-      return (
-        <PaletteFooterHints
-          primaryHint={{ keys: ["/"], label: "search projects" }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
-        />
-      );
-    }
+      // Mode-active footer: name what Enter does in the current scope so the
+      // user can't accidentally fire the wrong primary action.
+      if (activeMode === "commands") {
+        body = (
+          <PaletteFooterHints
+            primaryHint={{ keys: ["↵"], label: "to run command" }}
+            hints={[
+              { keys: ["⌫"], label: "exit scope" },
+              { keys: ["Esc"], label: "close" },
+            ]}
+          />
+        );
+      } else if (results.length === 0 && looksLikePath(query)) {
+        // Default empty-mode hint: surface the projects prefix when the query
+        // resembles a path or filename. Per-query-shape only — no auto-routing.
+        body = (
+          <PaletteFooterHints
+            primaryHint={{ keys: ["/"], label: "search projects" }}
+            hints={[
+              { keys: ["↑", "↓"], label: "navigate" },
+              { keys: ["Esc"], label: "close" },
+            ]}
+          />
+        );
+      } else {
+        // Default footer mirrors SearchablePalette's getActionLabel composition
+        // so we keep that affordance while still owning the wrapper id used by
+        // aria-describedby.
+        const phrase = `to ${(selectedItem?.title ?? "Run action").trim().toLowerCase()}`;
+        body = (
+          <PaletteFooterHints
+            primaryHint={{ keys: ["↵"], label: phrase }}
+            hints={[
+              { keys: ["↑", "↓"], label: "navigate" },
+              { keys: ["Esc"], label: "close" },
+            ]}
+          />
+        );
+      }
 
-    return undefined;
-  }, [activeMode, query, results.length]);
+      // Mirror showSections (`!query.trim()`) so a whitespace-only buffer
+      // collapses to the same default state instead of diverging between the
+      // sectioned MRU body and the prefix-hint footer.
+      const showPrefixHints = activeMode === null && !query.trim();
+      return (
+        <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
+          {body}
+          {showPrefixHints && <PrefixDiscoverabilityRow />}
+        </div>
+      );
+    },
+    [activeMode, query, results.length, footerHintId]
+  );
 
   const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
 
@@ -336,9 +410,8 @@ export function ActionPalette({
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
       inputPrefix={chipNode}
-      footer={footer}
+      getFooter={getFooter}
       getItemId={getActionItemId}
-      getActionLabel={activeMode === null && footer === undefined ? getActionLabel : undefined}
       isFiltering={isStale}
       renderItem={(item, index, isSelected, onHoverIndex) => {
         const isPinned = pinnedActionIds.includes(item.id);
@@ -354,6 +427,7 @@ export function ActionPalette({
             onPin={pinAction}
             onUnpin={unpinAction}
             onHide={hideAction}
+            footerHintId={footerHintId}
           />
         );
       }}

@@ -441,4 +441,49 @@ describe("ActionPaletteItem", () => {
       expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     });
   });
+
+  describe("footerHintId aria-describedby", () => {
+    it("points aria-describedby at the supplied footerHintId", () => {
+      const { container } = render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+          footerHintId="palette-footer-hint"
+        />
+      );
+      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+        "palette-footer-hint"
+      );
+    });
+
+    it("appends the rationale id when selected on a confirm-tier row", () => {
+      const item = {
+        ...makeItem(),
+        id: "delete-worktree",
+        danger: "confirm" as const,
+        dangerRationale: "Removes the working tree",
+      };
+      const { container } = render(
+        <ActionPaletteItem
+          item={item}
+          index={0}
+          isSelected={true}
+          onSelect={onSelect}
+          footerHintId="palette-footer-hint"
+        />
+      );
+      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+        "palette-footer-hint delete-worktree-danger-rationale"
+      );
+    });
+
+    it("omits aria-describedby entirely when no footerHintId and no selected rationale", () => {
+      const { container } = render(
+        <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+      );
+      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBeNull();
+    });
+  });
 });
