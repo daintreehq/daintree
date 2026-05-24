@@ -868,4 +868,33 @@ describe("PanelHeader", () => {
       expect(cls).toContain("focus:outline-hidden");
     });
   });
+
+  describe("fleet preview kinetic cue", () => {
+    it("renders the preview-enter overlay when isFleetPreviewed is true", () => {
+      const { container } = render(<PanelHeader {...makeProps({ isFleetPreviewed: true })} />);
+      const overlay = container.querySelector(".fleet-preview-enter-overlay");
+      expect(overlay).not.toBeNull();
+      expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("does not render the overlay when isFleetPreviewed is false", () => {
+      const { container } = render(<PanelHeader {...makeProps({ isFleetPreviewed: false })} />);
+      expect(container.querySelector(".fleet-preview-enter-overlay")).toBeNull();
+    });
+
+    it("coexists with the selected state without replacing the selected background", () => {
+      // isFocused: false isolates the bg cascade so isSelected wins the class
+      // (bg-overlay-subtle) — the kinetic overlay is additive, not a replacement.
+      const { container } = render(
+        <PanelHeader
+          {...makeProps({ isFleetPreviewed: true, isSelected: true, isFocused: false })}
+        />
+      );
+      const overlay = container.querySelector(".fleet-preview-enter-overlay");
+      expect(overlay).not.toBeNull();
+      const header = container.querySelector("[data-pane-chrome]");
+      expect(header?.getAttribute("data-selected")).toBe("true");
+      expect(header?.className).toContain("bg-overlay-subtle");
+    });
+  });
 });
