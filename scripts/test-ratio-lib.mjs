@@ -73,6 +73,17 @@ export function classifyPR(pr) {
 }
 
 /**
+ * Per-PR reminder policy for the pull_request arm: true when a PR looks like a
+ * fix but didn't touch any test files. Skipped PRs (release/version bumps) and
+ * non-fix PRs never trigger the reminder.
+ * @param {ClassifiedPR} classified — output of classifyPR
+ * @returns {boolean}
+ */
+export function shouldRemindAboutTests(classified) {
+  return classified.isFix && !classified.touchesTests && !classified.isSkipped;
+}
+
+/**
  * Aggregate classified PRs into the two ratios.
  *
  * @param {ClassifiedPR[]} classified — output of classifyPR for each PR
