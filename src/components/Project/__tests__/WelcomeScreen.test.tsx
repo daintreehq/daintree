@@ -708,10 +708,12 @@ describe("WelcomeScreen", () => {
 
     const openFolder = screen.getByText("Open folder").closest("button")!;
     const createProject = screen.getByText("Create project").closest("button")!;
+    const cloneRepository = screen.getByText("Clone repository").closest("button")!;
     const launchAgent = screen.getByText("Launch agent").closest("button")!;
 
     expect(openFolder.disabled).toBe(false);
     expect(createProject.disabled).toBe(false);
+    expect(cloneRepository.disabled).toBe(false);
     expect(launchAgent.disabled).toBe(false);
   });
 
@@ -734,6 +736,12 @@ describe("WelcomeScreen", () => {
 
     const openFolder = screen.getByText("Open folder").closest("button")!;
     expect(openFolder.className).toContain("bg-surface-panel-elevated/95");
+
+    // Only the primary card is lifted — the three secondary cards are not.
+    for (const label of ["Create project", "Clone repository", "Launch agent"]) {
+      const card = screen.getByText(label).closest("button")!;
+      expect(card.className).not.toContain("bg-surface-panel-elevated/95");
+    }
   });
 
   it("adds a muted heading and demotes the Open folder card for returning users", () => {

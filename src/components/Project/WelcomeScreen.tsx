@@ -164,6 +164,10 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   key={id}
                   type="button"
                   onClick={onClick}
+                  // Title is the accessible name; the description is announced
+                  // once via aria-describedby. aria-label keeps the name clean
+                  // so the in-button description text isn't double-announced.
+                  aria-label={title}
                   aria-describedby={`qa-desc-${id}`}
                   className={cn(
                     "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left",
