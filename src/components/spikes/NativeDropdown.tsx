@@ -31,6 +31,13 @@ export function resolveMenuIndex(
   if (enabled.length === 0) return null;
 
   const pos = enabled.indexOf(current);
+  if (pos === -1) {
+    // No valid current selection (unset, or pointing at a disabled item):
+    // ArrowDown/Home land on the first enabled item, ArrowUp/End on the last.
+    if (key === "ArrowDown" || key === "Home") return enabled[0]!;
+    if (key === "ArrowUp" || key === "End") return enabled[enabled.length - 1]!;
+    return null;
+  }
   switch (key) {
     case "ArrowDown":
       return enabled[(pos + 1) % enabled.length]!;

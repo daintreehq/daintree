@@ -7,8 +7,11 @@
 
 /* Reset the UA popover defaults. Chromium centers [popover] with
  * `position: fixed; inset: 0; margin: auto` — clearing inset/margin lets CSS
- * anchor positioning take over. Top-layer rendering means z-index is moot. */
-.np-surface {
+ * anchor positioning take over. Top-layer rendering means z-index is moot.
+ * Wrapped in :where() for zero specificity so the surface/padding utility
+ * classes (surface-overlay, px-3, …) still win — this sheet is imported with
+ * `reference`, so Tailwind's @layer ordering isn't emitted here to rely on. */
+:where(.np-surface) {
   position: absolute;
   inset: auto;
   margin: 0;

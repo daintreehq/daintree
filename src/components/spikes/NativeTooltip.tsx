@@ -25,8 +25,11 @@ export function NativeTooltip({ content, children }: NativeTooltipProps) {
   const anchorName = `--np-tt-${id.replace(/[^a-zA-Z0-9]/g, "")}`;
   const popoverRef = React.useRef<HTMLDivElement>(null);
 
-  const show = () => popoverRef.current?.showPopover();
-  const hide = () => popoverRef.current?.hidePopover();
+  // togglePopover(force) is idempotent — bare show/hidePopover throw
+  // InvalidStateError when called against an already-open/closed popover
+  // (e.g. focus-then-hover, or a hint auto-dismissed by a sibling).
+  const show = () => popoverRef.current?.togglePopover(true);
+  const hide = () => popoverRef.current?.togglePopover(false);
 
   const trigger = React.cloneElement(children, {
     style: { ...children.props.style, anchorName },

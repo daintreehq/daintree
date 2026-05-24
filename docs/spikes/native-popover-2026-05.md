@@ -37,8 +37,16 @@ Measured from `dist/renderer-bundle-size-report.json` after `npm run build`.
 | Chunk | Raw | Gzip | Notes |
 |---|---|---|---|
 | `vendor-radix-overlay` (today's baseline) | 105,042 B | 31,874 B | all five Radix primitives, one deferred chunk |
-| `NativePopoverSpike` (spike, DEV-only) | 6,040 B | 2,461 B | not loaded in production |
-| Production main/entry delta from this spike | **0 B** | **0 B** | spike is DEV-gated; entry bundle unchanged |
+| `NativePopoverSpike` (spike chunk) | 6,040 B | 2,461 B | emitted but never fetched in production |
+| Production main/entry delta from this spike | **0 B** | **0 B** | spike is DEV-gated; entry/critical-path bundle unchanged |
+
+The `import.meta.env.DEV` render gate makes the spike's dynamic import a dead
+branch at runtime (`!1 && …`), so the chunk is **never fetched** in a production
+build and adds nothing to the entry/critical-path bundle. Because the `lazy()`
+declaration still sits at module scope, Rollup keeps the import *edge* and the
+`NativePopoverSpike` chunk file is still emitted to `dist/` (~2.5 KB gzip on
+disk). To drop the file entirely, move the `lazy()` call inside the
+`import.meta.env.DEV` guard — not done here since the spike is throwaway.
 
 The current `vendor-radix-overlay` chunk bundles **all five** primitives
 (`react-tooltip`, `react-popover`, `react-dropdown-menu`, `react-select`,
@@ -65,7 +73,7 @@ native replacement code (~2.5 KB) offsets part of whatever is saved.
 | Reduced motion | media query + `data-reduce-animations` selector | `@variant reduce-motion` | ✅ parity |
 | Light dismiss (outside click) | `popover="auto"` native | `DismissableLayer` | ✅ parity |
 | Escape, single surface | native `CloseWatcher` | `DismissableLayer` capture handler | ✅ parity |
-| **Escape arbitration (popover inside dialog)** | native `CloseWatcher` LIFO — first Escape closes menu, second closes dialog, **for free** | requires `dialogEscapeBackstop.ts` shim | ✅ **better — the shim's entire reason to exist disappears for native surfaces** |
+| **Escape arbitration (popover inside dialog)** | native `CloseWatcher` LIFO — first Escape closes menu, second closes dialog | requires `dialogEscapeBackstop.ts` shim | ✅ better, with a caveat (see gaps #5) |
 | Trigger focus-restore on close | automatic for `popover="auto"` | Radix manages | ✅ parity |
 | **Focus trap / arrow-key menu nav** | **none** — must hand-roll roving tabindex + `role` wiring | `react-roving-focus`, full ARIA | ❌ **gap — the main cost of a production-quality native dropdown** |
 | Hover-to-open tooltip | **none declarative** — `interestfor` still flagged in 146; needs JS pointer/focus wiring | Radix `Tooltip` hover/focus + delay | ❌ gap — JS still required to open on hover |
@@ -91,14 +99,28 @@ native replacement code (~2.5 KB) offsets part of whatever is saved.
    anchor positioning. Only the keyboard resolver is unit-testable; everything
    visual is manual-verify or E2E-in-Electron. That raises the regression-test
    cost of any production migration.
+5. **`dialogEscapeBackstop` doesn't transparently coexist with native popovers
+   inside `AppDialog`.** The backstop's capture-phase probe
+   (`radixLayerWasOpenWhenEscapePressed` → `isAnyRadixLayerOpen`) detects open
+   Radix surfaces via `[role="menu"][data-state="open"]` and friends. The native
+   dropdown carries `role="menu"` but **no `data-state`**, so the probe returns
+   `false` while the native menu is open. In the demo the two-step close still
+   appeared correct because `CloseWatcher` fires before the document-bubble
+   backstop — but this is Chromium-timing-dependent, not guaranteed by design. A
+   production adoption would need to extend `isAnyRadixLayerOpen` to also detect
+   open native popovers (e.g. `[popover]:popover-open`) or share an open-count
+   registry. So the shim doesn't simply *disappear* for native surfaces inside a
+   dialog; it has to be taught about them.
 
 ## What native does genuinely better
 
-- **Kills `dialogEscapeBackstop.ts` for native surfaces.** The shim exists only
-  because Radix's `DismissableLayer` calls `preventDefault()` on Escape mid-exit
-  and doesn't use `CloseWatcher`. Native `popover="auto"` resolves Escape LIFO
-  against `<dialog>` automatically — the popover-inside-`AppDialog` case Just
-  Works. Confirmed in the demo.
+- **Removes the need for `dialogEscapeBackstop.ts` on standalone native
+  surfaces.** The shim exists only because Radix's `DismissableLayer` calls
+  `preventDefault()` on Escape mid-exit and doesn't use `CloseWatcher`. Native
+  `popover="auto"` resolves Escape LIFO against `<dialog>` automatically. Inside
+  an `AppDialog`, the two-step close worked in the demo — but see gap #5: the
+  existing backstop probe doesn't recognise native popovers, so coexistence is
+  timing-dependent until the probe is extended.
 - **No Portal, no `getPortalBoundary()`, no `--z-popover` juggling.** Top-layer
   rendering sidesteps the entire stacking-context and collision-boundary
   apparatus in `popover.tsx`.
@@ -126,4 +148,6 @@ Portal/z-index fronts. But it is **not a drop-in replacement**:
 
 No follow-up work is committed by this spike. The strongest standalone takeaway
 is architectural, not bundle-size: **`CloseWatcher` makes the Escape-arbitration
-shim unnecessary for any surface built on `popover="auto"`.**
+shim unnecessary for standalone surfaces built on `popover="auto"`** — and
+points to extending the existing backstop probe to recognise native popovers as
+the right first step for any future adoption inside dialogs.

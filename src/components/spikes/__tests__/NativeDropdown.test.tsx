@@ -54,4 +54,29 @@ describe("resolveMenuIndex", () => {
   it("starts from the first enabled item when current index is unset (-1)", () => {
     expect(resolveMenuIndex("ArrowDown", -1, items)).toBe(0);
   });
+
+  it("starts from the last enabled item on ArrowUp when current is unset (-1)", () => {
+    expect(resolveMenuIndex("ArrowUp", -1, items)).toBe(3);
+  });
+
+  it("treats a current index pointing at a disabled item like unset", () => {
+    // index 2 is disabled; ArrowDown lands on the first enabled item.
+    expect(resolveMenuIndex("ArrowDown", 2, items)).toBe(0);
+    expect(resolveMenuIndex("ArrowUp", 2, items)).toBe(3);
+  });
+
+  it("returns the sole enabled item for every navigation key", () => {
+    const oneEnabled: NativeMenuItem[] = [
+      { label: "x", onSelect: () => {}, disabled: true },
+      { label: "y", onSelect: () => {} },
+      { label: "z", onSelect: () => {}, disabled: true },
+    ];
+    for (const key of ["ArrowDown", "ArrowUp", "Home", "End"]) {
+      expect(resolveMenuIndex(key, 1, oneEnabled)).toBe(1);
+    }
+  });
+
+  it("returns null for an empty items array", () => {
+    expect(resolveMenuIndex("ArrowDown", 0, [])).toBeNull();
+  });
 });
