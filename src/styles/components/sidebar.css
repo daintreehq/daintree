@@ -95,4 +95,11 @@ html[data-dragging="true"] .sidebar-worktree-card[data-hovered="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
+
+  /* The active row's left-edge indicator is an inset box-shadow, which is
+     stripped here. Fall back to a system-color left border so the selected
+     worktree stays distinguishable from idle rows. */
+  .sidebar-worktree-card[data-active="true"] {
+    border-left: 2px solid SelectedItem;
+  }
 }
