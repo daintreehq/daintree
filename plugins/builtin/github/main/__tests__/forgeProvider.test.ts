@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
+import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
 
 const mockGraphQLClient = vi.fn();
 const mockFetchActivityProbe = vi.fn();
-const mockShouldBlockRequest = vi.fn(() => ({ blocked: false, reason: null }));
+const mockShouldBlockRequest = vi.fn(
+  (_resource?: string): ShouldBlockResult => ({ blocked: false, reason: null })
+);
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
@@ -22,7 +25,7 @@ vi.mock("../GitHubRateLimitService.js", () => ({
   gitHubRateLimitService: {
     updateFromGraphQL: vi.fn(),
     getState: vi.fn(() => ({ blocked: false })),
-    shouldBlockRequest: (...args: unknown[]) => mockShouldBlockRequest(...args),
+    shouldBlockRequest: (resource?: string) => mockShouldBlockRequest(resource),
   },
 }));
 
@@ -617,7 +620,7 @@ describe("findPRsByBranches rate-limit gate + pre-warm", () => {
       blocked: true,
       reason: "secondary",
       resumeAt: Date.now() + 1000,
-    });
+    } as ShouldBlockResult);
     const result = await githubForgeProvider.findPRsByBranches!(repo, ["feature/a"]);
     expect(result.size).toBe(0);
     expect(mockGraphQLClient).not.toHaveBeenCalled();
