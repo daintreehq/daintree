@@ -41,4 +41,7 @@ async function main() {
   }
 }
 
-main();
+// Informational only — never fail the PR. Swallow any unexpected runtime error.
+main().catch((err) => {
+  console.error(`check-pr-test-ratio: skipped due to unexpected error: ${err?.message ?? err}`);
+});

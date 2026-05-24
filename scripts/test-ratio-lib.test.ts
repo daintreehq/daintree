@@ -113,6 +113,11 @@ describe("TEST_FILE_RE", () => {
     expect(TEST_FILE_RE.test("scripts/helpers.spec.js")).toBe(true);
   });
 
+  it("matches .test.mjs and .spec.cjs files", () => {
+    expect(TEST_FILE_RE.test("scripts/lint-ratchet.test.mjs")).toBe(true);
+    expect(TEST_FILE_RE.test("scripts/helpers.spec.cjs")).toBe(true);
+  });
+
   it("rejects non-test files", () => {
     expect(TEST_FILE_RE.test("src/utils/test-utils.ts")).toBe(false);
     expect(TEST_FILE_RE.test("src/components/TestButton.tsx")).toBe(false);
@@ -223,6 +228,14 @@ describe("shouldRemindAboutTests", () => {
       pr({ title: "chore(release): v0.7.2", files: { nodes: [{ path: "package.json" }] } })
     );
     expect(shouldRemindAboutTests(r)).toBe(false);
+  });
+
+  it("respects the isSkipped guard for an otherwise-reminding shape", () => {
+    // Exercises the `!isSkipped` clause directly — a real release PR is also
+    // isFix:false, so this synthetic shape is the only way to isolate it.
+    expect(shouldRemindAboutTests({ isFix: true, touchesTests: false, isSkipped: true })).toBe(
+      false
+    );
   });
 });
 

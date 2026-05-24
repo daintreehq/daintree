@@ -11,7 +11,7 @@
 // - The CLI compares these against a checked-in baseline and emits GitHub
 //   workflow annotations. No PR-blocking gate.
 
-export const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx)$/;
+export const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 const FIX_TITLE_RE = /^fix[(:]/i;
 const RELEASE_TITLE_RE = /^chore\(release\):/;

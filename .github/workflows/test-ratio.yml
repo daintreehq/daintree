@@ -64,7 +64,8 @@ jobs:
       - name: Classify PR for test coverage
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+        # Informational only — the script always exits 0, and a transient
+        # git-diff failure must not surface as a red check on the PR.
         run: |
-          set -euo pipefail
           git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
             | node scripts/check-pr-test-ratio.mjs
