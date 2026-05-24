@@ -27,6 +27,7 @@ export function useDiskSpaceWarnings(): void {
           supersedeKey: DISK_SPACE_SUPERSEDE_KEY,
           title: "Disk space restored",
           message: "Disk space is back to normal.",
+          context: { eventKind: "host" },
         });
         return;
       }
@@ -50,6 +51,7 @@ export function useDiskSpaceWarnings(): void {
           title: "Critical: Disk space very low",
           message: `Only ${mb} MB remaining. Session backups and terminal snapshots have been paused. Free disk space immediately.`,
           inboxMessage: `Critical disk space: ${mb} MB remaining. Writes paused.`,
+          context: { eventKind: "host" },
         });
       } else {
         notify({
@@ -62,6 +64,7 @@ export function useDiskSpaceWarnings(): void {
           title: "Low disk space",
           message: `${mb} MB remaining on the application data volume. Free disk space to avoid data loss.`,
           inboxMessage: `Low disk space: ${mb} MB remaining.`,
+          context: { eventKind: "host" },
         });
       }
     });

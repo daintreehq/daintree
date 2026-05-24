@@ -19,6 +19,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
         "Daintree disabled GPU acceleration after repeated GPU crashes. Performance may be reduced — re-enable it in Settings > Troubleshooting.",
       priority: "watch",
       duration: 0,
+      context: { eventKind: "recovery" },
     });
   }
 
@@ -35,6 +36,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
         message: `Your settings file was corrupted and has been restored from a backup. Some recent changes may have been lost.${pathNote}`,
         priority: "high",
         duration: 8000,
+        context: { eventKind: "recovery" },
       });
     } else {
       notify({
@@ -43,6 +45,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
         message: `Your settings file was corrupted and no backup was available. Settings have been reset to defaults.${pathNote}`,
         priority: "high",
         duration: 0,
+        context: { eventKind: "recovery" },
       });
     }
   }
@@ -55,6 +58,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
       message: `Your project state was corrupted and has been reset. The corrupt file is preserved at: ${quarantinedPath}`,
       priority: "high",
       duration: 0,
+      context: { eventKind: "recovery" },
     });
   }
 
@@ -66,6 +70,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
       message: `The crash-loop tracker file was corrupted and has been reset. The corrupt file is preserved at: ${quarantinedPath}`,
       priority: "high",
       duration: 0,
+      context: { eventKind: "recovery" },
     });
   }
 }

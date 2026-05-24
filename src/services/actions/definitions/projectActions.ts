@@ -343,6 +343,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const { kind, projectId } = args as { kind: NotificationEventKind; projectId?: string };
       const label = EVENT_KIND_LABEL[kind] ?? kind;
       const settingKey = EVENT_KIND_TO_SETTING_KEY[kind];
+      // Routing-only kinds (e.g. "host", "git") have no persisted silence
+      // toggle. The Zod enum below only admits the four silenceable kinds, so
+      // this is a type-narrowing guard rather than a reachable runtime path.
+      if (!settingKey) return;
 
       try {
         const isGlobalOnly = kind === "uiFeedback";

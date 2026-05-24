@@ -17,6 +17,7 @@ export function fireWatchNotification(
       message: `${label} process has exited`,
       duration: 5000,
       correlationId: panelId,
+      context: { eventKind: "agent", panelId },
       action: {
         label: "Go to terminal",
         successLabel: "Opened",
@@ -38,6 +39,7 @@ export function fireWatchNotification(
       message: `${label} is waiting for your input`,
       duration: 12000,
       correlationId: panelId,
+      context: { eventKind: "agent", panelId },
       action: {
         label: "Go to terminal",
         successLabel: "Opened",

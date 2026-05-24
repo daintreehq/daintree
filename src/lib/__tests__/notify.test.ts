@@ -4,6 +4,10 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   notify,
   TOAST_DURATION,
+  EVENT_POLICY,
+  EVENT_KIND_LABEL,
+  EVENT_KIND_TO_SETTING_KEY,
+  type NotificationEventKind,
   _resetCoalesceMap,
   _resetEscalationTrackers,
   _resetRateLimitBuckets,
@@ -2768,5 +2772,160 @@ describe("notify() — thread re-promotion (#9008)", () => {
     // The bucket is exhausted, so the re-promoted toast is suppressed (routed
     // to the summary row) rather than bypassing the rate limiter.
     expect(useNotificationStore.getState().notifications.length).toBe(toastsBefore);
+  });
+});
+
+describe("EVENT_POLICY manifest routing", () => {
+  const ALL_EVENT_KINDS: NotificationEventKind[] = [
+    "completed",
+    "waiting",
+    "workingPulse",
+    "uiFeedback",
+    "agent",
+    "git",
+    "host",
+    "recovery",
+    "settings",
+    "connectivity",
+  ];
+
+  beforeEach(() => {
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    _resetCoalesceMap();
+    _resetRateLimitBuckets();
+    _setQuietUntil(0);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("completeness", () => {
+    it("defines a policy and label for every event kind", () => {
+      for (const kind of ALL_EVENT_KINDS) {
+        expect(EVENT_POLICY[kind]).toBeDefined();
+        expect(EVENT_KIND_LABEL[kind]).toBeTruthy();
+      }
+    });
+
+    it("maps only the silenceable kinds to a settings key", () => {
+      expect(EVENT_KIND_TO_SETTING_KEY.completed).toBe("completedEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.waiting).toBe("waitingEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.workingPulse).toBe("workingPulseEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.uiFeedback).toBe("uiFeedbackSoundEnabled");
+      // Routing-only kinds have no persisted silence toggle.
+      expect(EVENT_KIND_TO_SETTING_KEY.host).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.git).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.recovery).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.connectivity).toBeUndefined();
+    });
+  });
+
+  describe("priority resolution", () => {
+    it("resolves an active kind to a high-priority toast when none supplied", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      const active = useNotificationStore.getState().notifications;
+      expect(active).toHaveLength(1);
+      expect(active[0]!.priority).toBe("high");
+    });
+
+    it("resolves a passive kind to inbox-only (low priority)", () => {
+      notify({ type: "info", message: "Setting saved", context: { eventKind: "settings" } });
+      // Low priority routes to the inbox only — no active toast.
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+    });
+
+    it("lets an explicit caller priority win over the policy default", () => {
+      // git policy → high, but the caller pins low, so it must route to inbox only.
+      notify({
+        type: "info",
+        message: "Quiet git note",
+        priority: "low",
+        context: { eventKind: "git" },
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+    });
+  });
+
+  describe("urgent / quiet-gate resolution", () => {
+    it("bypasses the quiet gate for a time-sensitive kind", () => {
+      _setQuietUntil(Date.now() + 60_000);
+      notify({ type: "warning", message: "Disk low", context: { eventKind: "host" } });
+      // host → time-sensitive → urgent, so the toast fires despite quiet.
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("suppresses a non-time-sensitive kind during quiet", () => {
+      _setQuietUntil(Date.now() + 60_000);
+      notify({ type: "info", message: "Git note", context: { eventKind: "git" } });
+      // git → active (no urgent), so quiet suppresses the toast.
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+  });
+
+  describe("duration resolution", () => {
+    it("applies a policy defaultDurationMs when the caller omits duration", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      const active = useNotificationStore.getState().notifications;
+      expect(active[0]!.duration).toBe(EVENT_POLICY.git.defaultDurationMs);
+    });
+
+    it("lets an explicit caller duration win over the policy default", () => {
+      notify({
+        type: "info",
+        message: "Git push done",
+        duration: 9999,
+        context: { eventKind: "git" },
+      });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(9999);
+    });
+
+    it("keeps action-bearing toasts sticky over the policy default", () => {
+      notify({
+        type: "info",
+        message: "Git push done",
+        context: { eventKind: "git" },
+        action: { label: "View", onClick: () => {} },
+      });
+      // Sticky-action default (0) must win over git's defaultDurationMs.
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(0);
+    });
+
+    it("falls through to the per-type default for kinds without a policy duration", () => {
+      // recovery has no defaultDurationMs → per-type warning default applies.
+      notify({ type: "warning", message: "Settings reset", context: { eventKind: "recovery" } });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(
+        TOAST_DURATION.warning
+      );
+    });
+  });
+
+  describe("placement resolution", () => {
+    it("leaves placement unset for auto-surface kinds", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      expect(useNotificationStore.getState().notifications[0]!.placement).toBeUndefined();
+    });
+  });
+
+  describe("no eventKind is unchanged", () => {
+    it("uses the legacy defaults when no eventKind is present", () => {
+      notify({ type: "info", message: "Plain note" });
+      const active = useNotificationStore.getState().notifications;
+      expect(active).toHaveLength(1);
+      expect(active[0]!.priority).toBe("high");
+      expect(active[0]!.duration).toBe(TOAST_DURATION.info);
+    });
   });
 });
