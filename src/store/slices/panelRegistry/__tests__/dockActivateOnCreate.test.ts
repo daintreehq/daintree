@@ -423,6 +423,112 @@ describe("atomic dock activation on create (#6590)", () => {
   });
 });
 
+describe("dockPopoverOnSpawn policy gate (#8946)", () => {
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+  });
+
+  it("kind with dockPopoverOnSpawn: false skips the popover even when activateDockOnCreate is true", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "quiet-dock-kind",
+      name: "Quiet Dock",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockPopoverOnSpawn: false },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      // Extension kinds widen via explicit cast at the integration boundary
+      // — see ExtensionPanelOptions note in shared/types/addPanelOptions.ts.
+      const id = await addPanel({
+        kind: "quiet-dock-kind",
+        requestedId: "quiet-dock-1",
+        cwd: "/",
+        location: "dock",
+        bypassLimits: true,
+        activateDockOnCreate: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("quiet-dock-1");
+      const state = usePanelStore.getState();
+      // Panel committed to dock but popover NOT opened — activeDockTerminalId stays null.
+      expect(state.panelsById[id!]).toBeDefined();
+      expect(state.activeDockTerminalId).toBeNull();
+      expect(state.focusedId).toBeNull();
+    } finally {
+      unregisterPanelKind("quiet-dock-kind");
+    }
+  });
+
+  it("MCP suppression still wins over kind policy (both gates lead to suppressed popover)", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    // Even with dockPopoverOnSpawn: true (default), MCP spawn still suppresses.
+    registerPanelKind({
+      id: "opt-in-popover-kind",
+      name: "Opt-In",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockPopoverOnSpawn: true },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      const id = await addPanel({
+        kind: "opt-in-popover-kind",
+        requestedId: "opt-in-1",
+        cwd: "/",
+        location: "dock",
+        bypassLimits: true,
+        activateDockOnCreate: true,
+        spawnedBy: "mcp",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("opt-in-1");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[id!]).toBeDefined();
+      // MCP still suppresses regardless of policy.
+      expect(state.activeDockTerminalId).toBeNull();
+    } finally {
+      unregisterPanelKind("opt-in-popover-kind");
+    }
+  });
+
+  it("kind without policy (default dockPopoverOnSpawn: true) still opens the popover", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      // browser has no policy — uses default dockPopoverOnSpawn: true.
+      kind: "browser",
+      requestedId: "browser-default-popover",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+      activateDockOnCreate: true,
+    });
+
+    expect(id).toBe("browser-default-popover");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[id!]).toBeDefined();
+    expect(state.activeDockTerminalId).toBe("browser-default-popover");
+  });
+});
+
 describe("dock watchdog hardening (#7278)", () => {
   beforeEach(async () => {
     const { reset } = usePanelStore.getState();

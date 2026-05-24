@@ -7,6 +7,7 @@ import {
   panelKindUsesTerminalUi,
   getPanelKindConfig,
   getExtensionFallbackDefaults,
+  resolvePanelKindPolicy,
 } from "@shared/config/panelKindRegistry";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
@@ -237,7 +238,11 @@ export const createAddPanelActions = (
             // popover. Opening the popover mounts Radix focus management and
             // terminal focus handlers, which is itself a keyboard-focus side
             // effect even if focusedId is preserved. See #6959.
-            if (options.spawnedBy === "mcp") {
+            // The kind's policy may also opt out (e.g., a reading-surface
+            // kind that prefers to land in the dock quietly); same mechanism,
+            // applied per-kind.
+            const policy = resolvePanelKindPolicy(requestedKind);
+            if (options.spawnedBy === "mcp" || !policy.dockPopoverOnSpawn) {
               return {
                 panelsById: newById,
                 panelIds: newIds,
@@ -451,7 +456,9 @@ export const createAddPanelActions = (
           // popover. Opening the popover mounts Radix focus management and
           // terminal focus handlers, which is itself a keyboard-focus side
           // effect even if focusedId is preserved. See #6959.
-          if (options.spawnedBy === "mcp") {
+          // The kind's policy may also opt out via `dockPopoverOnSpawn: false`.
+          const policy = resolvePanelKindPolicy(kind);
+          if (options.spawnedBy === "mcp" || !policy.dockPopoverOnSpawn) {
             return {
               panelsById: newById,
               panelIds: newIds,
@@ -555,7 +562,15 @@ export const createAddPanelActions = (
     // perform. Wrapped to mirror the prewarm block: a renderer service
     // failure should not strand the panel in `spawning` with the spawn
     // promise never started.
-    if (options.activateDockOnCreate && location === "dock" && options.spawnedBy !== "mcp") {
+    // Mirror both opt-outs from the popover gate above so this side-effect
+    // path doesn't fire when the popover was deliberately suppressed.
+    const ptyDockPolicy = resolvePanelKindPolicy(kind);
+    if (
+      options.activateDockOnCreate &&
+      location === "dock" &&
+      options.spawnedBy !== "mcp" &&
+      ptyDockPolicy.dockPopoverOnSpawn
+    ) {
       try {
         terminalInstanceService.wake(id);
         if (agentState === "waiting") {
