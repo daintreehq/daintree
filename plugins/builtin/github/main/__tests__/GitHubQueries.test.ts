@@ -152,6 +152,32 @@ describe("REPO_STATS_AND_PAGE_QUERY", () => {
     expect(REPO_STATS_AND_PAGE_QUERY).toContain("statusCheckRollup");
   });
 
+  it("includes reviewDecision and mergeStateStatus on the PR fragment", () => {
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("reviewDecision");
+    expect(prsBlock).toContain("mergeStateStatus");
+  });
+
+  it("includes statusCheckRollup.contexts aggregate scalars on the PR fragment", () => {
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("contexts {");
+    expect(prsBlock).toContain("checkRunCount");
+    expect(prsBlock).toContain("statusContextCount");
+    expect(prsBlock).toContain("checkRunCountsByState {");
+    expect(prsBlock).toContain("statusContextCountsByState {");
+    // Must not include first: or last: on the contexts connection
+    const contextsLine = prsBlock.slice(
+      prsBlock.indexOf("contexts {"),
+      prsBlock.indexOf("contexts {") + 50
+    );
+    expect(contextsLine).not.toMatch(/\bfirst\b/);
+    expect(contextsLine).not.toMatch(/\blast\b/);
+  });
+
   it("returns the issue fields the disk-cache validator (isIssueLike) requires", () => {
     // GitHubFirstPageCache.isIssueLike rejects items missing author{login,
     // avatarUrl} or assignees. Drop one of these from the query and the

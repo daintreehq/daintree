@@ -63,6 +63,8 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           updatedAt
           merged
           headRefName
+          reviewDecision
+          mergeStateStatus
           headRepository { nameWithOwner }
           baseRepository { nameWithOwner }
           author { login avatarUrl }
@@ -71,7 +73,21 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           commits(last: 1) {
             nodes {
               commit {
-                statusCheckRollup { state }
+                statusCheckRollup {
+                  state
+                  contexts {
+                    checkRunCount
+                    statusContextCount
+                    checkRunCountsByState {
+                      state
+                      count
+                    }
+                    statusContextCountsByState {
+                      state
+                      count
+                    }
+                  }
+                }
               }
             }
           }

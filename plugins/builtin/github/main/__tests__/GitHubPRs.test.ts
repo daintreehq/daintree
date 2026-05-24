@@ -187,4 +187,29 @@ describe("parsePRNode — global CI aggregates", () => {
     // Required-only ciStatus still comes from raw rollup
     expect(pr.ciStatus).toBe("FAILURE");
   });
+
+  it("validates mergeStateStatus against known set, maps unknown to undefined", () => {
+    const pr = parsePRNode(makeBaseNode({ mergeStateStatus: "DRAFT" }));
+    expect(pr.mergeStateStatus).toBeUndefined();
+  });
+
+  it("accepts all valid mergeStateStatus values", () => {
+    for (const state of [
+      "BEHIND",
+      "BLOCKED",
+      "CLEAN",
+      "DIRTY",
+      "HAS_HOOKS",
+      "UNKNOWN",
+      "UNSTABLE",
+    ]) {
+      const pr = parsePRNode(makeBaseNode({ mergeStateStatus: state }));
+      expect(pr.mergeStateStatus).toBe(state);
+    }
+  });
+
+  it("normalises lowercase mergeStateStatus to uppercase", () => {
+    const pr = parsePRNode(makeBaseNode({ mergeStateStatus: "clean" }));
+    expect(pr.mergeStateStatus).toBe("CLEAN");
+  });
 });

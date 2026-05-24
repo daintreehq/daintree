@@ -30,6 +30,12 @@ const PENDING_CHECK_STATUSES = new Set([
 // Pending StatusContext states
 const PENDING_STATUS_STATES = new Set(["PENDING", "EXPECTED"]);
 
+// Known non-failing, non-pending bucket states for check runs and status contexts.
+// Any state not in these sets or the failing/pending sets above is treated as
+// unclassifiable (conservative against future GitHub enum additions).
+const NON_FAILING_CHECK_STATES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"]);
+const NON_FAILING_STATUS_STATES = new Set(["SUCCESS"]);
+
 export interface RollupContextNode {
   __typename?: string;
   // CheckRun fields
@@ -172,6 +178,7 @@ export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
 
   let failingCount = 0;
   let pendingCount = 0;
+  let unknownCount = 0;
 
   for (const bucket of input.checkRunCountsByState ?? []) {
     const state = bucket?.state?.toUpperCase();
@@ -180,6 +187,8 @@ export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
       failingCount += count;
     } else if (state && PENDING_CHECK_STATUSES.has(state)) {
       pendingCount += count;
+    } else if (state && !NON_FAILING_CHECK_STATES.has(state)) {
+      unknownCount += count;
     }
   }
 
@@ -190,9 +199,16 @@ export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
       failingCount += count;
     } else if (state && PENDING_STATUS_STATES.has(state)) {
       pendingCount += count;
+    } else if (state && !NON_FAILING_STATUS_STATES.has(state)) {
+      unknownCount += count;
     }
   }
 
+  // BLOCKED is broader than CI — it can be triggered by required reviews,
+  // stale branches, or other branch-protection rules with zero CI failures.
+  // Treating it as FAILURE is a conservative signal that "something is wrong";
+  // consumers should inspect failingCount to distinguish CI blocks from
+  // non-CI blocks (failingCount === 0 means the block is not from CI).
   if (input.mergeStateStatus === "BLOCKED") {
     return {
       ciStatus: "FAILURE",
@@ -210,10 +226,10 @@ export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
     ciStatus = "FAILURE";
   } else if (pendingCount > 0) {
     ciStatus = "PENDING";
-  } else if (hasCounts && hasBuckets) {
-    // Only declare SUCCESS when bucket data backs the classification.
-    // Counts without bucket breakdowns mean we can't verify what state
-    // the checks are in — treat as unclassifiable.
+  } else if (hasCounts && hasBuckets && unknownCount === 0) {
+    // Only declare SUCCESS when all buckets are classified — unknown
+    // bucket states from future GitHub enum additions must not produce
+    // a false-green. Counts without bucket breakdowns are also unclassifiable.
     ciStatus = "SUCCESS";
   }
 

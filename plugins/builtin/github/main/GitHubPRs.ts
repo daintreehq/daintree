@@ -111,9 +111,19 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
       : undefined;
 
   const mergeStateStatusRaw = node.mergeStateStatus as string | null | undefined;
-  const mergeStateStatus = mergeStateStatusRaw
-    ? (mergeStateStatusRaw.toUpperCase() as GitHubPR["mergeStateStatus"])
-    : undefined;
+  const validMergeStates = new Set([
+    "BEHIND",
+    "BLOCKED",
+    "CLEAN",
+    "DIRTY",
+    "HAS_HOOKS",
+    "UNKNOWN",
+    "UNSTABLE",
+  ]);
+  const mergeStateStatus =
+    mergeStateStatusRaw && validMergeStates.has(mergeStateStatusRaw.toUpperCase())
+      ? (mergeStateStatusRaw.toUpperCase() as GitHubPR["mergeStateStatus"])
+      : undefined;
 
   const rollupContexts = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.contexts as
     | GlobalCIDeriveInput

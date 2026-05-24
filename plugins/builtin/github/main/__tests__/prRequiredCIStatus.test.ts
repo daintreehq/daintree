@@ -388,16 +388,15 @@ describe("deriveGlobalCIStatus", () => {
     expect(r.ciStatus).toBeUndefined();
   });
 
-  it("handles unknown bucket state strings gracefully", () => {
+  it("treats unknown bucket state strings conservatively (not SUCCESS)", () => {
     const r = deriveGlobalCIStatus({
       mergeStateStatus: "CLEAN",
       checkRunCount: 2,
       checkRunCountsByState: [{ state: "SOME_FUTURE_STATE", count: 2 }],
     });
-    // Unknown states contribute 0 to failing/pending — treated as success
-    expect(r.ciStatus).toBe("SUCCESS");
-    expect(r.ciSummary?.failingCount).toBe(0);
-    expect(r.ciSummary?.pendingCount).toBe(0);
+    // Unknown states prevent SUCCESS — treat as unclassifiable
+    expect(r.ciStatus).toBeUndefined();
+    expect(r.ciSummary).toBeUndefined();
   });
 
   it("handles missing mergeStateStatus (treat as non-UNKNOWN/non-BLOCKED)", () => {
