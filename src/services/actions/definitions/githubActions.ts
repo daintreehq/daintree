@@ -50,12 +50,11 @@ async function dispatchAlias<T = unknown>(targetId: ActionId, args: unknown): Pr
 
 export function registerGithubActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   // ---------------------------------------------------------------------------
-  // forge.* primaries — provider-routed action surface.
+  // forge.* primaries — provider-agnostic action surface.
   //
-  // With only the GitHub provider registered today, each forge.* calls the
-  // existing githubClient.* methods directly. When a second provider lands,
-  // the run() bodies switch to ForgeProviderRegistry routing without changing
-  // the public action shape.
+  // Each forge.* action calls forgeClient (the provider-agnostic IPC wrapper).
+  // Provider routing is resolved at the IPC layer in electron/ipc/handlers/forge.ts
+  // via resolveForCwd, so these run() bodies stay provider-agnostic.
   // ---------------------------------------------------------------------------
 
   actions.set("forge.openIssues", () =>
@@ -328,9 +327,11 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
   );
 
   // ---------------------------------------------------------------------------
-  // github.* host actions that are NOT migrating to forge.* in this stage.
-  // These stay on the host since they are GitHub-specific (CLI checks, token
-  // storage, paginated listings) rather than provider-abstract operations.
+  // github.* host actions — intentionally GitHub-specific.
+  //
+  // These actions are GitHub-specific by design: token-backed API calls, CLI
+  // credential checks, and GitHub URL opening. They have no provider-abstract
+  // equivalent and live here permanently alongside the forge.* surface.
   // ---------------------------------------------------------------------------
 
   actions.set("github.openPR", () =>
