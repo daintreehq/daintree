@@ -423,6 +423,238 @@ describe("atomic dock activation on create (#6590)", () => {
   });
 });
 
+describe("dockPopoverOnSpawn policy gate (#8946)", () => {
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+  });
+
+  it("kind with dockPopoverOnSpawn: false skips the popover even when activateDockOnCreate is true", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "quiet-dock-kind",
+      name: "Quiet Dock",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockPopoverOnSpawn: false },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      // Extension kinds widen via explicit cast at the integration boundary
+      // — see ExtensionPanelOptions note in shared/types/addPanelOptions.ts.
+      const id = await addPanel({
+        kind: "quiet-dock-kind",
+        requestedId: "quiet-dock-1",
+        cwd: "/",
+        location: "dock",
+        bypassLimits: true,
+        activateDockOnCreate: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("quiet-dock-1");
+      const state = usePanelStore.getState();
+      // Panel committed to dock but popover NOT opened — activeDockTerminalId stays null.
+      expect(state.panelsById[id!]).toBeDefined();
+      expect(state.activeDockTerminalId).toBeNull();
+      expect(state.focusedId).toBeNull();
+    } finally {
+      unregisterPanelKind("quiet-dock-kind");
+    }
+  });
+
+  it("MCP suppression still wins over kind policy (both gates lead to suppressed popover)", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    // Even with dockPopoverOnSpawn: true (default), MCP spawn still suppresses.
+    registerPanelKind({
+      id: "opt-in-popover-kind",
+      name: "Opt-In",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockPopoverOnSpawn: true },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      const id = await addPanel({
+        kind: "opt-in-popover-kind",
+        requestedId: "opt-in-1",
+        cwd: "/",
+        location: "dock",
+        bypassLimits: true,
+        activateDockOnCreate: true,
+        spawnedBy: "mcp",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("opt-in-1");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[id!]).toBeDefined();
+      // MCP still suppresses regardless of policy.
+      expect(state.activeDockTerminalId).toBeNull();
+    } finally {
+      unregisterPanelKind("opt-in-popover-kind");
+    }
+  });
+
+  it("kind without policy (default dockPopoverOnSpawn: true) still opens the popover", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      // browser has no policy — uses default dockPopoverOnSpawn: true.
+      kind: "browser",
+      requestedId: "browser-default-popover",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+      activateDockOnCreate: true,
+    });
+
+    expect(id).toBe("browser-default-popover");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[id!]).toBeDefined();
+    expect(state.activeDockTerminalId).toBe("browser-default-popover");
+  });
+
+  it("PTY extension kind honors dockPopoverOnSpawn: false (resolved from requestedKind, not collapsed kind)", async () => {
+    // Regression guard: previously the PTY path resolved policy from the
+    // collapsed `kind` ("terminal" | "dev-preview"), silently dropping any
+    // PTY extension kind's policy. Resolution now uses `requestedKind`.
+    const wake = vi.mocked(terminalInstanceService.wake);
+    wake.mockReset();
+
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "pty-quiet-kind",
+      name: "PTY Quiet",
+      iconId: "test",
+      color: "#000",
+      hasPty: true,
+      canRestart: true,
+      canConvert: true,
+      usesTerminalUi: true,
+      extensionId: "test-policy-plugin",
+      policy: { dockPopoverOnSpawn: false },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      const id = await addPanel({
+        kind: "pty-quiet-kind",
+        requestedId: "pty-quiet-1",
+        cwd: "/",
+        location: "dock",
+        bypassLimits: true,
+        activateDockOnCreate: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("pty-quiet-1");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[id!]).toBeDefined();
+      // Popover suppressed by policy.
+      expect(state.activeDockTerminalId).toBeNull();
+      // Side-effect block also suppressed.
+      expect(wake).not.toHaveBeenCalledWith("pty-quiet-1");
+    } finally {
+      unregisterPanelKind("pty-quiet-kind");
+    }
+  });
+});
+
+describe("defaultFocusOnCreate policy gate (#8946)", () => {
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+  });
+
+  it("kind with defaultFocusOnCreate: false does not steal focus on grid spawn", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "no-focus-steal-kind",
+      name: "No Focus Steal",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { defaultFocusOnCreate: false },
+    });
+
+    try {
+      const { addPanel } = usePanelStore.getState();
+      // Seed an existing focused grid panel.
+      const firstId = await addPanel({
+        kind: "browser",
+        requestedId: "anchor-focus",
+        cwd: "/",
+        location: "grid",
+        bypassLimits: true,
+      });
+      expect(firstId).toBe("anchor-focus");
+      expect(usePanelStore.getState().focusedId).toBe("anchor-focus");
+
+      // Spawn the policy-gated kind into the grid — should NOT steal focus.
+      const id = await addPanel({
+        kind: "no-focus-steal-kind",
+        requestedId: "quiet-grid-1",
+        cwd: "/",
+        location: "grid",
+        bypassLimits: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      expect(id).toBe("quiet-grid-1");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[id!]).toBeDefined();
+      // Anchor still holds focus, previousFocusedId is unchanged.
+      expect(state.focusedId).toBe("anchor-focus");
+    } finally {
+      unregisterPanelKind("no-focus-steal-kind");
+    }
+  });
+
+  it("kind without policy (default defaultFocusOnCreate: true) does steal focus on grid spawn", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const firstId = await addPanel({
+      kind: "browser",
+      requestedId: "anchor-2",
+      cwd: "/",
+      location: "grid",
+      bypassLimits: true,
+    });
+    expect(firstId).toBe("anchor-2");
+    expect(usePanelStore.getState().focusedId).toBe("anchor-2");
+
+    const secondId = await addPanel({
+      // browser has no policy → default defaultFocusOnCreate: true.
+      kind: "browser",
+      requestedId: "stealer-2",
+      cwd: "/",
+      location: "grid",
+      bypassLimits: true,
+    });
+    expect(secondId).toBe("stealer-2");
+    expect(usePanelStore.getState().focusedId).toBe("stealer-2");
+  });
+});
+
 describe("dock watchdog hardening (#7278)", () => {
   beforeEach(async () => {
     const { reset } = usePanelStore.getState();

@@ -7,6 +7,7 @@ import {
   panelKindUsesTerminalUi,
   getPanelKindConfig,
   getExtensionFallbackDefaults,
+  resolvePanelKindPolicy,
 } from "@shared/config/panelKindRegistry";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
@@ -206,6 +207,14 @@ export const createAddPanelActions = (
         });
         collectPanelIdForBatch(id);
       } else {
+        // Capture the kind's policy synchronously, BEFORE the `set()` updater
+        // closure. The updater can run later (or, under React 19 concurrent
+        // mode, replay), and a plugin unregister landing between this point
+        // and the commit would silently flip the popover gate. See the
+        // matching pattern in panelStore.ts where every fallback site reads
+        // policy before the registry mutation.
+        const popoverSuppressed =
+          options.spawnedBy === "mcp" || !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
         set((state) => {
           const existing = state.panelsById[id];
           if (existing) {
@@ -237,7 +246,10 @@ export const createAddPanelActions = (
             // popover. Opening the popover mounts Radix focus management and
             // terminal focus handlers, which is itself a keyboard-focus side
             // effect even if focusedId is preserved. See #6959.
-            if (options.spawnedBy === "mcp") {
+            // The kind's policy may also opt out (e.g., a reading-surface
+            // kind that prefers to land in the dock quietly); same mechanism,
+            // applied per-kind.
+            if (popoverSuppressed) {
               return {
                 panelsById: newById,
                 panelIds: newIds,
@@ -400,6 +412,13 @@ export const createAddPanelActions = (
       });
       collectPanelIdForBatch(id);
     } else {
+      // Capture popover-gate inputs synchronously, BEFORE the `set()` updater
+      // closure — same reason as the non-PTY path above. Resolve from
+      // `requestedKind` (the caller-supplied kind), not the collapsed `kind`,
+      // so a PTY extension kind's policy is honored. `kind` here is collapsed
+      // to "terminal" | "dev-preview" for storage-shape purposes only.
+      const ptyPopoverSuppressed =
+        options.spawnedBy === "mcp" || !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
       set((state) => {
         const existing = state.panelsById[id];
         if (existing) {
@@ -451,7 +470,8 @@ export const createAddPanelActions = (
           // popover. Opening the popover mounts Radix focus management and
           // terminal focus handlers, which is itself a keyboard-focus side
           // effect even if focusedId is preserved. See #6959.
-          if (options.spawnedBy === "mcp") {
+          // The kind's policy may also opt out via `dockPopoverOnSpawn: false`.
+          if (ptyPopoverSuppressed) {
             return {
               panelsById: newById,
               panelIds: newIds,
@@ -555,7 +575,16 @@ export const createAddPanelActions = (
     // perform. Wrapped to mirror the prewarm block: a renderer service
     // failure should not strand the panel in `spawning` with the spawn
     // promise never started.
-    if (options.activateDockOnCreate && location === "dock" && options.spawnedBy !== "mcp") {
+    // Mirror both opt-outs from the popover gate above so this side-effect
+    // path doesn't fire when the popover was deliberately suppressed.
+    // Resolve from `requestedKind` to honor PTY extension kind policies.
+    const ptyDockPolicy = resolvePanelKindPolicy(requestedKind);
+    if (
+      options.activateDockOnCreate &&
+      location === "dock" &&
+      options.spawnedBy !== "mcp" &&
+      ptyDockPolicy.dockPopoverOnSpawn
+    ) {
       try {
         terminalInstanceService.wake(id);
         if (agentState === "waiting") {
