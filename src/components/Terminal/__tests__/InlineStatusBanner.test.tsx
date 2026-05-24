@@ -449,4 +449,42 @@ describe("InlineStatusBanner", () => {
     expect(root.className).toContain("duration-250");
     expect(root.className).not.toContain("duration-150");
   });
+
+  it("suppresses the 250ms entrance class when data-reduce-animations is true", () => {
+    document.body.setAttribute("data-reduce-animations", "true");
+    try {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={Info}
+          title="Animated"
+          severity="info"
+          animated={true}
+          actions={[]}
+        />
+      );
+      const root = container.firstElementChild as HTMLElement;
+      expect(root.className).not.toContain("duration-250");
+    } finally {
+      document.body.removeAttribute("data-reduce-animations");
+    }
+  });
+
+  it("suppresses the 250ms entrance class when data-performance-mode is true", () => {
+    document.body.setAttribute("data-performance-mode", "true");
+    try {
+      const { container } = render(
+        <InlineStatusBanner
+          icon={Info}
+          title="Animated"
+          severity="info"
+          animated={true}
+          actions={[]}
+        />
+      );
+      const root = container.firstElementChild as HTMLElement;
+      expect(root.className).not.toContain("duration-250");
+    } finally {
+      document.body.removeAttribute("data-performance-mode");
+    }
+  });
 });

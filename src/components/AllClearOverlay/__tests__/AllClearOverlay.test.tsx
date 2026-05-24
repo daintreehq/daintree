@@ -64,6 +64,18 @@ describe("AllClearOverlay", () => {
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
   });
 
+  it("suppresses the overlay when data-reduce-animations is true", () => {
+    document.body.setAttribute("data-reduce-animations", "true");
+    render(<AllClearOverlay />);
+
+    act(() => {
+      onAllAgentsClearCb?.({ timestamp: Date.now() });
+    });
+
+    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
+    document.body.removeAttribute("data-reduce-animations");
+  });
+
   it("suppresses the overlay when data-performance-mode is true", () => {
     document.body.setAttribute("data-performance-mode", "true");
     render(<AllClearOverlay />);
