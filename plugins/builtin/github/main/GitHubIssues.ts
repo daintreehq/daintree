@@ -10,7 +10,12 @@ import {
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
-import { repoStatsCache, issueListCache, issueTooltipCache } from "./GitHubCaches.js";
+import {
+  repoStatsCache,
+  issueListCache,
+  issueTooltipCache,
+  issueTooltipWrittenAt,
+} from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
 import { truncateBody } from "./GitHubCaches.js";
@@ -259,6 +264,8 @@ function updateIssueAssigneeInCache(
   issueTooltipCache.invalidate(`${owner}/${repo}:${issueNumber}`);
 }
 
+const inFlightIssueTooltips = new Map<string, Promise<IssueTooltipData | null>>();
+
 export async function getIssueTooltip(
   cwd: string,
   issueNumber: number
@@ -276,51 +283,108 @@ export async function getIssueTooltip(
         return cached;
       }
 
-      const response = (await client(GET_ISSUE_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        number: issueNumber,
-        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-      })) as GraphQlQueryResponseData;
+      const inFlight = inFlightIssueTooltips.get(cacheKey);
+      if (inFlight) return inFlight;
 
-      gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
+      const requestedAt = Date.now();
+      const promise = (async () => {
+        const response = (await client(GET_ISSUE_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          number: issueNumber,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
 
-      const issue = response?.repository?.issue;
-      if (!issue) {
-        return null;
-      }
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
-      const author = issue.author as { login?: string; avatarUrl?: string } | null;
-      const assigneesData = issue.assignees as {
-        nodes?: Array<{ login?: string; avatarUrl?: string }>;
-      };
-      const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+        const issue = response?.repository?.issue;
+        if (!issue) {
+          return null;
+        }
 
-      const tooltipData: IssueTooltipData = {
-        number: issue.number as number,
-        title: issue.title as string,
-        bodyExcerpt: truncateBody(issue.bodyText as string | null),
-        state: issue.state as "OPEN" | "CLOSED",
-        createdAt: issue.createdAt as string,
-        author: {
-          login: author?.login ?? "unknown",
-          avatarUrl: author?.avatarUrl ?? "",
-        },
-        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-          login: a.login ?? "unknown",
-          avatarUrl: a.avatarUrl ?? "",
-        })),
-        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-          name: l.name ?? "",
-          color: l.color ?? "",
-        })),
-      };
+        const author = issue.author as { login?: string; avatarUrl?: string } | null;
+        const assigneesData = issue.assignees as {
+          nodes?: Array<{ login?: string; avatarUrl?: string }>;
+        };
+        const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
 
-      issueTooltipCache.set(cacheKey, tooltipData);
-      return tooltipData;
+        const tooltipData: IssueTooltipData = {
+          number: issue.number as number,
+          title: issue.title as string,
+          bodyExcerpt: truncateBody(issue.bodyText as string | null),
+          state: issue.state as "OPEN" | "CLOSED",
+          createdAt: issue.createdAt as string,
+          author: {
+            login: author?.login ?? "unknown",
+            avatarUrl: author?.avatarUrl ?? "",
+          },
+          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+            login: a.login ?? "unknown",
+            avatarUrl: a.avatarUrl ?? "",
+          })),
+          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+            name: l.name ?? "",
+            color: l.color ?? "",
+          })),
+        };
+
+        const existing = issueTooltipWrittenAt.get(cacheKey);
+        if (existing === undefined || requestedAt >= existing) {
+          issueTooltipCache.set(cacheKey, tooltipData);
+          issueTooltipWrittenAt.set(cacheKey, requestedAt);
+        }
+        return tooltipData;
+      })();
+
+      inFlightIssueTooltips.set(cacheKey, promise);
+      promise.finally(() => {
+        inFlightIssueTooltips.delete(cacheKey);
+      });
+
+      return promise;
     });
   } catch {
     return null;
+  }
+}
+
+function prewarmIssueTooltips(
+  owner: string,
+  repo: string,
+  nodes: Array<Record<string, unknown>>
+): void {
+  const requestedAt = Date.now();
+  for (const node of nodes) {
+    const num = node.number as number;
+    if (!num) continue;
+    const cacheKey = `${owner}/${repo}:${num}`;
+    const existing = issueTooltipWrittenAt.get(cacheKey);
+    if (existing !== undefined && requestedAt < existing) continue;
+    const author = node.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = node.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    issueTooltipCache.set(cacheKey, {
+      number: num,
+      title: node.title as string,
+      bodyExcerpt: truncateBody(node.bodyText as string | null),
+      state: node.state as "OPEN" | "CLOSED",
+      createdAt: node.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    });
+    issueTooltipWrittenAt.set(cacheKey, requestedAt);
   }
 }
 
@@ -379,9 +443,12 @@ export async function listIssues(
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+        const filteredNodes = nodes.filter(Boolean);
+
+        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
 
         result = {
-          items: nodes.filter(Boolean).map(parseIssueNode),
+          items: filteredNodes.map(parseIssueNode),
           pageInfo: {
             hasNextPage: search?.pageInfo?.hasNextPage ?? false,
             endCursor: search?.pageInfo?.endCursor ?? null,
@@ -405,9 +472,12 @@ export async function listIssues(
         const issues = response?.repository?.issues;
         const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (issues?.totalCount as number) ?? undefined;
+        const filteredNodes = nodes.filter(Boolean);
+
+        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
 
         result = {
-          items: nodes.filter(Boolean).map(parseIssueNode),
+          items: filteredNodes.map(parseIssueNode),
           pageInfo: {
             hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
             endCursor: issues?.pageInfo?.endCursor ?? null,

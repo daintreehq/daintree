@@ -295,6 +295,18 @@ export const LIST_PRS_QUERY = `
             login
             avatarUrl
           }
+          assignees(first: 10) {
+            nodes {
+              login
+              avatarUrl
+            }
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
+          }
           comments {
             totalCount
           }
@@ -392,6 +404,18 @@ export const SEARCH_QUERY = `
           author {
             login
             avatarUrl
+          }
+          assignees(first: 10) {
+            nodes {
+              login
+              avatarUrl
+            }
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
           }
           comments {
             totalCount

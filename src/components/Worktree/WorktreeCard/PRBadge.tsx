@@ -60,6 +60,7 @@ export function PRBadge({
   const prevPrNumber = useRef<number | undefined>(undefined);
   const isColdTitleGap = isHeadline === true && !prTitle && prNumber !== prevPrNumber.current;
   const showColdFallback = useDohertyGate(isColdTitleGap);
+  const showTooltipLoading = useDohertyGate(loading);
   useEffect(() => {
     prevPrNumber.current = prNumber;
   }, [prNumber]);
@@ -214,7 +215,7 @@ export function PRBadge({
       <TooltipContent side="right" align="start" className="p-3">
         {missingToken ? (
           <TokenMissingTooltip type="pr" />
-        ) : loading ? (
+        ) : showTooltipLoading ? (
           <TooltipLoading />
         ) : data ? (
           <PRTooltipContent data={data} />

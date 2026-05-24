@@ -25,7 +25,13 @@ export const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>
 });
 export const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
 export const projectHealthCache = new Cache<string, unknown>({ defaultTTL: 60000 });
-export const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 });
+export const issueTooltipWrittenAt = new Map<string, number>();
+export const issueTooltipCache = new Cache<string, IssueTooltipData>({
+  defaultTTL: 300000,
+  onEvict: (key) => {
+    issueTooltipWrittenAt.delete(key as string);
+  },
+});
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const TEN_MINUTES_MS = 10 * 60 * 1000;
@@ -138,6 +144,7 @@ export function clearGitHubCaches(): void {
   issueListCache.clear();
   prListCache.clear();
   issueTooltipCache.clear();
+  issueTooltipWrittenAt.clear();
   prTooltipCache.clear();
   prTooltipWrittenAt.clear();
   prETagCache.clear();

@@ -15,13 +15,14 @@ const TOOLTIP_CACHE_TTL = 300_000; // 5 minutes, matching backend TTL
 const issueCache = new TtlCache<string, IssueTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
 const prCache = new TtlCache<string, PRTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
 
+const inFlightIssues = new Map<string, Promise<IssueTooltipData | null>>();
+
 export function useIssueTooltip(cwd: string | undefined, issueNumber: number | undefined) {
   const [state, setState] = useState<TooltipState<IssueTooltipData>>({
     data: null,
     loading: false,
     error: false,
   });
-  const fetchingKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
   const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
@@ -48,39 +49,61 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
       return;
     }
 
-    if (fetchingKeyRef.current === cacheKey) return;
+    const inFlight = inFlightIssues.get(cacheKey);
+    if (inFlight) {
+      setState((prev) => ({ ...prev, loading: true, error: false }));
+      try {
+        const data = await inFlight;
+        if (!mountedRef.current) return;
+        if (data) {
+          setState({ data, loading: false, error: false });
+        } else {
+          setState({ data: null, loading: false, error: true });
+        }
+      } catch {
+        if (!mountedRef.current) return;
+        setState({ data: null, loading: false, error: true });
+      }
+      return;
+    }
 
-    fetchingKeyRef.current = cacheKey;
     setState((prev) => ({ ...prev, loading: true, error: false }));
 
-    try {
+    const promise = (async () => {
       const data = await window.electron.github.getIssueTooltip(cwd, issueNumber);
-      if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
-
       if (data) {
         issueCache.set(cacheKey, data);
+      }
+      return data;
+    })();
+
+    inFlightIssues.set(cacheKey, promise);
+    promise.finally(() => {
+      inFlightIssues.delete(cacheKey);
+    });
+
+    try {
+      const data = await promise;
+      if (!mountedRef.current) return;
+      if (data) {
         setState({ data, loading: false, error: false });
       } else {
         setState({ data: null, loading: false, error: true });
       }
     } catch {
-      if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
+      if (!mountedRef.current) return;
       setState({ data: null, loading: false, error: true });
-    } finally {
-      if (fetchingKeyRef.current === cacheKey) {
-        fetchingKeyRef.current = null;
-      }
     }
   }, [cwd, issueNumber, missingToken]);
 
   const reset = useCallback(() => {
-    if (!fetchingKeyRef.current) {
-      setState({ data: null, loading: false, error: false });
-    }
+    setState({ data: null, loading: false, error: false });
   }, []);
 
   return { ...state, missingToken, fetchTooltip, reset };
 }
+
+const inFlightPRs = new Map<string, Promise<PRTooltipData | null>>();
 
 export function usePRTooltip(cwd: string | undefined, prNumber: number | undefined) {
   const [state, setState] = useState<TooltipState<PRTooltipData>>({
@@ -88,7 +111,6 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
     loading: false,
     error: false,
   });
-  const fetchingKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
   const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
@@ -115,35 +137,55 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
       return;
     }
 
-    if (fetchingKeyRef.current === cacheKey) return;
+    const inFlight = inFlightPRs.get(cacheKey);
+    if (inFlight) {
+      setState((prev) => ({ ...prev, loading: true, error: false }));
+      try {
+        const data = await inFlight;
+        if (!mountedRef.current) return;
+        if (data) {
+          setState({ data, loading: false, error: false });
+        } else {
+          setState({ data: null, loading: false, error: true });
+        }
+      } catch {
+        if (!mountedRef.current) return;
+        setState({ data: null, loading: false, error: true });
+      }
+      return;
+    }
 
-    fetchingKeyRef.current = cacheKey;
     setState((prev) => ({ ...prev, loading: true, error: false }));
 
-    try {
+    const promise = (async () => {
       const data = await window.electron.github.getPRTooltip(cwd, prNumber);
-      if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
-
       if (data) {
         prCache.set(cacheKey, data);
+      }
+      return data;
+    })();
+
+    inFlightPRs.set(cacheKey, promise);
+    promise.finally(() => {
+      inFlightPRs.delete(cacheKey);
+    });
+
+    try {
+      const data = await promise;
+      if (!mountedRef.current) return;
+      if (data) {
         setState({ data, loading: false, error: false });
       } else {
         setState({ data: null, loading: false, error: true });
       }
     } catch {
-      if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
+      if (!mountedRef.current) return;
       setState({ data: null, loading: false, error: true });
-    } finally {
-      if (fetchingKeyRef.current === cacheKey) {
-        fetchingKeyRef.current = null;
-      }
     }
   }, [cwd, prNumber, missingToken]);
 
   const reset = useCallback(() => {
-    if (!fetchingKeyRef.current) {
-      setState({ data: null, loading: false, error: false });
-    }
+    setState({ data: null, loading: false, error: false });
   }, []);
 
   return { ...state, missingToken, fetchTooltip, reset };
