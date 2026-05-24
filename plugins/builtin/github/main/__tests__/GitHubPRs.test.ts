@@ -205,6 +205,51 @@ describe("getPRReviewThreads", () => {
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it("stops pagination when hasNextPage is true but endCursor is null (malformed response)", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeThreadNode("src/a.ts", false, false)], true, null) // hasNextPage: true, cursor: null
+    );
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ "src/a.ts": 1 });
+    expect(result.__clampedAt).toBeUndefined();
+  });
+
+  it("passes correct cursors across paginated calls", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        makePageResponse([makeThreadNode("src/a.ts", false, false)], true, "cursor-2")
+      )
+      .mockResolvedValueOnce(
+        makePageResponse([makeThreadNode("src/b.ts", false, false)], false, null)
+      );
+    await getPRReviewThreads("/fake", 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    // First call: cursor is null
+    expect(mockGraphQLClient.mock.calls[0][1].cursor).toBeNull();
+    // Second call: cursor from first page
+    expect(mockGraphQLClient.mock.calls[1][1].cursor).toBe("cursor-2");
+  });
+
+  it("handles prototype property names without pollution", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse(
+        [
+          makeThreadNode("toString", false, false),
+          makeThreadNode("constructor", false, false),
+          makeThreadNode("__proto__", false, false),
+        ],
+        false,
+        null
+      )
+    );
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result.toString).toBe(1);
+    expect(result.constructor).toBe(1);
+    expect(result.__proto__).toBe(1);
+  });
 });
 
 function makeBaseNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {

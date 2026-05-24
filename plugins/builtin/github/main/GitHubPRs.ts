@@ -614,7 +614,7 @@ export async function getPRReviewThreads(
         }
 
         pageCount++;
-        hasNextPage = threads?.pageInfo?.hasNextPage ?? false;
+        hasNextPage = !!(threads?.pageInfo?.hasNextPage && threads?.pageInfo?.endCursor);
         cursor = threads?.pageInfo?.endCursor ?? null;
 
         if (pageCount >= MAX_REVIEW_THREAD_PAGES) {
@@ -622,7 +622,7 @@ export async function getPRReviewThreads(
         }
       }
 
-      const counts: Record<string, number> = {};
+      const counts: Record<string, number> = Object.create(null);
       for (const thread of allThreads) {
         if (!thread.isResolved && !thread.isOutdated) {
           counts[thread.path] = (counts[thread.path] ?? 0) + 1;
