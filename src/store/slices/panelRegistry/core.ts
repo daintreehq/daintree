@@ -8,6 +8,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
@@ -155,7 +156,7 @@ export const createCorePanelActions = (
       const terminal = state.panelsById[id];
       if (!terminal) continue;
 
-      if (terminal.kind === "dev-preview") {
+      if (isDevPreviewPanel(terminal)) {
         stopDevPreviewByPanelId(id);
       }
 

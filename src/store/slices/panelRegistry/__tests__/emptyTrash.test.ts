@@ -87,7 +87,7 @@ describe("emptyTrash", () => {
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
       focusedId: null,
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
   });
 
   afterEach(() => {
@@ -106,7 +106,7 @@ describe("emptyTrash", () => {
         ["p-1", makeTrashedInfo("p-1")],
         ["p-2", makeTrashedInfo("p-2")],
       ]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1", "p-2"]);
 
@@ -129,7 +129,7 @@ describe("emptyTrash", () => {
         ["p-1", makeTrashedInfo("p-1")],
         ["p-3", makeTrashedInfo("p-3")],
       ]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -150,7 +150,7 @@ describe("emptyTrash", () => {
       panelIds: ["p-1"],
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
       backgroundedTerminals: new Map([["p-1", { id: "p-1", originalLocation: "grid" as const }]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -163,7 +163,7 @@ describe("emptyTrash", () => {
       panelsById: { "p-1": makePanel("p-1") },
       panelIds: ["p-1"],
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash([]);
 
@@ -176,7 +176,7 @@ describe("emptyTrash", () => {
     usePanelStore.setState({
       panelsById: { "p-1": makePanel("p-1") },
       panelIds: ["p-1"],
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["unknown"]);
 
@@ -190,7 +190,7 @@ describe("emptyTrash", () => {
       panelsById: { "p-1": makePanel("p-1") },
       panelIds: ["p-1"],
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1", "p-1", "p-1"]);
 
@@ -210,7 +210,7 @@ describe("emptyTrash", () => {
         ["p-1", makeTrashedInfo("p-1")],
         ["p-2", makeTrashedInfo("p-2")],
       ]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1", "p-2"]);
 
@@ -227,7 +227,7 @@ describe("emptyTrash", () => {
       },
       panelIds: ["p-1"],
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     vi.clearAllMocks();
     usePanelStore.getState().emptyTrash(["p-1"]);
@@ -247,9 +247,9 @@ describe("emptyTrash", () => {
         ["p-1", makeTrashedInfo("p-1")],
         ["p-2", makeTrashedInfo("p-2")],
       ]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
-    panelPersistence.save.mockClear();
+    (panelPersistence.save as unknown as ReturnType<typeof vi.fn>).mockClear();
 
     usePanelStore.getState().emptyTrash(["p-1", "p-2"]);
 
@@ -274,7 +274,7 @@ describe("emptyTrash", () => {
       panelIds: ["p-1", "p-2", "p-3"],
       tabGroups: new Map([["group-1", group]]),
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -300,7 +300,7 @@ describe("emptyTrash", () => {
       panelIds: ["p-1", "p-2"],
       tabGroups: new Map([["group-1", group]]),
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -320,7 +320,7 @@ describe("emptyTrash", () => {
         ["p-1", makeTrashedInfo("p-1")],
         ["p-2", makeTrashedInfo("p-2")],
       ]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -336,7 +336,7 @@ describe("emptyTrash", () => {
       panelIds: ["p-1"],
       panelIdsByWorktreeId: { "wt-a": ["p-1"] },
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
 
@@ -349,7 +349,7 @@ describe("emptyTrash", () => {
       panelsById: { "p-1": makePanel("p-1") },
       panelIds: ["p-1"],
       trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as Parameters<typeof usePanelStore.setState>[0]);
+    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
 
     usePanelStore.getState().emptyTrash(["p-1"]);
     const state1 = usePanelStore.getState();

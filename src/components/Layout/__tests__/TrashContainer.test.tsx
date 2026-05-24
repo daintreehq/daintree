@@ -8,7 +8,7 @@ import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal } from "@/store/slices";
 
-let emptyTrashSpy: ReturnType<typeof vi.fn>;
+let emptyTrashSpy: (...args: unknown[]) => unknown;
 
 // jsdom does not ship AnimationEvent.
 if (typeof AnimationEvent === "undefined") {
@@ -195,7 +195,9 @@ describe("TrashContainer", () => {
     dndMocks.isOver = false;
     confirmDialogProps = null;
     emptyTrashSpy = vi.fn();
-    vi.spyOn(usePanelStore.getState(), "emptyTrash").mockImplementation(emptyTrashSpy);
+    vi.spyOn(usePanelStore.getState(), "emptyTrash").mockImplementation(
+      emptyTrashSpy as unknown as (ids: string[]) => void
+    );
   });
 
   afterEach(() => {
