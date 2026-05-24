@@ -138,6 +138,19 @@ function writeBaseline(report, { force }) {
   console.log(
     `[check-import-budget] baseline updated: count=${formatted.count}, allowlist=${formatted.allowlist.length} file(s), syncViolations=${formatted.syncViolations.length}`
   );
+
+  // Remind the developer to justify any allowlisted file that lacks the
+  // `// eager-import-allow:` header — otherwise the next `check` run fails with
+  // missing-allow-comment. The update path itself doesn't fail on this; it only
+  // captures current state.
+  const marked = scanAllowlistMarkers(formatted.allowlist, ROOT);
+  const unmarked = formatted.allowlist.filter((file) => !marked.has(file));
+  if (unmarked.length > 0) {
+    console.warn(
+      `[check-import-budget] ${unmarked.length} allowlisted file(s) lack a \`// eager-import-allow: <reason>\` header. Add one near the top of each before committing, or \`check\` will fail:`
+    );
+    for (const file of unmarked) console.warn(`   - ${file}`);
+  }
 }
 
 // Build and write the markdown summary for downstream PR-comment aggregation.
