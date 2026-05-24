@@ -494,6 +494,7 @@ export const GET_PR_QUERY = `
         state
         isDraft
         merged
+        reviewDecision
         createdAt
         updatedAt
         closedAt

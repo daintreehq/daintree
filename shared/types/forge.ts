@@ -446,6 +446,11 @@ export interface ForgeProviderImpl {
    * Project v2 metadata, repo settings, wiki/discussion edits). Callers should
    * pair it with a bounded TTL so list content can't go stale indefinitely
    * behind a continuously-matching probe.
+   *
+   * May reject when the probe is unavailable (auth/network failure, the
+   * provider can't compute a token). Since the optimization is best-effort,
+   * callers must catch and fall back to a full fetch rather than surfacing the
+   * error.
    */
   getRepoActivityProbe?(repo: RepoRef): Promise<{ freshnessToken: string }>;
 

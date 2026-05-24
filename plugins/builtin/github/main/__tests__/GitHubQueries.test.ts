@@ -242,6 +242,10 @@ describe("GET_PR_QUERY", () => {
   it("fetches comments totalCount", () => {
     expect(GET_PR_QUERY).toContain("comments");
   });
+
+  it("selects reviewDecision so getPR matches listPRs", () => {
+    expect(GET_PR_QUERY).toContain("reviewDecision");
+  });
 });
 
 describe("buildBatchPRQuery — no comments field", () => {

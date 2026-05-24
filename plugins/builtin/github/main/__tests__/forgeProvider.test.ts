@@ -35,6 +35,7 @@ import {
   clearPRCaches,
   forgeQueryCache,
 } from "../GitHubCaches.js";
+import { GitHubAuth } from "../GitHubAuth.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
@@ -324,9 +325,10 @@ describe("listPRs reviewDecision", () => {
             makePRNode(1, "feature/a", "APPROVED"),
             makePRNode(2, "feature/b", "CHANGES_REQUESTED"),
             makePRNode(3, "feature/c", null),
+            makePRNode(4, "feature/d", "REVIEW_REQUIRED"),
           ],
           pageInfo: { hasNextPage: false, endCursor: null },
-          totalCount: 3,
+          totalCount: 4,
         },
       },
       rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
@@ -338,6 +340,7 @@ describe("listPRs reviewDecision", () => {
     expect(page.items[1].reviewDecision).toBe("CHANGES_REQUESTED");
     // `null` means the repo doesn't gate on reviews — preserved, not coerced.
     expect(page.items[2].reviewDecision).toBeNull();
+    expect(page.items[3].reviewDecision).toBe("REVIEW_REQUIRED");
   });
 
   it("leaves reviewDecision undefined when the provider omits the field", async () => {
@@ -388,6 +391,21 @@ describe("getRepoActivityProbe", () => {
   it("throws when the probe status is unknown", async () => {
     mockFetchActivityProbe.mockResolvedValueOnce({ status: "unknown" });
 
+    await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
+  });
+
+  it("yields a different token when the ETag changes", async () => {
+    mockFetchActivityProbe
+      .mockResolvedValueOnce({ status: "changed", etag: 'W/"etag-1"' })
+      .mockResolvedValueOnce({ status: "changed", etag: 'W/"etag-2"' });
+
+    const first = await githubForgeProvider.getRepoActivityProbe!(repo);
+    const second = await githubForgeProvider.getRepoActivityProbe!(repo);
+    expect(first.freshnessToken).not.toBe(second.freshnessToken);
+  });
+
+  it("throws when no GitHub token is configured", async () => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValueOnce(undefined);
     await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
   });
 });
