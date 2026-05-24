@@ -916,7 +916,7 @@ export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[
             avatarUrl
           }
         }
-        reviews {
+        reviews(first: 1) {
           totalCount
         }
         comments {

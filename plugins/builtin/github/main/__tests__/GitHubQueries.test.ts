@@ -672,7 +672,7 @@ describe("buildBatchPRsQuery", () => {
     expect(query).toContain("baseRepository");
     expect(query).toContain("author {");
     expect(query).toContain("assignees(first: 10)");
-    expect(query).toContain("reviews {");
+    expect(query).toContain("reviews(first: 1)");
     expect(query).toContain("comments {");
     expect(query).toContain("labels(first: 10)");
     expect(query).toContain("commits(last: 1)");
