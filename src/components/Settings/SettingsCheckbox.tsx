@@ -70,8 +70,7 @@ export function SettingsCheckbox({
             "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
             "disabled:opacity-50 disabled:cursor-not-allowed",
-            isError &&
-              "border-status-error data-[state=checked]:border-status-error"
+            isError && "border-status-error data-[state=checked]:border-status-error"
           )}
         >
           <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
