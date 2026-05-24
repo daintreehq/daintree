@@ -146,8 +146,9 @@ export function dissolvePanelFromGroup(
     if (newPanelIds.length <= 1) {
       newTabGroups.delete(group.id);
     } else {
-      const newActiveTabId =
-        group.activeTabId === panelId ? (newPanelIds[0] ?? "") : group.activeTabId;
+      const newActiveTabId = newPanelIds.includes(group.activeTabId)
+        ? group.activeTabId
+        : (newPanelIds[0] ?? "");
       newTabGroups.set(group.id, {
         ...group,
         panelIds: newPanelIds,
@@ -186,7 +187,7 @@ export function computeRestoredTabGroup(
 ): { orderedPanelIds: string[]; activeTabId: string } | null {
   if (validPanelIds.length <= 1) return null;
 
-  let orderedPanelIds = validPanelIds;
+  let orderedPanelIds = [...validPanelIds];
   let activeTabId: string = validPanelIds[0]!;
 
   if (anchorMetadata) {
