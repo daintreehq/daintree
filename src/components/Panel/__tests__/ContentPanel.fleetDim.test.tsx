@@ -212,4 +212,17 @@ describe("PanelHeader fleet-preview enter overlay (#8995)", () => {
     });
     expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
   });
+
+  it("scopes the overlay per-pane during a multi-pane preview", () => {
+    // Two panes rendered; only one is in the preview set. The non-previewed
+    // pane must not pick up the enter cue — this is the core differentiator
+    // between the kinetic preview cue and the global multi-select state.
+    const { container: previewed } = renderPanel("t-1");
+    const { container: untouched } = renderPanel("t-2");
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    expect(previewed.querySelector('[data-testid="fleet-preview-enter-overlay"]')).not.toBeNull();
+    expect(untouched.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
+  });
 });
