@@ -65,11 +65,7 @@ export type NormalizedIssueState = "open" | "closed";
  * provider did not report a decision. Provider-specific states belong in
  * `rawData`, never here.
  */
-export type NormalizedReviewDecision =
-  | "APPROVED"
-  | "CHANGES_REQUESTED"
-  | "REVIEW_REQUIRED"
-  | null;
+export type NormalizedReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 
 /**
  * Uniform rate-limit projection. Plugins parse their own transport (e.g. the
