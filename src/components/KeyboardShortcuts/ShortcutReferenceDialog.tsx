@@ -157,8 +157,8 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       <AppDialog.Body>
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
           {searchQuery.trim()
-            ? `${filteredBindings.length} shortcuts found`
-            : `${filteredBindings.length} shortcuts`}
+            ? `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""} found for "${searchQuery.trim()}"`
+            : `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""}`}
         </div>
 
         {sortedCategories.length === 0 ? (
@@ -173,7 +173,10 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
         ) : (
           <div id={resultsId} className="space-y-8">
             {sortedCategories.map((category) => {
-              const headingId = `${headingPrefix}-${category.replace(/\s+/g, "-")}`;
+              const headingId = `${headingPrefix}-${category
+                .replace(/[^a-zA-Z0-9]/g, "-")
+                .replace(/-+/g, "-")
+                .replace(/^-|-$/g, "")}`;
               return (
                 <div key={category}>
                   <h3

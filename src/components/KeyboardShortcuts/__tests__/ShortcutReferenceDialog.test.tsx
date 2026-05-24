@@ -329,7 +329,7 @@ describe("ShortcutReferenceDialog", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
     const statusRegions = screen.getAllByRole("status");
-    const countRegion = statusRegions.find((el) => el.textContent?.includes("shortcuts"));
+    const countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
     expect(countRegion).toBeTruthy();
     expect(countRegion!.getAttribute("aria-live")).toBe("polite");
     expect(countRegion!.getAttribute("aria-atomic")).toBe("true");
@@ -353,8 +353,8 @@ describe("ShortcutReferenceDialog", () => {
 
     const countRegion = screen
       .getAllByRole("status")
-      .find((el) => el.textContent?.includes("shortcuts"));
-    expect(countRegion?.textContent).toContain("6");
+      .find((el) => el.textContent?.includes("shortcut"));
+    expect(countRegion?.textContent).toBe("6 shortcuts");
 
     const searchInput = screen.getByPlaceholderText("Search shortcuts...");
     fireEvent.change(searchInput, { target: { value: "stash" } });
@@ -362,8 +362,8 @@ describe("ShortcutReferenceDialog", () => {
     await waitFor(() => {
       const updated = screen
         .getAllByRole("status")
-        .find((el) => el.textContent?.includes("shortcuts"));
-      expect(updated?.textContent).toContain("1");
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(updated?.textContent).toBe('1 shortcut found for "stash"');
     });
   });
 
@@ -372,7 +372,7 @@ describe("ShortcutReferenceDialog", () => {
 
     // Should exist when results are shown
     let statusRegions = screen.getAllByRole("status");
-    let countRegion = statusRegions.find((el) => el.textContent?.includes("shortcuts"));
+    let countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
     expect(countRegion).toBeTruthy();
 
     // Should still exist when search yields no results
@@ -381,8 +381,32 @@ describe("ShortcutReferenceDialog", () => {
 
     await waitFor(() => {
       statusRegions = screen.getAllByRole("status");
-      countRegion = statusRegions.find((el) => el.textContent?.includes("shortcuts"));
+      countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
       expect(countRegion).toBeTruthy();
+    });
+  });
+
+  it("sr-only announcement changes when same-count but different results", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+
+    // settings → 1 result
+    fireEvent.change(searchInput, { target: { value: "settings" } });
+    await waitFor(() => {
+      const region = screen
+        .getAllByRole("status")
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(region?.textContent).toBe('1 shortcut found for "settings"');
+    });
+
+    // stash → also 1 result, but different text → re-announces
+    fireEvent.change(searchInput, { target: { value: "stash" } });
+    await waitFor(() => {
+      const region = screen
+        .getAllByRole("status")
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(region?.textContent).toBe('1 shortcut found for "stash"');
     });
   });
 
