@@ -4,7 +4,9 @@
   "fixWithTestRatio": 0.9090909090909091,
   "fixCount": 44,
   "fixWithTestCount": 40,
+  "fixWithTestLowerBound": 0.7884048060208251,
   "allWithTestRatio": 0.91,
   "totalCount": 100,
-  "allWithTestCount": 91
+  "allWithTestCount": 91,
+  "allWithTestLowerBound": 0.8377362530335634
 }

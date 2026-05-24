@@ -13,6 +13,15 @@
 
 export const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
+// Minimum number of fix PRs in the window before the fix-only regression gate
+// fires. Below this, a single untested fix swings the ratio enough to look like
+// a regression, so the gate is statistical noise rather than signal.
+export const MIN_FIX_COUNT_FLOOR = 20;
+
+// z-value for the Wilson interval. 1.96 is the two-sided 95% CI multiplier
+// (the conservative choice for a one-tailed regression gate — wider tolerance).
+const WILSON_Z = 1.96;
+
 const FIX_TITLE_RE = /^fix[(:]/i;
 const RELEASE_TITLE_RE = /^chore\(release\):/;
 const VERSION_TAG_RE = /^v?\d+\.\d+/;
@@ -109,6 +118,29 @@ export function computeTestRatioReport(classified, rollingWindowSize) {
   };
 }
 
+/**
+ * Wilson score interval lower bound for a binomial proportion. Used to give the
+ * regression gate a noise-tolerant floor: a sample proportion is only a
+ * regression when it falls below the lower bound of the baseline's confidence
+ * interval, not merely below the baseline point estimate.
+ *
+ * @param {number} successes — number of successes (e.g. fix PRs touching tests)
+ * @param {number} n — sample size (e.g. total fix PRs)
+ * @param {number} [z=WILSON_Z] — standard-normal multiplier (1.96 ≈ 95% CI)
+ * @returns {number} lower bound clamped to [0, 1]
+ */
+export function wilsonLowerBound(successes, n, z = WILSON_Z) {
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (!Number.isFinite(successes) || successes < 0 || successes > n) return 0;
+  if (!Number.isFinite(z)) return 0;
+  const p = successes / n;
+  const zSq = z * z;
+  const numerator = p + zSq / (2 * n) - z * Math.sqrt((p * (1 - p)) / n + zSq / (4 * n * n));
+  const denominator = 1 + zSq / n;
+  const lower = numerator / denominator;
+  return Math.min(1, Math.max(0, lower));
+}
+
 const REQUIRED_BASELINE_KEYS = [
   "rollingWindowSize",
   "updatedAt",
@@ -149,6 +181,14 @@ export function validateBaseline(data) {
       errs.push(`${key} must be a number between 0 and 1`);
     }
   }
+  // Precomputed Wilson lower bounds are optional (older baselines lack them),
+  // but when present they must be valid proportions.
+  for (const key of ["fixWithTestLowerBound", "allWithTestLowerBound"]) {
+    const v = data[key];
+    if (v !== undefined && (!Number.isFinite(v) || v < 0 || v > 1)) {
+      errs.push(`${key} must be a number between 0 and 1`);
+    }
+  }
   for (const key of ["fixCount", "fixWithTestCount", "totalCount", "allWithTestCount"]) {
     const v = data[key];
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
@@ -179,10 +219,38 @@ export function compareToBaseline(current, baseline) {
 
   const pct = (ratio) => (ratio * 100).toFixed(1);
 
-  if (current.fixWithTestRatio < baseline.fixWithTestRatio) {
+  // Skip the regression gate entirely when the rolling window is incomplete.
+  // Partial windows produce noisy ratios that would trigger false regressions.
+  if (current.windowCompleted === false) {
+    notices.push({
+      kind: "window-incomplete",
+      message: `rolling window incomplete (${current.totalCount}/${current.rollingWindowSize} eligible PRs) — skipping ratio regression checks.`,
+    });
+    return { ok: true, errors, notices };
+  }
+
+  // Compare against the baseline's Wilson lower bound rather than its point
+  // estimate so normal sampling noise doesn't read as a regression. Fall back
+  // to recomputing from the stored counts for baselines written before the
+  // bounds were precomputed.
+  const fixLowerBound =
+    baseline.fixWithTestLowerBound ??
+    wilsonLowerBound(baseline.fixWithTestCount, baseline.fixCount);
+  const allLowerBound =
+    baseline.allWithTestLowerBound ??
+    wilsonLowerBound(baseline.allWithTestCount, baseline.totalCount);
+
+  // The fix-only gate needs a minimum sample size — with too few fix PRs a
+  // single untested fix swings the ratio enough to look like a regression.
+  if (current.fixCount < MIN_FIX_COUNT_FLOOR) {
+    notices.push({
+      kind: "fix-count-floor",
+      message: `only ${current.fixCount} fix PRs in window (below the ${MIN_FIX_COUNT_FLOOR} floor) — skipping fix-with-test regression check.`,
+    });
+  } else if (current.fixWithTestRatio < fixLowerBound) {
     errors.push({
       kind: "fix-with-test-regression",
-      message: `fix-with-test ratio dropped from ${pct(baseline.fixWithTestRatio)}% to ${pct(current.fixWithTestRatio)}% (${current.fixWithTestCount}/${current.fixCount} fix PRs touched tests vs baseline ${baseline.fixWithTestCount}/${baseline.fixCount}).`,
+      message: `fix-with-test ratio ${pct(current.fixWithTestRatio)}% fell below the baseline Wilson lower bound ${pct(fixLowerBound)}% (${current.fixWithTestCount}/${current.fixCount} fix PRs touched tests vs baseline ${baseline.fixWithTestCount}/${baseline.fixCount}).`,
     });
   } else if (current.fixWithTestRatio > baseline.fixWithTestRatio) {
     notices.push({
@@ -191,10 +259,10 @@ export function compareToBaseline(current, baseline) {
     });
   }
 
-  if (current.allWithTestRatio < baseline.allWithTestRatio) {
+  if (current.allWithTestRatio < allLowerBound) {
     errors.push({
       kind: "all-with-test-regression",
-      message: `all-with-test ratio dropped from ${pct(baseline.allWithTestRatio)}% to ${pct(current.allWithTestRatio)}% (${current.allWithTestCount}/${current.totalCount} PRs touched tests vs baseline ${baseline.allWithTestCount}/${baseline.totalCount}).`,
+      message: `all-with-test ratio ${pct(current.allWithTestRatio)}% fell below the baseline Wilson lower bound ${pct(allLowerBound)}% (${current.allWithTestCount}/${current.totalCount} PRs touched tests vs baseline ${baseline.allWithTestCount}/${baseline.totalCount}).`,
     });
   } else if (current.allWithTestRatio > baseline.allWithTestRatio) {
     notices.push({
@@ -224,9 +292,11 @@ const KEY_ORDER = [
   "fixWithTestRatio",
   "fixCount",
   "fixWithTestCount",
+  "fixWithTestLowerBound",
   "allWithTestRatio",
   "totalCount",
   "allWithTestCount",
+  "allWithTestLowerBound",
 ];
 
 /**
