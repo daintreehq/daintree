@@ -20,7 +20,7 @@ export const theme: BuiltInThemeSource = {
       primary: "#3D2D19",
       secondary: "#68573D",
       muted: "#8A7A5C",
-      inverse: "#1E160C",
+      inverse: "#FDFAF2",
     },
     border: "#D4C499",
     accent: "#9E7F22",
@@ -77,6 +77,7 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    "accent-foreground": "#1E160C",
     "accent-muted": "rgba(158,127,34,0.28)",
     "accent-soft": "rgba(158,127,34,0.14)",
     "border-divider": "rgba(44,33,15,0.09)",

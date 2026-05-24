@@ -804,8 +804,8 @@ describe("SettingsCheckbox", () => {
       />
     );
     const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("data-[state=checked]:bg-daintree-accent");
-    expect(checkbox.className).toContain("data-[state=checked]:border-daintree-accent");
+    expect(checkbox.className).toContain("data-[state=checked]:bg-daintree-text");
+    expect(checkbox.className).toContain("data-[state=checked]:border-daintree-text");
   });
 
   it("renders checkmark when checked", () => {
@@ -929,7 +929,7 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-accent");
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
   });
 
   it("applies amber color scheme", () => {

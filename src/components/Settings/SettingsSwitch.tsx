@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 const COLOR_SCHEMES = {
   accent: {
-    track: "bg-daintree-border data-[state=checked]:bg-daintree-accent",
+    track: "bg-daintree-border data-[state=checked]:bg-daintree-text",
     thumb: "bg-daintree-text data-[state=checked]:bg-text-inverse",
     focus: "focus-visible:outline-daintree-accent",
   },

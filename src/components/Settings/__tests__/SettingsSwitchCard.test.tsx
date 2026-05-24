@@ -58,7 +58,7 @@ describe("SettingsSwitchCard", () => {
     expect(classes).toContain("data-[state=checked]:bg-text-inverse");
   });
 
-  it("uses bg-text-inverse on the thumb in the ON state (sits on accent track)", () => {
+  it("uses bg-text-inverse on the thumb in the ON state (sits on text-primary track)", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const thumb = getThumb(container);
     expect(thumb).not.toBeNull();
@@ -86,7 +86,7 @@ describe("SettingsSwitchCard", () => {
   it("applies accent color scheme by default", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-accent");
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
   });
 
   it("wraps content in subgrid container", () => {
