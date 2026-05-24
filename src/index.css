@@ -1093,24 +1093,6 @@ body,
   will-change: transform, opacity;
 }
 
-/* Voice recording: rotating conic border ring */
-@keyframes voice-ring-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Subtle opacity pulse for voice recording indicator */
-@keyframes voice-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
 /* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {
@@ -1791,9 +1773,8 @@ body,
   }
 }
 
-/* Diagnostics dock — 200ms height transition (semantic exception per CLAUDE.md):
- * height encodes open/close state. Suppressed during active drag and under
- * reduced-motion to mirror the .terminal-restoring peer pattern. */
+/* Diagnostics dock — 200ms height transition.
+ * Suppressed during active drag and under reduced-motion. */
 .diagnostics-dock {
   transition: height 200ms ease-out;
 }
