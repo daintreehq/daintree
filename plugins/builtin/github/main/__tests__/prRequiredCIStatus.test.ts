@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveRequiredCIStatus, normalizeRawState } from "../prRequiredCIStatus.js";
+import {
+  deriveRequiredCIStatus,
+  deriveGlobalCIStatus,
+  normalizeRawState,
+} from "../prRequiredCIStatus.js";
 
 describe("deriveRequiredCIStatus", () => {
   it("returns raw status and no summary when contexts is null", () => {
@@ -237,5 +241,180 @@ describe("normalizeRawState", () => {
     expect(normalizeRawState("SKIPPED")).toBeUndefined();
     expect(normalizeRawState("STALE")).toBeUndefined();
     expect(normalizeRawState("IN_PROGRESS")).toBeUndefined();
+  });
+});
+
+describe("deriveGlobalCIStatus", () => {
+  it("returns undefined ciStatus when mergeStateStatus is UNKNOWN", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "UNKNOWN",
+      checkRunCount: 5,
+      checkRunCountsByState: [{ state: "SUCCESS", count: 5 }],
+    });
+    expect(r.ciStatus).toBeUndefined();
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("returns FAILURE when mergeStateStatus is BLOCKED", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "BLOCKED",
+      checkRunCount: 3,
+      checkRunCountsByState: [{ state: "SUCCESS", count: 3 }],
+    });
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toEqual({
+      checkRunCount: 3,
+      statusContextCount: 0,
+      failingCount: 0,
+      pendingCount: 0,
+    });
+  });
+
+  it("returns FAILURE when check runs have failing conclusions", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 5,
+      checkRunCountsByState: [
+        { state: "SUCCESS", count: 3 },
+        { state: "FAILURE", count: 2 },
+      ],
+    });
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary?.failingCount).toBe(2);
+  });
+
+  it("returns FAILURE when status contexts have ERROR/FAILURE states", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      statusContextCount: 4,
+      statusContextCountsByState: [
+        { state: "SUCCESS", count: 2 },
+        { state: "ERROR", count: 2 },
+      ],
+    });
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary?.failingCount).toBe(2);
+  });
+
+  it("treats TIMED_OUT, ACTION_REQUIRED, CANCELLED, STARTUP_FAILURE, STALE as failing", () => {
+    for (const state of ["TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "STARTUP_FAILURE", "STALE"]) {
+      const r = deriveGlobalCIStatus({
+        mergeStateStatus: "CLEAN",
+        checkRunCount: 1,
+        checkRunCountsByState: [{ state, count: 1 }],
+      });
+      expect(r.ciStatus).toBe("FAILURE");
+      expect(r.ciSummary?.failingCount).toBe(1);
+    }
+  });
+
+  it("returns PENDING when only pending check runs exist", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 2,
+      checkRunCountsByState: [
+        { state: "SUCCESS", count: 1 },
+        { state: "IN_PROGRESS", count: 1 },
+      ],
+    });
+    expect(r.ciStatus).toBe("PENDING");
+    expect(r.ciSummary).toEqual({
+      checkRunCount: 2,
+      statusContextCount: 0,
+      failingCount: 0,
+      pendingCount: 1,
+    });
+  });
+
+  it("returns PENDING when only pending status contexts exist", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      statusContextCount: 3,
+      statusContextCountsByState: [
+        { state: "PENDING", count: 2 },
+        { state: "SUCCESS", count: 1 },
+      ],
+    });
+    expect(r.ciStatus).toBe("PENDING");
+    expect(r.ciSummary?.pendingCount).toBe(2);
+  });
+
+  it("returns SUCCESS when all checks are successful", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 3,
+      statusContextCount: 2,
+      checkRunCountsByState: [{ state: "SUCCESS", count: 3 }],
+      statusContextCountsByState: [{ state: "SUCCESS", count: 2 }],
+    });
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary).toEqual({
+      checkRunCount: 3,
+      statusContextCount: 2,
+      failingCount: 0,
+      pendingCount: 0,
+    });
+  });
+
+  it("returns undefined ciStatus when there are no checks at all", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 0,
+      statusContextCount: 0,
+    });
+    expect(r.ciStatus).toBeUndefined();
+  });
+
+  it("prioritises FAILURE over PENDING when both are present", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 3,
+      checkRunCountsByState: [
+        { state: "FAILURE", count: 1 },
+        { state: "IN_PROGRESS", count: 2 },
+      ],
+    });
+    expect(r.ciStatus).toBe("FAILURE");
+  });
+
+  it("handles null/undefined buckets gracefully", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 1,
+      checkRunCountsByState: null,
+      statusContextCountsByState: undefined,
+      statusContextCount: 1,
+    });
+    expect(r.ciStatus).toBeUndefined();
+  });
+
+  it("handles unknown bucket state strings gracefully", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: 2,
+      checkRunCountsByState: [{ state: "SOME_FUTURE_STATE", count: 2 }],
+    });
+    // Unknown states contribute 0 to failing/pending — treated as success
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary?.failingCount).toBe(0);
+    expect(r.ciSummary?.pendingCount).toBe(0);
+  });
+
+  it("handles missing mergeStateStatus (treat as non-UNKNOWN/non-BLOCKED)", () => {
+    const r = deriveGlobalCIStatus({
+      checkRunCount: 1,
+      checkRunCountsByState: [{ state: "SUCCESS", count: 1 }],
+    });
+    expect(r.ciStatus).toBe("SUCCESS");
+  });
+
+  it("defaults null counts to 0 and returns no summary when total is zero", () => {
+    const r = deriveGlobalCIStatus({
+      mergeStateStatus: "CLEAN",
+      checkRunCount: null,
+      statusContextCount: null,
+    });
+    expect(r.ciStatus).toBeUndefined();
+    expect(r.ciSummary).toBeUndefined();
   });
 });

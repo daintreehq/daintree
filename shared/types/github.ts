@@ -62,6 +62,18 @@ export interface GitHubPRCISummary {
   requiredPending: number;
 }
 
+/** Global (non-required-filtered) CI aggregate summary from in-band statusCheckRollup.contexts */
+export interface GitHubPRGlobalCISummary {
+  /** Total check runs across all states */
+  checkRunCount: number;
+  /** Total status contexts across all states */
+  statusContextCount: number;
+  /** Failing check runs + status contexts (global, not required-filtered) */
+  failingCount: number;
+  /** Pending check runs + status contexts (global, not required-filtered) */
+  pendingCount: number;
+}
+
 /** GitHub pull request representation */
 export interface GitHubPR {
   /** PR number */
@@ -92,6 +104,21 @@ export interface GitHubPR {
    *  was truncated, or when the repository has no required checks configured (in which case
    *  ciStatus reflects the raw rollup). */
   ciSummary?: GitHubPRCISummary;
+  /** Review decision from the PR (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or absent) */
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
+  /** Merge state status from the PR. UNKNOWN on freshly-opened PRs that GitHub hasn't backgrounded yet. */
+  mergeStateStatus?:
+    | "BEHIND"
+    | "BLOCKED"
+    | "CLEAN"
+    | "DIRTY"
+    | "HAS_HOOKS"
+    | "UNKNOWN"
+    | "UNSTABLE";
+  /** Global CI status derived from in-band statusCheckRollup.contexts aggregates (not required-filtered) */
+  globalCIStatus?: GitHubPRCIStatus;
+  /** Global CI aggregate counts from in-band statusCheckRollup.contexts (not required-filtered) */
+  globalCISummary?: GitHubPRGlobalCISummary;
   /** Plain-text PR body. Used to body-parse closing-issue references (`Closes #N`)
    *  when capturing the source PR at worktree-create time. */
   bodyText?: string;

@@ -1,4 +1,8 @@
-import type { GitHubPRCIStatus, GitHubPRCISummary } from "../../../../shared/types/github.js";
+import type {
+  GitHubPRCIStatus,
+  GitHubPRCISummary,
+  GitHubPRGlobalCISummary,
+} from "../../../../shared/types/github.js";
 
 // Failing CheckRun conclusions per GitHub schema. STALE is included because a stale required
 // run has not resolved to a passing state and must not be silently treated as success.
@@ -140,4 +144,83 @@ export function deriveRequiredCIStatus(
   }
 
   return { ciStatus, ciSummary: summary };
+}
+
+export interface GlobalCIDeriveInput {
+  checkRunCountsByState?: Array<{ state?: string | null; count?: number | null }> | null;
+  statusContextCountsByState?: Array<{ state?: string | null; count?: number | null }> | null;
+  checkRunCount?: number | null;
+  statusContextCount?: number | null;
+  mergeStateStatus?: string | null;
+}
+
+/**
+ * Derive a global (non-required-filtered) CI status from the in-band aggregate
+ * scalars on {@code statusCheckRollup.contexts}. Returns {@code ciStatus: undefined}
+ * when the merge state is UNKNOWN (transient state on freshly-opened PRs).
+ */
+export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
+  ciStatus: GitHubPRCIStatus | undefined;
+  ciSummary: GitHubPRGlobalCISummary | undefined;
+} {
+  if (input.mergeStateStatus === "UNKNOWN") {
+    return { ciStatus: undefined, ciSummary: undefined };
+  }
+
+  const checkRunCount = input.checkRunCount ?? 0;
+  const statusContextCount = input.statusContextCount ?? 0;
+
+  let failingCount = 0;
+  let pendingCount = 0;
+
+  for (const bucket of input.checkRunCountsByState ?? []) {
+    const state = bucket?.state?.toUpperCase();
+    const count = bucket?.count ?? 0;
+    if (state && FAILING_CHECK_CONCLUSIONS.has(state)) {
+      failingCount += count;
+    } else if (state && PENDING_CHECK_STATUSES.has(state)) {
+      pendingCount += count;
+    }
+  }
+
+  for (const bucket of input.statusContextCountsByState ?? []) {
+    const state = bucket?.state?.toUpperCase();
+    const count = bucket?.count ?? 0;
+    if (state && FAILING_STATUS_STATES.has(state)) {
+      failingCount += count;
+    } else if (state && PENDING_STATUS_STATES.has(state)) {
+      pendingCount += count;
+    }
+  }
+
+  if (input.mergeStateStatus === "BLOCKED") {
+    return {
+      ciStatus: "FAILURE",
+      ciSummary: { checkRunCount, statusContextCount, failingCount, pendingCount },
+    };
+  }
+
+  const hasCounts = checkRunCount + statusContextCount > 0;
+  const hasBuckets =
+    (input.checkRunCountsByState?.length ?? 0) > 0 ||
+    (input.statusContextCountsByState?.length ?? 0) > 0;
+
+  let ciStatus: GitHubPRCIStatus | undefined;
+  if (failingCount > 0) {
+    ciStatus = "FAILURE";
+  } else if (pendingCount > 0) {
+    ciStatus = "PENDING";
+  } else if (hasCounts && hasBuckets) {
+    // Only declare SUCCESS when bucket data backs the classification.
+    // Counts without bucket breakdowns mean we can't verify what state
+    // the checks are in — treat as unclassifiable.
+    ciStatus = "SUCCESS";
+  }
+
+  const ciSummary: GitHubPRGlobalCISummary | undefined =
+    ciStatus !== undefined
+      ? { checkRunCount, statusContextCount, failingCount, pendingCount }
+      : undefined;
+
+  return { ciStatus, ciSummary };
 }

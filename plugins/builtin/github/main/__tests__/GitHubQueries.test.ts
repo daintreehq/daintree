@@ -185,6 +185,37 @@ describe("LIST_PRS_QUERY", () => {
     expect(LIST_PRS_QUERY).toContain("comments");
     expect(LIST_PRS_QUERY).toContain("totalCount");
   });
+
+  it("fetches reviewDecision and mergeStateStatus at the PR node level", () => {
+    expect(LIST_PRS_QUERY).toContain("reviewDecision");
+    expect(LIST_PRS_QUERY).toContain("mergeStateStatus");
+  });
+
+  it("fetches statusCheckRollup.contexts aggregate scalars without first/last args", () => {
+    // contexts must NOT use first: or last: — aggregate scalars are
+    // available on the connection type itself without pagination args.
+    const rollupSection = LIST_PRS_QUERY.slice(LIST_PRS_QUERY.indexOf("statusCheckRollup {"));
+    expect(rollupSection).toContain("contexts {");
+    expect(rollupSection).toContain("checkRunCount");
+    expect(rollupSection).toContain("statusContextCount");
+    expect(rollupSection).toContain("checkRunCountsByState {");
+    expect(rollupSection).toContain("statusContextCountsByState {");
+    expect(rollupSection).toContain("state");
+    expect(rollupSection).toContain("count");
+
+    // Must not include first: or last: on the contexts connection
+    const contextsLine = rollupSection.slice(
+      rollupSection.indexOf("contexts {"),
+      rollupSection.indexOf("contexts {") + 50
+    );
+    expect(contextsLine).not.toMatch(/\bfirst\b/);
+    expect(contextsLine).not.toMatch(/\blast\b/);
+  });
+
+  it("retains the raw statusCheckRollup.state field", () => {
+    expect(LIST_PRS_QUERY).toContain("statusCheckRollup {");
+    expect(LIST_PRS_QUERY).toContain("state");
+  });
 });
 
 describe("SEARCH_QUERY", () => {

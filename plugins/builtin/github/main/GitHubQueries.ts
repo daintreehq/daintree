@@ -268,6 +268,8 @@ export const LIST_PRS_QUERY = `
           merged
           baseRefName
           headRefName
+          reviewDecision
+          mergeStateStatus
           headRepository {
             nameWithOwner
           }
@@ -289,6 +291,18 @@ export const LIST_PRS_QUERY = `
               commit {
                 statusCheckRollup {
                   state
+                  contexts {
+                    checkRunCount
+                    statusContextCount
+                    checkRunCountsByState {
+                      state
+                      count
+                    }
+                    statusContextCountsByState {
+                      state
+                      count
+                    }
+                  }
                 }
               }
             }
