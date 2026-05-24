@@ -137,6 +137,63 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Build import budget metadata
+        run: npm run import-budget:build
+
+      - name: Check renderer bundle budget
+        id: renderer_bundle_budget
+        continue-on-error: true
+        run: npm run renderer-bundle-budget:check
+
+      - name: Check first render chunk budget
+        id: first_render_chunk_budget
+        continue-on-error: true
+        run: npm run first-render-chunk-budget:check
+
+      - name: Check renderer import budget
+        id: renderer_import_budget
+        continue-on-error: true
+        run: npm run renderer-import-budget:check
+
+      - name: Check import budget
+        id: import_budget
+        continue-on-error: true
+        run: npm run import-budget:check
+
+      - name: Check compiler budget
+        id: compiler_budget
+        continue-on-error: true
+        run: npm run compiler-budget:check
+
+      - name: Budget summaries
+        if: always()
+        run: |
+          if [ -f dist/renderer-bundle-size-summary.md ]; then
+            cat dist/renderer-bundle-size-summary.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f dist/first-render-chunk-summary.md ]; then
+            cat dist/first-render-chunk-summary.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Gate performance budgets
+        if: always()
+        env:
+          RENDERER_BUNDLE: ${{ steps.renderer_bundle_budget.outcome }}
+          FIRST_RENDER: ${{ steps.first_render_chunk_budget.outcome }}
+          RENDERER_IMPORT: ${{ steps.renderer_import_budget.outcome }}
+          IMPORT_BUDGET: ${{ steps.import_budget.outcome }}
+          COMPILER_BUDGET: ${{ steps.compiler_budget.outcome }}
+        run: |
+          failed=0
+          [ "$RENDERER_BUNDLE" = "failure" ] && echo "::error::renderer-bundle-budget failed" && failed=1
+          [ "$FIRST_RENDER" = "failure" ] && echo "::error::first-render-chunk-budget failed" && failed=1
+          [ "$RENDERER_IMPORT" = "failure" ] && echo "::error::renderer-import-budget failed" && failed=1
+          [ "$IMPORT_BUDGET" = "failure" ] && echo "::error::import-budget failed" && failed=1
+          [ "$COMPILER_BUDGET" = "failure" ] && echo "::error::compiler-budget failed" && failed=1
+          exit $failed
+
       - name: Smoke test
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: xvfb-run --auto-servernum npm run test:smoke
