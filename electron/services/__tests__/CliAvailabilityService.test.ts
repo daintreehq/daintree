@@ -856,6 +856,50 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.copilot).toBe("ready");
     });
+
+    it("does NOT probe the bogus Antigravity path (.antigravity/oauth_creds.json)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Only agy binary found; no auth files exist
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("");
+        throw new Error("not found");
+      });
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      const result = await service.checkAvailability();
+
+      // Binary on PATH + no credential detected → `unauthenticated`.
+      expect(result.antigravity).toBe("unauthenticated");
+      expect(service.getDetails()!.antigravity?.authConfirmed).toBe(false);
+
+      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
+      // agy stores OAuth in the OS keychain, not on disk. The old
+      // .antigravity/oauth_creds.json path never existed and must never be
+      // probed (regression guard for #8918).
+      expect(probedPaths).not.toContain(join(homedir(), ".antigravity/oauth_creds.json"));
+    });
+
+    it("reaches 'ready' for Antigravity when ~/.gemini/antigravity-cli directory exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const antigravityDir = join(homedir(), ".gemini/antigravity-cli");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === antigravityDir) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.antigravity).toBe("ready");
+      expect(service.getDetails()!.antigravity?.authConfirmed).toBe(true);
+    });
   });
 
   describe("diagnostic logging for auth discovery", () => {

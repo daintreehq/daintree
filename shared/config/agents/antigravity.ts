@@ -59,14 +59,18 @@ export const config: AgentConfig = {
   help: {
     args: [],
   },
-  // The exact credential filename under `~/.antigravity/` isn't documented
-  // yet — `oauth_creds.json` mirrors the Gemini CLI's layout and is the
-  // most likely location given `agy` is the Gemini CLI successor. The
-  // env var fallback (`GOOGLE_API_KEY`) is a strong signal regardless of
-  // file path. Worst case the file probe misses and we rely on the env
-  // signal; the auth check never gates launch.
+  // `agy` is a compiled Go binary that stores OAuth credentials in the
+  // OS-native keychain (macOS Keychain, Linux libsecret) — there is no
+  // on-disk credential file to probe. The old `~/.antigravity/oauth_creds.json`
+  // path never existed, so authenticated users always read as
+  // unauthenticated. `~/.gemini/antigravity-cli` is the non-credential
+  // settings directory `agy` writes on first run after setup, so its
+  // presence is the best available filesystem proxy for "set up and used"
+  // (fs.access works on directories too). The `GOOGLE_API_KEY` env var
+  // fallback remains the strong positive signal. This is a best-effort
+  // indicator — the auth check never gates launch.
   authCheck: {
-    configPathsAll: [".antigravity/oauth_creds.json"],
+    configPathsAll: [".gemini/antigravity-cli"],
     envVar: "GOOGLE_API_KEY",
   },
   prerequisites: [
