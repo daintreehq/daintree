@@ -67,19 +67,18 @@ function renderDialog() {
 describe("IssuePickerDialog empty states", () => {
   it("renders zero-data EmptyState when no issues and no query", async () => {
     listIssuesMock.mockResolvedValue({ items: [] });
-    renderDialog();
+    const { container } = renderDialog();
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toContain("No issues found");
+      expect(screen.getByText("No issues found")).toBeTruthy();
     });
-    const status = screen.getByRole("status");
-    expect(status.getAttribute("aria-live")).toBe("polite");
-    expect(status.hasAttribute("aria-describedby")).toBe(false);
+    expect(container.querySelector("[aria-live]")).toBeNull();
+    expect(container.querySelector("[aria-describedby]")).toBeNull();
   });
 
   it("trims whitespace-only search before querying the API and shows zero-data copy", async () => {
     listIssuesMock.mockResolvedValue({ items: [] });
     renderDialog();
-    await waitFor(() => screen.getByRole("status"));
+    await waitFor(() => screen.getByText("No issues found"));
 
     fireEvent.change(screen.getByPlaceholderText("Search issues by title or number..."), {
       target: { value: "   " },
@@ -91,13 +90,13 @@ describe("IssuePickerDialog empty states", () => {
       },
       { timeout: 2000 }
     );
-    expect(screen.getByRole("status").textContent).toContain("No issues found");
+    expect(screen.getByText("No issues found")).toBeTruthy();
   });
 
   it("renders filtered-empty EmptyState with interpolated query", async () => {
     listIssuesMock.mockResolvedValue({ items: [] });
     renderDialog();
-    await waitFor(() => screen.getByRole("status"));
+    await waitFor(() => screen.getByText("No issues found"));
 
     fireEvent.change(screen.getByPlaceholderText("Search issues by title or number..."), {
       target: { value: "foobar" },
@@ -105,7 +104,7 @@ describe("IssuePickerDialog empty states", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByRole("status").textContent).toContain('No matches for "foobar"');
+        expect(screen.getByText('No matches for "foobar"')).toBeTruthy();
       },
       { timeout: 2000 }
     );
@@ -358,7 +357,7 @@ describe("IssuePickerDialog stale behavior", () => {
         await vi.advanceTimersByTimeAsync(300);
       });
 
-      expect(screen.getByRole("status").textContent).toContain("No issues found");
+      expect(screen.getByText("No issues found")).toBeTruthy();
 
       fireEvent.change(screen.getByPlaceholderText("Search issues by title or number..."), {
         target: { value: "foo" },
@@ -367,14 +366,14 @@ describe("IssuePickerDialog stale behavior", () => {
         await vi.advanceTimersByTimeAsync(300);
       });
 
-      expect(screen.getByRole("status").textContent).toContain('No matches for "foo"');
+      expect(screen.getByText('No matches for "foo"')).toBeTruthy();
 
       fireEvent.change(screen.getByPlaceholderText("Search issues by title or number..."), {
         target: { value: "foobar" },
       });
 
-      expect(screen.getByRole("status").textContent).toContain('No matches for "foo"');
-      expect(screen.getByRole("status").textContent).not.toContain("foobar");
+      expect(screen.getByText('No matches for "foo"')).toBeTruthy();
+      expect(screen.queryByText('No matches for "foobar"')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
