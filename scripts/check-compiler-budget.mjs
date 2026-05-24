@@ -308,16 +308,18 @@ function emitSummary(
   if (improvements.length > 0) {
     sections.push({
       heading: "Improvements",
-      body: improvements.map(({ file, base, entry, improvedKeys, baseStrictCount, strictCount }) => {
-        const changes = improvedKeys
-          .map((k) =>
-            k === "strictErrors"
-              ? `strictErrors ${baseStrictCount} → ${strictCount}`
-              : `${k} ${base[k]} → ${entry[k]}`
-          )
-          .join(", ");
-        return `- \`${file}\` — ${changes}`;
-      }),
+      body: improvements.map(
+        ({ file, base, entry, improvedKeys, baseStrictCount, strictCount }) => {
+          const changes = improvedKeys
+            .map((k) =>
+              k === "strictErrors"
+                ? `strictErrors ${baseStrictCount} → ${strictCount}`
+                : `${k} ${base[k]} → ${entry[k]}`
+            )
+            .join(", ");
+          return `- \`${file}\` — ${changes}`;
+        }
+      ),
     });
   }
   if (successDrops.length > 0) {
