@@ -54,13 +54,23 @@ const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
 
 // Adaptive boost: when any resolved PR has CI in-flight (PENDING/EXPECTED), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
-// the floor — statusCheckRollup is ~10–30 GraphQL points per call, so 30s keeps
-// headroom for ~8 active PRs under the 5000/hr primary limit. The ceiling caps
-// boosted polling at 15 min after the last observed PENDING result, preventing
-// a hung CI from indefinitely burning quota; subsequent PENDING observations
-// slide the window forward.
+// the floor. Each CI status query costs ~2 GraphQL points (commits(last:1) +
+// nested contexts(first:100) = 101 nodes; 101/100 rounds to 2), and with the
+// accompanying getPR call (~1 point), revalidating each resolved PR costs ~3
+// points total. At 30s the full 5000/hr primary limit can support ~14 PRs; the
+// decay bands reduce that burn rate proportionally. The ceiling caps boosted
+// polling at 15 min after the last observed PENDING result, preventing a hung
+// CI from indefinitely burning quota; subsequent PENDING observations slide the
+// window forward.
 const RESOLVED_REVALIDATION_BOOST_INTERVAL_MS = 30 * 1000; // 30 seconds
 const RESOLVED_REVALIDATION_BOOST_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+// Decay thresholds: when CI status hasn't changed for this many consecutive
+// polls on the most-stagnant PR, the revalidation interval steps up.
+const STAGNANT_POLL_DECAY_AT_10 = 10;
+const STAGNANT_POLL_DECAY_AT_20 = 20;
+const RESOLVED_REVALIDATION_DECAY_INTERVAL_MS = 60 * 1000;
+const RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS = 120 * 1000;
 
 // Rate-limit block constants extracted from the GitHub-specific service so the
 // polling loops consult the active provider's rate-limit state through
@@ -82,6 +92,7 @@ interface InternalLinkedPR {
   ciStatus?: import("../../shared/types/github.js").GitHubPRCIStatus;
   _ciStatus?: import("../../shared/types/forge.js").CIStatus;
   providerId: string;
+  stagnantPollCount: number;
 }
 
 export interface PRDetectionResult {
@@ -506,6 +517,7 @@ class PullRequestService {
       this.updateDebounceTimer = null;
     }
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.isPolling = false;
     logInfo("PullRequestService stopped");
   }
@@ -526,6 +538,7 @@ class PullRequestService {
       this.revalidationTimer = null;
     }
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
     this.setDetectionState(false);
@@ -573,6 +586,7 @@ class PullRequestService {
     // suppress a later genuine trip (the flag is false afterward).
     this.setDetectionState(false);
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.lastCheckAt = Number.NEGATIVE_INFINITY;
     this.inFlightBranchLookups.clear();
     this.invalidateProvider();
@@ -741,6 +755,26 @@ class PullRequestService {
       : null;
   }
 
+  private getBoostRevalidationIntervalMs(): number {
+    const maxStagnant = Math.max(
+      0,
+      ...Array.from(this.detectedPRs.values(), (pr) => pr.stagnantPollCount)
+    );
+    if (maxStagnant >= STAGNANT_POLL_DECAY_AT_20) {
+      return RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS;
+    }
+    if (maxStagnant >= STAGNANT_POLL_DECAY_AT_10) {
+      return RESOLVED_REVALIDATION_DECAY_INTERVAL_MS;
+    }
+    return RESOLVED_REVALIDATION_BOOST_INTERVAL_MS;
+  }
+
+  private clearStagnantPollCounts(): void {
+    for (const pr of this.detectedPRs.values()) {
+      pr.stagnantPollCount = 0;
+    }
+  }
+
   private hasUnresolvedCandidates(): boolean {
     for (const worktreeId of this.candidates.keys()) {
       if (!this.resolvedWorktrees.has(worktreeId)) {
@@ -777,7 +811,7 @@ class PullRequestService {
     }
     const intervalMs =
       this.boostExpiresAt !== null
-        ? RESOLVED_REVALIDATION_BOOST_INTERVAL_MS
+        ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
 
     this.revalidationTimer = setTimeout(() => {
@@ -1203,6 +1237,7 @@ class PullRequestService {
           state: pr.state === "declined" ? "closed" : pr.state,
           isDraft: pr.isDraft,
           providerId,
+          stagnantPollCount: 0,
         };
 
         for (const worktreeId of worktreeIds) {
@@ -1328,6 +1363,7 @@ class PullRequestService {
       .getCIStatus(providerId, repo, pr.number)
       .then((ciStatus) => {
         if (!ciStatus) return;
+        const prevCiStatus = pr.ciStatus;
         pr.ciStatus =
           ciStatus.state === "success"
             ? "SUCCESS"
@@ -1337,6 +1373,9 @@ class PullRequestService {
                 ? "PENDING"
                 : undefined;
         pr._ciStatus = ciStatus;
+        if (pr.ciStatus !== undefined) {
+          pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
+        }
         // Re-emit for each worktree that has this PR
         for (const [worktreeId, detected] of this.detectedPRs) {
           if (detected.number === pr.number) {
