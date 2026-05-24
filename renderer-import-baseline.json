@@ -69,6 +69,54 @@
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2730865,
-  "eagerGzip": 819174
+  "eagerRaw": 2739205,
+  "eagerGzip": 822015,
+  "chunkGzip": {
+    "vendor-radix-utils": 3262,
+    "vendor-react": 56449,
+    "vendor-xterm": 127757
+  },
+  "chunkModules": {
+    "vendor-radix-utils": [
+      "node_modules/@radix-ui/primitive/dist/index.mjs",
+      "node_modules/@radix-ui/react-collection/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-compose-refs/dist/index.mjs",
+      "node_modules/@radix-ui/react-context/dist/index.mjs",
+      "node_modules/@radix-ui/react-id/dist/index.mjs",
+      "node_modules/@radix-ui/react-menu/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-popover/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-presence/dist/index.mjs",
+      "node_modules/@radix-ui/react-primitive/dist/index.mjs",
+      "node_modules/@radix-ui/react-primitive/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-select/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-tooltip/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-callback-ref/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-escape-keydown/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-layout-effect/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-previous/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-size/dist/index.mjs"
+    ],
+    "vendor-react": [
+      "node_modules/react-dom/cjs/react-dom-client.production.js",
+      "node_modules/react-dom/cjs/react-dom.production.js",
+      "node_modules/react-dom/client.js",
+      "node_modules/react-dom/index.js",
+      "node_modules/react/cjs/react-compiler-runtime.production.js",
+      "node_modules/react/compiler-runtime.js",
+      "node_modules/scheduler/cjs/scheduler.production.js",
+      "node_modules/scheduler/index.js"
+    ],
+    "vendor-xterm": [
+      "node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+      "node_modules/@xterm/addon-image/lib/addon-image.mjs",
+      "node_modules/@xterm/addon-search/lib/addon-search.mjs",
+      "node_modules/@xterm/addon-serialize/lib/addon-serialize.mjs",
+      "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.mjs",
+      "node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+      "node_modules/@xterm/xterm/css/xterm.css",
+      "node_modules/@xterm/xterm/lib/xterm.mjs"
+    ]
+  }
 }

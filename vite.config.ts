@@ -352,6 +352,49 @@ function firstRenderSeedsPlugin(): Plugin {
   };
 }
 
+// Emits dist/chunk-modules.json after the build: a map of stable chunk name to
+// the sorted, repo-relative source module IDs bundled into that chunk. The Vite
+// manifest only records a chunk's single entry `src`, never its full module
+// membership, so this sidecar is the only place per-chunk composition is
+// observable. scripts/check-renderer-import-budget.mjs reads it to gate silent
+// module migration between the critical T0 vendor chunks (#8890) — a module can
+// hop chunks while both the eager chunk count and aggregate gzip stay in budget.
+function chunkModulesPlugin(): Plugin {
+  const outPath = path.join(process.cwd(), "dist", "chunk-modules.json");
+  const root = process.cwd();
+
+  return {
+    name: "chunk-modules-sidecar",
+    apply: "build",
+    writeBundle(_options, bundle) {
+      const chunkModules: Record<string, string[]> = {};
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk") continue;
+        const name = output.name || output.fileName;
+        // Normalize to repo-relative forward-slash paths so the baseline is
+        // stable across machines and OSes (absolute paths and "\" would churn).
+        // Drop Rolldown virtual modules ("\0"-prefixed, e.g. the modulepreload
+        // polyfill) — they normalize to machine-dependent "../" paths and would
+        // produce spurious module-set diffs.
+        chunkModules[name] = (output.moduleIds ?? [])
+          .filter((id) => !id.startsWith("\0"))
+          .map((id) => path.relative(root, id).split(path.sep).join("/"))
+          .sort();
+      }
+
+      const sorted = Object.keys(chunkModules)
+        .sort()
+        .reduce<Record<string, string[]>>((acc, k) => {
+          acc[k] = chunkModules[k];
+          return acc;
+        }, {});
+
+      mkdirSync(path.dirname(outPath), { recursive: true });
+      writeFileSync(outPath, JSON.stringify(sorted, null, 2) + "\n");
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => {
   const { logger: compilerLogger, plugin: compilerReportPlugin } =
     reactCompilerReportPlugin(command);
@@ -388,6 +431,7 @@ export default defineConfig(({ command, mode }) => {
       compilerReportPlugin,
       rendererBundleSizePlugin(),
       firstRenderSeedsPlugin(),
+      chunkModulesPlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
       ...(process.env.ANALYZE === "true"
         ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true }) as Plugin]
