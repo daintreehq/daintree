@@ -148,6 +148,7 @@ export function Sidebar({
       <ContextMenuTrigger asChild>
         <aside
           ref={sidebarRef}
+          role="region"
           tabIndex={-1}
           aria-label="Sidebar"
           aria-hidden={!isVisible}
@@ -161,7 +162,7 @@ export function Sidebar({
             "relative w-full h-full flex flex-col outline-hidden overflow-hidden",
             "surface-chrome",
             "border-r border-divider",
-            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
             className
           )}
         >

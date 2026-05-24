@@ -26,13 +26,13 @@ export function ContentGridFleetScope({
       ref={bindGridRegion}
       role="region"
       tabIndex={-1}
-      aria-label="Fleet scope grid"
+      aria-label="Content"
       data-fleet-scope="true"
       data-macro-focus={ctx.isMacroFocused ? "true" : undefined}
       onKeyDown={ctx.handleGridRegionKeyDown}
       className={cn(
         "h-full flex flex-col outline-hidden",
-        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
         className
       )}
     >

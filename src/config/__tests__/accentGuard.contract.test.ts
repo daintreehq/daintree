@@ -329,8 +329,6 @@ describe("accent guard", () => {
       // outline focus rings
       "focus-visible:outline-daintree-accent",
       "focus:outline-daintree-accent",
-      // custom focus mechanism
-      "data-[macro-focus=true]:ring-daintree-accent/60",
       // stacked variants
       "motion-safe:focus-visible:ring-daintree-accent/20",
     ];

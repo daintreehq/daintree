@@ -25,12 +25,12 @@ export function ContentGridMaximizedGroup({
       ref={bindGridRegion}
       role="region"
       tabIndex={-1}
-      aria-label="Panel grid region"
+      aria-label="Content"
       data-macro-focus={ctx.isMacroFocused ? "true" : undefined}
       onKeyDown={ctx.handleGridRegionKeyDown}
       className={cn(
         "h-full flex flex-col bg-daintree-bg outline-hidden",
-        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
         className
       )}
     >
