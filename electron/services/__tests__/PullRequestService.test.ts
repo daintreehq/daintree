@@ -642,6 +642,9 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
     pullRequestService.initialize("/repo");
     events.emit(
       "sys:worktree:update",
@@ -663,6 +666,69 @@ describe("PullRequestService", () => {
       expect.arrayContaining([1, 2])
     );
     expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+
+    // The batched CI result is applied: each worktree gets a re-emit carrying
+    // its enriched status, proving the coalesced data flows back through.
+    const ciByWorktree = new Map(
+      detected.filter((d) => d.prCiStatus).map((d) => [d.worktreeId, d.prCiStatus])
+    );
+    expect(ciByWorktree.get("wt-1")).toBe("SUCCESS");
+    expect(ciByWorktree.get("wt-2")).toBe("SUCCESS");
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("does not bump consecutiveErrors when the provider is invalidated mid-check", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    let releaseBatch: (() => void) | null = null;
+    const batchSpy = vi.fn(
+      (_repo: RepoRef, branches: string[]) =>
+        new Promise<Map<string, ForgePR | null>>((resolve) => {
+          releaseBatch = () => {
+            const map = new Map<string, ForgePR | null>();
+            for (const branch of branches) map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+            resolve(map);
+          };
+        })
+    );
+    mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    const svc = pullRequestService as unknown as {
+      checkForPRs: () => Promise<void>;
+      resolveProvider: () => Promise<void>;
+      invalidateProvider: () => void;
+      consecutiveErrors: number;
+      lastCheckAt: number;
+    };
+
+    await svc.resolveProvider();
+    svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+
+    // Start a check that blocks inside the branch loader's batch function.
+    const checkPromise = svc.checkForPRs();
+    await flushLoaders();
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+
+    // Swap the provider mid-flight (refresh()/setForgeSettings() do this): the
+    // loader is disposed, rejecting the in-flight load. The cycle must be
+    // discarded by the stale-provider guard, NOT counted as an error.
+    svc.invalidateProvider();
+    releaseBatch?.(); // late batch result must be dropped silently
+    await checkPromise;
+    await flushLoaders();
+
+    expect(svc.consecutiveErrors).toBe(0);
 
     pullRequestService.destroy();
   });

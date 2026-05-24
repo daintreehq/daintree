@@ -72,15 +72,18 @@ function createSingleFlight() {
  * separate in-flight slots.
  */
 function listOptionsKey(opts: ListOptions): string {
-  return [
-    opts.state ?? "",
-    opts.cursor ?? "",
-    opts.perPage ?? "",
-    (opts.labels ?? []).join(","),
-    opts.assignee ?? "",
-    opts.sort ?? "",
-    opts.direction ?? "",
-  ].join("|");
+  // JSON-encode a fixed-order tuple so each field is unambiguously delimited:
+  // a string separator would let a `|` inside a value (or `["a,b"]` vs
+  // `["a","b"]` labels) collide two distinct queries into one in-flight slot.
+  return JSON.stringify([
+    opts.state ?? null,
+    opts.cursor ?? null,
+    opts.perPage ?? null,
+    opts.labels ?? null,
+    opts.assignee ?? null,
+    opts.sort ?? null,
+    opts.direction ?? null,
+  ]);
 }
 
 export function registerForgeDataHandlers(): () => void {

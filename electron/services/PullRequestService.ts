@@ -489,7 +489,15 @@ class PullRequestService {
         batchMap = null; // fall through to per-number lookups
       }
       if (batchMap) {
-        return list.map((prNumber) => batchMap.get(prNumber) ?? null);
+        // A present key (even null-valued) is authoritative; an omitted key is
+        // a transient miss per the BatchLookupCapability contract — surface it
+        // as a per-key Error so it rejects (enrich drops it) and stays eligible
+        // for retry rather than being written as a confirmed "no CI status".
+        return list.map((prNumber) =>
+          batchMap.has(prNumber)
+            ? (batchMap.get(prNumber) ?? null)
+            : new Error(`CI status for PR #${prNumber} omitted from getCIStatuses batch`)
+        );
       }
       // CI status is best-effort: a transient failure resolves to null rather
       // than rejecting, so it never invalidates an already-detected PR.
@@ -1413,8 +1421,20 @@ class PullRequestService {
       return [];
     }
 
+    // Absorb a per-load rejection as `null` ("no PR found"). The only source of
+    // rejection here is the loader being disposed by a mid-cycle provider swap
+    // (`invalidateProvider()` from refresh()/setForgeSettings()); propagating it
+    // would land in checkForPRs's catch and wrongly bump `consecutiveErrors`
+    // toward the circuit breaker. The downstream stale-provider guard discards
+    // the whole cycle once it sees the provider changed, so the null is never
+    // written as a spurious `sys:pr:cleared`.
     return Promise.all(
-      branches.map((branch) => loader.load(branch).then((pr) => ({ branch, pr })))
+      branches.map((branch) =>
+        loader.load(branch).then(
+          (pr) => ({ branch, pr }),
+          () => ({ branch, pr: null as ForgePR | null })
+        )
+      )
     );
   }
 
