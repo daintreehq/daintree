@@ -856,6 +856,76 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.copilot).toBe("ready");
     });
+
+    it("does NOT probe the bogus Antigravity path (.antigravity/oauth_creds.json)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Only agy binary found; no auth files exist
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("");
+        throw new Error("not found");
+      });
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      const result = await service.checkAvailability();
+
+      // Binary on PATH + no credential detected → `unauthenticated`.
+      expect(result.antigravity).toBe("unauthenticated");
+      expect(service.getDetails()!.antigravity?.authConfirmed).toBe(false);
+
+      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
+      // The old .antigravity/oauth_creds.json path never existed on disk and
+      // must never be probed (regression guard for #8918).
+      expect(probedPaths).not.toContain(join(homedir(), ".antigravity/oauth_creds.json"));
+      // Upper-bound guard: the inherited Gemini OAuth file IS probed — proves
+      // the fix wired the real path, not just that the bogus one is gone.
+      expect(probedPaths).toContain(join(homedir(), ".gemini/oauth_creds.json"));
+    });
+
+    it("reaches 'ready' for Antigravity when ~/.gemini/oauth_creds.json exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      // agy inherits Gemini's OAuth creds; either inherited file is a match.
+      const oauthCreds = join(homedir(), ".gemini/oauth_creds.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === oauthCreds) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.antigravity).toBe("ready");
+      expect(service.getDetails()!.antigravity?.authConfirmed).toBe(true);
+    });
+
+    it("reaches 'ready' for Antigravity via GOOGLE_API_KEY env var alone", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("");
+        throw new Error("not found");
+      });
+      // No credential files on disk; only the env var signals auth.
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      const prev = process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_API_KEY = "test-key";
+      try {
+        const result = await service.checkAvailability();
+        expect(result.antigravity).toBe("ready");
+        expect(service.getDetails()!.antigravity?.authConfirmed).toBe(true);
+      } finally {
+        if (prev === undefined) delete process.env.GOOGLE_API_KEY;
+        else process.env.GOOGLE_API_KEY = prev;
+      }
+    });
   });
 
   describe("diagnostic logging for auth discovery", () => {
