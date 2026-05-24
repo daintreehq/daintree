@@ -77,10 +77,18 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
-        const runOptions = { spawnedBy, focusPolicy };
-        await useRecipeStore
-          .getState()
-          .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, runOptions);
+        if (spawnedBy !== undefined || focusPolicy !== undefined) {
+          await useRecipeStore
+            .getState()
+            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
+              spawnedBy,
+              focusPolicy,
+            });
+        } else {
+          await useRecipeStore
+            .getState()
+            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext);
+        }
       },
     })
   );
