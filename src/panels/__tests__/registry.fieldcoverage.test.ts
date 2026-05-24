@@ -98,6 +98,7 @@ const PTY_FIELD_CLASSIFICATION = {
   everDetectedAgent: false,
   detectedAgentId: false,
   spawnedBy: false,
+  focusPolicy: false,
   ephemeral: false,
   startedAt: false,
   exitCode: false,
