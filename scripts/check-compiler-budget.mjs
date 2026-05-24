@@ -169,7 +169,7 @@ function emitSummary(report, { regressions, improvements, successDrops, newClean
 
   const headerLine = ok
     ? `${fileCount} files (success=${totals.success}, skip=${totals.skip}, error=${totals.error}, pipeline=${totals.pipeline})`
-    : `${regressions.length} regression(s), ${disappeared.length} missing baseline entrie(s)`;
+    : `${regressions.length} regression(s), ${disappeared.length} missing baseline entries`;
 
   const sections = [
     {
@@ -366,7 +366,7 @@ function main() {
   }
   const total = regressions.length + disappeared.length;
   console.error(
-    `\n[check-compiler-budget] FAILED — ${total} issue(s): ${regressions.length} regression(s), ${disappeared.length} missing baseline entrie(s). ` +
+    `\n[check-compiler-budget] FAILED — ${total} issue(s): ${regressions.length} regression(s), ${disappeared.length} missing baseline entries. ` +
       `For investigation, run \`npm run compiler-budget:critical\` to list only critical (Error-severity) compiler diagnostics. ` +
       `If the change is intentional (e.g. files were genuinely deleted), run \`npm run compiler-budget:update\` to refresh the baseline.`
   );

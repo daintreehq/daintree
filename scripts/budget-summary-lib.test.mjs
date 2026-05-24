@@ -126,6 +126,47 @@ describe("formatBudgetSummary — size guard", () => {
     expect(md).toContain("## Big report");
   });
 
+  it("reports the exact number of omitted lines in the notice", () => {
+    // 10 deterministic entry lines. Truncation drops from the end, so only
+    // entry lines (never the "## T" / "### S" structural lines) get dropped as
+    // long as at least one entry survives — making the count exactly checkable.
+    const body = Array.from({ length: 10 }, (_, i) => `- line ${i}`);
+    const opts = {
+      title: "T",
+      status: "PASS",
+      headerLine: "h",
+      sections: [{ heading: "S", body }],
+    };
+    const full = formatBudgetSummary(opts);
+    const md = formatBudgetSummary({ ...opts, maxChars: full.length - 30 });
+
+    const m = md.match(/_\[(\d+) line\(s\) omitted/);
+    expect(m).not.toBeNull();
+    const reported = Number(m[1]);
+    const present = body.filter((line) => md.includes(line)).length;
+    expect(present).toBeGreaterThan(0); // structural lines were retained
+    expect(reported).toBe(body.length - present);
+  });
+
+  it("does not truncate when output is exactly at the cap, truncates one char under", () => {
+    const body = Array.from({ length: 50 }, (_, i) => `- chunk-${i}`);
+    const opts = {
+      title: "Boundary",
+      status: "PASS",
+      headerLine: "edge",
+      sections: [{ heading: "Chunks", body }],
+    };
+    const exact = formatBudgetSummary(opts);
+    // At exactly the assembled length, the <= guard must NOT truncate.
+    const atCap = formatBudgetSummary({ ...opts, maxChars: exact.length });
+    expect(atCap).toBe(exact);
+    expect(atCap).not.toContain("omitted");
+    // One character under forces truncation.
+    const underCap = formatBudgetSummary({ ...opts, maxChars: exact.length - 1 });
+    expect(underCap).toContain("omitted");
+    expect(underCap.length).toBeLessThanOrEqual(exact.length - 1);
+  });
+
   it("leaves content untouched when comfortably under the cap", () => {
     const md = formatBudgetSummary({
       title: "Small report",

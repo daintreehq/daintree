@@ -80,15 +80,51 @@ export function formatBudgetSummary({
   // leaving room for an omission notice. The title line (bodyLines[0]) is
   // always retained so the collapsed block still identifies itself. The closing
   // </details> is re-appended by assemble(), so truncation never leaves the
-  // block unclosed.
+  // block unclosed. Preserve at least one body entry line when possible.
   const total = bodyLines.length;
   const noticeFor = (omitted) =>
     `_[${omitted} line(s) omitted — summary exceeded ${maxChars}-character cap]_`;
+
+  // Identify the structural prefix (title, section headings, and blank separators).
+  // A structural line is either empty, starts with ##, or is a pure markdown element.
+  // Entry lines are content lines (typically start with "- " for lists).
+  const isStructural = (line) => !line.trim() || line.startsWith("##") || line.startsWith("###");
+
+  // Find the boundary between structural lines and entries. We want to keep at least
+  // the first entry plus all structural lines before it.
+  let structuralBoundary = 0;
+  for (let i = 0; i < bodyLines.length; i++) {
+    if (!isStructural(bodyLines[i])) {
+      structuralBoundary = i;
+      break;
+    }
+  }
+
+  // First pass: try to keep as many lines as possible while staying within the soft cap,
+  // ensuring we include at least one entry (at minimum, structuralBoundary + 1 lines).
+  for (let keep = total - 1; keep >= structuralBoundary + 1; keep--) {
+    const kept = bodyLines.slice(0, keep);
+    const candidate = assemble([...kept, "", noticeFor(total - keep)]);
+    if (candidate.length <= maxChars) return candidate;
+  }
+
+  // Second pass: if the soft cap can't accommodate an entry line, find the smallest
+  // version with at least one entry, even if it exceeds the cap slightly.
+  // This ensures that even when severely over-budget, we still show at least one item.
+  for (let keep = structuralBoundary + 1; keep <= total - 1; keep++) {
+    const kept = bodyLines.slice(0, keep);
+    const candidate = assemble([...kept, "", noticeFor(total - keep)]);
+    // Return the first one that includes an entry (which this loop guarantees).
+    return candidate;
+  }
+
+  // Fallback: if we somehow have no entries at all, keep as much as fits structurally.
   for (let keep = total - 1; keep >= 1; keep--) {
     const kept = bodyLines.slice(0, keep);
     const candidate = assemble([...kept, "", noticeFor(total - keep)]);
     if (candidate.length <= maxChars) return candidate;
   }
+
   // Degenerate case: even the title + notice overflows. Return the smallest
   // valid block — title plus notice — accepting it may still nudge over the cap
   // (it never will in practice; the wrapper + one line is a few hundred bytes).
