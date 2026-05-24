@@ -1,5 +1,6 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
@@ -26,7 +27,7 @@ export const createBackgroundActions = (
     if (!terminal) return;
     if (terminal.location === "trash" || terminal.location === "background") return;
 
-    if (terminal.kind === "dev-preview") {
+    if (isDevPreviewPanel(terminal)) {
       stopDevPreviewByPanelId(id);
     }
 
@@ -174,7 +175,7 @@ export const createBackgroundActions = (
 
     for (const bid of bgPanelIds) {
       const terminal = state.panelsById[bid];
-      if (terminal?.kind === "dev-preview") {
+      if (terminal && isDevPreviewPanel(terminal)) {
         stopDevPreviewByPanelId(bid);
         continue;
       }
