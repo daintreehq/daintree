@@ -235,6 +235,8 @@ vi.mock("@dnd-kit/modifiers", () => ({
 vi.mock("framer-motion", () => ({
   LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   LazyMotion: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  m: { div: ({ children }: { children: React.ReactNode }) => <>{children}</> },
   domMax: {},
 }));
 
