@@ -435,6 +435,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return null;
   }
 
+  const performanceMode = document.body.dataset.performanceMode === "true";
+
   const brandColor =
     panelPresetColors.get(activePanel.id) ?? deriveTerminalChrome(activePanel).color;
   const activeChrome = deriveTerminalChrome({
@@ -601,8 +603,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     aria-label="Dock panel tabs"
                     onKeyDown={handleTabListKeyDown}
                   >
-                    <AnimatePresence initial={false} mode="popLayout">
-                      {panels.map((panel) => {
+                    {performanceMode ? (
+                      panels.map((panel) => {
                         const tabChrome = deriveTerminalChrome({
                           kind: panel.kind,
                           launchAgentId: panel.launchAgentId,
@@ -615,31 +617,63 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           presetColor: panelPresetColors.get(panel.id),
                         });
                         return (
-                          <m.div
+                          <SortableTabButton
                             key={panel.id}
-                            layout="position"
-                            transition={{
-                              duration: UI_ANIMATION_DURATION / 1000,
-                              ease: EASE_OUT_EXPO_FM,
-                            }}
-                          >
-                            <SortableTabButton
-                              id={panel.id}
-                              title={getBaseTitle(panel.title)}
-                              chrome={tabChrome}
-                              kind={panel.kind ?? "terminal"}
-                              agentState={getDockDisplayAgentState(panel)}
-                              isActive={panel.id === activeTabId}
-                              presetColor={panelPresetColors.get(panel.id)}
-                              isUsingFallback={panel.isUsingFallback}
-                              onClick={() => handleTabClick(panel.id)}
-                              onClose={() => handleTabClose(panel.id)}
-                              onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
-                            />
-                          </m.div>
+                            id={panel.id}
+                            title={getBaseTitle(panel.title)}
+                            chrome={tabChrome}
+                            kind={panel.kind ?? "terminal"}
+                            agentState={getDockDisplayAgentState(panel)}
+                            isActive={panel.id === activeTabId}
+                            presetColor={panelPresetColors.get(panel.id)}
+                            isUsingFallback={panel.isUsingFallback}
+                            onClick={() => handleTabClick(panel.id)}
+                            onClose={() => handleTabClose(panel.id)}
+                            onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                          />
                         );
-                      })}
-                    </AnimatePresence>
+                      })
+                    ) : (
+                      <AnimatePresence initial={false} mode="popLayout">
+                        {panels.map((panel) => {
+                          const tabChrome = deriveTerminalChrome({
+                            kind: panel.kind,
+                            launchAgentId: panel.launchAgentId,
+                            runtimeIdentity: panel.runtimeIdentity,
+                            detectedAgentId: panel.detectedAgentId,
+                            detectedProcessId: panel.detectedProcessId,
+                            agentState: panel.agentState,
+                            runtimeStatus: panel.runtimeStatus,
+                            exitCode: panel.exitCode,
+                            presetColor: panelPresetColors.get(panel.id),
+                          });
+                          return (
+                            <m.div
+                              key={panel.id}
+                              layout="position"
+                              transition={{
+                                duration: UI_ANIMATION_DURATION / 1000,
+                                ease: EASE_OUT_EXPO_FM,
+                              }}
+                            >
+                              <SortableTabButton
+                                id={panel.id}
+                                title={getBaseTitle(panel.title)}
+                                chrome={tabChrome}
+                                kind={panel.kind ?? "terminal"}
+                                agentState={getDockDisplayAgentState(panel)}
+                                isActive={panel.id === activeTabId}
+                                presetColor={panelPresetColors.get(panel.id)}
+                                isUsingFallback={panel.isUsingFallback}
+                                onClick={() => handleTabClick(panel.id)}
+                                onClose={() => handleTabClose(panel.id)}
+                                onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                              />
+                            </m.div>
+                          );
+                        })}
+                      </AnimatePresence>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
