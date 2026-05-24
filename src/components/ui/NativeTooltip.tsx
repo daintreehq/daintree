@@ -1,3 +1,6 @@
+// eslint-disable-next-line react-compiler/react-compiler
+"use no memo";
+
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
@@ -51,26 +54,30 @@ export function NativeTooltip({
   const popoverRef = React.useRef<HTMLDivElement | null>(null);
   const showTimerRef = React.useRef<number | null>(null);
 
-  const clearShowTimer = React.useCallback(() => {
+  React.useEffect(
+    () => () => {
+      if (showTimerRef.current !== null) {
+        window.clearTimeout(showTimerRef.current);
+        showTimerRef.current = null;
+      }
+    },
+    []
+  );
+
+  function show() {
+    if (showTimerRef.current !== null) window.clearTimeout(showTimerRef.current);
+    showTimerRef.current = window.setTimeout(() => {
+      popoverRef.current?.showPopover();
+    }, delay);
+  }
+
+  function hide() {
     if (showTimerRef.current !== null) {
       window.clearTimeout(showTimerRef.current);
       showTimerRef.current = null;
     }
-  }, []);
-
-  const show = React.useCallback(() => {
-    clearShowTimer();
-    showTimerRef.current = window.setTimeout(() => {
-      popoverRef.current?.showPopover();
-    }, delay);
-  }, [clearShowTimer, delay]);
-
-  const hide = React.useCallback(() => {
-    clearShowTimer();
     popoverRef.current?.hidePopover();
-  }, [clearShowTimer]);
-
-  React.useEffect(() => clearShowTimer, [clearShowTimer]);
+  }
 
   const childProps = children.props;
 
