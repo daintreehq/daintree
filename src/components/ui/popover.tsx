@@ -230,7 +230,6 @@ const PopoverContent = React.forwardRef<
         align={align}
         sideOffset={sideOffset}
         collisionBoundary={collisionBoundary ?? boundary ?? undefined}
-        data-reposition-tick={repositionTick}
         style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
         className={cn(
           "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
@@ -238,6 +237,8 @@ const PopoverContent = React.forwardRef<
           className
         )}
         {...props}
+        // Internal reposition trigger must win over any caller-supplied value.
+        data-reposition-tick={repositionTick}
       />
     </Portal>
   );

@@ -103,6 +103,20 @@ describe("PopoverContent reposition on boundary resize (issue #8969)", () => {
     expect(getContentEl().getAttribute("data-reposition-tick")).toBe("3");
   });
 
+  it("internal tick wins over a caller-supplied data-reposition-tick prop", () => {
+    render(
+      <PopoverPrimitive.Root open>
+        <PopoverPrimitive.Trigger>trigger</PopoverPrimitive.Trigger>
+        <PopoverContent forceMount data-reposition-tick={99}>
+          content
+        </PopoverContent>
+      </PopoverPrimitive.Root>
+    );
+    expect(getContentEl().getAttribute("data-reposition-tick")).toBe("0");
+    fireResize();
+    expect(getContentEl().getAttribute("data-reposition-tick")).toBe("1");
+  });
+
   it("observes the portal boundary element", () => {
     render(
       <PopoverPrimitive.Root open>
