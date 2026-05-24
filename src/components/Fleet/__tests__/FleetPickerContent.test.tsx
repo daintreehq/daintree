@@ -549,7 +549,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       renderHarness([], { mode: "cold-start", onCommit: () => {} });
       await act(async () => {});
-      expect(screen.getByRole("status").textContent).toContain("No terminals available");
+      expect(screen.getByText("No terminals available")).toBeTruthy();
     });
 
     it("renders 'No terminals match' when the search filters out all eligibles", async () => {
@@ -568,7 +568,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
         fireEvent.change(search, { target: { value: "zzz-no-match" } });
       });
       await act(async () => {});
-      expect(screen.getByRole("status").textContent).toContain("No terminals match");
+      expect(screen.getByText("No terminals match")).toBeTruthy();
       expect(screen.queryAllByRole("option")).toHaveLength(0);
     });
   });

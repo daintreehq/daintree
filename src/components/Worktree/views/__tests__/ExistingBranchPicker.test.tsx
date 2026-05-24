@@ -34,22 +34,19 @@ function renderPicker(overrides: Partial<Parameters<typeof ExistingBranchPicker>
 
 describe("ExistingBranchPicker empty states", () => {
   it("renders zero-data EmptyState when no branches and no query", () => {
-    renderPicker({ query: "", filteredBranches: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain("No available local branches");
-    expect(status.getAttribute("aria-live")).toBe("polite");
-    expect(status.hasAttribute("aria-describedby")).toBe(false);
+    const { container } = renderPicker({ query: "", filteredBranches: [] });
+    expect(screen.getByText("No available local branches")).toBeTruthy();
+    expect(container.querySelector("[aria-live]")).toBeNull();
+    expect(container.querySelector("[aria-describedby]")).toBeNull();
   });
 
   it("renders filtered-empty EmptyState with interpolated query", () => {
     renderPicker({ query: "feature/foo", filteredBranches: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain('No matches for "feature/foo"');
+    expect(screen.getByText('No matches for "feature/foo"')).toBeTruthy();
   });
 
   it("falls back to zero-data copy for whitespace-only query", () => {
     renderPicker({ query: "   ", filteredBranches: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain("No available local branches");
+    expect(screen.getByText("No available local branches")).toBeTruthy();
   });
 });

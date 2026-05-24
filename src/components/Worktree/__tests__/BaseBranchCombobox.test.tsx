@@ -46,22 +46,19 @@ function renderCombobox(overrides: Partial<Parameters<typeof BaseBranchCombobox>
 
 describe("BaseBranchCombobox empty states", () => {
   it("renders zero-data EmptyState when no branches and no query", () => {
-    renderCombobox({ branchQuery: "", selectableRows: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain("No branches available");
-    expect(status.getAttribute("aria-live")).toBe("polite");
-    expect(status.hasAttribute("aria-describedby")).toBe(false);
+    const { container } = renderCombobox({ branchQuery: "", selectableRows: [] });
+    expect(screen.getByText("No branches available")).toBeTruthy();
+    expect(container.querySelector("[aria-live]")).toBeNull();
+    expect(container.querySelector("[aria-describedby]")).toBeNull();
   });
 
   it("renders filtered-empty EmptyState with interpolated query", () => {
     renderCombobox({ branchQuery: "feature/foo", selectableRows: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain('No matches for "feature/foo"');
+    expect(screen.getByText('No matches for "feature/foo"')).toBeTruthy();
   });
 
   it("falls back to zero-data copy for whitespace-only query", () => {
     renderCombobox({ branchQuery: "   ", selectableRows: [] });
-    const status = screen.getByRole("status");
-    expect(status.textContent).toContain("No branches available");
+    expect(screen.getByText("No branches available")).toBeTruthy();
   });
 });
