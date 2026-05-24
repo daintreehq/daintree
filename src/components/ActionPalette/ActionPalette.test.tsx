@@ -17,13 +17,20 @@ const lastSearchablePaletteProps: { current: MockSearchablePaletteProps | null }
 // Capture the props passed to SearchablePalette and mirror its empty-state
 // gating (only render `emptyContent` when the user hasn't typed a query, same
 // as AppPaletteDialog.Empty's zero-data branch). Avoids dragging the full
-// dialog/animation stack into a renderer-only unit test.
+// dialog/animation stack into a renderer-only unit test. Footer resolution
+// mirrors SearchablePalette: getFooter > footer.
 vi.mock("@/components/ui/SearchablePalette", () => ({
   SearchablePalette: (props: MockSearchablePaletteProps) => {
     lastSearchablePaletteProps.current = props;
     const query = props.query ?? "";
     const results = props.results ?? [];
     const showEmptyContent = results.length === 0 && query.trim() === "";
+    const getFooter = props.getFooter as ((selected: unknown) => React.ReactNode) | undefined;
+    const selectedIndex = (props.selectedIndex as number) ?? 0;
+    const selectedItem = results[selectedIndex] ?? null;
+    const footerNode = getFooter
+      ? getFooter(selectedItem)
+      : ((props.footer as React.ReactNode) ?? null);
     return (
       <div data-testid="searchable-palette">
         {(props.inputPrefix as React.ReactNode) ?? null}
@@ -35,7 +42,7 @@ vi.mock("@/components/ui/SearchablePalette", () => ({
             (props.emptyContent ?? null)
           )
         ) : null}
-        {(props.footer as React.ReactNode) ?? null}
+        {footerNode}
       </div>
     );
   },
@@ -326,5 +333,64 @@ describe("ActionPalette", () => {
     } else {
       expect(screen.queryByText("search projects")).toBeNull();
     }
+  });
+
+  describe("prefix discoverability footer", () => {
+    it("renders the prefix table in the default empty-query footer", () => {
+      render(<ActionPalette {...baseProps} />);
+      // One chip per prefix — labels are lowercased for mid-sentence rendering.
+      expect(screen.getByText("commands")).toBeTruthy();
+      expect(screen.getByText("worktrees")).toBeTruthy();
+      expect(screen.getByText("panels")).toBeTruthy();
+      expect(screen.getByText("prompt history")).toBeTruthy();
+      expect(screen.getByText("projects")).toBeTruthy();
+    });
+
+    it("hides the prefix table once a query is typed", () => {
+      render(
+        <ActionPalette
+          {...baseProps}
+          query="al"
+          results={[makeItem("a.action", "Alpha")]}
+          totalResults={1}
+        />
+      );
+      expect(screen.queryByText("worktrees")).toBeNull();
+    });
+
+    it("hides the prefix table while a mode chip is active", () => {
+      render(<ActionPalette {...baseProps} />);
+      // Sanity: prefix row visible before any prefix is typed.
+      expect(screen.getByText("worktrees")).toBeTruthy();
+      fireKey(">");
+      // Activating commands mode replaces the row with the mode-scoped hint.
+      expect(screen.queryByText("worktrees")).toBeNull();
+    });
+  });
+
+  describe("section header listbox separators", () => {
+    it("renders section headers as aria-disabled options so AT announces them", () => {
+      render(
+        <ActionPalette
+          {...baseProps}
+          pinnedCount={1}
+          results={[makeItem("pinned.alpha", "Alpha"), makeItem("recent.beta", "Beta")]}
+          totalResults={2}
+        />
+      );
+      const renderBody = lastSearchablePaletteProps.current?.renderBody as
+        | (() => React.ReactNode)
+        | undefined;
+      expect(typeof renderBody).toBe("function");
+      const { container } = render(<>{renderBody!()}</>);
+
+      const favorites = container.querySelector('[aria-label="Favorites"]');
+      const recent = container.querySelector('[aria-label="Recently used"]');
+      expect(favorites?.getAttribute("role")).toBe("option");
+      expect(favorites?.getAttribute("aria-disabled")).toBe("true");
+      expect(favorites?.getAttribute("aria-selected")).toBe("false");
+      expect(recent?.getAttribute("role")).toBe("option");
+      expect(recent?.getAttribute("aria-disabled")).toBe("true");
+    });
   });
 });

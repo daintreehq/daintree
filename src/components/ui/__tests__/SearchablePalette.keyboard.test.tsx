@@ -146,4 +146,34 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     input.dispatchEvent(event);
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it("jumps to the first row on Home", () => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, selectedIndex: 1 });
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "Home", keyCode: 36 });
+    expect(onHoverIndex).toHaveBeenCalledWith(0);
+  });
+
+  it("jumps to the last row on End", () => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, selectedIndex: 0 });
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "End", keyCode: 35 });
+    expect(onHoverIndex).toHaveBeenCalledWith(items.length - 1);
+  });
+
+  it("does not intercept Home when the result list is empty", () => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, results: [] });
+    const input = screen.getByRole("combobox");
+    const event = new window.KeyboardEvent("keydown", { key: "Home", keyCode: 36, bubbles: true });
+    let prevented = false;
+    event.preventDefault = () => {
+      prevented = true;
+    };
+    input.dispatchEvent(event);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+    expect(prevented).toBe(false);
+  });
 });

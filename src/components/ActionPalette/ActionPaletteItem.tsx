@@ -23,6 +23,13 @@ interface ActionPaletteItemProps {
    * hide button is hidden.
    */
   onHide?: (item: ActionPaletteItemType) => void;
+  /**
+   * Stable id of the footer-hint node. When provided it is announced via
+   * aria-describedby alongside the optional rationale id, so screen readers
+   * hear what Enter does for each option. Mirrors the QuickSwitcherItem
+   * pattern.
+   */
+  footerHintId?: string;
 }
 
 function ActionPaletteItemInner({
@@ -35,6 +42,7 @@ function ActionPaletteItemInner({
   onPin,
   onUnpin,
   onHide,
+  footerHintId,
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
   const [pinRejected, setPinRejected] = useState(false);
@@ -108,6 +116,11 @@ function ActionPaletteItemInner({
   const isConfirmTier = item.danger === "confirm";
   const hasRationale = isConfirmTier && Boolean(item.dangerRationale);
   const rationaleId = hasRationale ? `${item.id}-danger-rationale` : undefined;
+  // Rationale node is CSS-hidden on unselected rows but stays in the DOM, so we
+  // only point aria-describedby at it while selected. The footer hint is always
+  // visible, so it's announced for every option.
+  const describedBy =
+    [footerHintId, isSelected ? rationaleId : undefined].filter(Boolean).join(" ") || undefined;
   // HIG ellipsis (U+2026) signals "activation requires further input or confirmation".
   // Appended at render time; the action definition's title is never mutated.
   const displayTitle = isConfirmTier ? `${item.title} …` : item.title;
@@ -135,7 +148,7 @@ function ActionPaletteItemInner({
         tabIndex={-1}
         aria-label={item.title}
         aria-haspopup={isConfirmTier ? "dialog" : undefined}
-        aria-describedby={isSelected && rationaleId ? rationaleId : undefined}
+        aria-describedby={describedBy}
         onClick={handleSelectClick}
         className={cn(
           "flex-1 min-w-0 flex items-center gap-3 text-left bg-transparent border-0 p-0",

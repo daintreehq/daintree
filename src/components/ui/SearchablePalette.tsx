@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useCallback } from "react";
 import { AppPaletteDialog, KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { useEscapeStack } from "@/hooks";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 const noopHoverIndex = () => {};
@@ -199,6 +201,25 @@ export function SearchablePalette<T>({
     }
   }, [selectedIndex, results]);
 
+  // Announce the result count to screen readers on the trailing edge of a
+  // filter pass. Gated on the `isFiltering` true→false transition (mirrors the
+  // visual stale-dim signal) and debounced 400ms so fast typists don't chatter
+  // the live region. Empty-query passes are skipped — the listbox already
+  // reflects the no-input state and an "N results" announcement there is noise.
+  const prevIsFilteringRef = useRef(isFiltering);
+  useEffect(() => {
+    const wasFiltering = prevIsFilteringRef.current;
+    prevIsFilteringRef.current = isFiltering;
+    if (!wasFiltering || isFiltering) return;
+    if (!query.trim()) return;
+    const count = results.length;
+    const timer = window.setTimeout(() => {
+      const message = count === 1 ? "1 result" : `${count} results`;
+      useAnnouncerStore.getState().announce(message, "polite");
+    }, UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, [isFiltering, query, results.length]);
+
   useEscapeStack(isOpen, () => {
     if (query !== "") {
       onQueryChange("");
@@ -206,6 +227,8 @@ export function SearchablePalette<T>({
       onClose();
     }
   });
+
+  const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -227,6 +250,23 @@ export function SearchablePalette<T>({
           e.stopPropagation();
           onSelectNext();
           break;
+        case "Home":
+          // Override native caret-to-start so the listbox jumps to the first
+          // result. The palette input is single-line, the caret rarely needs
+          // explicit movement, and matching VS Code / Linear / Raycast keeps
+          // the muscle memory consistent. No-op when there's nothing to jump
+          // to so empty-state typing isn't intercepted.
+          if (results.length === 0) break;
+          e.preventDefault();
+          e.stopPropagation();
+          hoverIndexHandler(0);
+          break;
+        case "End":
+          if (results.length === 0) break;
+          e.preventDefault();
+          e.stopPropagation();
+          hoverIndexHandler(results.length - 1);
+          break;
         case "Enter":
           e.preventDefault();
           e.stopPropagation();
@@ -243,15 +283,13 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm]
+    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm, results.length, hoverIndexHandler]
   );
 
   const activeDescendant =
     results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
       ? `${itemIdPrefix}-${getItemId(results[selectedIndex]!)}`
       : undefined;
-
-  const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
 
   const selectedItem = results[selectedIndex] ?? null;
 
