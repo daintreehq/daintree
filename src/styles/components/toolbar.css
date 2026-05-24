@@ -416,3 +416,24 @@ html[data-shortcut-reveal] .shortcut-reveal-chip {
     border: 2px solid ButtonText;
   }
 }
+
+/* ── Forced colors / Windows High Contrast ──
+ * Every pip paints state via background-color, which the UA forces to Canvas
+ * (invisible). Repaint with CanvasText so the dot stays visible; shape tiers
+ * (border-radius) already survive and keep carrying the non-color WCAG 1.4.1
+ * cue. The overflow ring uses box-shadow, which is stripped entirely — swap it
+ * for an inset outline so warning/info still read as ringed. */
+@media (forced-colors: active) {
+  .toolbar-badge,
+  .toolbar-overflow-badge,
+  .toolbar-problems-badge {
+    background-color: CanvasText;
+  }
+
+  .toolbar-overflow-badge[data-severity="warning"],
+  .toolbar-overflow-badge[data-severity="info"] {
+    box-shadow: none;
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+}
