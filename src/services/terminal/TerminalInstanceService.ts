@@ -152,6 +152,7 @@ class TerminalInstanceService {
       openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
       getCwdProvider: (id) => this.cwdProviders.get(id),
       onHibernationChanged: (id) => this.notifyHibernationListeners(id),
+      getIsBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       ...this.makeListenerInstallDeps(),
     });
 

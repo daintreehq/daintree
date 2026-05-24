@@ -4,7 +4,7 @@ import {
   TerminalHibernationManager,
   type HibernationManagerDeps,
 } from "../TerminalHibernationManager";
-import type { ManagedTerminal } from "../types";
+import { AGENT_IDLE_SILENCE_MS, type ManagedTerminal } from "../types";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const {
@@ -178,6 +178,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     openLink: vi.fn(),
     getCwdProvider: vi.fn(() => undefined),
     onHibernationChanged: vi.fn(),
+    getIsBackgrounded: vi.fn(() => false),
     onBufferModeChange: vi.fn(),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
@@ -357,5 +358,40 @@ describe("TerminalHibernationManager adversarial", () => {
     expect(managed.isDetached).toBe(true);
     expect(managed.restoreGeneration).toBe(8);
     expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("BACKGROUNDED_BYPASS_DROPPED_WHEN_RESTORED_BETWEEN_SCHEDULE_AND_FIRE", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      managed = makeMockManaged({
+        runtimeAgentId: "claude",
+        canonicalAgentState: "working",
+        isVisible: false,
+        pendingWrites: 0,
+        lastWriteAt: 0, // recent — well inside the silence window
+      });
+      deps = makeMockDeps(managed);
+      // Backgrounded at schedule time → bypass active, normal timer armed.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      manager = new TerminalHibernationManager(deps);
+
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      // User restores the panel before the timer fires: the backgrounded
+      // map is cleared, so getIsBackgrounded now reads false live. The agent
+      // is still active and within the silence window, so hibernate() must
+      // bail rather than tear down a live agent.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(managed.isHibernated).toBe(false);
+    } finally {
+      vi.setSystemTime(new Date());
+      vi.useRealTimers();
+    }
   });
 });
