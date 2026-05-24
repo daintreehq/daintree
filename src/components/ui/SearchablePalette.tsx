@@ -136,9 +136,12 @@ export interface SearchablePaletteProps<T> {
   isLoading?: boolean;
   /**
    * True while a deferred filter pass is catching up to the latest query.
-   * Drives a stale-dim on the listbox (via `palette-results-stale`) gated by a
-   * 400ms transition-delay so sub-frame work never flickers. Reduced-motion
-   * and performance-mode CSS bypasses keep the listbox at full opacity.
+   * Drives a stale-dim on the listbox (via `palette-results-stale`) gated by
+   * the 200ms palette stale-delay (`--anti-flicker-delay-palette`) so sub-frame
+   * work never flickers. The palette gate is shorter than the 400ms Doherty
+   * floor because keystrokes arrive every ~200ms — a 400ms gate would almost
+   * never fire before the next keystroke reset it. Reduced-motion and
+   * performance-mode CSS bypasses keep the listbox at full opacity.
    */
   isFiltering?: boolean;
 }

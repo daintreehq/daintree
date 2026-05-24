@@ -45,11 +45,22 @@ export const UI_PALETTE_EXIT_DURATION = DURATION_100;
 // Tooltip hover/skip delays consumed by the Radix `TooltipProvider` at the app
 // root. These are wait times before a tooltip opens, not animation durations.
 /** UX anti-flicker gate: sub-400ms work should show nothing (Doherty threshold).
- *  Used by palette loading bar and stale-result dimming to prevent flashes on
- *  fast renders. Not an animation token — a perceptual floor.
+ *  Used by discrete-action stale surfaces (e.g. Review/Commit modal background
+ *  refresh via `.surface-stale`) and the `.animate-pulse-delayed` skeleton.
+ *  Not an animation token — a perceptual floor.
  *  CSS counterpart: `--anti-flicker-delay` in src/index.css `:root`. The
- *  drift-contract test in animationUtils.test.ts enforces parity. */
+ *  drift-contract test in animationUtils.test.ts enforces parity.
+ *  See `UI_PALETTE_STALE_DELAY` for the typed-input counterpart. */
 export const UI_DOHERTY_THRESHOLD = 400;
+
+/** UX anti-flicker gate for palette typed-input stale dimming. Shorter than
+ *  Doherty's 400ms because keystrokes arrive every ~200ms at normal typing
+ *  speed — a 400ms gate would almost never fire before being reset by the next
+ *  keystroke, leaving stale state unacknowledged. Industry convention (Algolia
+ *  `stalledSearchDelay`, React `useDeferredValue` examples) is 200ms.
+ *  CSS counterpart: `--anti-flicker-delay-palette` in src/index.css `:root`.
+ *  Consumed by `.palette-results-stale` and the palette loading bar. */
+export const UI_PALETTE_STALE_DELAY = DURATION_200;
 
 /** UX anti-flicker gate for skeleton components using the `immediate` prop.
  *  Sub-200ms work should show no pulse — warm-cache Suspense falls through this.

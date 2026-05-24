@@ -21,6 +21,7 @@ import {
   TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
+  UI_PALETTE_STALE_DELAY,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
@@ -159,13 +160,14 @@ describe("--anti-flicker-delay CSS contract", () => {
   it("declares --anti-flicker-delay exactly once", () => {
     // A second declaration in a media query or duplicate :root would let the
     // cascade resolve to a different value while the first-match parity test
-    // below still passes — guard against that.
-    const declarations = css.match(/--anti-flicker-delay\s*:/g) ?? [];
+    // below still passes — guard against that. The trailing `(?!-)` rules out
+    // the sibling `--anti-flicker-delay-palette` token.
+    const declarations = css.match(/--anti-flicker-delay(?!-)\s*:/g) ?? [];
     expect(declarations.length).toBe(1);
   });
 
   it("token value matches UI_DOHERTY_THRESHOLD", () => {
-    const match = css.match(/--anti-flicker-delay\s*:\s*(\d+)ms/);
+    const match = css.match(/--anti-flicker-delay(?!-)\s*:\s*(\d+)ms/);
     expect(match).not.toBeNull();
     if (!match?.[1]) return;
     const ms = Number.parseInt(match[1], 10);
@@ -179,9 +181,52 @@ describe("--anti-flicker-delay CSS contract", () => {
     expect(css).not.toMatch(/\.animate-pulse-delayed\s*\{[\s\S]*?animation-delay:\s*\d+ms/);
   });
 
-  it(".palette-results-stale / .surface-stale transition references the token", () => {
+  it(".surface-stale transition references the Doherty token (discrete-action gate)", () => {
     expect(css).toMatch(
-      /\.palette-results-stale,\s*\.surface-stale\s*\{[\s\S]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay\)/
+      /\.surface-stale\s*\{[^}]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay\)/
     );
+  });
+});
+
+describe("--anti-flicker-delay-palette CSS contract", () => {
+  // Palette typed-input stale-dim uses a shorter gate than Doherty's 400ms —
+  // keystrokes arrive every ~200ms at normal speed, so a 400ms gate would
+  // almost never fire before the next keystroke resets it. Industry convention
+  // (Algolia, React useDeferredValue) is 200ms. Asserting the split so future
+  // changes can't silently recombine the two tokens.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("declares --anti-flicker-delay-palette inside the :root block", () => {
+    expect(css).toMatch(/:root\s*\{[^}]*--anti-flicker-delay-palette\s*:\s*\d+ms/);
+  });
+
+  it("declares --anti-flicker-delay-palette exactly once", () => {
+    const declarations = css.match(/--anti-flicker-delay-palette\s*:/g) ?? [];
+    expect(declarations.length).toBe(1);
+  });
+
+  it("token value matches UI_PALETTE_STALE_DELAY", () => {
+    const match = css.match(/--anti-flicker-delay-palette\s*:\s*(\d+)ms/);
+    expect(match).not.toBeNull();
+    if (!match?.[1]) return;
+    const ms = Number.parseInt(match[1], 10);
+    expect(ms).toBe(UI_PALETTE_STALE_DELAY);
+  });
+
+  it(".palette-results-stale transition references the palette token (not Doherty)", () => {
+    expect(css).toMatch(
+      /\.palette-results-stale\s*\{[^}]*?transition:\s*opacity\s+150ms\s+ease-out\s+var\(--anti-flicker-delay-palette\)/
+    );
+    // Negative assertion: prevent accidental recombination with the Doherty token.
+    expect(css).not.toMatch(
+      /\.palette-results-stale\s*\{[^}]*?transition:[^}]*var\(--anti-flicker-delay\)(?!-)/
+    );
+  });
+
+  it("UI_PALETTE_STALE_DELAY is shorter than UI_DOHERTY_THRESHOLD", () => {
+    // Encodes the architectural intent: typed-input feedback must fire faster
+    // than discrete-action skeletons, or the palette gate stops firing in
+    // practice at normal typing speeds.
+    expect(UI_PALETTE_STALE_DELAY).toBeLessThan(UI_DOHERTY_THRESHOLD);
   });
 });
