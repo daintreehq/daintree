@@ -176,4 +176,18 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     expect(onHoverIndex).not.toHaveBeenCalled();
     expect(prevented).toBe(false);
   });
+
+  it("does not intercept End when the result list is empty", () => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, results: [] });
+    const input = screen.getByRole("combobox");
+    const event = new window.KeyboardEvent("keydown", { key: "End", keyCode: 35, bubbles: true });
+    let prevented = false;
+    event.preventDefault = () => {
+      prevented = true;
+    };
+    input.dispatchEvent(event);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+    expect(prevented).toBe(false);
+  });
 });

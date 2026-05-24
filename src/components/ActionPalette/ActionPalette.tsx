@@ -380,7 +380,10 @@ export function ActionPalette({
         );
       }
 
-      const showPrefixHints = activeMode === null && query === "";
+      // Mirror showSections (`!query.trim()`) so a whitespace-only buffer
+      // collapses to the same default state instead of diverging between the
+      // sectioned MRU body and the prefix-hint footer.
+      const showPrefixHints = activeMode === null && !query.trim();
       return (
         <div
           id={footerHintId}
