@@ -18,27 +18,186 @@ import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
-export type NotificationEventKind = "completed" | "waiting" | "workingPulse" | "uiFeedback";
+/**
+ * Closed union of routing-relevant notification domains. Kept closed (not
+ * widened with `(string & {})`) on purpose: this is an internal taxonomy, not a
+ * plugin extension point, so the closed union buys compile-time completeness
+ * checks on `EVENT_POLICY` and `EVENT_KIND_LABEL`. The first four are the
+ * historical sound/silence kinds; the rest classify the higher-traffic
+ * notification sources so `notify()` can resolve routing defaults centrally.
+ */
+export type NotificationEventKind =
+  | "completed"
+  | "waiting"
+  | "workingPulse"
+  | "uiFeedback"
+  | "agent"
+  | "git"
+  | "host"
+  | "recovery"
+  | "settings"
+  | "connectivity";
 
-export const EVENT_KIND_TO_SETTING_KEY: Record<NotificationEventKind, keyof NotificationSettings> =
-  {
-    completed: "completedEnabled",
-    waiting: "waitingEnabled",
-    workingPulse: "workingPulseEnabled",
-    uiFeedback: "uiFeedbackSoundEnabled",
-  };
+/**
+ * Baseline interruption level a kind warrants, independent of the per-call
+ * `type`. Maps to a default `priority` (see `INTERRUPTION_TO_PRIORITY`):
+ * `passive` → inbox-only, `active` → toast-when-focused, `time-sensitive` →
+ * toast + bypass the startup quiet gate, `critical` → toast + OS-native banner.
+ */
+export type EventInterruption = "passive" | "active" | "time-sensitive" | "critical";
+
+/**
+ * Declarative routing policy for a notification kind. `notify()` consults this
+ * manifest at dispatch time to fill routing defaults the caller didn't set —
+ * explicit fields on the payload always win. Replaces the per-call-site
+ * four-question checklist with a single typed source of truth.
+ */
+export interface EventPolicy {
+  /** Baseline interruption level → resolved `priority` (+ `urgent` when time-sensitive). */
+  baseInterruption: EventInterruption;
+  /**
+   * Preferred delivery surface. `"auto"` keeps the default priority routing;
+   * `"grid-bar"` pins the signal inline. Limited to real `NotificationPlacement`
+   * values — `"toast"`/`"inbox"`/`"frame"` are not standalone placements.
+   */
+  preferredSurface: "grid-bar" | "auto";
+  /**
+   * Declarative hint: this kind should re-surface as a toast when its severity
+   * escalates. Reserved for future escalation wiring — not behavioral yet.
+   */
+  reToastOnSeverityEscalation: boolean;
+  /** Default auto-dismiss (ms) when the caller omits `duration`; falls through to `TOAST_DURATION[type]`. */
+  defaultDurationMs?: number;
+  /** Persisted user-facing toggle that silences this kind, when one exists. */
+  userOverrideKey?: keyof NotificationSettings;
+}
+
+export const EVENT_POLICY: Record<NotificationEventKind, EventPolicy> = {
+  completed: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+    userOverrideKey: "completedEnabled",
+  },
+  waiting: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+    userOverrideKey: "waitingEnabled",
+  },
+  workingPulse: {
+    baseInterruption: "passive",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+    userOverrideKey: "workingPulseEnabled",
+  },
+  uiFeedback: {
+    baseInterruption: "passive",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+    userOverrideKey: "uiFeedbackSoundEnabled",
+  },
+  agent: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+  },
+  git: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+    // Git operation confirmations are brief — shorter than the per-type default.
+    defaultDurationMs: 6000,
+  },
+  host: {
+    baseInterruption: "time-sensitive",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: true,
+  },
+  recovery: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: true,
+  },
+  settings: {
+    baseInterruption: "passive",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+  },
+  connectivity: {
+    baseInterruption: "active",
+    preferredSurface: "auto",
+    reToastOnSeverityEscalation: false,
+  },
+};
+
+/**
+ * Per-kind persisted silence toggle, derived from `EVENT_POLICY` so the
+ * manifest stays the single source of truth. Partial: kinds without a
+ * user-facing setting (the routing-only domains) are absent — consumers must
+ * guard for `undefined`.
+ */
+export const EVENT_KIND_TO_SETTING_KEY: Partial<
+  Record<NotificationEventKind, keyof NotificationSettings>
+> = Object.fromEntries(
+  (Object.entries(EVENT_POLICY) as [NotificationEventKind, EventPolicy][])
+    .filter((entry) => entry[1].userOverrideKey !== undefined)
+    .map(([kind, policy]) => [kind, policy.userOverrideKey])
+) as Partial<Record<NotificationEventKind, keyof NotificationSettings>>;
 
 export const EVENT_KIND_LABEL: Record<NotificationEventKind, string> = {
   completed: "completed notifications",
   waiting: "waiting notifications",
   workingPulse: "working pulse sound",
   uiFeedback: "UI feedback sounds",
+  agent: "agent notifications",
+  git: "git notifications",
+  host: "system notifications",
+  recovery: "recovery notifications",
+  settings: "settings notifications",
+  connectivity: "connection notifications",
 };
 
 const EVENT_KIND_VALUES: ReadonlySet<string> = new Set(Object.keys(EVENT_KIND_LABEL));
 
 export function isNotificationEventKind(v: string | undefined): v is NotificationEventKind {
   return v !== undefined && EVENT_KIND_VALUES.has(v);
+}
+
+const INTERRUPTION_TO_PRIORITY: Record<EventInterruption, NotificationPriority> = {
+  passive: "low",
+  active: "high",
+  "time-sensitive": "high",
+  critical: "watch",
+};
+
+/**
+ * Fills routing defaults (priority, urgent, placement) from `EVENT_POLICY` for
+ * the payload's `context.eventKind`. Only gaps are filled — any field the
+ * caller set explicitly is preserved. Returns a new object; never mutates.
+ * `duration` is resolved separately in `notify()` so the sticky-action default
+ * can still win over a policy's `defaultDurationMs`.
+ */
+function resolveEventPolicyDefaults(payload: NotifyPayload): NotifyPayload {
+  const eventKind = payload.context?.eventKind;
+  if (!eventKind) return payload;
+  const policy = EVENT_POLICY[eventKind];
+  if (!policy) return payload;
+
+  let next = payload;
+  if (next.priority === undefined) {
+    next = { ...next, priority: INTERRUPTION_TO_PRIORITY[policy.baseInterruption] };
+  }
+  if (
+    next.urgent === undefined &&
+    (policy.baseInterruption === "time-sensitive" || policy.baseInterruption === "critical")
+  ) {
+    next = { ...next, urgent: true };
+  }
+  if (next.placement === undefined && policy.preferredSurface !== "auto") {
+    next = { ...next, placement: policy.preferredSurface };
+  }
+  return next;
 }
 
 /**
@@ -600,6 +759,10 @@ export function notify(
   }
 ): string;
 export function notify(payload: NotifyPayload): string {
+  // Resolve routing defaults from the EVENT_POLICY manifest before reading any
+  // routing fields — explicit caller fields are preserved, only gaps are filled.
+  payload = resolveEventPolicyDefaults(payload);
+
   const priority = payload.priority ?? "high";
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;
 
@@ -636,6 +799,16 @@ export function notify(payload: NotifyPayload): string {
   // Action-bearing toasts persist by default so users can act; toaster's 3s fallback would otherwise dismiss them.
   if (payload.duration === undefined && allActions.length > 0) {
     payload = { ...payload, duration: 0 };
+  }
+
+  // Policy-declared default duration fills the gap after the sticky-action
+  // default (so action-bearing toasts stay sticky) but before the per-type
+  // fallback. Caller-supplied `duration` still wins over both.
+  if (payload.duration === undefined && context?.eventKind) {
+    const policyDuration = EVENT_POLICY[context.eventKind]?.defaultDurationMs;
+    if (policyDuration !== undefined) {
+      payload = { ...payload, duration: policyDuration };
+    }
   }
 
   // Severity-based dismiss defaults. When a toast fires, the persistent inbox is
@@ -804,9 +977,16 @@ export function notify(payload: NotifyPayload): string {
         // type default — that signals an intentional UX choice.
         const resultingActionsCount =
           (patchAction ? 1 : 0) + (coalesce.buildAction ? 0 : (notification.actions?.length ?? 0));
+        // A duration is "default" if it's the per-type fallback, the policy's
+        // defaultDurationMs for the kind, or unset — any of these means the
+        // caller didn't pin a duration, so the sticky promotion is safe.
+        const policyDefaultDuration = notification.context?.eventKind
+          ? EVENT_POLICY[notification.context.eventKind]?.defaultDurationMs
+          : undefined;
         const storedDurationIsDefault =
           notification.duration === undefined ||
-          notification.duration === TOAST_DURATION[notification.type];
+          notification.duration === TOAST_DURATION[notification.type] ||
+          notification.duration === policyDefaultDuration;
         if (resultingActionsCount > 0 && storedDurationIsDefault) {
           patch.duration = 0;
         }

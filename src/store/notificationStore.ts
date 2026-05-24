@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ReactNode } from "react";
 import type { ActionId } from "@shared/types/actions";
+import type { NotificationEventKind } from "@/lib/notify";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useUIStore } from "@/store/uiStore";
 
@@ -58,7 +59,7 @@ export interface Notification {
     projectId?: string;
     worktreeId?: string;
     panelId?: string;
-    eventKind?: "completed" | "waiting" | "workingPulse" | "uiFeedback";
+    eventKind?: NotificationEventKind;
   };
   /**
    * Number of events collapsed into this toast. `undefined` means a single

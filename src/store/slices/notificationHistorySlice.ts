@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationActionVariant } from "@/store/notificationStore";
+import type { NotificationEventKind } from "@/lib/notify";
 
 export interface NotificationHistoryAction {
   label: string;
@@ -39,7 +40,7 @@ export interface NotificationHistoryEntry {
     projectId?: string;
     worktreeId?: string;
     panelId?: string;
-    eventKind?: "completed" | "waiting" | "workingPulse" | "uiFeedback";
+    eventKind?: NotificationEventKind;
   };
   actions?: NotificationHistoryAction[];
 }
