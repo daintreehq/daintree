@@ -385,10 +385,7 @@ export function ActionPalette({
       // sectioned MRU body and the prefix-hint footer.
       const showPrefixHints = activeMode === null && !query.trim();
       return (
-        <div
-          id={footerHintId}
-          className="@container/palette-footer w-full flex flex-col gap-1.5"
-        >
+        <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
           {body}
           {showPrefixHints && <PrefixDiscoverabilityRow />}
         </div>
