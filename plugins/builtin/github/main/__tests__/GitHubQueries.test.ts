@@ -193,6 +193,12 @@ describe("LIST_PRS_QUERY", () => {
     expect(LIST_PRS_QUERY).toContain("mergeStateStatus");
   });
 
+  it("selects reviewDecision as a bare scalar (zero-cost approval badge)", () => {
+    expect(LIST_PRS_QUERY).toContain("reviewDecision");
+    // Bare scalar — no connection arguments that would add query cost.
+    expect(LIST_PRS_QUERY).not.toContain("reviewDecision(");
+  });
+
   it("fetches statusCheckRollup.contexts aggregate scalars without first/last args", () => {
     // contexts must NOT use first: or last: — aggregate scalars are
     // available on the connection type itself without pagination args.
@@ -224,6 +230,11 @@ describe("SEARCH_QUERY", () => {
   it("fetches comments totalCount in PR fragment", () => {
     const prFragment = SEARCH_QUERY.slice(SEARCH_QUERY.indexOf("... on PullRequest"));
     expect(prFragment).toContain("comments");
+  });
+
+  it("selects reviewDecision in the PR fragment so searched PRs carry the badge", () => {
+    const prFragment = SEARCH_QUERY.slice(SEARCH_QUERY.indexOf("... on PullRequest"));
+    expect(prFragment).toContain("reviewDecision");
   });
 });
 

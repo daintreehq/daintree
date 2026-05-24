@@ -354,6 +354,7 @@ export const SEARCH_QUERY = `
           closedAt
           mergedAt
           merged
+          reviewDecision
           baseRefName
           headRefName
           headRepository {

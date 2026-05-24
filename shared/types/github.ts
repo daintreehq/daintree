@@ -1,5 +1,7 @@
 // Core GitHub Types
 
+import type { NormalizedReviewDecision } from "./forge.js";
+
 /** GitHub user */
 export interface GitHubUser {
   /** GitHub username */
@@ -90,6 +92,9 @@ export interface GitHubPR {
   updatedAt: string;
   /** PR author */
   author: GitHubUser;
+  /** Aggregate review decision — drives the approval badge without an N+1 fetch.
+   *  `null` when the repo doesn't gate on reviews, `undefined` when not reported. */
+  reviewDecision?: NormalizedReviewDecision;
   /** Head branch name (short ref, e.g. "feature/my-branch") */
   headRefName?: string;
   /** Whether this PR originates from a fork repository */

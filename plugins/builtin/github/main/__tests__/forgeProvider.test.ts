@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js"
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 
 const mockGraphQLClient = vi.fn();
+const mockFetchActivityProbe = vi.fn();
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
@@ -10,6 +11,10 @@ vi.mock("../GitHubAuth.js", () => ({
     createClient: vi.fn(() => mockGraphQLClient),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
+}));
+
+vi.mock("../GitHubStats.js", () => ({
+  fetchActivityProbe: (...args: unknown[]) => mockFetchActivityProbe(...args),
 }));
 
 vi.mock("../GitHubRateLimitService.js", () => ({
@@ -40,7 +45,11 @@ beforeEach(() => {
   _resetForgeQueryCachesForTests();
 });
 
-function makePRNode(number: number, headRefName: string) {
+function makePRNode(
+  number: number,
+  headRefName: string,
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null
+) {
   return {
     number,
     title: `PR ${number}`,
@@ -56,6 +65,7 @@ function makePRNode(number: number, headRefName: string) {
     closedAt: null,
     mergedAt: null,
     author: { login: "user", avatarUrl: "" },
+    ...(reviewDecision !== undefined ? { reviewDecision } : {}),
   };
 }
 
@@ -298,6 +308,87 @@ describe("runQuery cache + in-flight dedup", () => {
 
     await githubForgeProvider.getIssue!(repo, 1);
     expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("listPRs reviewDecision", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  it("maps GitHub reviewDecision values onto the normalized PR field", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        pullRequests: {
+          nodes: [
+            makePRNode(1, "feature/a", "APPROVED"),
+            makePRNode(2, "feature/b", "CHANGES_REQUESTED"),
+            makePRNode(3, "feature/c", null),
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: 3,
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+
+    expect(page.items[0].reviewDecision).toBe("APPROVED");
+    expect(page.items[1].reviewDecision).toBe("CHANGES_REQUESTED");
+    // `null` means the repo doesn't gate on reviews — preserved, not coerced.
+    expect(page.items[2].reviewDecision).toBeNull();
+  });
+
+  it("leaves reviewDecision undefined when the provider omits the field", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        pullRequests: {
+          nodes: [makePRNode(1, "feature/a")],
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: 1,
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect(page.items[0].reviewDecision).toBeUndefined();
+  });
+});
+
+describe("getRepoActivityProbe", () => {
+  beforeEach(async () => {
+    mockFetchActivityProbe.mockReset();
+    const { repoEventsETagCache } = await import("../GitHubCaches.js");
+    repoEventsETagCache.clear();
+  });
+
+  it("returns the fresh ETag as the opaque freshness token on a changed probe", async () => {
+    mockFetchActivityProbe.mockResolvedValueOnce({
+      status: "changed",
+      etag: 'W/"fresh-etag"',
+    });
+
+    const { freshnessToken } = await githubForgeProvider.getRepoActivityProbe!(repo);
+
+    expect(freshnessToken).toBe('W/"fresh-etag"');
+  });
+
+  it("returns the cached ETag on an unchanged probe", async () => {
+    const { repoEventsETagCache } = await import("../GitHubCaches.js");
+    repoEventsETagCache.set("owner/repo", 'W/"cached-etag"');
+    mockFetchActivityProbe.mockResolvedValueOnce({ status: "unchanged" });
+
+    const { freshnessToken } = await githubForgeProvider.getRepoActivityProbe!(repo);
+
+    expect(freshnessToken).toBe('W/"cached-etag"');
+  });
+
+  it("throws when the probe status is unknown", async () => {
+    mockFetchActivityProbe.mockResolvedValueOnce({ status: "unknown" });
+
+    await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
   });
 });
 

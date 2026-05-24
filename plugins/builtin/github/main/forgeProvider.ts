@@ -11,6 +11,7 @@ import type {
   ListOptions,
   NormalizedIssueState,
   NormalizedPRState,
+  NormalizedReviewDecision,
   PR,
   Page,
   PushErrorClassification,
@@ -34,11 +35,16 @@ import {
   buildBatchBranchPRQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
-import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
+import {
+  forgeQueryCache,
+  forgeQueryInflight,
+  repoEventsETagCache,
+} from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
+import { fetchActivityProbe } from "./GitHubStats.js";
 
 const REPO_METADATA_QUERY = `
   query GetRepoMetadata($owner: String!, $repo: String!) {
@@ -190,6 +196,7 @@ function toForgePR(node: Record<string, unknown>): PR {
     baseRef: (node.baseRefName as string) ?? "",
     headRef: (node.headRefName as string) ?? "",
     mergeable: undefined,
+    reviewDecision: node.reviewDecision as NormalizedReviewDecision | undefined,
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
@@ -750,6 +757,27 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   getRateLimit: getRateLimitImpl,
+
+  async getRepoActivityProbe(repo: RepoRef): Promise<{ freshnessToken: string }> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured");
+    }
+    const probe = await fetchActivityProbe(token, repo.owner, repo.repo);
+    const cacheKey = `${repo.owner}/${repo.repo}`;
+    // The REST events probe returns either a fresh ETag (`changed`) or signals
+    // "nothing new since the cached ETag" (`unchanged`); either way the latest
+    // ETag is what the host should byte-compare. On `unknown` the probe has no
+    // signal to offer — surface the failure rather than fabricate a token.
+    if (probe.status === "unknown") {
+      throw new Error("Failed to capture repo activity probe");
+    }
+    const etag = probe.status === "changed" ? probe.etag : repoEventsETagCache.get(cacheKey);
+    if (!etag) {
+      throw new Error("Repo activity probe produced no ETag");
+    }
+    return { freshnessToken: etag };
+  },
 
   classifyPushError: classifyPushErrorImpl,
 
