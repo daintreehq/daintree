@@ -28,11 +28,13 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const REPORT_FILE = path.join(ROOT, "dist", "compiler-bailout-report.json");
 const BASELINE_FILE = path.join(ROOT, "compiler-bailout-baseline.json");
+const SUMMARY_FILE = path.join(ROOT, "dist", "compiler-budget-summary.md");
 
 const COUNT_KEYS = ["success", "skip", "error", "pipeline"];
 // Only these counts gate CI per file. A file that loses successes is logged
@@ -154,6 +156,81 @@ function writeBaseline(report, { force }) {
   );
 }
 
+// Build and write the markdown summary for downstream PR-comment aggregation.
+// Called on both the pass and fail paths so the aggregated comment always
+// carries a compiler-budget block.
+function emitSummary(report, { regressions, improvements, successDrops, newClean, disappeared }) {
+  const totals = COUNT_KEYS.reduce((t, k) => {
+    t[k] = Object.values(report).reduce((s, e) => s + e[k], 0);
+    return t;
+  }, {});
+  const ok = regressions.length === 0 && disappeared.length === 0;
+  const fileCount = Object.keys(report).length;
+
+  const headerLine = ok
+    ? `${fileCount} files (success=${totals.success}, skip=${totals.skip}, error=${totals.error}, pipeline=${totals.pipeline})`
+    : `${regressions.length} regression(s), ${disappeared.length} missing baseline entries`;
+
+  const sections = [
+    {
+      heading: "Totals",
+      body: [
+        `- files:    ${fileCount}`,
+        `- success:  ${totals.success}`,
+        `- skip:     ${totals.skip}`,
+        `- error:    ${totals.error}`,
+        `- pipeline: ${totals.pipeline}`,
+      ],
+    },
+  ];
+
+  if (regressions.length > 0) {
+    sections.push({
+      heading: "Regressions",
+      body: regressions.map(({ file, deltas, isNew }) => {
+        const summary = deltas.map(({ key, from, to }) => `${key}: ${from} → ${to}`).join("; ");
+        const prefix = isNew ? "new file with bailouts" : "regression";
+        return `- \`${file}\` — ${prefix} (${summary})`;
+      }),
+    });
+  }
+  if (disappeared.length > 0) {
+    sections.push({
+      heading: "Missing baseline entries",
+      body: disappeared.map((file) => `- \`${file}\` — no longer present in build output`),
+    });
+  }
+  if (improvements.length > 0) {
+    sections.push({
+      heading: "Improvements",
+      body: improvements.map(({ file, base, entry, improvedKeys }) => {
+        const changes = improvedKeys.map((k) => `${k} ${base[k]} → ${entry[k]}`).join(", ");
+        return `- \`${file}\` — ${changes}`;
+      }),
+    });
+  }
+  if (successDrops.length > 0) {
+    sections.push({
+      heading: "Success drops",
+      body: successDrops.map(({ file, from, to }) => `- \`${file}\` — success ${from} → ${to}`),
+    });
+  }
+  if (newClean.length > 0) {
+    sections.push({
+      heading: "New clean files",
+      body: newClean.map((file) => `- \`${file}\``),
+    });
+  }
+
+  const markdown = formatBudgetSummary({
+    title: "Compiler bailout budget",
+    status: ok ? "PASS" : "FAIL",
+    headerLine,
+    sections,
+  });
+  writeSummary(SUMMARY_FILE, markdown);
+}
+
 function main() {
   const isUpdate = process.argv.includes("--update");
   const force = process.argv.includes("--force");
@@ -226,6 +303,8 @@ function main() {
     console.log(`::notice file=${file}::compile success count dropped ${from} → ${to}`);
   }
 
+  emitSummary(report, { regressions, improvements, successDrops, newClean, disappeared });
+
   if (regressions.length === 0 && disappeared.length === 0) {
     const totals = COUNT_KEYS.reduce((t, k) => {
       t[k] = Object.values(report).reduce((s, e) => s + e[k], 0);
@@ -287,7 +366,7 @@ function main() {
   }
   const total = regressions.length + disappeared.length;
   console.error(
-    `\n[check-compiler-budget] FAILED — ${total} issue(s): ${regressions.length} regression(s), ${disappeared.length} missing baseline entrie(s). ` +
+    `\n[check-compiler-budget] FAILED — ${total} issue(s): ${regressions.length} regression(s), ${disappeared.length} missing baseline entries. ` +
       `For investigation, run \`npm run compiler-budget:critical\` to list only critical (Error-severity) compiler diagnostics. ` +
       `If the change is intentional (e.g. files were genuinely deleted), run \`npm run compiler-budget:update\` to refresh the baseline.`
   );

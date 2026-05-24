@@ -22,12 +22,14 @@ import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const DIST = path.join(ROOT, "dist");
 const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
 const BASELINE_FILE = path.join(ROOT, "renderer-import-baseline.json");
+const SUMMARY_FILE = path.join(DIST, "renderer-import-budget-summary.md");
 
 // Refuse to overwrite the baseline in --update mode if the eager chunk count
 // shrinks by more than this fraction. Mirrors check-import-budget.mjs.
@@ -271,6 +273,52 @@ function readBaseline() {
   }
 }
 
+// Build and write the markdown summary for downstream PR-comment aggregation.
+// Emitted on both pass and fail paths so the aggregated comment always carries
+// a renderer-import-budget block.
+function emitSummary(result) {
+  const hasGzip = typeof result.currentGzip === "number";
+  const gzipNote = hasGzip
+    ? `, eager gzip ${result.currentGzip} (baseline ${result.baselineGzip}, ${(result.byteRatio * 100).toFixed(2)}%)`
+    : "";
+
+  const headerLine = result.ok
+    ? `${result.currentCount} eager chunk(s) (baseline ${result.baselineCount})${gzipNote}`
+    : `chunks ${result.baselineCount} → ${result.currentCount}${gzipNote}`;
+
+  const totalsBody = [
+    `- eager chunks:    ${result.currentCount} (baseline ${result.baselineCount})`,
+  ];
+  if (hasGzip) {
+    totalsBody.push(
+      `- eager gzip:      ${result.currentGzip} bytes (baseline ${result.baselineGzip}, ${(result.byteRatio * 100).toFixed(2)}%)`
+    );
+  }
+
+  const sections = [{ heading: "Totals", body: totalsBody }];
+
+  if (result.added.length > 0) {
+    sections.push({
+      heading: "Added eager chunks",
+      body: result.added.map((k) => `- \`${k}\``),
+    });
+  }
+  if (result.removed.length > 0) {
+    sections.push({
+      heading: "Removed eager chunks",
+      body: result.removed.map((k) => `- \`${k}\``),
+    });
+  }
+
+  const markdown = formatBudgetSummary({
+    title: "Renderer import budget",
+    status: result.ok ? "PASS" : "FAIL",
+    headerLine,
+    sections,
+  });
+  writeSummary(SUMMARY_FILE, markdown);
+}
+
 function main() {
   const args = parseArgs(process.argv);
   const report = buildReport();
@@ -287,6 +335,8 @@ function main() {
     console.error(`::error::${result.error}`);
     process.exit(1);
   }
+
+  emitSummary(result);
 
   const byteSummary =
     typeof result.byteRatio === "number"
