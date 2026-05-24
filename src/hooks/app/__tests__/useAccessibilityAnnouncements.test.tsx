@@ -81,6 +81,43 @@ describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", 
     expect(assertive).toBeNull();
   });
 
+  it("cancels pending debounce timer when panel is removed before fire (#8937)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "working" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    // Transition triggers a 300ms debounce timer
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "exited" }]);
+    });
+    rerender();
+
+    // Remove the panel before the timer fires
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    act(() => {
+      setPanels([]);
+    });
+    rerender();
+
+    // Past the original debounce window — stale timer should have been cancelled
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    const { polite, assertive } = useAnnouncerStore.getState();
+    expect(polite).toBeNull();
+    expect(assertive).toBeNull();
+  });
+
   it("announces 'completed' (unchanged behavior — regression guard)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 

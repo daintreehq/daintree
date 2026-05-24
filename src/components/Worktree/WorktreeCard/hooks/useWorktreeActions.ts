@@ -245,8 +245,10 @@ export function useWorktreeActions({
           { worktreeId: worktree.id, confirmed: true },
           { source: "user" }
         );
-        useAnnouncerStore.getState().announce("Trashed all sessions");
+        // Close before announce — see VoiceOver modal-scoping note in
+        // TerminalContextMenu.handleDestructiveConfirm.
         setConfirmDialog({ isOpen: false });
+        useAnnouncerStore.getState().announce("Trashed all sessions");
       },
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch]);
@@ -266,8 +268,10 @@ export function useWorktreeActions({
           { worktreeId: worktree.id },
           { source: "user" }
         );
-        useAnnouncerStore.getState().announce("Terminated all sessions");
+        // Close before announce — see VoiceOver modal-scoping note in
+        // TerminalContextMenu.handleDestructiveConfirm.
         setConfirmDialog({ isOpen: false });
+        useAnnouncerStore.getState().announce("Terminated all sessions");
       },
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch]);

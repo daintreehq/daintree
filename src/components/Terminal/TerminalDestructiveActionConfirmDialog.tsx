@@ -96,7 +96,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
 
   const handleConfirm = useCallback(() => {
     if (pending === null) return;
-    const announce = useAnnouncerStore.getState().announce;
+    let announcement: string | null = null;
     switch (pending.kind) {
       case "kill":
         // Defensive: refuse to dispatch when the snapshot lost the target.
@@ -108,7 +108,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { terminalId: pending.terminalId, confirmed: true },
           { source: "user" }
         );
-        announce("Terminal killed");
+        announcement = "Terminal killed";
         break;
       case "restart":
         if (!pending.terminalId) break;
@@ -117,18 +117,18 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { terminalId: pending.terminalId, confirmed: true },
           { source: "user" }
         );
-        announce("Terminal restarted");
+        announcement = "Terminal restarted";
         break;
       case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source: "user" });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announce(`Killed ${pending.targetCount} ${noun}`);
+        announcement = `Killed ${pending.targetCount} ${noun}`;
         break;
       }
       case "restartAll": {
         void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source: "user" });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announce(`Restarted ${pending.targetCount} ${noun}`);
+        announcement = `Restarted ${pending.targetCount} ${noun}`;
         break;
       }
       case "worktreeRestartAll": {
@@ -139,7 +139,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { source: "user" }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
-        announce(`Restarted ${pending.targetCount} ${noun}`);
+        announcement = `Restarted ${pending.targetCount} ${noun}`;
         break;
       }
       case "worktreeTrashAll": {
@@ -150,11 +150,17 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { source: "user" }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
-        announce(`Trashed ${pending.targetCount} ${noun}`);
+        announcement = `Trashed ${pending.targetCount} ${noun}`;
         break;
       }
     }
+    // Close the dialog first so the announce fires after focus returns to
+    // the main tree — VoiceOver suppresses live-region updates from outside
+    // the current modal subtree while focus is trapped.
     clear();
+    if (announcement) {
+      useAnnouncerStore.getState().announce(announcement);
+    }
   }, [pending, clear]);
 
   if (pending === null) return null;

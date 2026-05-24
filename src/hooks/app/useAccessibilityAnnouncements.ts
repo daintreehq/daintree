@@ -99,6 +99,17 @@ export function useAccessibilityAnnouncements() {
       debounceTimersRef.current.set(terminal.id, timer);
     }
 
+    // Cancel pending debounce timers for panels that have left panelIds.
+    // Without this, a state-change timer scheduled just before removal would
+    // fire 300ms later and announce "${title} exited" for a panel that is
+    // no longer in the store.
+    for (const [id, timer] of debounceTimersRef.current) {
+      if (!newStates.has(id)) {
+        clearTimeout(timer);
+        debounceTimersRef.current.delete(id);
+      }
+    }
+
     previousStatesRef.current = newStates;
   }, [panelsById, panelIds]);
 

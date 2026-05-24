@@ -221,9 +221,14 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     if (killConfirmId) {
       const target = terminals.find((t) => t.id === killConfirmId);
       removePanel(killConfirmId);
+      // Close the confirm dialog first so the announce reaches AT after focus
+      // returns to the main tree (VoiceOver suppresses live-region updates
+      // from outside the active modal subtree).
+      setKillConfirmId(null);
       useAnnouncerStore
         .getState()
         .announce(target?.title ? `${target.title} killed` : "Terminal killed");
+      return;
     }
     setKillConfirmId(null);
   }, [killConfirmId, removePanel, terminals]);

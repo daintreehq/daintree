@@ -367,15 +367,18 @@ export function TerminalContextMenu({
   const handleDestructiveConfirm = useCallback(() => {
     if (!destructiveConfirm) return;
     const actionId = destructiveConfirm.kind === "kill" ? "terminal.kill" : "terminal.restart";
+    const announcement =
+      destructiveConfirm.kind === "kill" ? "Terminal killed" : "Terminal restarted";
     void actionService.dispatch(
       actionId,
       { terminalId, confirmed: true },
       { source: sourceRef.current }
     );
-    useAnnouncerStore
-      .getState()
-      .announce(destructiveConfirm.kind === "kill" ? "Terminal killed" : "Terminal restarted");
+    // Close the dialog first so the announce fires after focus returns to the
+    // main tree — VoiceOver suppresses live-region updates from outside the
+    // current modal subtree while focus is trapped.
     setDestructiveConfirm(null);
+    useAnnouncerStore.getState().announce(announcement);
   }, [destructiveConfirm, terminalId]);
 
   const closeDestructiveConfirm = useCallback(() => {
