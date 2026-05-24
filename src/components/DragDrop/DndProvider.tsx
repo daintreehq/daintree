@@ -501,6 +501,14 @@ export function DndProvider({ children }: DndProviderProps) {
   const stabilizationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dockRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
+  // dnd-kit's DndContext unconditionally renders its own aria-live announcer,
+  // which competes with the sidebar's custom Alt+Arrow reorder live regions and
+  // causes announcements to be silently dropped. Portal that announcer into a
+  // detached (never-attached) node so it stays out of the accessibility tree.
+  // The ref must hold a stable element for the provider's lifetime — a fresh
+  // element each render would re-portal the announcer and reintroduce the bug.
+  const dndAccessibilityContainerRef = useRef<Element>(document.createElement("div"));
+
   // Snapshot of the worktree-sort drag data pinned at pickup. The virtualized
   // sidebar can unmount the source row's useSortable hook once it scrolls
   // outside Virtuoso's overscan window, dropping active.data.current to
@@ -1246,6 +1254,7 @@ export function DndProvider({ children }: DndProviderProps) {
       accessibility={{
         announcements: dragAnnouncements,
         screenReaderInstructions: dragScreenReaderInstructions,
+        container: dndAccessibilityContainerRef.current,
       }}
     >
       <DndPlaceholderContext.Provider value={placeholderContextValue}>

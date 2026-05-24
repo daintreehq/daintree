@@ -5,7 +5,7 @@ export function VoiceRecordingAnnouncer() {
   const announcement = useVoiceRecordingStore((state) => state.announcement);
   const ref = useRef<HTMLDivElement>(null);
 
-  const pendingSetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSetRef = useRef<number | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -16,16 +16,23 @@ export function VoiceRecordingAnnouncer() {
       return;
     }
 
+    // Clear synchronously, then set the new text on the next animation frame.
+    // A requestAnimationFrame callback runs before paint, which guarantees the
+    // cleared state commits to the accessibility tree as its own frame before
+    // the new text lands — so the screen reader sees a genuine change. A
+    // setTimeout(0) fires in a fresh task that Chromium 146 can coalesce into
+    // the same frame, dropping the intermediate empty state and the announcement.
     el.textContent = "";
-    pendingSetRef.current = setTimeout(() => {
+    const text = announcement.text;
+    pendingSetRef.current = requestAnimationFrame(() => {
       if (ref.current) {
-        ref.current.textContent = announcement.text;
+        ref.current.textContent = text;
       }
-    }, 0);
+    });
 
     return () => {
-      if (pendingSetRef.current) {
-        clearTimeout(pendingSetRef.current);
+      if (pendingSetRef.current !== null) {
+        cancelAnimationFrame(pendingSetRef.current);
       }
     };
   }, [announcement]);

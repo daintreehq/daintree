@@ -47,7 +47,19 @@ export function ShortcutHint() {
   }, [activeHint, hide]);
 
   const hint = lastHint;
-  if (!shouldRender || !hint) return null;
+
+  // Live region must stay mounted at all times. If the node is created fresh on
+  // each activation (as it was when the visual tooltip carried the aria-live
+  // attributes and the whole portal unmounted), Chromium treats the text it
+  // finds at mount as pre-existing static content and never announces it. Keep
+  // a dedicated sr-only status node always in the DOM and only swap its text.
+  const liveRegion = (
+    <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {activeHint ? `Shortcut: ${activeHint.displayCombo}` : ""}
+    </div>
+  );
+
+  if (!shouldRender || !hint) return liveRegion;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -63,32 +75,36 @@ export function ShortcutHint() {
   }
   if (y > vh - TOOLTIP_HEIGHT_ESTIMATE) y = vh - TOOLTIP_HEIGHT_ESTIMATE - 8;
 
-  return createPortal(
-    <div
-      className={cn(
-        "fixed z-[var(--z-toast)] pointer-events-none",
-        "transition-opacity duration-150",
-        "motion-reduce:transition-none motion-reduce:duration-0",
-        isVisible ? "opacity-100" : "opacity-0"
+  return (
+    <>
+      {liveRegion}
+      {createPortal(
+        <div
+          className={cn(
+            "fixed z-[var(--z-toast)] pointer-events-none",
+            "transition-opacity duration-150",
+            "motion-reduce:transition-none motion-reduce:duration-0",
+            isVisible ? "opacity-100" : "opacity-0"
+          )}
+          style={{ left: x, top: y, transform: above ? "translateY(-100%)" : undefined }}
+          aria-hidden="true"
+        >
+          <div
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5",
+              "rounded-[var(--radius-lg)] bg-daintree-sidebar/95 border border-[var(--border-overlay)] shadow-[var(--theme-shadow-floating)]",
+              "text-xs text-daintree-text/70",
+              "transition duration-150",
+              "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+              isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
+            )}
+          >
+            <span>Tip:</span>
+            <Kbd>{hint.displayCombo}</Kbd>
+          </div>
+        </div>,
+        document.body
       )}
-      style={{ left: x, top: y, transform: above ? "translateY(-100%)" : undefined }}
-      role="status"
-      aria-live="polite"
-    >
-      <div
-        className={cn(
-          "flex items-center gap-2 px-3 py-1.5",
-          "rounded-[var(--radius-lg)] bg-daintree-sidebar/95 border border-[var(--border-overlay)] shadow-[var(--theme-shadow-floating)]",
-          "text-xs text-daintree-text/70",
-          "transition duration-150",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
-          isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"
-        )}
-      >
-        <span>Tip:</span>
-        <Kbd>{hint.displayCombo}</Kbd>
-      </div>
-    </div>,
-    document.body
+    </>
   );
 }
