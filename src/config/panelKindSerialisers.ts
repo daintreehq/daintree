@@ -1,4 +1,4 @@
-import type { PanelKind, ViewportPresetId } from "@/types";
+import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
@@ -9,6 +9,9 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
   return value !== undefined && value in VIEWPORT_PRESETS ? (value as ViewportPresetId) : undefined;
 }
 
+// Terminal is omitted — PTY panels restore through backend payload, not this
+// registry. Review is omitted — review panels carry no kind-specific persisted
+// state. `Record<string, …>` stays for registerDeserializer plugin mutation.
 const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
   browser: (saved) => ({
     browserUrl: saved.browserUrl,
@@ -35,7 +38,7 @@ const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
       createdAt: saved.createdAt,
     };
   },
-};
+} satisfies Partial<Record<BuiltInPanelKind, PanelKindDeserializer>>;
 
 export function getDeserializer(kind: PanelKind): PanelKindDeserializer | undefined {
   return DESERIALIZERS[kind];
