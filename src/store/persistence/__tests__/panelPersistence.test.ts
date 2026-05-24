@@ -535,6 +535,34 @@ describe("PanelPersistence", () => {
       });
     });
 
+    it("overwrites base fields from live terminal but preserves kind-specific fragment", () => {
+      // Round-trip test for #8960. Base fields (recognized by the compile-time
+      // allowlist) must be overwritten by the live terminal, while kind-specific
+      // fields from a previous snapshot must survive the save cycle.
+      const previous: TerminalSnapshot = {
+        id: "ext-roundtrip",
+        kind: "custom-widget",
+        title: "Stale Title",
+        worktreeId: "wt-stale",
+        location: "grid",
+        browserUrl: "https://example.com",
+      };
+
+      const panel = createMockTerminal({
+        id: "ext-roundtrip",
+        kind: "custom-widget",
+        title: "Live Title",
+        worktreeId: "wt-live",
+        location: "grid",
+      });
+
+      const snapshot = panelToSnapshot(panel, previous);
+
+      expect(snapshot.title).toBe("Live Title");
+      expect(snapshot.worktreeId).toBe("wt-live");
+      expect(snapshot.browserUrl).toBe("https://example.com");
+    });
+
     it("preserves previously-persisted kind-specific fields across save cycles", async () => {
       // Regression test for #5201. A panel whose kind has no registered
       // serializer (extension disabled mid-session, plugin not yet loaded,
