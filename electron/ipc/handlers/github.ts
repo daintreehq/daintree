@@ -36,6 +36,7 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
       limit: payload.limit ?? null,
       remaining: payload.remaining ?? null,
       resetAt: null,
+      throttleMultiplier: payload.throttleMultiplier,
     };
   }
   // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
@@ -46,6 +47,7 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
     remaining: 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
+    throttleMultiplier: payload.throttleMultiplier,
   };
 }
 

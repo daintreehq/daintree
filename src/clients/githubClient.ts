@@ -31,11 +31,12 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
  */
 function toGitHubRateLimitPayload(info: RateLimitInfo): GitHubRateLimitPayload {
   const blocked = info.remaining === 0 || info.secondaryThrottled === true;
-  if (!blocked) return { blocked: false, kind: null };
+  if (!blocked) return { blocked: false, kind: null, throttleMultiplier: info.throttleMultiplier };
   return {
     blocked: true,
     kind: info.secondaryThrottled ? "secondary" : "primary",
     ...(info.resetAt != null ? { resetAt: info.resetAt } : {}),
+    throttleMultiplier: info.throttleMultiplier,
   };
 }
 

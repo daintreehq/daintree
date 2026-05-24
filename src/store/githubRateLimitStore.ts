@@ -16,6 +16,7 @@ export interface GitHubRateLimitState {
   blocked: boolean;
   kind: GitHubRateLimitKind | null;
   resetAt: number | null;
+  throttleMultiplier: number;
   apply: (payload: GitHubRateLimitPayload) => void;
 }
 
@@ -24,6 +25,7 @@ const apply = (payload: GitHubRateLimitPayload): void =>
     blocked: payload.blocked,
     kind: payload.kind,
     resetAt: payload.resetAt ?? null,
+    throttleMultiplier: payload.throttleMultiplier,
   });
 
 function gitHubView(): GitHubRateLimitState {
@@ -34,6 +36,7 @@ function gitHubView(): GitHubRateLimitState {
     blocked: p.rateLimitBlocked,
     kind: p.rateLimitKind,
     resetAt: p.rateLimitResetAt,
+    throttleMultiplier: p.rateLimitMultiplier,
     apply,
   };
 }
@@ -45,6 +48,7 @@ export function useGitHubRateLimitStore<T>(selector: (state: GitHubRateLimitStat
       blocked: p.rateLimitBlocked,
       kind: p.rateLimitKind,
       resetAt: p.rateLimitResetAt,
+      throttleMultiplier: p.rateLimitMultiplier,
       apply,
     });
   });
@@ -59,7 +63,9 @@ useGitHubRateLimitStore.getState = gitHubView;
  * form only (no functional updater) — that is all callers use.
  */
 useGitHubRateLimitStore.setState = (
-  partial: Partial<Pick<GitHubRateLimitState, "blocked" | "kind" | "resetAt">>
+  partial: Partial<
+    Pick<GitHubRateLimitState, "blocked" | "kind" | "resetAt" | "throttleMultiplier">
+  >
 ): void => {
   const cur = gitHubView();
   const next = { ...cur, ...partial };
@@ -67,5 +73,6 @@ useGitHubRateLimitStore.setState = (
     blocked: next.blocked,
     kind: next.kind,
     resetAt: next.resetAt,
+    throttleMultiplier: next.throttleMultiplier,
   });
 };

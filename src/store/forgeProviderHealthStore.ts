@@ -20,6 +20,7 @@ export interface ForgeProviderHealth {
   rateLimitBlocked: boolean;
   rateLimitKind: ForgeRateLimitKind | null;
   rateLimitResetAt: number | null;
+  rateLimitMultiplier: number;
   tokenUnhealthy: boolean;
 }
 
@@ -29,6 +30,7 @@ export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = Object.freeze({
   rateLimitBlocked: false,
   rateLimitKind: null,
   rateLimitResetAt: null,
+  rateLimitMultiplier: 1,
   tokenUnhealthy: false,
 });
 
@@ -37,6 +39,7 @@ export interface ForgeRateLimitState {
   blocked: boolean;
   kind: ForgeRateLimitKind | null;
   resetAt?: number | null;
+  throttleMultiplier?: number;
 }
 
 interface ForgeProviderHealthStore {
@@ -59,7 +62,11 @@ function mergeProvider(
 
 export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set) => ({
   providers: {},
-  applyRateLimit: (providerId, state) =>
+  applyRateLimit: (providerId, state) => {
+    const multiplier =
+      Number.isFinite(state.throttleMultiplier ?? 1) && (state.throttleMultiplier ?? 1) >= 1
+        ? (state.throttleMultiplier ?? 1)
+        : 1;
     set((s) => ({
       providers: mergeProvider(
         s,
@@ -69,14 +76,17 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
               rateLimitBlocked: true,
               rateLimitKind: state.kind ?? null,
               rateLimitResetAt: state.resetAt ?? null,
+              rateLimitMultiplier: multiplier,
             }
           : {
               rateLimitBlocked: false,
               rateLimitKind: null,
               rateLimitResetAt: null,
+              rateLimitMultiplier: multiplier,
             }
       ),
-    })),
+    }));
+  },
   setTokenUnhealthy: (providerId, value) =>
     set((s) => ({
       providers: mergeProvider(s, providerId, { tokenUnhealthy: value }),
