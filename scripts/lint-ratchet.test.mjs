@@ -164,6 +164,17 @@ describe("aggregateByRule", () => {
     const results = [mkFile("/src/a.ts", [{ severity: 2, ruleId: "no-debugger" }])];
     expect(aggregateByRule(results)).toEqual({});
   });
+
+  it("counts a ruleId that collides with an Object prototype member", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 1, ruleId: "constructor" },
+        { severity: 1, ruleId: "toString" },
+        { severity: 1, ruleId: "constructor" },
+      ]),
+    ];
+    expect(aggregateByRule(results)).toEqual({ constructor: 2, toString: 1 });
+  });
 });
 
 describe("checkByRule", () => {
@@ -220,5 +231,18 @@ describe("checkByRule", () => {
       { rule: "a", from: 1, to: 2, delta: 1 },
       { rule: "b", from: 2, to: 5, delta: 3 },
     ]);
+  });
+
+  it("treats a prototype-named rule as a real new rule, not an inherited member", () => {
+    // `"toString" in {}` is true — using Object.hasOwn avoids the false positive.
+    const { newRules, disappeared } = checkByRule({}, { toString: 1 });
+    expect(newRules).toEqual([{ rule: "toString", to: 1 }]);
+    expect(disappeared).toEqual([]);
+  });
+
+  it("flags a prototype-named baseline rule as disappeared when absent from live", () => {
+    const { disappeared, regressed } = checkByRule({ toString: 3 }, { "no-console": 1 });
+    expect(disappeared).toEqual(["toString"]);
+    expect(regressed).toEqual([]);
   });
 });

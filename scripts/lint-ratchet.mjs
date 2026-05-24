@@ -71,7 +71,9 @@ export function checkShrinkageGuard(
  * Returns a `{ ruleId: count }` object with keys sorted for deterministic diffs.
  */
 export function aggregateByRule(productionResults) {
-  const tally = {};
+  // Null-prototype object so a rule named "constructor"/"toString" can't collide
+  // with an inherited member (the `?? 0` guard wouldn't fire on a real function).
+  const tally = Object.create(null);
   for (const file of productionResults) {
     for (const msg of file.messages) {
       if (msg.severity === 1 && msg.ruleId) {
@@ -97,16 +99,20 @@ export function checkByRule(baselineByRule, liveByRule) {
   const newRules = [];
 
   for (const [rule, from] of Object.entries(baselineByRule)) {
-    const to = liveByRule[rule];
-    if (to === undefined) {
+    // Object.hasOwn (not `in` / direct lookup) so prototype members like
+    // "toString" don't masquerade as present rules.
+    if (!Object.hasOwn(liveByRule, rule)) {
       disappeared.push(rule);
-    } else if (to > from) {
+      continue;
+    }
+    const to = liveByRule[rule];
+    if (to > from) {
       regressed.push({ rule, from, to, delta: to - from });
     }
   }
 
   for (const [rule, to] of Object.entries(liveByRule)) {
-    if (!(rule in baselineByRule)) {
+    if (!Object.hasOwn(baselineByRule, rule)) {
       newRules.push({ rule, to });
     }
   }
@@ -135,7 +141,7 @@ function main() {
     // ESLint exits with code 1 when there are warnings/errors
     // The output is still valid JSON in stdout
     if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      console.error("❌ ESLint output exceeded buffer size (25MB)");
+      console.error("❌ ESLint output exceeded buffer size (50MB)");
       console.error("   Try reducing the number of files or increasing maxBuffer");
       process.exit(1);
     }
@@ -168,6 +174,12 @@ function main() {
   // test-file errors must still block the build.
   const productionResults = results.filter((file) => !TEST_FILE_PATTERN.test(file.filePath));
 
+  // `warningCount` counts every severity-1 message; `byRule` (below) only counts
+  // those with a non-null ruleId. They stay in sync because ESLint emits
+  // null-ruleId messages as severity 2 (parse errors) under the current
+  // invocation — this divergence assumption only breaks if a flag like
+  // --report-unused-disable-directives is added, which would emit severity-1
+  // null-ruleId messages. `count` remains the canonical total either way.
   const warningCount = productionResults.reduce((sum, file) => {
     return sum + file.messages.filter((msg) => msg.severity === 1).length;
   }, 0);
@@ -223,11 +235,11 @@ function main() {
         const disappeared = [];
         const shrunk = [];
         for (const [rule, priorRuleCount] of Object.entries(prior.byRule)) {
-          const liveRuleCount = byRule[rule];
-          if (liveRuleCount === undefined) {
+          if (!Object.hasOwn(byRule, rule)) {
             disappeared.push({ rule, from: priorRuleCount });
             continue;
           }
+          const liveRuleCount = byRule[rule];
           const guard = checkShrinkageGuard(priorRuleCount, liveRuleCount, force);
           if (guard.blocked) {
             shrunk.push({ rule, from: priorRuleCount, to: liveRuleCount });
