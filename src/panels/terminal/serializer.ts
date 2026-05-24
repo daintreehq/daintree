@@ -6,7 +6,7 @@ import type { PanelSnapshot } from "@shared/types/project";
  * `lastActiveAt` fields, which are persisted but intentionally not declared
  * on the shared variant interface.
  */
-type PtySerializeInput = PtyPanelData & { createdAt?: number; lastActiveAt?: number };
+export type PtySerializeInput = PtyPanelData & { createdAt?: number; lastActiveAt?: number };
 
 export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
   return {

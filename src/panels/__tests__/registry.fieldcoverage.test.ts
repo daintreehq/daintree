@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import type {
+  BrowserPanelData,
   BuiltInPanelKind,
   PanelExitBehavior,
   PanelInstance,
@@ -10,15 +11,20 @@ import type { BrowserHistory } from "@shared/types/browser";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { initBuiltInPanelKinds } from "../registry";
+import type { PtySerializeInput } from "../terminal/serializer";
+import type { DevPreviewSerializeInput } from "../dev-preview/serializer";
 
 // Field-coverage meta-test. Every persisted field listed below must be
 // referenced by both the serializer and the deserializer, so a rename or
 // removal on one side surfaces as a loud test failure rather than silent
 // data loss on restore.
 //
-// The per-kind arrays are a ratchet, not exhaustive: newly added persisted
-// fields must be appended here by hand. The `satisfies readonly (keyof …)[]`
-// binding catches renames and key removals at TypeScript compile time.
+// Each per-kind map uses `satisfies Record<keyof T, boolean>` — the same
+// additive-safe pattern proven in `shared/types/project.ts:368`. Every field
+// of the type MUST appear in the map, so a newly added field on the source
+// type fails at compile time until it is classified here as persisted (true)
+// or runtime-only (false). This closes the gap where `satisfies readonly
+// (keyof T)[]` caught renames/removals but silently allowed new fields.
 //
 // Asymmetries:
 //  - terminal has no getDeserializer() entry — agent-running terminals restore
@@ -28,45 +34,136 @@ import { initBuiltInPanelKinds } from "../registry";
 //    buildArgsForNonPtyRecreation's base args, not the registry deserializer.
 //    Excluded from the deserializer-side check for that kind.
 
-type PtyData = Extract<PanelInstance, { kind: "terminal" }>;
-type BrowserData = Extract<PanelInstance, { kind: "browser" }>;
-type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
+// ── Terminal (PTY) field classification ──────────────────────────────
 
-const PERSISTED_PTY_FIELDS = [
-  "launchAgentId",
-  "cwd",
-  "command",
-  "exitBehavior",
-  "agentSessionId",
-  "agentLaunchFlags",
-  "agentModelId",
-  "agentPresetId",
-  "agentPresetColor",
-  "originalPresetId",
-  "isUsingFallback",
-  "fallbackChainIndex",
-  "agentState",
-  "lastStateChange",
-] as const satisfies readonly (keyof PtyData)[];
+const PTY_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer, not here
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // PtyPanelData persisted fields
+  launchAgentId: true,
+  cwd: true,
+  command: true,
+  exitBehavior: true,
+  agentSessionId: true,
+  agentLaunchFlags: true,
+  agentModelId: true,
+  agentPresetId: true,
+  agentPresetColor: true,
+  originalPresetId: true,
+  isUsingFallback: true,
+  fallbackChainIndex: true,
+  agentState: true,
+  lastStateChange: true,
+  // PtyPanelData runtime-only fields
+  pid: false,
+  cols: false,
+  rows: false,
+  stateChangeTrigger: false,
+  stateChangeConfidence: false,
+  activityHeadline: false,
+  activityStatus: false,
+  activityType: false,
+  activityTimestamp: false,
+  lastCommand: false,
+  restartKey: false,
+  isRestarting: false,
+  restartError: false,
+  reconnectError: false,
+  scrollbackRestoreError: false,
+  flowStatus: false,
+  runtimeStatus: false,
+  flowStatusTimestamp: false,
+  isInputLocked: false,
+  browserUrl: false,
+  browserHistory: false,
+  browserZoom: false,
+  devCommand: false,
+  devServerStatus: false,
+  devServerPhaseLabel: false,
+  devServerUrl: false,
+  devServerError: false,
+  devServerTerminalId: false,
+  devPreviewConsoleOpen: false,
+  devPreviewConsoleTab: false,
+  detectedProcessId: false,
+  runtimeIdentity: false,
+  everDetectedAgent: false,
+  detectedAgentId: false,
+  spawnedBy: false,
+  ephemeral: false,
+  startedAt: false,
+  exitCode: false,
+  // PtySerializeInput widener fields (persisted)
+  createdAt: true,
+  lastActiveAt: true,
+} as const satisfies Record<keyof PtySerializeInput, boolean>;
 
-const PERSISTED_BROWSER_FIELDS = [
-  "browserUrl",
-  "browserHistory",
-  "browserZoom",
-  "browserConsoleOpen",
-] as const satisfies readonly (keyof BrowserData)[];
+// ── Browser field classification ─────────────────────────────────────
 
-const PERSISTED_DEV_PREVIEW_FIELDS = [
-  "cwd",
-  "devCommand",
-  "browserUrl",
-  "browserHistory",
-  "browserZoom",
-  "devPreviewConsoleOpen",
-  "devPreviewConsoleTab",
-  "devPreviewScrollPosition",
-  "exitBehavior",
-] as const satisfies readonly (keyof DevPreviewData)[];
+const BROWSER_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // BrowserPanelData persisted fields
+  browserUrl: true,
+  browserHistory: true,
+  browserZoom: true,
+  browserConsoleOpen: true,
+} as const satisfies Record<keyof BrowserPanelData, boolean>;
+
+// ── Dev-preview field classification ─────────────────────────────────
+
+const DEV_PREVIEW_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // DevPreviewPanelData persisted fields
+  cwd: true,
+  devCommand: true,
+  browserUrl: true,
+  browserHistory: true,
+  browserZoom: true,
+  devPreviewConsoleOpen: true,
+  devPreviewConsoleTab: true,
+  exitBehavior: true,
+  viewportPreset: true,
+  viewportRotated: true,
+  viewportDpr: true,
+  viewportFit: true,
+  devPreviewScrollPosition: true,
+  // DevPreviewPanelData runtime-only fields
+  devServerStatus: false,
+  devServerPhaseLabel: false,
+  devServerUrl: false,
+  devServerError: false,
+  devServerTerminalId: false,
+  // DevPreviewSerializeInput widener (persisted)
+  createdAt: true,
+} as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
+
+// ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
   "terminal",
@@ -83,6 +180,13 @@ const _builtInKindsExhaustive: [_MissingBuiltInKinds] extends [never]
   : _MissingBuiltInKinds = true;
 void _builtInKindsExhaustive;
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/** Extract the keys classified as `true` from a field-classification map. */
+function persistedKeys<T extends Record<string, boolean>>(map: T): (keyof T)[] {
+  return (Object.keys(map) as (keyof T)[]).filter((k) => map[k]);
+}
+
 const browserHistoryFixture: BrowserHistory = {
   past: ["https://prev.example"],
   present: "https://example.com",
@@ -94,74 +198,6 @@ function baseFields(
 ): Pick<TerminalInstance, "id" | "title" | "location" | "kind"> {
   return { id: `panel-${kind}`, title: "Panel", location: "grid", kind };
 }
-
-// Fully-populated fixtures — every persisted field set to a truthy, non-empty,
-// non-null value so every conditional spread in the serializers emits its key.
-
-const terminalFixture: TerminalInstance = {
-  ...baseFields("terminal"),
-  launchAgentId: "claude",
-  titleMode: "default",
-  cwd: "/home/project",
-  command: "npm start",
-  exitBehavior: "keep" satisfies PanelExitBehavior,
-  agentSessionId: "session-abc",
-  agentLaunchFlags: ["--resume"],
-  agentModelId: "claude-3-5-sonnet",
-  agentPresetId: "blue-provider",
-  agentPresetColor: "#3366ff",
-  originalPresetId: "primary-provider",
-  isUsingFallback: true,
-  fallbackChainIndex: 1,
-  agentState: "idle",
-  lastStateChange: 1_700_000_000_000,
-};
-
-const browserFixture: TerminalInstance = {
-  ...baseFields("browser"),
-  browserUrl: "https://example.com",
-  browserHistory: browserHistoryFixture,
-  browserZoom: 1.5,
-  // `false` is deliberate — the browser serializer uses `!== undefined`, so
-  // falsy-but-defined values must still emit the key.
-  browserConsoleOpen: false,
-};
-
-const devPreviewFixture: TerminalInstance = {
-  ...baseFields("dev-preview"),
-  cwd: "/home/project",
-  devCommand: "npm run dev",
-  browserUrl: "http://localhost:3000",
-  browserHistory: browserHistoryFixture,
-  browserZoom: 1,
-  devPreviewConsoleOpen: false,
-  devPreviewConsoleTab: "console",
-  devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
-  exitBehavior: "keep",
-};
-
-const savedBrowser: SavedTerminalData = {
-  id: "panel-browser",
-  kind: "browser",
-  browserUrl: "https://example.com",
-  browserHistory: browserHistoryFixture,
-  browserZoom: 1.5,
-  browserConsoleOpen: false,
-};
-
-const savedDevPreview: SavedTerminalData = {
-  id: "panel-dev-preview",
-  kind: "dev-preview",
-  devCommand: "npm run dev",
-  browserUrl: "http://localhost:3000",
-  browserHistory: browserHistoryFixture,
-  browserZoom: 1,
-  devPreviewConsoleOpen: false,
-  devPreviewConsoleTab: "console",
-  devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
-  exitBehavior: "keep",
-  createdAt: 1_700_000_000_000,
-};
 
 function assertCovers(
   label: string,
@@ -190,9 +226,94 @@ function assertCovers(
   }
 }
 
+// ── Fixtures ─────────────────────────────────────────────────────────
+// Fully-populated fixtures — every persisted field set to a truthy,
+// non-empty, non-null value so every conditional spread in the serializers
+// emits its key.
+
+const terminalFixture: TerminalInstance = {
+  ...baseFields("terminal"),
+  launchAgentId: "claude",
+  titleMode: "default",
+  cwd: "/home/project",
+  command: "npm start",
+  exitBehavior: "keep" satisfies PanelExitBehavior,
+  agentSessionId: "session-abc",
+  agentLaunchFlags: ["--resume"],
+  agentModelId: "claude-3-5-sonnet",
+  agentPresetId: "blue-provider",
+  agentPresetColor: "#3366ff",
+  originalPresetId: "primary-provider",
+  isUsingFallback: true,
+  fallbackChainIndex: 1,
+  agentState: "idle",
+  lastStateChange: 1_700_000_000_000,
+  createdAt: 1_700_000_000_000,
+  lastActiveAt: 1_700_000_000_001,
+};
+
+const browserFixture: TerminalInstance = {
+  ...baseFields("browser"),
+  browserUrl: "https://example.com",
+  browserHistory: browserHistoryFixture,
+  browserZoom: 1.5,
+  // `false` is deliberate — the browser serializer uses `!== undefined`, so
+  // falsy-but-defined values must still emit the key.
+  browserConsoleOpen: false,
+};
+
+const devPreviewFixture: TerminalInstance = {
+  ...baseFields("dev-preview"),
+  cwd: "/home/project",
+  devCommand: "npm run dev",
+  browserUrl: "http://localhost:3000",
+  browserHistory: browserHistoryFixture,
+  browserZoom: 1,
+  devPreviewConsoleOpen: false,
+  devPreviewConsoleTab: "console",
+  devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
+  viewportPreset: "iphone",
+  viewportRotated: false,
+  viewportDpr: 2,
+  viewportFit: true,
+  exitBehavior: "keep",
+  createdAt: 1_700_000_000_000,
+};
+
+const savedBrowser: SavedTerminalData = {
+  id: "panel-browser",
+  kind: "browser",
+  browserUrl: "https://example.com",
+  browserHistory: browserHistoryFixture,
+  browserZoom: 1.5,
+  browserConsoleOpen: false,
+};
+
+const savedDevPreview: SavedTerminalData = {
+  id: "panel-dev-preview",
+  kind: "dev-preview",
+  devCommand: "npm run dev",
+  browserUrl: "http://localhost:3000",
+  browserHistory: browserHistoryFixture,
+  browserZoom: 1,
+  devPreviewConsoleOpen: false,
+  devPreviewConsoleTab: "console",
+  devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 250 },
+  viewportPreset: "iphone",
+  viewportRotated: false,
+  viewportDpr: 2,
+  viewportFit: true,
+  exitBehavior: "keep",
+  createdAt: 1_700_000_000_000,
+};
+
+// ── Setup ────────────────────────────────────────────────────────────
+
 beforeAll(() => {
   initBuiltInPanelKinds();
 });
+
+// ── Serializer coverage ──────────────────────────────────────────────
 
 describe("panel serializer field coverage", () => {
   it("every built-in kind registers a serializer", () => {
@@ -207,7 +328,7 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    assertCovers("terminal serializer", output, PERSISTED_PTY_FIELDS);
+    assertCovers("terminal serializer", output, persistedKeys(PTY_FIELD_CLASSIFICATION));
   });
 
   it("browser serializer covers every persisted browser field", () => {
@@ -215,7 +336,7 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    assertCovers("browser serializer", output, PERSISTED_BROWSER_FIELDS);
+    assertCovers("browser serializer", output, persistedKeys(BROWSER_FIELD_CLASSIFICATION));
   });
 
   it("dev-preview serializer covers every persisted dev-preview field (devCommand → command)", () => {
@@ -223,18 +344,25 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    assertCovers("dev-preview serializer", output, PERSISTED_DEV_PREVIEW_FIELDS, {
-      devCommand: "command",
-    });
+    assertCovers(
+      "dev-preview serializer",
+      output,
+      persistedKeys(DEV_PREVIEW_FIELD_CLASSIFICATION),
+      {
+        devCommand: "command",
+      }
+    );
   });
 });
+
+// ── Deserializer coverage ────────────────────────────────────────────
 
 describe("panel deserializer field coverage", () => {
   it("browser deserializer covers every persisted browser field", () => {
     const deserializer = getDeserializer("browser");
     expect(deserializer, "browser deserializer must be registered").toBeDefined();
     const output = deserializer!(savedBrowser) as Record<string, unknown>;
-    assertCovers("browser deserializer", output, PERSISTED_BROWSER_FIELDS);
+    assertCovers("browser deserializer", output, persistedKeys(BROWSER_FIELD_CLASSIFICATION));
   });
 
   it("dev-preview deserializer covers every persisted dev-preview field (cwd + exitBehavior via base args)", () => {
@@ -243,10 +371,13 @@ describe("panel deserializer field coverage", () => {
     const output = deserializer!(savedDevPreview) as Record<string, unknown>;
     // `cwd` and `exitBehavior` are injected by buildArgsForNonPtyRecreation's
     // base args, not the dev-preview deserializer, so they are excluded here.
-    assertCovers("dev-preview deserializer", output, PERSISTED_DEV_PREVIEW_FIELDS, {}, [
-      "cwd",
-      "exitBehavior",
-    ]);
+    assertCovers(
+      "dev-preview deserializer",
+      output,
+      persistedKeys(DEV_PREVIEW_FIELD_CLASSIFICATION),
+      {},
+      ["cwd", "exitBehavior"]
+    );
   });
 
   it("terminal has no deserializer registry entry", () => {
@@ -256,5 +387,12 @@ describe("panel deserializer field coverage", () => {
     // accidental registry entry forces a deliberate decision about the new
     // restore path.
     expect(getDeserializer("terminal")).toBeUndefined();
+  });
+
+  it("review has no deserializer registry entry", () => {
+    // Review panels carry no kind-specific persisted fields — `worktreeId`
+    // from BasePanelData is the sole binding, and the worktree path is
+    // resolved fresh from the worktree store at render time.
+    expect(getDeserializer("review")).toBeUndefined();
   });
 });

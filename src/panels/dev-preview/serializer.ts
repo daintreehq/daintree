@@ -5,7 +5,7 @@ import type { PanelSnapshot } from "@shared/types/project";
  * Serializer input: `DevPreviewPanelData` plus the legacy `createdAt` field,
  * which is persisted but not declared on the shared variant interface.
  */
-type DevPreviewSerializeInput = DevPreviewPanelData & {
+export type DevPreviewSerializeInput = DevPreviewPanelData & {
   createdAt?: number;
 };
 
