@@ -5,7 +5,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus } from "./helpers";
+import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -149,36 +149,14 @@ export const createTabGroupActions = (
 
   removePanelFromGroup: (panelId) => {
     set((state) => {
-      let groupToUpdate: TabGroup | undefined;
-      for (const group of state.tabGroups.values()) {
-        if (group.panelIds.includes(panelId)) {
-          groupToUpdate = group;
-          break;
-        }
+      const { tabGroups: newTabGroups, dissolved } = dissolvePanelFromGroup(
+        state.tabGroups,
+        panelId
+      );
+      if (dissolved) {
+        saveTabGroups(newTabGroups);
       }
-
-      if (!groupToUpdate) return state;
-
-      const newPanelIds = groupToUpdate.panelIds.filter((id) => id !== panelId);
-      const newTabGroups = new Map(state.tabGroups);
-
-      if (newPanelIds.length <= 1) {
-        newTabGroups.delete(groupToUpdate.id);
-      } else {
-        const newActiveTabId =
-          groupToUpdate.activeTabId === panelId
-            ? (newPanelIds[0] ?? "")
-            : groupToUpdate.activeTabId;
-        const newGroup: TabGroup = {
-          ...groupToUpdate,
-          panelIds: newPanelIds,
-          activeTabId: newActiveTabId,
-        };
-        newTabGroups.set(groupToUpdate.id, newGroup);
-      }
-
-      saveTabGroups(newTabGroups);
-      return { tabGroups: newTabGroups };
+      return dissolved ? { tabGroups: newTabGroups } : state;
     });
   },
 

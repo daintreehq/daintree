@@ -125,6 +125,89 @@ export function getDefaultTitle(
   return getDefaultPanelTitle(kind ?? "terminal");
 }
 
+/**
+ * Dissolve a single panel from its tab group. Returns a new Map (never mutates
+ * the input) and a `dissolved` flag so callers can decide whether to persist.
+ *
+ * When the remaining panel count drops to 1 or 0 the group is deleted.
+ * When the removed panel was the active tab, `activeTabId` falls back to the
+ * first remaining panel.
+ */
+export function dissolvePanelFromGroup(
+  tabGroups: Map<string, TabGroup>,
+  panelId: string
+): { tabGroups: Map<string, TabGroup>; dissolved: boolean } {
+  for (const group of tabGroups.values()) {
+    if (!group.panelIds.includes(panelId)) continue;
+
+    const newPanelIds = group.panelIds.filter((pid) => pid !== panelId);
+    const newTabGroups = new Map(tabGroups);
+
+    if (newPanelIds.length <= 1) {
+      newTabGroups.delete(group.id);
+    } else {
+      const newActiveTabId = newPanelIds.includes(group.activeTabId)
+        ? group.activeTabId
+        : (newPanelIds[0] ?? "");
+      newTabGroups.set(group.id, {
+        ...group,
+        panelIds: newPanelIds,
+        activeTabId: newActiveTabId,
+      });
+    }
+
+    return { tabGroups: newTabGroups, dissolved: true };
+  }
+
+  return { tabGroups, dissolved: false };
+}
+
+/** Structural shape satisfied by both BackgroundedTerminal and TrashedTerminal
+ *  at recreate call sites without merging the domain types. */
+export interface RestorableTerminalRef {
+  id: string;
+  originalLocation?: "dock" | "grid";
+  groupRestoreId?: string;
+  groupMetadata?: import("./types").TrashedTerminalGroupMetadata;
+}
+
+/**
+ * Compute the ordered panel IDs and active tab for a restored tab group.
+ *
+ * `anchorMetadata` is the `groupMetadata` from the anchor panel of the
+ * dissolved group. If the anchor panel was removed independently,
+ * `anchorMetadata` is undefined and the caller must fall back to the first
+ * remaining panel's original metadata.
+ *
+ * Returns `null` when fewer than 2 valid panels remain (no group to recreate).
+ */
+export function computeRestoredTabGroup(
+  validPanelIds: string[],
+  anchorMetadata?: import("./types").TrashedTerminalGroupMetadata
+): { orderedPanelIds: string[]; activeTabId: string } | null {
+  if (validPanelIds.length <= 1) return null;
+
+  let orderedPanelIds = [...validPanelIds];
+  let activeTabId: string = validPanelIds[0]!;
+
+  if (anchorMetadata) {
+    const { panelIds, activeTabId: metadataActiveTabId } = anchorMetadata;
+    orderedPanelIds = panelIds.filter((id) => validPanelIds.includes(id));
+    for (const id of validPanelIds) {
+      if (!orderedPanelIds.includes(id)) {
+        orderedPanelIds.push(id);
+      }
+    }
+    activeTabId = orderedPanelIds.includes(metadataActiveTabId)
+      ? metadataActiveTabId
+      : orderedPanelIds[0]!;
+  }
+
+  if (orderedPanelIds.length <= 1) return null;
+
+  return { orderedPanelIds, activeTabId };
+}
+
 export function stopDevPreviewByPanelId(panelId: string): void {
   if (typeof window === "undefined") return;
   const stopByPanel = window.electron?.devPreview?.stopByPanel;
