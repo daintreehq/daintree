@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileDecorationProviderImpl } from "../../../../../shared/types/forge.js";
-import type { PluginHostApi, WorktreeSnapshot } from "../../../../../shared/types/plugin.js";
+import type {
+  PluginHostApi,
+  PluginPluginWorktreeSnapshot,
+} from "../../../../../shared/types/plugin.js";
 
 const mockGetPRReviewThreads = vi.fn();
 
@@ -10,7 +13,7 @@ vi.mock("../GitHubPRs.js", () => ({
 
 import { createReviewDecorationProvider } from "../reviewDecorationProvider.js";
 
-function makeHost(worktrees: WorktreeSnapshot[] = []): PluginHostApi {
+function makeHost(worktrees: PluginWorktreeSnapshot[] = []): PluginHostApi {
   return {
     getWorktrees: vi.fn().mockResolvedValue(worktrees),
     registerFileDecorationProvider: vi.fn(),
@@ -19,11 +22,11 @@ function makeHost(worktrees: WorktreeSnapshot[] = []): PluginHostApi {
   } as unknown as PluginHostApi;
 }
 
-function makeWorktree(path: string, prNumber: number): WorktreeSnapshot {
+function makeWorktree(path: string, prNumber: number): PluginWorktreeSnapshot {
   return {
     path,
     linked: { pr: { ref: { number: prNumber } } },
-  } as unknown as WorktreeSnapshot;
+  } as unknown as PluginWorktreeSnapshot;
 }
 
 describe("createReviewDecorationProvider", () => {
@@ -57,7 +60,7 @@ describe("createReviewDecorationProvider", () => {
   });
 
   it("returns empty object when worktree has no PR link", async () => {
-    const host = makeHost([{ path: "/some/path" } as WorktreeSnapshot]);
+    const host = makeHost([{ path: "/some/path" } as PluginWorktreeSnapshot]);
     provider = createReviewDecorationProvider(host);
     const result = await provider.provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
     expect(result).toEqual({});
