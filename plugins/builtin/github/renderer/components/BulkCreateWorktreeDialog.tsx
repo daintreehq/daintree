@@ -32,6 +32,7 @@ import {
   MAX_AUTO_RETRIES,
   QUEUE_CONCURRENCY,
   BACKOFF_BASE_MS,
+  ASSIGNMENT_BACKOFF_CAP_MS,
   VERIFICATION_SETTLE_MS,
 } from "./bulkCreateUtils";
 import type { PlannedWorktree } from "./bulkCreateUtils";
@@ -529,64 +530,79 @@ export function BulkCreateWorktreeDialog({
                 const failedIndices = currentTracked?.failedTerminalIndices;
                 const shouldRetryTerminals =
                   failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
-
-                dispatchProgress({
-                  type: "ITEM_TERMINALS_SPAWNING",
-                  issueNumber: itemNumber,
-                });
-
-                const recipeContext =
-                  planned.mode === "pr"
-                    ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
-                    : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
-
-                const results: RecipeSpawnResults = await useRecipeStore
-                  .getState()
-                  .runRecipeWithResults(selectedRecipeId, worktreePath, worktreeId, recipeContext, {
-                    terminalIndices: shouldRetryTerminals,
-                  });
-
-                const updatedTracked = tracking.get(itemNumber);
-                if (updatedTracked) {
-                  updatedTracked.spawnedTerminalIds = [
-                    ...updatedTracked.spawnedTerminalIds,
-                    ...results.spawned.map((s) => s.terminalId),
-                  ];
-                  updatedTracked.failedTerminalIndices = results.failed.map((f) => f.index);
-                }
-
-                dispatchProgress({
-                  type: "ITEM_TERMINALS_RESULT",
-                  issueNumber: itemNumber,
-                  spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
-                  failedTerminalIndices: results.failed.map((f) => f.index),
-                });
-
-                if (results.failed.length > 0) {
-                  const hasTransient = results.failed.some((f) => isTransientError(f.error));
-                  if (attempt <= MAX_AUTO_RETRIES && hasTransient) {
-                    backoffDelay = nextBackoffDelay(backoffDelay);
-                    await delay(backoffDelay);
-                    continue;
-                  }
-                  const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                  failedItems.add(itemNumber);
+                // Skip the recipe when terminals are already healthy (e.g. an assignment-only
+                // retry preserved its terminal tracking). Otherwise retrying after a 403 from
+                // POST /assignees would re-spawn the recipe and duplicate every terminal.
+                const allTerminalsHealthy =
+                  currentTracked != null &&
+                  currentTracked.spawnedTerminalIds.length > 0 &&
+                  (!failedIndices || failedIndices.length === 0);
+                if (allTerminalsHealthy) {
+                  // fall through to step 3 without re-running the recipe
+                } else {
                   dispatchProgress({
-                    type: "ITEM_FAILED",
+                    type: "ITEM_TERMINALS_SPAWNING",
                     issueNumber: itemNumber,
-                    error: errorMsg,
-                    attempts: attempt,
-                    failedStep: "terminals",
                   });
-                  return;
+
+                  const recipeContext =
+                    planned.mode === "pr"
+                      ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
+                      : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
+
+                  const results: RecipeSpawnResults = await useRecipeStore
+                    .getState()
+                    .runRecipeWithResults(
+                      selectedRecipeId,
+                      worktreePath,
+                      worktreeId,
+                      recipeContext,
+                      {
+                        terminalIndices: shouldRetryTerminals,
+                      }
+                    );
+
+                  const updatedTracked = tracking.get(itemNumber);
+                  if (updatedTracked) {
+                    updatedTracked.spawnedTerminalIds = [
+                      ...updatedTracked.spawnedTerminalIds,
+                      ...results.spawned.map((s) => s.terminalId),
+                    ];
+                    updatedTracked.failedTerminalIndices = results.failed.map((f) => f.index);
+                  }
+
+                  dispatchProgress({
+                    type: "ITEM_TERMINALS_RESULT",
+                    issueNumber: itemNumber,
+                    spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
+                    failedTerminalIndices: results.failed.map((f) => f.index),
+                  });
+
+                  if (results.failed.length > 0) {
+                    const hasTransient = results.failed.some((f) => isTransientError(f.error));
+                    if (attempt <= MAX_AUTO_RETRIES && hasTransient) {
+                      backoffDelay = nextBackoffDelay(backoffDelay);
+                      await delay(backoffDelay);
+                      continue;
+                    }
+                    const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
+                    failedItems.add(itemNumber);
+                    dispatchProgress({
+                      type: "ITEM_FAILED",
+                      issueNumber: itemNumber,
+                      error: errorMsg,
+                      attempts: attempt,
+                      failedStep: "terminals",
+                    });
+                    return;
+                  }
                 }
               }
 
-              // Step 3: Issue assignment (best-effort, issues only).
+              // Step 3: Issue assignment (issues only).
               // Retries transient failures using the same helpers as the outer loop, but
-              // with isolated backoff so step-3 delays don't contaminate sibling items.
-              // Permanent failures (401/403/404/422) and exhausted retries fall through
-              // silently — assignment is never surfaced as an item failure.
+              // with an isolated 60s backoff cap so the assignment endpoint's secondary
+              // rate limit (~60s) doesn't widen worktree/terminal retry delays.
               if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
                 const username = useGitHubConfigStore.getState().config?.username;
                 if (username) {
@@ -607,11 +623,19 @@ export function BulkCreateWorktreeDialog({
                     } catch (err) {
                       const assignErr = normalizeError(err);
                       if (assignAttempt <= MAX_AUTO_RETRIES && isTransientError(assignErr)) {
-                        assignBackoff = nextBackoffDelay(assignBackoff);
+                        assignBackoff = nextBackoffDelay(assignBackoff, ASSIGNMENT_BACKOFF_CAP_MS);
                         await delay(assignBackoff);
                         continue;
                       }
-                      break;
+                      failedItems.add(itemNumber);
+                      dispatchProgress({
+                        type: "ITEM_FAILED",
+                        issueNumber: itemNumber,
+                        error: assignErr,
+                        attempts: assignAttempt,
+                        failedStep: "assignment",
+                      });
+                      return;
                     }
                   }
                 }
@@ -660,6 +684,9 @@ export function BulkCreateWorktreeDialog({
 
         for (const [itemNumber, tracked] of tracking) {
           if (!currentRunItems.has(itemNumber)) continue;
+          // Items that already failed (e.g. assignment) must not get their
+          // ITEM_FAILED dispatch overwritten by a verification check.
+          if (failedItems.has(itemNumber)) continue;
           if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
           if (tracked.failedTerminalIndices.length > 0) continue;
 
@@ -752,7 +779,10 @@ export function BulkCreateWorktreeDialog({
       // Reset terminal tracking for retried items so verification doesn't use stale data.
       // cloneComplete is also cleared so retry re-enters the clone branch — otherwise a
       // post-success verification failure silently short-circuits to ITEM_SUCCEEDED.
+      // Assignment-only failures keep their terminal tracking: the worktree and terminals
+      // are healthy, only the GitHub assign call needs to retry.
       for (const issueNumber of failedIssueNumbers) {
+        if (progress.items.get(issueNumber)?.failedStep === "assignment") continue;
         const tracked = batchTrackingRef.current.get(issueNumber);
         if (tracked) {
           tracked.spawnedTerminalIds = [];
