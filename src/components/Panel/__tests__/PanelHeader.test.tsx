@@ -896,5 +896,45 @@ describe("PanelHeader", () => {
       expect(header?.getAttribute("data-selected")).toBe("true");
       expect(header?.className).toContain("bg-overlay-subtle");
     });
+
+    it("still renders the overlay when the pane is focused", () => {
+      // A focused, previewed pane gets bg-overlay-subtle via the isFocused
+      // branch — the overlay must not be gated on focus/selection state.
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFleetPreviewed: true, isFocused: true })} />
+      );
+      expect(container.querySelector(".fleet-preview-enter-overlay")).not.toBeNull();
+    });
+
+    it("mounts/unmounts the overlay across preview enter→exit→enter, replaying the cue", () => {
+      const { container, rerender } = render(
+        <PanelHeader {...makeProps({ isFleetPreviewed: false })} />
+      );
+      expect(container.querySelector(".fleet-preview-enter-overlay")).toBeNull();
+
+      rerender(<PanelHeader {...makeProps({ isFleetPreviewed: true })} />);
+      const first = container.querySelector(".fleet-preview-enter-overlay");
+      expect(first).not.toBeNull();
+
+      rerender(<PanelHeader {...makeProps({ isFleetPreviewed: false })} />);
+      expect(container.querySelector(".fleet-preview-enter-overlay")).toBeNull();
+
+      // Re-entering remounts a fresh node so the one-shot animation replays.
+      rerender(<PanelHeader {...makeProps({ isFleetPreviewed: true })} />);
+      const second = container.querySelector(".fleet-preview-enter-overlay");
+      expect(second).not.toBeNull();
+      expect(second).not.toBe(first);
+    });
+
+    it("syncs the data-fleet-previewed attribute with the preview state", () => {
+      const { container, rerender } = render(
+        <PanelHeader {...makeProps({ isFleetPreviewed: true })} />
+      );
+      const header = container.querySelector("[data-pane-chrome]");
+      expect(header?.getAttribute("data-fleet-previewed")).toBe("true");
+
+      rerender(<PanelHeader {...makeProps({ isFleetPreviewed: false })} />);
+      expect(header?.hasAttribute("data-fleet-previewed")).toBe(false);
+    });
   });
 });

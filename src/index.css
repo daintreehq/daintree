@@ -1575,8 +1575,13 @@ body,
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
-  animation: fleet-preview-enter 150ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  border-radius: inherit;
+  /* opacity: 0 rest state — the keyframe drives the pulse, and this keeps the
+   * overlay invisible when the animation is killed (data-performance-mode
+   * wildcard sets `animation: none`), avoiding a frozen static tint. */
+  opacity: 0;
+  background: color-mix(in oklch, var(--theme-tint) 12%, transparent);
+  animation: fleet-preview-enter 200ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
   will-change: opacity;
   z-index: 2;
 }
