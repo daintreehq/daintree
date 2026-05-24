@@ -37,6 +37,21 @@ export interface PanelKindConfig {
   usesTerminalUi?: boolean;
   /** Whether this panel kind should keep its runtime alive across project switches */
   keepAliveOnProjectSwitch?: boolean;
+  /**
+   * Whether this panel kind's lazy chunk loads on the first-render path — i.e.
+   * a persisted panel of this kind restores synchronously from session state,
+   * pulling its `React.lazy()` chunk into the first-paint download. Drives the
+   * first-render chunk budget seed list (see `getFirstRenderSeeds`).
+   */
+  firstRenderRestore?: boolean;
+  /**
+   * Root-relative source path of this kind's lazy boundary, in the exact form
+   * Vite/Rolldown emits as a manifest key (e.g. `"src/panels/review/ReviewPane.tsx"`).
+   * Required when `firstRenderRestore` is true so the budget script can resolve
+   * the chunk in `dist/.vite/manifest.json`. Must match the manifest key — a
+   * file-relative path like `"./review/ReviewPane"` will silently miss.
+   */
+  lazyImportPath?: string;
   /** Whether this panel kind should appear in the panel palette (⌘⇧P). Set to false for panels with dedicated spawn actions (terminal, agent). Defaults to true for extension panels if not specified. */
   showInPalette?: boolean;
   /** Extension ID if this is an extension-provided panel kind */
@@ -86,6 +101,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/components/Browser/BrowserPane.tsx",
   },
   "dev-preview": {
     id: "dev-preview",
@@ -99,6 +116,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["localhost", "server", "preview", "port"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/components/DevPreview/DevPreviewPane.tsx",
   },
   review: {
     id: "review",
@@ -112,6 +131,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["diff", "commit", "stage", "git"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/review/ReviewPane.tsx",
   },
 };
 
@@ -398,6 +419,36 @@ export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
  */
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
   return [...BUILT_IN_PANEL_KINDS];
+}
+
+/**
+ * Source paths of every panel kind whose lazy chunk loads on the first-render
+ * path (`firstRenderRestore === true`). This is the single source of truth for
+ * the first-render chunk budget seed list — a build-time Vite plugin emits the
+ * result to `dist/.vite/first-render-seeds.json`, which the budget script reads
+ * (it can't import this TS module directly from plain Node ESM).
+ *
+ * Only built-in kinds are eligible: plugin-registered panels are runtime-async
+ * (their chunks are never part of the first-paint download) and are excluded by
+ * design. A misconfigured built-in — `firstRenderRestore: true` with a missing
+ * or empty `lazyImportPath` — throws rather than silently dropping the seed,
+ * since a dropped seed is exactly the budget drift this guard exists to catch.
+ *
+ * @returns Root-relative source paths matching Vite manifest keys
+ */
+export function getFirstRenderSeeds(): string[] {
+  const seeds: string[] = [];
+  for (const config of Object.values(PANEL_KIND_REGISTRY)) {
+    if (config.firstRenderRestore !== true) continue;
+    if (config.extensionId !== undefined) continue;
+    if (typeof config.lazyImportPath !== "string" || config.lazyImportPath.length === 0) {
+      throw new Error(
+        `[panelKindRegistry] panel kind "${config.id}" sets firstRenderRestore but is missing lazyImportPath`
+      );
+    }
+    seeds.push(config.lazyImportPath);
+  }
+  return seeds;
 }
 
 /**

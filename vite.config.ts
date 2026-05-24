@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
+import { getFirstRenderSeeds } from "./shared/config/panelKindRegistry";
 
 const devServerConfig = getDevServerConfig();
 
@@ -282,6 +283,26 @@ function rendererBundleSizePlugin(): Plugin {
   };
 }
 
+// Emits dist/.vite/first-render-seeds.json — the root-relative source paths of
+// every lazy panel chunk that loads on the first-render path, derived from the
+// panel-kind registry (getFirstRenderSeeds). The check-first-render-chunk-budget
+// script reads this artifact instead of a hardcoded list, so the seed set can
+// never drift from the registry. Build-only; the seeds are static registry data,
+// not bundle-derived, so this doesn't inspect the OutputBundle.
+function firstRenderSeedsPlugin(): Plugin {
+  const seedsPath = path.join(process.cwd(), "dist", ".vite", "first-render-seeds.json");
+
+  return {
+    name: "first-render-seeds",
+    apply: "build",
+    writeBundle() {
+      const seeds = getFirstRenderSeeds();
+      mkdirSync(path.dirname(seedsPath), { recursive: true });
+      writeFileSync(seedsPath, JSON.stringify(seeds, null, 2) + "\n");
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => {
   const { logger: compilerLogger, plugin: compilerReportPlugin } =
     reactCompilerReportPlugin(command);
@@ -317,6 +338,7 @@ export default defineConfig(({ command, mode }) => {
       cspTransformPlugin(),
       compilerReportPlugin,
       rendererBundleSizePlugin(),
+      firstRenderSeedsPlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
       ...(process.env.ANALYZE === "true"
         ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true }) as Plugin]
