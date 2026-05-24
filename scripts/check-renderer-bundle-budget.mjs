@@ -162,7 +162,7 @@ function main() {
   } else {
     console.error(
       `\n[check-renderer-bundle-budget] FAILED — ${comparison.failures.length} regression(s) exceed +${(args.threshold * 100).toFixed(0)}% threshold. ` +
-        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline, or add the \`bundle-size-override\` label to the PR.`
+        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline.`
     );
     if (!args.override) process.exit(1);
     console.log(
