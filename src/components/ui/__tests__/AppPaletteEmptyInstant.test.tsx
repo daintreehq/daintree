@@ -80,4 +80,13 @@ describe("AppPaletteDialog.Empty instant derivation", () => {
     expect(lastProps().instant).toBe(false);
     expect(lastProps().variant).toBe("zero-data");
   });
+
+  it("treats a whitespace-only query as zero-data with the fade intact", () => {
+    // trim() collapses "   " to "" -> zero-data branch, and the length guard
+    // keeps instant false even while the deferred value lags on "foo".
+    deferQuery = () => "foo";
+    render(<AppPaletteDialog.Empty query="   " emptyMessage="No items available" />);
+    expect(lastProps().instant).toBe(false);
+    expect(lastProps().variant).toBe("zero-data");
+  });
 });
