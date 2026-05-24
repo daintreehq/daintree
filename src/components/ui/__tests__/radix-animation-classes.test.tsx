@@ -235,4 +235,14 @@ describe("Radix overlay animation classes — wrapper source", () => {
     // until the next pointer move.
     expect(src).toMatch(/if \(pointerActiveRef\.current\) return/);
   });
+
+  it("DockedTerminalItem.tsx does not contain stale animation classes", () => {
+    const src = readWrapperSource("../Layout/DockedTerminalItem.tsx");
+    expect(src).not.toContain("slide-in-from-top-2");
+    expect(src).not.toContain("slide-in-from-right-2");
+    expect(src).not.toContain("slide-in-from-left-2");
+    expect(src).not.toContain("slide-in-from-bottom-2");
+    expect(src).not.toContain("zoom-in-95");
+    expect(src).not.toContain("zoom-out-95");
+  });
 });
