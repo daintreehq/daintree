@@ -486,6 +486,11 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // the immediate `trimmedQuery` so clearing the input flips back to
   // zero-data without a stale "No matches for ..." flash.
   const deferredTrimmedQuery = useDeferredValue(trimmedQuery);
+  // When the urgent query is ahead of the deferred one, the user is mid-keystroke
+  // and the empty state is churning — suppress the fade so it doesn't strobe. The
+  // length guard keeps the crossfade when the input is cleared back to empty (the
+  // deferred value briefly lags behind "", which would otherwise read as stale).
+  const isStale = trimmedQuery !== deferredTrimmedQuery && trimmedQuery.length > 0;
   if (trimmedQuery) {
     const displayQuery = deferredTrimmedQuery || trimmedQuery;
     return (
@@ -495,6 +500,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
         title={noMatchMessage ?? defaultNoMatchTitle(displayQuery)}
         action={noMatchContent}
         className="px-3 py-8"
+        instant={isStale}
       />
     );
   }
@@ -505,6 +511,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
       title={emptyMessage}
       action={children}
       className="px-3 py-8"
+      instant={isStale}
     />
   );
 };
