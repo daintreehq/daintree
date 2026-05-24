@@ -2654,6 +2654,33 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   textarea {
     border: 1px solid FieldText;
   }
+
+  /* ActivityLight: the active state paints via an inline background-color the
+     UA forces to Canvas (invisible), while the idle ring's border survives as
+     ButtonText — inverting the meaning. Repaint the active dot with CanvasText.
+     !important is required to beat the inline author style under forced colors;
+     this is the only place in this block that needs it. */
+  [data-activity-active="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* SettingsSwitch (Radix Switch). The track's unchecked border is already
+     covered by the global button/[role="button"] rule above. Add the checked
+     fill plus thumb contrast so on/off is distinguishable beyond thumb position.
+     Scoped to a [data-state] parent so the two non-Radix custom role="switch"
+     buttons (plain <span> children, no data-state) are not matched. */
+  [role="switch"][data-state="checked"] {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
+  [role="switch"][data-state] span[data-state="checked"] {
+    background-color: HighlightText;
+  }
+
+  [role="switch"][data-state] span[data-state="unchecked"] {
+    background-color: ButtonText;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.

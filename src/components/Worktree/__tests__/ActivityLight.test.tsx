@@ -48,6 +48,8 @@ describe("ActivityLight", () => {
     expect(dot.style.backgroundColor).not.toBe("");
     expect(dot.style.borderColor).toBe("");
     expect(dot.className).not.toMatch(/\bborder\b/);
+    // Stable hook the forced-colors CSS repaints the otherwise-stripped fill from.
+    expect(dot.getAttribute("data-activity-active")).toBe("true");
   });
 
   it("renders a hollow ring when idle (elapsed >= DECAY_DURATION)", () => {
@@ -59,6 +61,7 @@ describe("ActivityLight", () => {
     expect(dot.className).toMatch(/\bborder\b/);
     expect(dot.className).toMatch(/bg-transparent/);
     expect(dot.style.borderColor).not.toBe("");
+    expect(dot.getAttribute("data-activity-active")).toBe("false");
   });
 
   it("renders nothing when timestamp is null (never recorded)", () => {
@@ -103,6 +106,7 @@ describe("ActivityLight", () => {
 
     // Starts active (filled).
     expect(getDot(container).className).not.toMatch(/\bborder\b/);
+    expect(getDot(container).getAttribute("data-activity-active")).toBe("true");
 
     // Jump wall-clock past the decay window and let the next scheduled
     // flip fire — the component recomputes from Date.now().
@@ -113,6 +117,7 @@ describe("ActivityLight", () => {
 
     expect(getDot(container).className).toMatch(/\bborder\b/);
     expect(getDot(container).className).toMatch(/bg-transparent/);
+    expect(getDot(container).getAttribute("data-activity-active")).toBe("false");
   });
 
   it("schedules no timer when mounted already idle (past the decay window)", () => {

@@ -416,3 +416,21 @@ html[data-shortcut-reveal] .shortcut-reveal-chip {
     border: 2px solid ButtonText;
   }
 }
+
+/* ── Forced colors / Windows High Contrast ──
+ * Every pip — including the GitHub activity corner chips — paints state via
+ * background-color, which the UA forces to Canvas (invisible). Repaint with
+ * CanvasText so the dot stays visible. The overflow severity ring (box-shadow)
+ * is stripped, but it only carved a background-colored moat to separate the pip
+ * from overlapping chrome; against the high-contrast Canvas/CanvasText palette
+ * the filled pip already separates cleanly, so no replacement is needed. The
+ * per-severity shape tiers (border-radius — not a color property) survive and
+ * remain the non-color WCAG 1.4.1 cue. */
+@media (forced-colors: active) {
+  .toolbar-badge,
+  .toolbar-badge-chip,
+  .toolbar-overflow-badge,
+  .toolbar-problems-badge {
+    background-color: CanvasText;
+  }
+}
