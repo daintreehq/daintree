@@ -1,4 +1,11 @@
-import { useCallback, useDeferredValue, useEffect, useRef, type CSSProperties } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -461,6 +468,7 @@ interface AppPaletteEmptyProps {
 }
 
 const NO_MATCH_QUERY_MAX = 40;
+const EMPTY_ANNOUNCEMENT_DEBOUNCE_MS = 600;
 
 function defaultNoMatchTitle(trimmedQuery: string) {
   // Iterate by codepoint (Array.from handles surrogate pairs) so we never
@@ -491,27 +499,63 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // length guard keeps the crossfade when the input is cleared back to empty (the
   // deferred value briefly lags behind "", which would otherwise read as stale).
   const isStale = trimmedQuery !== deferredTrimmedQuery && trimmedQuery.length > 0;
+
+  // Debounced sr-only live region so screen readers announce the empty/no-match
+  // title once typing stops, rather than on every keystroke. Follows the
+  // SidebarContent trailing-debounce + clear-then-set precedent so Chromium
+  // doesn't suppress repeated identical announcements.
+  const srTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [srAnnouncement, setSrAnnouncement] = useState("");
+  const displayQuery = deferredTrimmedQuery || trimmedQuery;
+  const title = trimmedQuery ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery)) : emptyMessage;
+
+  useEffect(() => {
+    return () => {
+      if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    setSrAnnouncement("");
+    if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    srTimerRef.current = setTimeout(() => {
+      setSrAnnouncement(title);
+    }, EMPTY_ANNOUNCEMENT_DEBOUNCE_MS);
+    return () => {
+      if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    };
+  }, [title]);
+
   if (trimmedQuery) {
-    const displayQuery = deferredTrimmedQuery || trimmedQuery;
     return (
-      <EmptyState
-        variant="filtered-empty"
-        scale="popover"
-        title={noMatchMessage ?? defaultNoMatchTitle(displayQuery)}
-        action={noMatchContent}
-        className="px-3 py-8"
-        instant={isStale}
-      />
+      <>
+        <EmptyState
+          variant="filtered-empty"
+          scale="popover"
+          title={title}
+          action={noMatchContent}
+          className="px-3 py-8"
+          instant={isStale}
+        />
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {srAnnouncement}
+        </div>
+      </>
     );
   }
   return (
-    <EmptyState
-      variant="zero-data"
-      scale="popover"
-      title={emptyMessage}
-      action={children}
-      className="px-3 py-8"
-      instant={isStale}
-    />
+    <>
+      <EmptyState
+        variant="zero-data"
+        scale="popover"
+        title={title}
+        action={children}
+        className="px-3 py-8"
+        instant={isStale}
+      />
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {srAnnouncement}
+      </div>
+    </>
   );
 };

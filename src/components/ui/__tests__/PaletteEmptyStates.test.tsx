@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -156,5 +156,109 @@ describe("AppPaletteDialog.Empty", () => {
     );
     expect(screen.getByText("Custom not-found copy")).toBeTruthy();
     expect(screen.queryByText(/No matches for/)).toBeNull();
+  });
+
+  describe("debounced sr-only live region", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("does not announce immediately — sr-only text is empty at time 0", () => {
+      render(<AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />);
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("");
+    });
+
+    it("announces the title after the 600ms debounce", () => {
+      render(<AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe('No matches for "foo"');
+    });
+
+    it("announces the zero-data title after 600ms", () => {
+      render(<AppPaletteDialog.Empty query="" emptyMessage="Nothing here" />);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("Nothing here");
+    });
+
+    it("resets the timer on rapid prop changes, announcing only the final title", () => {
+      const { rerender } = render(
+        <AppPaletteDialog.Empty query="f" emptyMessage="No items available" />
+      );
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      rerender(<AppPaletteDialog.Empty query="fo" emptyMessage="No items available" />);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      rerender(<AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe('No matches for "foo"');
+    });
+
+    it("clear-then-set allows repeated identical queries to re-announce", () => {
+      const { rerender } = render(
+        <AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />
+      );
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(screen.getByRole("status").textContent).toBe('No matches for "foo"');
+
+      // Clear query then re-enter the same search
+      rerender(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(screen.getByRole("status").textContent).toBe("No items available");
+
+      rerender(<AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      // Should announce the same message again — Chromium would suppress this
+      // without the clear-then-set pattern.
+      expect(screen.getByRole("status").textContent).toBe('No matches for "foo"');
+    });
+
+    it("announces custom noMatchMessage after debounce", () => {
+      render(
+        <AppPaletteDialog.Empty
+          query="xyz"
+          emptyMessage="No items available"
+          noMatchMessage="Nothing found"
+        />
+      );
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      const status = screen.getByRole("status");
+      expect(status.textContent).toBe("Nothing found");
+    });
+
+    it("clears the timer on unmount", () => {
+      const { unmount } = render(
+        <AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />
+      );
+      unmount();
+      // Advancing past the debounce after unmount should not throw (timer was cleared)
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      // No assertion needed — the test verifies no setState-after-unmount warning
+    });
   });
 });

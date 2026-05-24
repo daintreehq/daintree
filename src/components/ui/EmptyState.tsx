@@ -60,7 +60,7 @@ export type EmptyStateProps =
       instant?: never;
     });
 
-const EXIT_SAFETY_MS = 250;
+const EXIT_FALLBACK_MS = 250;
 
 function renderInner(
   props: EmptyStateProps,
@@ -148,12 +148,12 @@ export function EmptyState(props: EmptyStateProps) {
     prevPropsRef.current = props;
   }, [transitionKey, instant, props]);
 
-  // Safety cleanup — under reduced-motion / performance-mode the CSS animation
-  // is suppressed entirely, so `animationend` never fires from the outgoing
-  // cell. Without this timeout the previous content latches in the DOM.
+  // Fallback cleanup — when the CSS animation is suppressed (reduced-motion,
+  // performance-mode, or any other reason `animationend` doesn't fire), the
+  // outgoing cell would otherwise latch in the DOM forever.
   useEffect(() => {
     if (outgoing === null) return;
-    const timer = setTimeout(() => setOutgoing(null), EXIT_SAFETY_MS);
+    const timer = setTimeout(() => setOutgoing(null), EXIT_FALLBACK_MS);
     return () => clearTimeout(timer);
   }, [outgoing, generation]);
 
@@ -169,8 +169,6 @@ export function EmptyState(props: EmptyStateProps) {
 
   return (
     <div
-      role="status"
-      aria-live="polite"
       aria-describedby={hasDescription ? descriptionId : undefined}
       className={cn(
         "@container/empty-state flex flex-col items-center justify-center text-center px-4 py-8",
