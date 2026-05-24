@@ -4,7 +4,7 @@ import {
   TerminalHibernationManager,
   type HibernationManagerDeps,
 } from "../TerminalHibernationManager";
-import { AGENT_IDLE_SILENCE_MS, type ManagedTerminal } from "../types";
+import { type ManagedTerminal } from "../types";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const {
