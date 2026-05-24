@@ -1783,6 +1783,63 @@ export class WorkspaceService {
         }
       }
 
+      // #8888: when created from the GitHub PR dropdown, seed the source PR
+      // eagerly so the card surfaces the PR (title, linked issue) immediately
+      // instead of waiting for PullRequestService's branch-name polling. Must
+      // run before `return canonicalWorktreeId` — the initial clean snapshot
+      // already emitted from addNewWorktreeMonitor, so we mutate and emit once
+      // more. Wrapped in try/catch: a seeding failure must never fail the
+      // create (polling backfills `linked` regardless).
+      if (options.sourcePrNumber !== undefined) {
+        const m = this.monitors.get(canonicalWorktreeId);
+        if (m) {
+          try {
+            m.setSourcePrNumber(options.sourcePrNumber);
+
+            const providerCtx = this.prService.getProviderContext();
+            if (providerCtx && options.sourcePrUrl && options.sourcePrState) {
+              // Provider resolved — `linked` is the source of truth.
+              const linked = this.composeLinked({
+                providerId: providerCtx.providerId,
+                owner: providerCtx.owner,
+                repo: providerCtx.repo,
+                pr: {
+                  number: options.sourcePrNumber,
+                  title: options.sourcePrTitle,
+                  url: options.sourcePrUrl,
+                  state: options.sourcePrState,
+                },
+                issue:
+                  options.sourcePrLinkedIssueNumber !== undefined
+                    ? { number: options.sourcePrLinkedIssueNumber }
+                    : undefined,
+              });
+              m.setLinked(linked);
+            } else {
+              // No provider context yet (e.g. token not connected). Persist the
+              // legacy flat fields so the PR still shows; PullRequestService
+              // fills `linked` on its first poll.
+              m.setPRInfo({
+                prNumber: options.sourcePrNumber,
+                prUrl: options.sourcePrUrl,
+                prState: options.sourcePrState,
+                prTitle: options.sourcePrTitle,
+              });
+            }
+
+            // Keep the flat issue number in lockstep so the offline issue badge
+            // shows and the onIssueNotFound guard matches.
+            if (options.sourcePrLinkedIssueNumber !== undefined) {
+              m.setIssueNumber(options.sourcePrLinkedIssueNumber);
+            }
+
+            m.emitUpdate();
+          } catch (err) {
+            console.warn("[WorkspaceHost] failed to seed source PR on create:", err);
+          }
+        }
+      }
+
       // Fire-and-forget tail: cache invalidation, .daintree copy, and
       // lifecycle setup are non-blocking for callers of create-worktree-result.
       // Tail failures are logged but never re-emit a result event.

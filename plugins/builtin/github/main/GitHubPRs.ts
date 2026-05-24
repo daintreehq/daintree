@@ -108,6 +108,7 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
     ciStatus,
+    bodyText: (node.bodyText as string) || undefined,
   };
 }
 

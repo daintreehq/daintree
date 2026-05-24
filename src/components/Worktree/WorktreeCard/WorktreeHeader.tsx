@@ -8,6 +8,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
+import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
@@ -254,8 +255,20 @@ export function WorktreeHeader({
     [menu]
   );
 
-  const displayTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
-  const hasDisplayTitle = !!(worktree.issueNumber && displayTitle);
+  // PR-originated worktrees (created from the PR dropdown, #8888) invert the
+  // default issue-first headline: the PR title leads, with the linked issue
+  // shown underneath. `sourcePrNumber` is the in-memory discriminator seeded at
+  // creation time.
+  const isPrOriginated = !!worktree.sourcePrNumber;
+  const prHeadlineTitle = worktree.linked?.pr?.title ?? worktree.prTitle;
+  const displayTitle = isPrOriginated
+    ? prHeadlineTitle
+    : (worktree.issueTitle ?? worktree.branchDerivedTitle);
+  // For PR-originated, the headline always renders (PRBadge handles the brief
+  // cold-title gap → "#NNN"); otherwise it needs both an issue number and title.
+  const hasDisplayTitle = isPrOriginated
+    ? !!worktree.sourcePrNumber
+    : !!(worktree.issueNumber && displayTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const underlineOnHover = variant !== "sidebar" || isActive;
@@ -311,15 +324,31 @@ export function WorktreeHeader({
             />
           )}
           {hasDisplayTitle ? (
-            <IssueBadge
-              issueNumber={worktree.issueNumber!}
-              issueTitle={displayTitle}
-              worktreePath={worktree.path}
-              onOpen={badges.onOpenIssue}
-              isHeadline
-              isActive={isActive}
-              underlineOnHover={underlineOnHover}
-            />
+            isPrOriginated ? (
+              <PRBadge
+                prNumber={worktree.sourcePrNumber!}
+                prTitle={displayTitle}
+                prState={worktree.linked?.pr?.state}
+                prCiStatus={worktree.linked?.pr?.ciStatus}
+                isSubordinate={false}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenPR}
+                isHeadline
+                isActive={isActive}
+                underlineOnHover={underlineOnHover}
+                rowLastUpdatedAt={worktree.prLastUpdatedAt}
+              />
+            ) : (
+              <IssueBadge
+                issueNumber={worktree.issueNumber!}
+                issueTitle={displayTitle}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenIssue}
+                isHeadline
+                isActive={isActive}
+                underlineOnHover={underlineOnHover}
+              />
+            )
           ) : isMainStandardLayout ? (
             <TruncatedTooltip content={worktree.name}>
               <span
@@ -461,6 +490,7 @@ export function WorktreeHeader({
             hasUpstreamDelta={hasUpstreamDelta}
             hasAuthFailedSignIn={hasAuthFailedSignIn}
             hasDisplayTitle={hasDisplayTitle}
+            isPrOriginated={isPrOriginated}
             hasPlanFile={hasPlanFile}
             badges={badges}
           />

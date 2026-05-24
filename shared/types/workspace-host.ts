@@ -112,6 +112,15 @@ export interface WorktreeSnapshot {
    * fetched yet so the sidebar never shows the raw slug (#8851).
    */
   branchDerivedTitle?: string;
+  /**
+   * PR number this worktree was created from via the GitHub PR dropdown (#8888).
+   * Acts as the "PR-originated" discriminator: when set, the card surfaces the
+   * PR title as the primary headline with the linked issue underneath, inverting
+   * the default issue-first display. Held in-memory by the monitor (like
+   * `worktreeMode`); not persisted to disk, so after a host restart the PR is
+   * re-detected by polling and shown as a subordinate badge until then.
+   */
+  sourcePrNumber?: number;
   prLastUpdatedAt?: number;
   issueLastUpdatedAt?: number;
   worktreeChanges?: WorktreeChanges | null;

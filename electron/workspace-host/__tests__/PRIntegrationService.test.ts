@@ -52,6 +52,7 @@ describe("PRIntegrationService", () => {
       isEnabled: boolean;
       detectionStateTripped: boolean;
     };
+    getProviderContext(): { providerId: string; owner: string; repo: string } | null;
   }
 
   let prServiceMock: PullRequestServiceLike;
@@ -72,6 +73,7 @@ describe("PRIntegrationService", () => {
         isEnabled: true,
         detectionStateTripped: false,
       })),
+      getProviderContext: vi.fn(() => null),
     };
   });
 

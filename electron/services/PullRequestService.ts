@@ -409,6 +409,21 @@ class PullRequestService {
   }
 
   /**
+   * Currently-resolved forge provider context, or null when no provider has
+   * resolved yet (e.g. token not connected). Read synchronously so callers can
+   * eagerly compose a `linked` projection at worktree-create time without an
+   * IPC roundtrip (#8888).
+   */
+  public getProviderContext(): { providerId: string; owner: string; repo: string } | null {
+    if (!this.providerNamespacedId || !this.repoRef) return null;
+    return {
+      providerId: this.providerNamespacedId,
+      owner: this.repoRef.owner,
+      repo: this.repoRef.repo,
+    };
+  }
+
+  /**
    * Start polling. The first check is delayed by a randomised
    * STARTUP_JITTER_MIN..MAX window so a fleet-wide host restart doesn't fire a
    * synchronised PR refetch burst. Pass `startupDelayMs = 0` to check
