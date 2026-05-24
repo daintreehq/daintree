@@ -5,8 +5,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import * as SelectPrimitive from "@radix-ui/react-select";
 import { PopoverContent } from "../popover";
 import { DropdownMenuContent, DropdownMenuSubContent } from "../dropdown-menu";
+import { SelectContent } from "../select";
 import { primeRadix } from "../radix-loader";
 
 beforeAll(async () => {
@@ -20,17 +22,30 @@ const ENTER_EXIT_CLASSES = [
   "data-[state=closed]:animate-out",
   "data-[state=open]:fade-in-0",
   "data-[state=closed]:fade-out-0",
-  "data-[state=open]:zoom-in-95",
-  "data-[state=closed]:zoom-out-95",
-  "data-[side=bottom]:slide-in-from-top-2",
-  "data-[side=left]:slide-in-from-right-2",
-  "data-[side=right]:slide-in-from-left-2",
-  "data-[side=top]:slide-in-from-bottom-2",
+  "data-[state=open]:zoom-in-97",
+  "data-[state=closed]:zoom-out-97",
+  "data-[side=bottom]:slide-in-from-top-1",
+  "data-[side=left]:slide-in-from-right-1",
+  "data-[side=right]:slide-in-from-left-1",
+  "data-[side=top]:slide-in-from-bottom-1",
 ];
 
 const UI_DURATION_CLASSES = [
   "data-[state=open]:duration-200",
   "data-[state=closed]:duration-[120ms]",
+];
+
+const SELECT_CLASSES = [
+  "data-[state=open]:animate-in",
+  "data-[state=closed]:animate-out",
+  "data-[state=open]:fade-in-0",
+  "data-[state=closed]:fade-out-0",
+  "data-[state=open]:zoom-in-98",
+  "data-[state=closed]:zoom-out-98",
+  "data-[side=bottom]:slide-in-from-top-1",
+  "data-[side=left]:slide-in-from-right-1",
+  "data-[side=right]:slide-in-from-left-1",
+  "data-[side=top]:slide-in-from-bottom-1",
 ];
 
 const TRANSFORM_ORIGIN_VARS: Record<string, string> = {
@@ -45,12 +60,10 @@ const TRANSFORM_ORIGIN_VARS: Record<string, string> = {
 const TOOLTIP_CLASSES = [
   "animate-in",
   "fade-in-0",
-  "zoom-in-95",
   "duration-150",
   "data-[state=closed]:animate-out",
   "data-[state=closed]:duration-[100ms]",
   "data-[state=closed]:fade-out-0",
-  "data-[state=closed]:zoom-out-95",
   "data-[side=bottom]:slide-in-from-top-1",
   "data-[side=left]:slide-in-from-right-1",
   "data-[side=right]:slide-in-from-left-1",
@@ -176,9 +189,27 @@ describe("Radix overlay animation classes — wrapper source", () => {
 
   it("select.tsx contains the full enter/exit set and UI durations", () => {
     const src = readWrapperSource("select.tsx");
-    expectAllInString(src, ENTER_EXIT_CLASSES, "select.tsx");
+    expectAllInString(src, SELECT_CLASSES, "select.tsx");
     expectAllInString(src, UI_DURATION_CLASSES, "select.tsx");
     expect(src).toContain("var(--radix-select-content-transform-origin)");
+  });
+
+  it("SelectContent renders with select-specific enter/exit class set and UI durations", () => {
+    render(
+      <SelectPrimitive.Root open>
+        <SelectPrimitive.Trigger>trigger</SelectPrimitive.Trigger>
+        <SelectContent forceMount>
+          <SelectPrimitive.Item value="a">a</SelectPrimitive.Item>
+        </SelectContent>
+      </SelectPrimitive.Root>
+    );
+    const el = assertHTMLElement(
+      document.querySelector("[data-radix-popper-content-wrapper] > *"),
+      "SelectContent"
+    );
+    expectAllInString(el.className, SELECT_CLASSES, "SelectContent");
+    expectAllInString(el.className, UI_DURATION_CLASSES, "SelectContent");
+    expect(el.style.transformOrigin).toBe(TRANSFORM_ORIGIN_VARS.select);
   });
 
   it("tooltip.tsx contains palette enter/exit set with palette durations", () => {
