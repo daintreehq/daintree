@@ -26,6 +26,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     wake: vi.fn(),
   },
 }));

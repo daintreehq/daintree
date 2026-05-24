@@ -44,6 +44,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     prewarmTerminal: vi.fn(),
     sendPtyResize: vi.fn(),
     setInputLocked: vi.fn(),

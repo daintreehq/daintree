@@ -15,6 +15,7 @@ vi.mock("@/clients", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
   },
 }));

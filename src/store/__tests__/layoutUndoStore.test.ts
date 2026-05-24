@@ -29,6 +29,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     lockResize: vi.fn(),
     optimizeForDock: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
