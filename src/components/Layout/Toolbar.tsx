@@ -141,7 +141,8 @@ export function PluginToolbarButton({
   config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
   "data-toolbar-item"?: string;
 }) {
-  const hover = useShortcutHintHover(config.actionId as string);
+  const hover = useShortcutHintHover(config.actionId);
+  const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   return (
@@ -163,6 +164,7 @@ export function PluginToolbarButton({
               }}
               className={toolbarIconButtonClass}
               aria-label={config?.label ?? pluginId}
+              aria-keyshortcuts={ariaShortcut}
             >
               <McpServerIcon />
             </Button>

@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
@@ -155,6 +155,7 @@ export function AgentButton({
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
+  const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
@@ -369,7 +370,14 @@ export function AgentButton({
                   onClick={handleClick}
                   aria-disabled={isLoading || undefined}
                   data-toolbar-item={dataToolbarItem}
-                  onPointerEnter={clearFocusRestoreSuppression}
+                  onPointerEnter={(e) => {
+                    clearFocusRestoreSuppression();
+                    hover.onPointerEnter(e);
+                  }}
+                  onPointerLeave={hover.onPointerLeave}
+                  onPointerDown={hover.onPointerDown}
+                  onFocus={hover.onFocus}
+                  onBlur={hover.onBlur}
                   className={cn(
                     "toolbar-agent-button text-daintree-text relative",
                     needsSetup && "opacity-70",
@@ -447,7 +455,14 @@ export function AgentButton({
                 onClick={handleClick}
                 aria-disabled={isLoading || undefined}
                 data-toolbar-item={dataToolbarItem}
-                onPointerEnter={clearFocusRestoreSuppression}
+                onPointerEnter={(e) => {
+                  clearFocusRestoreSuppression();
+                  hover.onPointerEnter(e);
+                }}
+                onPointerLeave={hover.onPointerLeave}
+                onPointerDown={hover.onPointerDown}
+                onFocus={hover.onFocus}
+                onBlur={hover.onBlur}
                 className={cn(
                   "toolbar-agent-button text-daintree-text rounded-r-none border-r border-transparent relative",
                   needsSetup && "opacity-70",
