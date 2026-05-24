@@ -697,7 +697,7 @@ export function notify(payload: NotifyPayload): string {
   // there is nothing to re-promote against.
   const shouldToastThread =
     !shouldToast && correlationId && !payload.transient
-      ? shouldReToast(type, getEntriesByCorrelationId(correlationId))
+      ? shouldReToast(type, getEntriesByCorrelationId(correlationId), payload.urgent)
       : false;
   const effectiveShouldToast = shouldToast || shouldToastThread;
 

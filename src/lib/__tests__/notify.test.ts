@@ -2719,6 +2719,38 @@ describe("notify() — thread re-promotion (#9008)", () => {
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
   });
 
+  it("re-toasts an urgent same-severity thread child", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({
+      type: "info",
+      correlationId: "build",
+      message: "Urgent update",
+      priority: "low",
+      urgent: true,
+    });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("excludes archived entries from the escalation baseline", () => {
+    // Active worst is "info"; an old archived "error" must not block escalation.
+    seedThread([
+      seedEntry({ type: "error", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    notify({ type: "warning", correlationId: "build", message: "Degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("compares against the worst active entry in a mixed-severity thread", () => {
+    seedThread([
+      seedEntry({ type: "warning", correlationId: "build", archivedAt: null }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    // Same as active worst → no re-toast.
+    notify({ type: "warning", correlationId: "build", message: "Still warning", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
   it("escalation re-toast still consumes the rate-limit bucket", () => {
     // Drain the per-source bucket with toasting notifications first.
     for (let i = 0; i < 4; i++) {
