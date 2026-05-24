@@ -18,7 +18,10 @@ import {
   _resetPendingSuppressedForTest,
 } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
-import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
 
 const mockShowNative = vi.fn();
@@ -2604,5 +2607,166 @@ describe("per-source rate-limit", () => {
       .getState()
       .entries.find((e) => e.message.includes("more event"));
     expect(summary?.context).toBeUndefined();
+  });
+});
+
+describe("notify() — thread re-promotion (#9008)", () => {
+  let entrySeq = 0;
+
+  function seedEntry(
+    overrides: Partial<NotificationHistoryEntry> & Pick<NotificationHistoryEntry, "type">
+  ): NotificationHistoryEntry {
+    return {
+      id: `seed-${entrySeq++}`,
+      type: overrides.type,
+      title: overrides.title,
+      message: overrides.message ?? "seeded",
+      timestamp: overrides.timestamp ?? Date.now() - 1000,
+      correlationId: overrides.correlationId,
+      seenAsToast: overrides.seenAsToast ?? true,
+      summarized: overrides.summarized ?? false,
+      countable: overrides.countable ?? true,
+      archivedAt: overrides.archivedAt ?? null,
+      supersedeKey: overrides.supersedeKey,
+      context: overrides.context,
+      actions: overrides.actions,
+    };
+  }
+
+  function seedThread(entries: NotificationHistoryEntry[]): void {
+    useNotificationHistoryStore.setState({
+      entries,
+      unreadCount: entries.filter((e) => !e.seenAsToast && e.countable && !e.archivedAt).length,
+    });
+  }
+
+  beforeEach(() => {
+    entrySeq = 0;
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    _resetCoalesceMap();
+    _resetRateLimitBuckets();
+    _setQuietUntil(0);
+    // priority "low" routes inbox-only by default, so re-promotion is the only
+    // path to a toast — isolates the predicate from focus/origin logic.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("re-toasts when severity escalates above the thread's worst (info → warning)", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({ type: "warning", correlationId: "build", message: "Build degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("re-toasts on escalation to error (warning → error)", () => {
+    seedThread([seedEntry({ type: "warning", correlationId: "build" })]);
+    notify({ type: "error", correlationId: "build", message: "Build failed", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("re-toasts at the success → info boundary (weight 0 → 1)", () => {
+    seedThread([seedEntry({ type: "success", correlationId: "build" })]);
+    notify({ type: "info", correlationId: "build", message: "Rebuilding", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("stays inbox-only on same severity (info → info)", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({ type: "info", correlationId: "build", message: "Still building", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    // but the inbox row is still written
+    expect(useNotificationHistoryStore.getState().entries).toHaveLength(2);
+  });
+
+  it("stays inbox-only on de-escalation (error → warning)", () => {
+    seedThread([seedEntry({ type: "error", correlationId: "build" })]);
+    notify({ type: "warning", correlationId: "build", message: "Recovering", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("re-toasts when the entire thread is archived (un-snooze)", () => {
+    seedThread([
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 4000 }),
+    ]);
+    notify({ type: "info", correlationId: "build", message: "New activity", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("does not re-toast a partially-archived thread on same severity", () => {
+    seedThread([
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    notify({ type: "info", correlationId: "build", message: "Still active", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("leaves the standard toast gate untouched when no thread exists", () => {
+    notify({ type: "warning", correlationId: "fresh", message: "First", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("re-toasts an urgent same-severity thread child", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({
+      type: "info",
+      correlationId: "build",
+      message: "Urgent update",
+      priority: "low",
+      urgent: true,
+    });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("excludes archived entries from the escalation baseline", () => {
+    // Active worst is "info"; an old archived "error" must not block escalation.
+    seedThread([
+      seedEntry({ type: "error", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    notify({ type: "warning", correlationId: "build", message: "Degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("compares against the worst active entry in a mixed-severity thread", () => {
+    seedThread([
+      seedEntry({ type: "warning", correlationId: "build", archivedAt: null }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    // Same as active worst → no re-toast.
+    notify({ type: "warning", correlationId: "build", message: "Still warning", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("escalation re-toast still consumes the rate-limit bucket", () => {
+    // Drain the per-source bucket with toasting notifications first.
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "error", message: `m${i}`, rateLimitKey: "thread-rl" });
+    }
+    const toastsBefore = useNotificationStore.getState().notifications.length;
+    seedThread([seedEntry({ type: "info", correlationId: "rl" })]);
+    notify({
+      type: "warning",
+      correlationId: "rl",
+      message: "escalated",
+      priority: "low",
+      rateLimitKey: "thread-rl",
+    });
+    // The bucket is exhausted, so the re-promoted toast is suppressed (routed
+    // to the summary row) rather than bypassing the rate limiter.
+    expect(useNotificationStore.getState().notifications.length).toBe(toastsBefore);
   });
 });

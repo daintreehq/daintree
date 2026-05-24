@@ -4,15 +4,9 @@ import {
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 
 const MIN_BLUR_MS = 3000;
-
-const SEVERITY_WEIGHTS: Record<NotificationHistoryEntry["type"], number> = {
-  error: 3,
-  warning: 2,
-  info: 1,
-  success: 0,
-};
 
 export interface WorktreeRow {
   worktreeId: string;
