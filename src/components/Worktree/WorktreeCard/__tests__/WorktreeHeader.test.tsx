@@ -145,6 +145,46 @@ describe("WorktreeHeader menu button", () => {
   });
 });
 
+describe("WorktreeHeader PR-originated headline (#8888)", () => {
+  it("shows the PR title as the primary headline when sourcePrNumber is set", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        sourcePrNumber: 314,
+        linked: {
+          providerId: "github",
+          pr: {
+            ref: { providerId: "github", owner: "o", repo: "r", number: 314, rawData: null },
+            title: "Fix flaky terminal search",
+            url: "https://github.com/o/r/pull/314",
+            state: "open",
+          },
+        },
+        issueNumber: 99,
+      } as WorktreeState,
+      badges: { onOpenPR: noop, onOpenIssue: noop },
+    });
+
+    const prButton = screen.getByRole("button", {
+      name: /Open pull request #314: Fix flaky terminal search/,
+    });
+    expect(prButton).toBeDefined();
+    expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
+  });
+
+  it("falls back to the flat prTitle when linked.pr is not yet populated", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        sourcePrNumber: 314,
+        prTitle: "Eager PR title",
+      } as WorktreeState,
+      badges: { onOpenPR: noop },
+    });
+    expect(screen.getByText("Eager PR title")).toBeDefined();
+  });
+});
+
 describe("WorktreeHeader issue title headline", () => {
   it("shows issue title as primary headline when issueTitle is available", () => {
     renderHeader({

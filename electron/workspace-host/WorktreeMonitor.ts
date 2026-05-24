@@ -147,6 +147,7 @@ export class WorktreeMonitor {
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
   private _branchDerivedTitle: string | undefined;
+  private _sourcePrNumber: number | undefined;
   private prLastUpdatedAt: number | undefined;
   private issueLastUpdatedAt: number | undefined;
 
@@ -646,6 +647,15 @@ export class WorktreeMonitor {
   }
 
   /**
+   * Mark this worktree as PR-originated by recording the source PR number (#8888).
+   * Set once at creation time from the PR-dropdown flow; immutable thereafter.
+   * Drives the inverted PR-title-as-headline display in the worktree card.
+   */
+  setSourcePrNumber(prNumber: number | undefined): void {
+    this._sourcePrNumber = prNumber;
+  }
+
+  /**
    * Update the repository's main/integration branch — the base-branch
    * divergence fallback used when this worktree has no linked PR. Called by
    * `syncMonitors` so existing monitors track a main-worktree branch switch.
@@ -1077,6 +1087,7 @@ export class WorktreeMonitor {
       prTitle: linkedPr ? linkedPr.title : this.prTitle,
       issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
       branchDerivedTitle: this._branchDerivedTitle,
+      sourcePrNumber: this._sourcePrNumber,
       prLastUpdatedAt: this.prLastUpdatedAt,
       issueLastUpdatedAt: this.issueLastUpdatedAt,
       worktreeChanges: this.worktreeChanges,

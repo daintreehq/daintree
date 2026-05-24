@@ -1071,6 +1071,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.issueNumber === b.issueNumber &&
     a.issueTitle === b.issueTitle &&
     a.branchDerivedTitle === b.branchDerivedTitle &&
+    a.sourcePrNumber === b.sourcePrNumber &&
     a.prLastUpdatedAt === b.prLastUpdatedAt &&
     a.issueLastUpdatedAt === b.issueLastUpdatedAt &&
     a.hasPlanFile === b.hasPlanFile &&

@@ -25,6 +25,12 @@ interface NonMainSecondaryRowProps {
    * line, which surfaces below either form of title (#8851).
    */
   hasDisplayTitle: boolean;
+  /**
+   * True when the worktree was created from the PR dropdown (#8888): the PR is
+   * the headline, so suppress the subordinate PR badge here and instead surface
+   * the linked issue underneath.
+   */
+  isPrOriginated: boolean;
   hasPlanFile: boolean;
   badges: {
     onOpenIssue?: () => void;
@@ -42,6 +48,7 @@ export function NonMainSecondaryRow({
   hasUpstreamDelta,
   hasAuthFailedSignIn,
   hasDisplayTitle,
+  isPrOriginated,
   hasPlanFile,
   badges,
 }: NonMainSecondaryRowProps) {
@@ -54,7 +61,10 @@ export function NonMainSecondaryRow({
     [worktree.isCurrent, fetchIntervalActiveMs, fetchIntervalBackgroundMs]
   );
 
+  // Suppress the subordinate PR badge when the PR is already the headline
+  // (PR-originated worktrees, #8888) — the linked issue takes the secondary row.
   const showPRBadge =
+    !isPrOriginated &&
     worktree.linked?.pr &&
     worktree.linked.pr.state !== "closed" &&
     worktree.linked.pr.state !== "declined";
@@ -104,9 +114,10 @@ export function NonMainSecondaryRow({
 
   return (
     <div className="flex flex-col gap-0.5 mt-1.5">
-      {worktree.issueNumber && !hasDisplayTitle && (
+      {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
+          issueTitle={isPrOriginated ? worktree.issueTitle : undefined}
           worktreePath={worktree.path}
           onOpen={badges.onOpenIssue}
           isActive={isActive}

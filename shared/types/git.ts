@@ -166,4 +166,21 @@ export interface CreateWorktreeOptions {
   provisionResource?: boolean;
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;
+  /**
+   * Source PR number when the worktree is created from the GitHub PR dropdown.
+   * Captured eagerly so the worktree's linked PR is seeded at creation time
+   * rather than waiting for PullRequestService branch-name polling (#8888).
+   */
+  sourcePrNumber?: number;
+  /** Source PR title (for immediate headline display). */
+  sourcePrTitle?: string;
+  /** Source PR URL. */
+  sourcePrUrl?: string;
+  /** Source PR state, normalized to the workspace-host lowercase form. */
+  sourcePrState?: "open" | "closed" | "merged";
+  /**
+   * Closing issue number for the source PR, extracted from `closingIssuesReferences`
+   * or a body-parse of `Closes/Fixes/Resolves #N`. Undefined when the PR closes no issue.
+   */
+  sourcePrLinkedIssueNumber?: number;
 }

@@ -20,6 +20,7 @@ interface PullRequestServiceLike {
     isEnabled: boolean;
     detectionStateTripped: boolean;
   };
+  getProviderContext(): { providerId: string; owner: string; repo: string } | null;
 }
 
 export interface PRIntegrationCallbacks {
@@ -188,6 +189,15 @@ export class PRIntegrationService {
       // also disables polling but must not show the "detection paused" badge.
       circuitBreakerTripped: status.detectionStateTripped,
     };
+  }
+
+  /**
+   * Currently-resolved forge provider context, or null when no provider has
+   * resolved yet. Used to eagerly compose a `linked` projection at
+   * worktree-create time (#8888).
+   */
+  getProviderContext(): { providerId: string; owner: string; repo: string } | null {
+    return this.prService.getProviderContext();
   }
 
   resetPRState(projectRootPath: string | null): void {

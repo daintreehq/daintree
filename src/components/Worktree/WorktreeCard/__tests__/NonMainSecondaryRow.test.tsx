@@ -16,10 +16,19 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
+const issueBadgeProps: Array<Record<string, unknown>> = [];
+
 vi.mock("../PRBadge", () => ({
   PRBadge: (props: Record<string, unknown>) => {
     prBadgeProps.push(props);
     return <div data-testid="pr-badge" data-call-index={prBadgeProps.length - 1} />;
+  },
+}));
+
+vi.mock("../IssueBadge", () => ({
+  IssueBadge: (props: Record<string, unknown>) => {
+    issueBadgeProps.push(props);
+    return <div data-testid="issue-badge" data-call-index={issueBadgeProps.length - 1} />;
   },
 }));
 
@@ -56,6 +65,8 @@ interface RenderOverrides {
   worktree?: WorktreeState;
   hasUpstreamDelta?: boolean;
   hasAuthFailedSignIn?: boolean;
+  hasDisplayTitle?: boolean;
+  isPrOriginated?: boolean;
 }
 
 function renderRow(overrides: RenderOverrides = {}) {
@@ -68,7 +79,8 @@ function renderRow(overrides: RenderOverrides = {}) {
         underlineOnHover={false}
         hasUpstreamDelta={overrides.hasUpstreamDelta ?? false}
         hasAuthFailedSignIn={overrides.hasAuthFailedSignIn ?? false}
-        hasDisplayTitle={false}
+        hasDisplayTitle={overrides.hasDisplayTitle ?? false}
+        isPrOriginated={overrides.isPrOriginated ?? false}
         hasPlanFile={false}
         badges={{}}
       />
@@ -208,6 +220,23 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(prIdx).toBeGreaterThanOrEqual(0);
     expect(upIdx).toBeGreaterThanOrEqual(0);
     expect(prIdx).toBeLessThan(upIdx);
+  });
+
+  it("PR-originated: suppresses the subordinate PR badge and shows the linked issue", () => {
+    issueBadgeProps.length = 0;
+    const { queryByTestId } = renderRow({
+      worktree: {
+        ...baseWorktree,
+        sourcePrNumber: 42,
+        issueNumber: 123,
+      } as WorktreeState,
+      hasDisplayTitle: true,
+      isPrOriginated: true,
+    });
+    // PR is the headline above — no subordinate PR badge here.
+    expect(queryByTestId("pr-badge")).toBeNull();
+    // The linked issue surfaces in the secondary row even though hasDisplayTitle is true.
+    expect(issueBadgeProps.at(-1)?.issueNumber).toBe(123);
   });
 
   it("CI 'pending' does not flip the order (transient — no spatial churn)", () => {

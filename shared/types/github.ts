@@ -92,6 +92,9 @@ export interface GitHubPR {
    *  was truncated, or when the repository has no required checks configured (in which case
    *  ciStatus reflects the raw rollup). */
   ciSummary?: GitHubPRCISummary;
+  /** Plain-text PR body. Used to body-parse closing-issue references (`Closes #N`)
+   *  when capturing the source PR at worktree-create time. */
+  bodyText?: string;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */
