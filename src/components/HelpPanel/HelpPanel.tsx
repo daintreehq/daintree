@@ -114,6 +114,12 @@ export function HelpPanel({
   const [hasDomFocus, setHasDomFocus] = useState(false);
   const isHighlighted = isMacroFocused || hasDomFocus;
   const isVisible = isVisibleProp ?? effectiveWidth > 0;
+  // Clear the focus highlight when the panel collapses — a width collapse can
+  // tear down the focused descendant (e.g. xterm) without firing a blur,
+  // which would otherwise leave the lift stuck on across a reopen.
+  useEffect(() => {
+    if (!isVisible) setHasDomFocus(false);
+  }, [isVisible]);
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
   // Tracks the last preferredAgentId the switch effect acted on so a single
