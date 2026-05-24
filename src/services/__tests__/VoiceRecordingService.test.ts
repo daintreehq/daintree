@@ -521,7 +521,14 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     help.__state.terminalId = null;
     panel.__state.focusedId = null;
     panel.__state.panelsById = {};
-    const voice = await import("@/store/voiceRecordingStore");
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => {
+          setError: ReturnType<typeof vi.fn>;
+          announce: ReturnType<typeof vi.fn>;
+        };
+      };
+    };
     voice.useVoiceRecordingStore.getState().setError.mockClear();
     voice.useVoiceRecordingStore.getState().announce.mockClear();
     return { macro, help, panel };
