@@ -1,0 +1,485 @@
+import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
+const SRC_ROOT = path.join(REPO_ROOT, "src");
+const PLUGIN_RENDERER_ROOTS = [path.join(REPO_ROOT, "plugins/builtin/github/renderer")];
+
+// `outline-hidden` removes the focus outline entirely. Without a same-element focus
+// fallback (`focus:`, `focus-visible:`, `focus-within:`, or the codebase's
+// `data-[macro-focus=*]:` macro-focus mechanism) the element becomes invisible to
+// keyboard users. This contract scans for bare `outline-hidden` and requires an
+// element-owned focus indicator in the same className expression.
+
+const OUTLINE_HIDDEN_PATTERN = /\boutline-hidden\b/g;
+
+// Element-owned focus pseudo-class variants. Excludes `group-focus`/`peer-focus`
+// (parent/sibling state, not structural focus on the element itself), matching the
+// existing `isFocusRing` precedent in `accentGuard.contract.test.ts`.
+const FOCUS_VARIANT_PATTERN = /(?<![\w-])focus(?:-visible|-within)?:/;
+
+// Codebase macro-focus mechanism (TerminalDockRegion, HelpPanel) — paints a ring
+// via `data-[macro-focus=true]:ring-*` when the macro-focus app state owns the
+// region. Functions as a valid focus indicator on the element.
+const MACRO_FOCUS_PATTERN = /data-\[macro-focus[^\]]*\]:/;
+
+// ── className context extraction ───────────────────────────────────────
+
+// Extract the className expression containing `matchPos`. Strategy:
+//   1. Find the enclosing string literal (single/double/backtick) — every
+//      Tailwind utility lives inside a string, so this is the stable anchor.
+//   2. If that string literal is an argument to a class-helper call
+//      (`cn(`/`clsx(`/`classnames(`/`twMerge(`/`cva(`), expand to the whole
+//      call so a focus fallback in a sibling string argument is captured.
+//   3. Otherwise return just the enclosing string literal — bounds the scan
+//      to one className value and prevents bleed into adjacent JSX elements.
+//
+// Falls back to a small char window only if no enclosing string literal is
+// found (defensive — every real `outline-hidden` occurrence is inside a string).
+const HELPER_CALL_NAMES = new Set(["cn", "clsx", "classnames", "twMerge", "cva"]);
+
+function findEnclosingStringStart(source: string, pos: number): number {
+  // Walk back to the nearest unescaped quote — the opening of the enclosing
+  // string literal. Quotes inside a string are escaped, so the first unescaped
+  // quote walking back is reliably the opener.
+  for (let i = pos; i >= 0; i--) {
+    const ch = source[i];
+    if (ch !== '"' && ch !== "'" && ch !== "`") continue;
+    if (i > 0 && source[i - 1] === "\\") continue;
+    return i;
+  }
+  return -1;
+}
+
+function findStringEnd(source: string, start: number): number {
+  const quote = source[start]!;
+  let i = start + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === quote) return i;
+    i++;
+  }
+  return source.length - 1;
+}
+
+// Walk backward from `beforePos`, skipping string literals and balanced
+// parens/braces/brackets, until we find an unmatched `(`. If that `(` is
+// preceded by a class-helper-call name, return the full call range. Otherwise
+// return null. This correctly traverses sibling `cn()` arguments to find the
+// enclosing helper call even when the match is inside the 3rd or 4th string arg.
+function findEnclosingHelperCall(
+  source: string,
+  beforePos: number
+): { start: number; end: number } | null {
+  const MIN = Math.max(0, beforePos - 4000);
+  let i = beforePos - 1;
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+
+  while (i >= MIN) {
+    const ch = source[i]!;
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      // Walk back to this string's opening quote.
+      let j = i - 1;
+      while (j >= 0) {
+        if (source[j] === ch && (j === 0 || source[j - 1] !== "\\")) break;
+        j--;
+      }
+      i = j - 1;
+      continue;
+    }
+
+    if (ch === ")") {
+      parenDepth++;
+      i--;
+      continue;
+    }
+    if (ch === "}") {
+      braceDepth++;
+      i--;
+      continue;
+    }
+    if (ch === "]") {
+      bracketDepth++;
+      i--;
+      continue;
+    }
+    if (ch === "(") {
+      if (parenDepth === 0) {
+        // Unmatched `(` — check whether it's a class-helper-call.
+        let nameEnd = i - 1;
+        while (nameEnd >= 0 && /\s/.test(source[nameEnd]!)) nameEnd--;
+        let nameStart = nameEnd;
+        while (nameStart >= 0 && /[\w$]/.test(source[nameStart]!)) nameStart--;
+        nameStart++;
+        const funcName = nameEnd >= nameStart ? source.slice(nameStart, nameEnd + 1) : "";
+        if (!HELPER_CALL_NAMES.has(funcName)) return null;
+
+        // Walk forward from `(` to the matching `)`, skipping strings.
+        let k = i + 1;
+        let depth = 1;
+        while (k < source.length && depth > 0) {
+          const fch = source[k]!;
+          if (fch === '"' || fch === "'" || fch === "`") {
+            k = findStringEnd(source, k) + 1;
+            continue;
+          }
+          if (fch === "(") depth++;
+          else if (fch === ")") depth--;
+          k++;
+        }
+        return { start: i, end: k };
+      }
+      parenDepth--;
+      i--;
+      continue;
+    }
+    if (ch === "{") {
+      // Unmatched `{` means we crossed the JSX expression boundary
+      // (`className={…}`) — stop looking for a helper call.
+      if (braceDepth === 0) return null;
+      braceDepth--;
+      i--;
+      continue;
+    }
+    if (ch === "[") {
+      if (bracketDepth === 0) return null;
+      bracketDepth--;
+      i--;
+      continue;
+    }
+
+    i--;
+  }
+
+  return null;
+}
+
+function extractClassExpression(source: string, matchPos: number): string {
+  const stringStart = findEnclosingStringStart(source, matchPos);
+  if (stringStart === -1) {
+    return source.slice(Math.max(0, matchPos - 200), Math.min(source.length, matchPos + 200));
+  }
+  const stringEnd = findStringEnd(source, stringStart);
+
+  const helperCall = findEnclosingHelperCall(source, stringStart);
+  if (helperCall) {
+    return source.slice(helperCall.start, Math.min(source.length, helperCall.end));
+  }
+
+  return source.slice(stringStart, Math.min(source.length, stringEnd + 1));
+}
+
+function hasFocusFallback(expression: string): boolean {
+  if (FOCUS_VARIANT_PATTERN.test(expression)) return true;
+  if (MACRO_FOCUS_PATTERN.test(expression)) return true;
+  return false;
+}
+
+// ── File collection ────────────────────────────────────────────────────
+
+function collectSourceFiles(dir: string): string[] {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const result: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+      result.push(...collectSourceFiles(fullPath));
+      continue;
+    }
+
+    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    if (/\.(test|spec)\./.test(entry.name)) continue;
+
+    result.push(fullPath);
+  }
+
+  return result;
+}
+
+// ── Allowlist ──────────────────────────────────────────────────────────
+
+// Non-interactive containers and focus-trap surfaces that legitimately suppress
+// the focus outline. Each entry is matched by relative path AND a stable substring
+// of the className expression to scope the suppression to a specific occurrence.
+type FocusRingAllowlistEntry = {
+  file: string;
+  fragment: string;
+  reason: string;
+};
+
+const ALLOWLIST: FocusRingAllowlistEntry[] = [
+  {
+    file: "src/components/HelpPanel/HelpPanel.tsx",
+    fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
+    reason:
+      "Aside container — focus styling is delivered via data-[macro-focus=true] ring on the same element",
+  },
+  {
+    file: "src/components/ui/AppDialog.tsx",
+    fragment: '"outline-hidden"',
+    reason:
+      "Dialog content uses focus trap (tabIndex=-1) — focus is delegated to interactive descendants",
+  },
+  {
+    file: "src/components/ui/emoji-picker.tsx",
+    fragment: "relative flex-1 outline-hidden",
+    reason:
+      "Radix emoji-picker Viewport is a presentational container — focus lives on the inner search input",
+  },
+  {
+    file: "src/components/Portal/PortalDock.tsx",
+    fragment: "portal-dock outline-hidden",
+    reason: "Dock root container — focus is owned by inner panel children, not the dock itself",
+  },
+  {
+    file: "src/components/Layout/TerminalDockRegion.tsx",
+    fragment: "outline-hidden data-[macro-focus=true]:ring-2",
+    reason: "Macro-focus region — focus indicator is delivered via data-[macro-focus=true] ring",
+  },
+  {
+    file: "src/components/Layout/Sidebar.tsx",
+    fragment: "relative w-full h-full flex flex-col outline-hidden overflow-hidden",
+    reason: "Sidebar root container — focus lives on interactive descendants (tab nav, buttons)",
+  },
+  {
+    file: "src/components/Worktree/WorktreeCard.tsx",
+    fragment: "absolute inset-0 z-0 outline-hidden",
+    reason:
+      "Inner click-target overlay — keyboard nav handled by the parent focusable card row (#8094)",
+  },
+  {
+    file: "src/components/Layout/Toolbar.tsx",
+    fragment: "toolbar-project-pill",
+    reason:
+      "Project switcher pill — focus indicator is delivered via the toolbar-project-pill CSS class",
+  },
+  {
+    file: "src/components/Worktree/ReviewHub/ReviewHub.tsx",
+    fragment: "outline-hidden overflow-hidden",
+    reason: "Review hub dialog wrapper — focus trap (tabIndex=-1) delegates focus to content",
+  },
+  {
+    file: "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
+    fragment: "relative flex flex-col flex-1 min-h-0",
+    reason: "Review hub content container — focus lives on inner panels and inputs",
+  },
+  {
+    file: "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
+    fragment: "h-full flex flex-col outline-hidden",
+    reason: "Grid layout container — focus owned by terminal pane children",
+  },
+  {
+    file: "src/components/Terminal/ContentGridMaximizedGroup.tsx",
+    fragment: "h-full flex flex-col bg-daintree-bg outline-hidden",
+    reason: "Grid layout container — focus owned by terminal pane children",
+  },
+  {
+    file: "src/components/Terminal/ContentGridFleetScope.tsx",
+    fragment: "h-full flex flex-col outline-hidden",
+    reason: "Grid layout container — focus owned by terminal pane children",
+  },
+  {
+    file: "src/components/Terminal/ContentGridDefault.tsx",
+    fragment: "h-full flex flex-col outline-hidden",
+    reason: "Grid layout container — focus owned by terminal pane children",
+  },
+  {
+    file: "src/components/Terminal/ContentGridMaximizedSingle.tsx",
+    fragment: "h-full flex flex-col bg-daintree-bg outline-hidden",
+    reason: "Grid layout container — focus owned by terminal pane children",
+  },
+  {
+    file: "src/components/Fleet/FleetArmingRibbon.tsx",
+    fragment: "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border",
+    reason:
+      "Status/alertdialog ribbon — focus delegated to the inner broadcast confirm controls; ribbon itself uses tabIndex=-1 to receive programmatic focus only",
+  },
+  {
+    file: "src/components/Notifications/NotificationCenter.tsx",
+    fragment: "text-daintree-text/50 outline-hidden",
+    reason:
+      "'New since last looked' chip — non-interactive label; mark-read button inside has its own focus styling",
+  },
+  {
+    file: "src/components/Fleet/FleetPickerContent.tsx",
+    fragment: "flex-1 min-h-0 overflow-y-auto px-2 py-2 outline-hidden",
+    reason:
+      "Listbox container with roving tabindex — focus indicator is owned by the active row, not the container",
+  },
+];
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+describe("focus-ring fallback contract", () => {
+  // ── Self-tests: focus fallback detection ────────────────────────────
+
+  describe("focus fallback detection", () => {
+    const withFallback = [
+      // Standard same-string focus variants
+      '"outline-hidden focus:ring-2 focus:ring-daintree-accent"',
+      '"focus:bg-overlay-emphasis outline-hidden"',
+      '"outline-hidden focus-visible:outline focus-visible:outline-2"',
+      '"outline-hidden focus-within:ring-1"',
+      // Stacked variants
+      '"outline-hidden motion-safe:focus-visible:ring-2"',
+      // Codebase macro-focus mechanism
+      '"outline-hidden data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60"',
+    ];
+
+    const withoutFallback = [
+      // Bare suppression — no focus indicator at all
+      '"outline-hidden"',
+      // Hover-only — not a focus indicator
+      '"outline-hidden hover:ring-1"',
+      // Parent/sibling state — not element-owned focus
+      '"outline-hidden group-focus:ring-2"',
+      '"outline-hidden peer-focus:ring-2"',
+      // data-[state=*] is not a focus indicator
+      '"outline-hidden data-[state=open]:ring-2"',
+    ];
+
+    for (const input of withFallback) {
+      it(`accepts ${input}`, () => {
+        expect(hasFocusFallback(input)).toBe(true);
+      });
+    }
+
+    for (const input of withoutFallback) {
+      it(`flags ${input}`, () => {
+        expect(hasFocusFallback(input)).toBe(false);
+      });
+    }
+  });
+
+  // ── Self-tests: multi-line cn() extraction ──────────────────────────
+
+  describe("multi-line cn() extraction", () => {
+    it("captures focus fallback in a sibling cn() argument", () => {
+      const source = `<input
+        className={cn(
+          "w-full bg-transparent outline-hidden",
+          "focus:ring-2 focus:ring-daintree-accent"
+        )}
+      />`;
+      const matchPos = source.indexOf("outline-hidden");
+      const expression = extractClassExpression(source, matchPos);
+      expect(hasFocusFallback(expression)).toBe(true);
+    });
+
+    it("captures macro-focus fallback in a sibling cn() argument", () => {
+      const source = `<aside
+        className={cn(
+          "overflow-hidden outline-hidden",
+          "bg-daintree-bg border-l border-daintree-border",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60"
+        )}
+      />`;
+      const matchPos = source.indexOf("outline-hidden");
+      const expression = extractClassExpression(source, matchPos);
+      expect(hasFocusFallback(expression)).toBe(true);
+    });
+
+    it("does NOT pick up an unrelated focus class in an adjacent JSX element", () => {
+      const source = `<div className={cn("outline-hidden")}>
+        <button className="focus:ring-2">click</button>
+      </div>`;
+      const matchPos = source.indexOf("outline-hidden");
+      const expression = extractClassExpression(source, matchPos);
+      // The button's focus class is in a separate JSX element, outside the cn() — must not bleed in.
+      expect(hasFocusFallback(expression)).toBe(false);
+    });
+
+    it("does NOT pick up focus on a sibling JSX className expression", () => {
+      const source = `<div>
+        <span className="outline-hidden" />
+        <span className="focus:ring-1" />
+      </div>`;
+      const matchPos = source.indexOf("outline-hidden");
+      const expression = extractClassExpression(source, matchPos);
+      expect(hasFocusFallback(expression)).toBe(false);
+    });
+
+    it("captures focus in a single-line string", () => {
+      const source = `<input className="outline-hidden focus:ring-2" />`;
+      const matchPos = source.indexOf("outline-hidden");
+      const expression = extractClassExpression(source, matchPos);
+      expect(hasFocusFallback(expression)).toBe(true);
+    });
+  });
+
+  // ── Repository scan ─────────────────────────────────────────────────
+
+  it("every outline-hidden occurrence pairs with an element-owned focus indicator (or is allowlisted)", () => {
+    const scanRoots = [SRC_ROOT, ...PLUGIN_RENDERER_ROOTS];
+    const allFiles = scanRoots.flatMap((root) =>
+      fs.existsSync(root) ? collectSourceFiles(root) : []
+    );
+
+    const violations: Array<{ file: string; line: number; snippet: string }> = [];
+
+    for (const filePath of allFiles) {
+      const source = fs.readFileSync(filePath, "utf8");
+      // Normalize to posix-style separators so allowlist hits match on Windows.
+      const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");
+
+      OUTLINE_HIDDEN_PATTERN.lastIndex = 0;
+      for (const match of source.matchAll(OUTLINE_HIDDEN_PATTERN)) {
+        const matchPos = match.index ?? -1;
+        if (matchPos < 0) continue;
+
+        const expression = extractClassExpression(source, matchPos);
+        if (hasFocusFallback(expression)) continue;
+
+        const allowlisted = ALLOWLIST.some(
+          (entry) => entry.file === relativePath && expression.includes(entry.fragment)
+        );
+        if (allowlisted) continue;
+
+        const lineNumber = source.slice(0, matchPos).split("\n").length;
+        const snippet = source.split("\n")[lineNumber - 1]!.trim();
+        violations.push({ file: relativePath, line: lineNumber, snippet });
+      }
+    }
+
+    if (violations.length === 0) return;
+
+    const detail = violations
+      .slice(0, 20)
+      .map((v) => `  ${v.file}:${v.line} — ${v.snippet}`)
+      .join("\n");
+    const more = violations.length > 20 ? `\n  …and ${violations.length - 20} more` : "";
+
+    throw new Error(
+      `Found ${violations.length} bare \`outline-hidden\` use(s) with no element-owned focus indicator. ` +
+        `Add a same-element focus fallback (e.g. \`focus-visible:ring-2 focus-visible:ring-daintree-accent\`) ` +
+        `or, if the element is non-interactive and delegates focus, add an ALLOWLIST entry with a rationale ` +
+        `in src/config/__tests__/focusRingFallback.contract.test.ts:\n${detail}${more}`
+    );
+  });
+
+  it("every allowlist entry has a non-empty rationale", () => {
+    for (const entry of ALLOWLIST) {
+      expect(
+        entry.reason.trim().length,
+        `${entry.file}: rationale must not be empty`
+      ).toBeGreaterThan(0);
+      expect(
+        entry.fragment.trim().length,
+        `${entry.file}: fragment must not be empty`
+      ).toBeGreaterThan(0);
+    }
+  });
+});
