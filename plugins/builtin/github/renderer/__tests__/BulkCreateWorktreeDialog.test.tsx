@@ -1707,7 +1707,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(screen.queryByText(/failed/)).toBeNull();
   });
 
-  it("does not retry non-transient assignment failures", async () => {
+  it("surfaces non-transient assignment failures as item failures", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     githubConfigHolder.config = { username: "me" };
 
@@ -1721,12 +1721,41 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
     await advanceTimersGradually(5000);
 
+    // Permanent failure must not retry, and must mark the item failed instead
+    // of falling through to ITEM_SUCCEEDED (see #8975).
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
   });
 
-  it("swallows exhausted transient assignment retries (best-effort)", async () => {
+  it("surfaces a silent-drop assignment (token lacks push access) as a failure", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    githubConfigHolder.config = { username: "me" };
+
+    // POST /assignees returns 201 with an empty assignees[] when the token
+    // lacks push access. assignIssue() in the main process detects this and
+    // throws the message below; isTransientError() must not match it, so the
+    // call is treated as permanent.
+    mockAssignIssue.mockRejectedValue(
+      new Error('Assignment succeeded but user "me" not found in response')
+    );
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(mockAssignIssue).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+  });
+
+  it("surfaces exhausted transient assignment retries as item failures", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     githubConfigHolder.config = { username: "me" };
 
@@ -1740,12 +1769,15 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    await advanceTimersGradually(70000);
+    // 60s cap on assignment backoff (ASSIGNMENT_BACKOFF_CAP_MS) — drain enough
+    // virtual time for two backoff windows plus slack.
+    await advanceTimersGradually(150000);
 
-    // MAX_AUTO_RETRIES = 2 → 3 total attempts before giving up silently.
+    // MAX_AUTO_RETRIES = 2 → 3 total attempts before giving up.
     expect(mockAssignIssue).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
   });
 
   it("stops assignment retries when the run is cancelled mid-backoff", async () => {

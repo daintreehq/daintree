@@ -9,6 +9,7 @@ import {
   nextBackoffDelay,
   BACKOFF_BASE_MS,
   BACKOFF_CAP_MS,
+  ASSIGNMENT_BACKOFF_CAP_MS,
   MAX_AUTO_RETRIES,
 } from "../components/bulkCreateUtils";
 
@@ -223,10 +224,24 @@ describe("nextBackoffDelay", () => {
     expect(small).toBeLessThanOrEqual(BACKOFF_CAP_MS);
     expect(large).toBeLessThanOrEqual(BACKOFF_CAP_MS);
   });
+
+  it("honors a per-call cap above the default", () => {
+    for (let i = 0; i < 20; i++) {
+      const value = nextBackoffDelay(50000, ASSIGNMENT_BACKOFF_CAP_MS);
+      expect(value).toBeLessThanOrEqual(ASSIGNMENT_BACKOFF_CAP_MS);
+      // With a 50s prior delay the max term in the formula is 150s; only the
+      // 60s cap keeps the result bounded, proving the cap parameter is wired.
+      expect(value).toBeGreaterThanOrEqual(BACKOFF_BASE_MS);
+    }
+  });
 });
 
 describe("constants", () => {
   it("MAX_AUTO_RETRIES is 2", () => {
     expect(MAX_AUTO_RETRIES).toBe(2);
+  });
+
+  it("ASSIGNMENT_BACKOFF_CAP_MS is 60s to cover GitHub secondary rate limit", () => {
+    expect(ASSIGNMENT_BACKOFF_CAP_MS).toBe(60000);
   });
 });

@@ -32,6 +32,7 @@ import {
   MAX_AUTO_RETRIES,
   QUEUE_CONCURRENCY,
   BACKOFF_BASE_MS,
+  ASSIGNMENT_BACKOFF_CAP_MS,
   VERIFICATION_SETTLE_MS,
 } from "./bulkCreateUtils";
 import type { PlannedWorktree } from "./bulkCreateUtils";
@@ -582,11 +583,10 @@ export function BulkCreateWorktreeDialog({
                 }
               }
 
-              // Step 3: Issue assignment (best-effort, issues only).
+              // Step 3: Issue assignment (issues only).
               // Retries transient failures using the same helpers as the outer loop, but
-              // with isolated backoff so step-3 delays don't contaminate sibling items.
-              // Permanent failures (401/403/404/422) and exhausted retries fall through
-              // silently — assignment is never surfaced as an item failure.
+              // with an isolated 60s backoff cap so the assignment endpoint's secondary
+              // rate limit (~60s) doesn't widen worktree/terminal retry delays.
               if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
                 const username = useGitHubConfigStore.getState().config?.username;
                 if (username) {
@@ -607,11 +607,19 @@ export function BulkCreateWorktreeDialog({
                     } catch (err) {
                       const assignErr = normalizeError(err);
                       if (assignAttempt <= MAX_AUTO_RETRIES && isTransientError(assignErr)) {
-                        assignBackoff = nextBackoffDelay(assignBackoff);
+                        assignBackoff = nextBackoffDelay(assignBackoff, ASSIGNMENT_BACKOFF_CAP_MS);
                         await delay(assignBackoff);
                         continue;
                       }
-                      break;
+                      failedItems.add(itemNumber);
+                      dispatchProgress({
+                        type: "ITEM_FAILED",
+                        issueNumber: itemNumber,
+                        error: assignErr,
+                        attempts: assignAttempt,
+                        failedStep: "assignment",
+                      });
+                      return;
                     }
                   }
                 }

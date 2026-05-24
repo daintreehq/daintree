@@ -19,7 +19,7 @@ export interface ItemStatus {
   resolvedBranch?: string;
   failedTerminalIndices?: number[];
   spawnedTerminalIds?: string[];
-  failedStep?: "worktree" | "terminals" | "verification";
+  failedStep?: "worktree" | "terminals" | "verification" | "assignment";
 }
 
 export interface ProgressState {
@@ -53,7 +53,7 @@ export type ProgressAction =
       issueNumber: number;
       error: string;
       attempts: number;
-      failedStep?: "worktree" | "terminals" | "verification";
+      failedStep?: "worktree" | "terminals" | "verification" | "assignment";
     }
   | { type: "DONE" }
   | { type: "RETRY_FAILED" }
@@ -191,6 +191,7 @@ export function getStageLabel(status: ItemStatus | undefined): string | null {
     case "failed":
       if (status.failedStep === "terminals") return "Terminal spawn failed";
       if (status.failedStep === "verification") return "Missing terminals";
+      if (status.failedStep === "assignment") return "Assignment failed";
       return null;
     default:
       return null;

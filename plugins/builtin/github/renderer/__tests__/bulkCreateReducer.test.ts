@@ -226,6 +226,12 @@ describe("getStageLabel", () => {
     );
   });
 
+  it("returns assignment failed for failed+assignment", () => {
+    expect(getStageLabel(makeStatus({ stage: "failed", failedStep: "assignment" }))).toBe(
+      "Assignment failed"
+    );
+  });
+
   it("returns null for generic failed without step", () => {
     expect(getStageLabel(makeStatus({ stage: "failed" }))).toBeNull();
   });
