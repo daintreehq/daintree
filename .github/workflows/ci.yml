@@ -61,6 +61,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fast-fail before the slow check: a budget `*-override` label must be
+      # backed by a linked tracking issue in the PR body. PR-only — push and
+      # workflow_dispatch have no PR context, so the step is skipped there.
+      # PR body and label names are injected via env (never the shell) so PR
+      # body metacharacters can't reach a command line.
+      - name: Budget override gate
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-budget-override-gate.mjs
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+
       - name: Check (typecheck + lint + format)
         run: npm run check
 

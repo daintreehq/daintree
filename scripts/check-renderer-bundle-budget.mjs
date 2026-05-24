@@ -11,7 +11,10 @@
 //   node scripts/check-renderer-bundle-budget.mjs --threshold 0.10            # allow 10% growth
 //   node scripts/check-renderer-bundle-budget.mjs --update                    # write current report as new baseline
 //   node scripts/check-renderer-bundle-budget.mjs --update --force            # bypass the shrinkage guard
-//   node scripts/check-renderer-bundle-budget.mjs --override                  # suppress failure exit code
+//
+// There is no override flag: an intentional regression is accepted by applying
+// the `renderer-bundle-override` label to the PR with a linked tracking issue
+// (enforced by scripts/check-budget-override-gate.mjs in CI).
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -94,12 +97,11 @@ function writeBaseline(report, { force }) {
 }
 
 function parseArgs(argv) {
-  const args = { isUpdate: false, force: false, override: false, threshold: DEFAULT_THRESHOLD };
+  const args = { isUpdate: false, force: false, threshold: DEFAULT_THRESHOLD };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--update") args.isUpdate = true;
     else if (arg === "--force") args.force = true;
-    else if (arg === "--override") args.override = true;
     else if (arg === "--threshold" && argv[i + 1]) {
       const val = argv[i + 1];
       args.threshold = parseFloat(val);
@@ -162,12 +164,9 @@ function main() {
   } else {
     console.error(
       `\n[check-renderer-bundle-budget] FAILED — ${comparison.failures.length} regression(s) exceed +${(args.threshold * 100).toFixed(0)}% threshold. ` +
-        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline.`
+        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline, or apply the \`renderer-bundle-override\` label to the PR with a linked tracking issue (\`Fixes #N\`, \`Resolves #N\`, or \`Closes #N\` in the PR body).`
     );
-    if (!args.override) process.exit(1);
-    console.log(
-      "[check-renderer-bundle-budget] override active — exiting successfully despite regressions"
-    );
+    process.exit(1);
   }
 }
 
