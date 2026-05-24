@@ -58,9 +58,9 @@ export function NativeDropdown({
   React.useEffect(() => {
     const node = popoverRef.current;
     if (!node) return;
-    const handleToggle = (event: Event) => {
-      const toggle = event as ToggleEvent;
-      setIsOpen(toggle.newState === "open");
+    // HTMLElementEventMap types "toggle" as ToggleEvent — no cast needed.
+    const handleToggle = (event: ToggleEvent) => {
+      setIsOpen(event.newState === "open");
     };
     node.addEventListener("toggle", handleToggle);
     return () => node.removeEventListener("toggle", handleToggle);
@@ -74,6 +74,10 @@ export function NativeDropdown({
 
   const triggerStyle: React.CSSProperties = { anchorName };
 
+  // csstype's Properties type rejects `--*` keys in object literals — the
+  // cast is the documented codebase pattern (see ContentPanel.tsx,
+  // SortableTabButton.tsx, DemoOverlay.tsx).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const popoverStyle = {
     "--np-anchor": anchorName,
     "--np-position-area": POSITION_AREA[side][align],

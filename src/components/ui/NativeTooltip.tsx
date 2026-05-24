@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 type Side = "top" | "right" | "bottom" | "left";
 type Align = "start" | "center" | "end";
 
+type TriggerProps = React.HTMLAttributes<HTMLElement>;
+
 type NativeTooltipProps = {
   content: React.ReactNode;
   side?: Side;
@@ -12,7 +14,7 @@ type NativeTooltipProps = {
   delay?: number;
   className?: string;
   contentClassName?: string;
-  children: React.ReactElement;
+  children: React.ReactElement<TriggerProps>;
 };
 
 const POSITION_AREA: Record<Side, Record<Align, string>> = {
@@ -70,40 +72,42 @@ export function NativeTooltip({
 
   React.useEffect(() => clearShowTimer, [clearShowTimer]);
 
+  const childProps = children.props;
+
   // The consumer-provided `style` is spread last so an explicit
   // `anchorName` on a child trigger wins — surprising, but matches normal
   // React style-merge precedence and keeps the POC predictable.
   const triggerStyle: React.CSSProperties = {
     anchorName,
-    ...(children.props as { style?: React.CSSProperties }).style,
+    ...childProps.style,
   };
 
-  const trigger = React.cloneElement(children, {
+  const triggerOverrides: TriggerProps = {
     "aria-describedby": popoverId,
     style: triggerStyle,
-    className: cn((children.props as { className?: string }).className, className),
-    onPointerEnter: (event: React.PointerEvent) => {
+    className: cn(childProps.className, className),
+    onPointerEnter: (event) => {
       show();
-      (children.props as { onPointerEnter?: (e: React.PointerEvent) => void }).onPointerEnter?.(
-        event
-      );
+      childProps.onPointerEnter?.(event);
     },
-    onPointerLeave: (event: React.PointerEvent) => {
+    onPointerLeave: (event) => {
       hide();
-      (children.props as { onPointerLeave?: (e: React.PointerEvent) => void }).onPointerLeave?.(
-        event
-      );
+      childProps.onPointerLeave?.(event);
     },
-    onFocus: (event: React.FocusEvent) => {
+    onFocus: (event) => {
       show();
-      (children.props as { onFocus?: (e: React.FocusEvent) => void }).onFocus?.(event);
+      childProps.onFocus?.(event);
     },
-    onBlur: (event: React.FocusEvent) => {
+    onBlur: (event) => {
       hide();
-      (children.props as { onBlur?: (e: React.FocusEvent) => void }).onBlur?.(event);
+      childProps.onBlur?.(event);
     },
-  } as React.HTMLAttributes<HTMLElement>);
+  };
 
+  // csstype's Properties type rejects `--*` keys in object literals — the
+  // cast is the documented codebase pattern (see ContentPanel.tsx,
+  // SortableTabButton.tsx, DemoOverlay.tsx).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const popoverStyle = {
     "--np-anchor": anchorName,
     "--np-position-area": POSITION_AREA[side][align],
@@ -113,7 +117,7 @@ export function NativeTooltip({
 
   return (
     <>
-      {trigger}
+      {React.cloneElement(children, triggerOverrides)}
       <div
         ref={popoverRef}
         id={popoverId}
