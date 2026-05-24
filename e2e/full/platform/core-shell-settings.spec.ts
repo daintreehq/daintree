@@ -42,9 +42,9 @@ test.describe.serial("Core: Shell & Settings", () => {
       await expectToolbarButtonReachable(window, SEL.toolbar.openSettings, T_SHORT);
     });
 
-    test("welcome screen shows Open Folder button", async () => {
+    test("welcome screen shows Open folder button", async () => {
       const { window } = ctx;
-      await expect(window.getByRole("button", { name: "Open Folder" })).toBeVisible({
+      await expect(window.getByRole("button", { name: "Open folder" })).toBeVisible({
         timeout: T_MEDIUM,
       });
     });

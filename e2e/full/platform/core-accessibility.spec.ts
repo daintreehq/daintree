@@ -61,7 +61,7 @@ test.describe.serial("Core: Accessibility", () => {
   test.describe.serial("Axe Audits", () => {
     test("welcome screen passes WCAG 2.2 AA audit", async () => {
       const { window } = ctx;
-      await window.getByRole("button", { name: "Open Folder" }).waitFor({
+      await window.getByRole("button", { name: "Open folder" }).waitFor({
         state: "visible",
         timeout: T_MEDIUM,
       });
