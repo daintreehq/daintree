@@ -148,7 +148,7 @@ export function NativeDropdown({ label, items, triggerClassName }: NativeDropdow
             }}
             className={cn(
               "block w-full px-3 py-1.5 text-left text-sm transition-colors",
-              "hover:bg-overlay-subtle focus:bg-overlay-subtle outline-none",
+              "hover:bg-overlay-subtle focus:bg-overlay-subtle outline-hidden",
               "disabled:opacity-50 disabled:pointer-events-none"
             )}
           >
