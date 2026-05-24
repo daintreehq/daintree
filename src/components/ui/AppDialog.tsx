@@ -37,6 +37,20 @@ type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
  */
 type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
 
+/**
+ * Resolve a {@link RestoreFocusTarget} to an element. Tolerates a throwing
+ * resolver so the caller can still fall through to the app-shell fallback.
+ */
+function resolveRestoreFocusTarget(target: RestoreFocusTarget | undefined): HTMLElement | null {
+  if (!target) return null;
+  try {
+    const resolved = typeof target === "function" ? target() : target.current;
+    return resolved instanceof HTMLElement ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
 interface AppDialogContextValue {
   onClose: () => void;
   titleId: string;
@@ -103,6 +117,15 @@ export function AppDialog({
   );
   const portalOffset = portalOpen ? portalWidth : 0;
 
+  // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
+  // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
+  // changed identity (e.g. a caller passing an inline function), the cleanup
+  // would fire mid-open and restore focus prematurely.
+  const restoreFocusToRef = useRef(restoreFocusTo);
+  useEffect(() => {
+    restoreFocusToRef.current = restoreFocusTo;
+  }, [restoreFocusTo]);
+
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
     previousActiveElement.current = null;
@@ -112,21 +135,19 @@ export function AppDialog({
       return;
     }
     // Trigger was unmounted before close. Prefer a caller-supplied logical
-    // successor (e.g. the next row after a delete) when one is still connected.
-    if (restoreFocusTo) {
-      const target =
-        typeof restoreFocusTo === "function" ? restoreFocusTo() : restoreFocusTo.current;
-      if (target instanceof HTMLElement && target.isConnected) {
-        target.focus();
-        return;
-      }
+    // successor (e.g. the next row after a delete) when one is still connected
+    // and actually accepts focus.
+    const target = resolveRestoreFocusTarget(restoreFocusToRef.current);
+    if (target?.isConnected) {
+      target.focus();
+      if (document.activeElement === target) return;
     }
     // Otherwise hand focus to the first tabbable child of the app shell rather
     // than letting it silently fall to <body>.
     const root = document.getElementById("root");
     const fallback = root ? getVisibleTabbableElements(root)[0] : undefined;
     fallback?.focus();
-  }, [restoreFocusTo]);
+  }, []);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,

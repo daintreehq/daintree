@@ -402,6 +402,120 @@ describe("AppDialog focus trapping", () => {
       expect(document.activeElement).toBe(fallbackButton);
       document.body.removeChild(root);
     });
+
+    it("ignores restoreFocusTo when the trigger is still connected", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={{ current: successor }}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      // Trigger stays mounted — focus must return to it, not the successor.
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={{ current: successor }}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+
+      expect(document.activeElement).toBe(trigger);
+      expect(document.activeElement).not.toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(trigger);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to #root when the connected target cannot take focus", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      // A connected but non-focusable element: focus() is a no-op.
+      const successor = document.createElement("div");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      expect(document.activeElement).not.toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to #root when the function target throws", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+
+      await openCloseWith(() => {
+        throw new Error("boom");
+      }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+
+    it("does not restore focus prematurely when restoreFocusTo identity changes while open", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+      const innerButton = screen.getByText("Inner");
+      expect(document.activeElement).toBe(innerButton);
+
+      // Parent re-renders while the dialog is open, passing a fresh inline
+      // function. Focus must stay inside the dialog — no premature restore.
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      expect(document.activeElement).toBe(innerButton);
+
+      // The real close still restores to the successor once the trigger is gone.
+      document.body.removeChild(trigger);
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      expect(document.activeElement).toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
   });
 
   describe("AppDialog Footer a11y", () => {
