@@ -231,8 +231,23 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(baseBlock).toMatch(/transition:[\s\S]*?;/);
       const transitionMatch = baseBlock!.match(/transition:[\s\S]*?;/)![0];
       expect(transitionMatch).not.toContain("box-shadow");
-      expect(transitionMatch).toContain("color");
+      expect(transitionMatch).not.toContain("all");
+      expect(transitionMatch).toMatch(/\bcolor\b/);
       expect(transitionMatch).toContain("background-color");
+
+      // Guard: no later rule in the same file reintroduces box-shadow or
+      // transition:all on these classes.
+      for (const block of css.match(/\.toolbar-(?:icon|agent)-button[\s\S]*?\{[\s\S]*?\}/g) ?? []) {
+        const t = block.match(/transition:[\s\S]*?;/)?.[0];
+        if (!t) continue;
+        if (block.includes("box-shadow") && t.includes("box-shadow")) {
+          // Armed-state block sets box-shadow but not in a transition list —
+          // only flag it if box-shadow appears inside the transition value.
+        }
+        expect(t).not.toContain("all");
+        if (block === baseBlock) continue; // already checked above
+        expect(t).not.toMatch(/box-shadow\s+150ms/);
+      }
     });
 
     it("overflow severity dot uses a non-color shape differentiator per tier — WCAG 1.4.1", () => {
