@@ -254,11 +254,12 @@ describe("AppPaletteDialog.Empty", () => {
         <AppPaletteDialog.Empty query="foo" emptyMessage="No items available" />
       );
       unmount();
+      expect(vi.getTimerCount()).toBe(0);
       // Advancing past the debounce after unmount should not throw (timer was cleared)
       act(() => {
         vi.advanceTimersByTime(600);
       });
-      // No assertion needed — the test verifies no setState-after-unmount warning
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });

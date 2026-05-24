@@ -524,7 +524,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     return () => {
       if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
     };
-  }, [title]);
+  }, [title, trimmedQuery]);
 
   if (trimmedQuery) {
     return (
