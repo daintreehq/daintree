@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -59,17 +59,19 @@ export function ErrorFallback({
     announcement: "Error ID copied",
   });
 
+  const announcedRef = useRef(false);
+
   // Fullscreen carries role="alertdialog" + autoFocus on its primary button —
   // AT already gets a focus shift + accessible-name read, so a duplicate
   // announce() would over-narrate. Section/component variants are inline and
   // need an explicit live-region message.
   useEffect(() => {
-    if (variant === "fullscreen") return;
+    if (variant === "fullscreen" || announcedRef.current) return;
+    announcedRef.current = true;
     const name = componentName || (variant === "section" ? "Section" : "Component");
     const msg = variant === "section" ? `${name} stopped working` : `${name} error`;
     useAnnouncerStore.getState().announce(msg, variant === "section" ? "assertive" : "polite");
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only announcement
-  }, []);
+  }, [variant, componentName]);
 
   const handleOpenLogs = () => {
     void actionService.dispatch("logs.openFile", undefined, { source: "user" });
