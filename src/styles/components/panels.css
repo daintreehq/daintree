@@ -32,6 +32,14 @@
   }
 }
 
+@media (prefers-contrast: more) {
+  .surface-chrome {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--theme-surface-sidebar);
+  }
+}
+
 .themed-dialog-surface {
   background: var(--dialog-bg, var(--theme-surface-panel-elevated));
   box-shadow: var(--dialog-shadow, var(--theme-shadow-dialog));

@@ -46,6 +46,14 @@
   }
 }
 
+@media (prefers-contrast: more) {
+  .surface-toolbar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--theme-surface-toolbar);
+  }
+}
+
 .toolbar-icon-button,
 .toolbar-agent-button {
   --_hover-fg: var(--toolbar-control-hover-fg, var(--theme-accent-primary));

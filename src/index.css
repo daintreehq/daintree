@@ -2655,7 +2655,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 }
 
-/* Increased contrast mode — heavier borders for visibility */
+/* Increased contrast mode — heavier borders for visibility.
+ *
+ * macOS "Increase Contrast" fires prefers-contrast: more but NOT
+ * forced-colors: active, so this block is the sole high-contrast surface
+ * for Mac users. Mirrors the structural intent of the forced-colors block
+ * above but keeps theme colors (the user wants more contrast, not a
+ * system-color repaint). */
 @media (prefers-contrast: more) {
   .terminal-selected,
   .terminal-focused {
@@ -2671,6 +2677,28 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   *:focus-visible {
     outline-width: 3px;
   }
+
+  /* Native form controls have border-width:0 from Preflight; restoring a
+   * visible 2px border (with the theme's own color) anchors the click target. */
+  button,
+  [role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"],
+  input,
+  select,
+  textarea {
+    border-width: 2px;
+  }
+
+  /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the
+   * class attribute and bakes the alpha into `color-mix()` on the color
+   * property — `opacity: 1` cannot recover the lost contrast. Forcing the
+   * solid token restores it. !important is required because the Tailwind
+   * utility rule has equal specificity (0,1,0) and wins on source order. */
+  [class*="text-daintree-text/"] {
+    color: var(--color-daintree-text) !important;
+  }
 }
 
 @layer utilities {
@@ -2682,6 +2710,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     -webkit-backdrop-filter: blur(var(--theme-material-blur))
       saturate(var(--theme-material-saturation));
     backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+  }
+
+  /* High-contrast users want solid chrome behind text; drop the frosted-glass
+   * material. Same shape as the prefers-reduced-transparency fallbacks in
+   * toolbar.css and panels.css. Inside @layer utilities so the layer
+   * specificity matches the base rule above. */
+  @media (prefers-contrast: more) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
   }
 
   .control-hover:hover {
