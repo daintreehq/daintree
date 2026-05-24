@@ -68,6 +68,17 @@ export const UI_PALETTE_STALE_DELAY = DURATION_200;
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
 
+/** Minimum on-screen dwell once a skeleton has crossed its onset gate. The
+ *  onset gates (`useSkeletonGate`, `useDohertyGate`) only suppress *early*
+ *  display; nothing stops a skeleton that just appeared from tearing down in
+ *  the same frame when the underlying work resolves moments later. That
+ *  same-frame flash reads as a glitch. `useSkeletonDisplayFloor` holds the
+ *  placeholder visible for this floor once shown. 250ms sits at the just-
+ *  noticeable-difference threshold — long enough to kill the flash, short
+ *  enough to never feel sluggish in an IDE where data usually resolves fast.
+ *  Not an animation token — a perceptual floor, same family as the gates. */
+export const UI_SKELETON_FLOOR_MS = DURATION_250;
+
 /** Feedback-hint window for direct user actions (e.g. `Button`'s `loading`
  *  state). Distinct in role from the skeleton/Doherty gates: those *delay*
  *  showing a placeholder to avoid flicker on background work, whereas a
