@@ -282,6 +282,16 @@ export function createDragAnnouncements(
       return `Dropped ${label}`;
     },
     onDragCancel({ active }) {
+      // Worktree-sort drags are cancel-announced by the sidebar's own
+      // assertive live region (SidebarContent's useDndMonitor.onDragCancel).
+      // dnd-kit's announcer also fires onDragCancel for every drag, so without
+      // this guard a worktree-sort Escape/cancel speaks the cancellation twice
+      // — the real "two announcers competing" case behind issue #8942. Returning
+      // undefined is a safe no-op (useAnnouncement ignores nullish values) and
+      // leaves dnd-kit's announcements intact for all other drag types.
+      if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+        return undefined;
+      }
       const label = resolveActiveLabel(active);
       return `Drag cancelled. ${label} returned to its original position`;
     },
@@ -500,14 +510,6 @@ export function DndProvider({ children }: DndProviderProps) {
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
   const stabilizationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dockRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-
-  // dnd-kit's DndContext unconditionally renders its own aria-live announcer,
-  // which competes with the sidebar's custom Alt+Arrow reorder live regions and
-  // causes announcements to be silently dropped. Portal that announcer into a
-  // detached (never-attached) node so it stays out of the accessibility tree.
-  // The ref must hold a stable element for the provider's lifetime — a fresh
-  // element each render would re-portal the announcer and reintroduce the bug.
-  const dndAccessibilityContainerRef = useRef<Element>(document.createElement("div"));
 
   // Snapshot of the worktree-sort drag data pinned at pickup. The virtualized
   // sidebar can unmount the source row's useSortable hook once it scrolls
@@ -1254,7 +1256,6 @@ export function DndProvider({ children }: DndProviderProps) {
       accessibility={{
         announcements: dragAnnouncements,
         screenReaderInstructions: dragScreenReaderInstructions,
-        container: dndAccessibilityContainerRef.current,
       }}
     >
       <DndPlaceholderContext.Provider value={placeholderContextValue}>
