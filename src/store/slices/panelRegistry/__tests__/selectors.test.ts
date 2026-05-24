@@ -33,11 +33,23 @@ describe("getNarrowPanel", () => {
     expect(p?.kind).toBe("terminal");
   });
 
-  it("treats a record with no kind as a PTY panel", () => {
+  it("backfills the terminal discriminant for a no-kind legacy record", () => {
     const noKind = panel("t", { kind: undefined });
     const p = getNarrowPanel({ t: noKind }, "t");
-    expect(p?.kind).toBeUndefined();
-    expect(p).toBe(noKind);
+    expect(p?.kind).toBe("terminal");
+    // A fresh object so the union's literal `kind: "terminal"` holds at runtime.
+    expect(p).not.toBe(noKind);
+  });
+
+  it("preserves identity for a record that already carries kind: terminal", () => {
+    const withKind = panel("t");
+    const p = getNarrowPanel({ t: withKind }, "t");
+    expect(p).toBe(withKind);
+  });
+
+  it("returns undefined for an extension/unknown kind", () => {
+    const ext = panel("x", { kind: "acme.tool" as TerminalInstance["kind"] });
+    expect(getNarrowPanel({ x: ext }, "x")).toBeUndefined();
   });
 
   it("narrows a browser panel", () => {
@@ -66,6 +78,15 @@ describe("getNarrowPanels", () => {
     const result = getNarrowPanels(byId, ["b", "missing", "a"]);
     expect(result.map((p) => p.id)).toEqual(["b", "a"]);
     expect(result.map((p) => p.kind)).toEqual(["browser", "terminal"]);
+  });
+
+  it("drops extension/unknown-kind panels from the result", () => {
+    const byId = {
+      a: panel("a"),
+      x: panel("x", { kind: "acme.tool" as TerminalInstance["kind"] }),
+    };
+    const result = getNarrowPanels(byId, ["a", "x"]);
+    expect(result.map((p) => p.id)).toEqual(["a"]);
   });
 
   it("returns a stable reference when inputs are identity-equal", () => {

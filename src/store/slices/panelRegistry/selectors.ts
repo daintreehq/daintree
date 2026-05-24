@@ -35,6 +35,10 @@ export function selectOrderedTerminals(
  * Uses the existing kind type guards (which default a missing `kind` to
  * "terminal"), so a no-`kind` legacy record narrows to `PtyPanelData` — no
  * blanket `as unknown as PanelInstance` cast.
+ *
+ * Returns `undefined` for an absent id and for any panel whose `kind` is
+ * outside the built-in union (e.g. an extension/plugin kind); such panels are
+ * intentionally not representable by `PanelInstance` and are dropped here.
  */
 export function getNarrowPanel(
   panelsById: Record<string, TerminalInstance>,
@@ -45,7 +49,13 @@ export function getNarrowPanel(
   if (isBrowserPanel(panel)) return panel;
   if (isDevPreviewPanel(panel)) return panel;
   if (isReviewPanel(panel)) return panel;
-  if (isPtyPanel(panel)) return panel;
+  if (isPtyPanel(panel)) {
+    // The guard defaults an absent `kind` to "terminal", so a legacy no-`kind`
+    // record lands here. Backfill the literal discriminant when it's missing so
+    // the returned `PtyPanelData` is sound for downstream `switch (kind)`;
+    // preserve object identity when the panel already carries it.
+    return panel.kind === "terminal" ? panel : { ...panel, kind: "terminal" };
+  }
   return undefined;
 }
 
