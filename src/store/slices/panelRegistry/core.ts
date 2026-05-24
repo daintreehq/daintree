@@ -8,6 +8,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
@@ -46,6 +47,7 @@ export const createCorePanelActions = (
   | "moveTerminalToDock"
   | "moveTerminalToGrid"
   | "toggleTerminalLocation"
+  | "emptyTrash"
 > => ({
   beginHydrationBatch: () => beginBatch(),
 
@@ -140,6 +142,76 @@ export const createCorePanelActions = (
 
     const remainingIds = get().panelIds;
     middleware?.onTerminalRemoved?.(id, removedIndex, remainingIds, terminal);
+  },
+
+  emptyTrash: (ids) => {
+    if (ids.length === 0) return;
+
+    const idSet = new Set(ids);
+    const state = get();
+
+    for (const id of idSet) {
+      clearTrashExpiryTimer(id);
+      cancelReconnectErrorDebounce(id);
+      const terminal = state.panelsById[id];
+      if (!terminal) continue;
+
+      if (isDevPreviewPanel(terminal)) {
+        stopDevPreviewByPanelId(id);
+      }
+
+      if (panelKindHasPty(terminal.kind ?? "terminal")) {
+        terminalClient.kill(id).catch((error) => {
+          logError("[TerminalStore] Failed to kill terminal", error);
+        });
+        terminalInstanceService.destroy(id);
+      }
+    }
+
+    set((state) => {
+      const newById = { ...state.panelsById };
+      for (const id of idSet) {
+        delete newById[id];
+      }
+
+      const newIds = state.panelIds.filter((tid) => !idSet.has(tid));
+
+      let newWorktreeIndex = state.panelIdsByWorktreeId;
+      for (const id of idSet) {
+        const terminal = state.panelsById[id];
+        if (terminal) {
+          newWorktreeIndex = removeFromWorktreeIndex(newWorktreeIndex, terminal.worktreeId, id);
+        }
+      }
+
+      const newTrashed = new Map(state.trashedTerminals);
+      for (const id of idSet) {
+        newTrashed.delete(id);
+      }
+
+      const newBackgrounded = new Map(state.backgroundedTerminals);
+      for (const id of idSet) {
+        newBackgrounded.delete(id);
+      }
+
+      const { tabGroups: newTabGroups } = removePanelIdsFromTabGroups(state.tabGroups, idSet);
+
+      saveNormalized(newById, newIds);
+      saveTabGroups(newTabGroups);
+      return {
+        panelsById: newById,
+        panelIds: newIds,
+        panelIdsByWorktreeId: newWorktreeIndex,
+        trashedTerminals: newTrashed,
+        backgroundedTerminals: newBackgrounded,
+        tabGroups: newTabGroups,
+      };
+    });
+
+    for (const id of idSet) {
+      const removedIndex = state.panelIds.indexOf(id);
+      middleware?.onTerminalRemoved?.(id, removedIndex, get().panelIds, state.panelsById[id]);
+    }
   },
 
   updateTitle: (id, newTitle) => {

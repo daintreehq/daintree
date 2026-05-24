@@ -96,6 +96,7 @@ export interface PanelRegistrySlice {
   /** Apply all panels collected since `beginHydrationBatch` in a single `set()` call. */
   flushHydrationBatch: (token: HydrationBatchToken) => void;
   removePanel: (id: string) => void;
+  emptyTrash: (ids: string[]) => void;
   updateTitle: (id: string, newTitle: string) => void;
   updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
