@@ -8,6 +8,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { actionService } from "@/services/ActionService";
+import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
@@ -327,6 +328,7 @@ const DropdownMenuActionItem = React.forwardRef<
   DropdownMenuActionItemProps
 >(({ actionId, args, dispatchOptions, onSelect, disabled, ...props }, ref) => {
   const source = useMenuActionSource();
+  const ariaKeyshortcuts = useAriaKeyshortcuts(actionId);
 
   const handleSelect: React.ComponentPropsWithoutRef<
     typeof DropdownMenuPrimitiveType.Item
@@ -336,7 +338,15 @@ const DropdownMenuActionItem = React.forwardRef<
     void actionService.dispatch(actionId, args, { ...dispatchOptions, source });
   };
 
-  return <DropdownMenuItem ref={ref} onSelect={handleSelect} disabled={disabled} {...props} />;
+  return (
+    <DropdownMenuItem
+      ref={ref}
+      onSelect={handleSelect}
+      disabled={disabled}
+      {...props}
+      aria-keyshortcuts={ariaKeyshortcuts}
+    />
+  );
 });
 DropdownMenuActionItem.displayName = "DropdownMenuActionItem";
 

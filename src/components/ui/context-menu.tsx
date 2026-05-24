@@ -8,6 +8,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { actionService } from "@/services/ActionService";
+import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
@@ -286,6 +287,7 @@ const ContextMenuActionItem = React.forwardRef<
   ContextMenuActionItemProps
 >(({ actionId, args, dispatchOptions, onSelect, disabled, ...props }, ref) => {
   const source = useMenuActionSource();
+  const ariaKeyshortcuts = useAriaKeyshortcuts(actionId);
 
   const handleSelect: React.ComponentPropsWithoutRef<
     typeof ContextMenuPrimitiveType.Item
@@ -295,7 +297,15 @@ const ContextMenuActionItem = React.forwardRef<
     void actionService.dispatch(actionId, args, { ...dispatchOptions, source });
   };
 
-  return <ContextMenuItem ref={ref} onSelect={handleSelect} disabled={disabled} {...props} />;
+  return (
+    <ContextMenuItem
+      ref={ref}
+      onSelect={handleSelect}
+      disabled={disabled}
+      {...props}
+      aria-keyshortcuts={ariaKeyshortcuts}
+    />
+  );
 });
 ContextMenuActionItem.displayName = "ContextMenuActionItem";
 
