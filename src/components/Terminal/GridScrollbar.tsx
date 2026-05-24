@@ -182,7 +182,7 @@ export function GridScrollbar({
       data-no-dnd
       onPointerDown={onTrackPointerDown}
       onWheel={onWheel}
-      className="absolute z-20"
+      className="absolute z-20 rounded-[7px] bg-[var(--scrollbar-track)]"
       style={{
         right: BAR_INSET_PX,
         top: TRACK_INSET_PX,
@@ -206,7 +206,7 @@ export function GridScrollbar({
         onPointerEnter={() => setPhase((p) => (p === "drag" ? p : "hover"))}
         onPointerLeave={() => setPhase((p) => (p === "drag" ? p : "idle"))}
         className={cn(
-          "absolute inset-x-0 cursor-default rounded-[7px] transition-colors",
+          "absolute inset-x-0 cursor-default rounded-[7px] border-2 border-transparent bg-clip-padding transition-colors",
           phase === "idle" ? "bg-[var(--scrollbar-thumb)]" : "bg-[var(--scrollbar-thumb-hover)]"
         )}
         style={{ height: geometry.height, top: geometry.top }}
