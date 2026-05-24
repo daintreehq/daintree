@@ -229,8 +229,8 @@ interface AppPaletteHeaderProps {
   className?: string;
   /**
    * Show an indeterminate loading bar pinned to the bottom of the header.
-   * The bar fades in after the 400ms Doherty threshold, so fast loads never
-   * flash a sweep.
+   * The bar fades in after the 150ms palette typed-input budget
+   * (`UI_PALETTE_STALE_DELAY`), so fast loads never flash a sweep.
    */
   isLoading?: boolean;
 }

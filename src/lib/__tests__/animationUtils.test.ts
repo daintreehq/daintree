@@ -189,6 +189,11 @@ describe("--anti-flicker-delay CSS contract", () => {
     );
     expect(css).toMatch(/\.surface-stale\s*\{[^}]*?opacity:\s*0\.5/);
   });
+
+  it(".surface-stale does not reference the palette token", () => {
+    // Guard against a future re-merge of the two rules onto one token.
+    expect(css).not.toMatch(/\.surface-stale\s*\{[^}]*--palette-stale-delay/);
+  });
 });
 
 describe("--palette-stale-delay CSS contract", () => {
@@ -221,5 +226,10 @@ describe("--palette-stale-delay CSS contract", () => {
 
   it(".palette-results-stale dims to 0.85 (WCAG-safe on keyboard-navigable rows)", () => {
     expect(css).toMatch(/\.palette-results-stale\s*\{[^}]*?opacity:\s*0\.85/);
+  });
+
+  it(".palette-results-stale does not reference the Doherty token", () => {
+    // Symmetric guard: the palette rule must not slip back onto the 400ms gate.
+    expect(css).not.toMatch(/\.palette-results-stale\s*\{[^}]*--anti-flicker-delay/);
   });
 });
