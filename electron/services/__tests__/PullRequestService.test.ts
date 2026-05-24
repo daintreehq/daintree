@@ -1172,7 +1172,7 @@ describe("PullRequestService", () => {
       expect(pr.stagnantPollCount).toBe(2);
 
       // Simulate CI transition
-      const prevDiff = pr.ciStatus;
+      const prevDiff = pr.ciStatus as string | undefined;
       pr.ciStatus = "SUCCESS";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevDiff === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
