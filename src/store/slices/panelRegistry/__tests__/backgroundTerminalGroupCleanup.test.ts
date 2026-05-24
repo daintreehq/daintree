@@ -519,7 +519,9 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
 
     usePanelStore.getState().backgroundPanelGroup("t1");
 
-    const groupRestoreId = usePanelStore.getState().backgroundedTerminals.get("t1")!.groupRestoreId!;
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
 
     // Remove the original anchor (first member) from the backgrounded collection
     // and from panelsById, simulating individual deletion / hydration loss.
@@ -561,7 +563,9 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
 
     usePanelStore.getState().backgroundPanelGroup("t1");
 
-    const groupRestoreId = usePanelStore.getState().backgroundedTerminals.get("t1")!.groupRestoreId!;
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
 
     // Remove t1 — which was both the anchor and the active tab.
     usePanelStore.setState((state) => {
@@ -601,7 +605,9 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
 
     usePanelStore.getState().backgroundPanelGroup("t1");
 
-    const groupRestoreId = usePanelStore.getState().backgroundedTerminals.get("t1")!.groupRestoreId!;
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
 
     usePanelStore.setState((state) => {
       const backgroundedTerminals = new Map(state.backgroundedTerminals);
@@ -640,7 +646,9 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
 
     usePanelStore.getState().backgroundPanelGroup("t1");
 
-    const groupRestoreId = usePanelStore.getState().backgroundedTerminals.get("t1")!.groupRestoreId!;
+    const groupRestoreId = usePanelStore
+      .getState()
+      .backgroundedTerminals.get("t1")!.groupRestoreId!;
 
     // Remove two members including the anchor — only t3 survives.
     usePanelStore.setState((state) => {
