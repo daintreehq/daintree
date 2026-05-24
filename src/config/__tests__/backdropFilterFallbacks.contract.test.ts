@@ -58,11 +58,16 @@ describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
       it("nulls both prefixed and unprefixed backdrop-filter and restores a solid bg", () => {
         // Each fallback block scopes to the surface selector and zeroes out
         // the filter; the solid background uses an opaque --theme-surface-*
-        // token, never a translucent color-mix. We concatenate the three
-        // fallback blocks so the assertions exercise all of them.
+        // token, never a translucent color-mix. Bound the contrast slice to
+        // its own closing `}\n}` (media-query close + ruleset close) so the
+        // assertions can't be satisfied by an unrelated later rule.
         const supportsBlock = css.slice(supportsIdx, reducedIdx);
         const reducedBlock = css.slice(reducedIdx, contrastIdx);
-        const contrastBlock = css.slice(contrastIdx);
+        const contrastEnd = css.indexOf("\n}\n}", contrastIdx);
+        const contrastBlock = css.slice(
+          contrastIdx,
+          contrastEnd > -1 ? contrastEnd + 4 : css.length
+        );
 
         for (const block of [supportsBlock, reducedBlock, contrastBlock]) {
           expect(block).toMatch(new RegExp(`\\${selector}\\s*{`));
@@ -75,7 +80,11 @@ describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
       it("does not use !important (cross-file perf-mode override owns that layer)", () => {
         const supportsBlock = css.slice(supportsIdx, reducedIdx);
         const reducedBlock = css.slice(reducedIdx, contrastIdx);
-        const contrastBlock = css.slice(contrastIdx).split("\n}")[0];
+        const contrastEnd = css.indexOf("\n}\n}", contrastIdx);
+        const contrastBlock = css.slice(
+          contrastIdx,
+          contrastEnd > -1 ? contrastEnd + 4 : css.length
+        );
         expect(supportsBlock).not.toMatch(/!important/);
         expect(reducedBlock).not.toMatch(/!important/);
         expect(contrastBlock).not.toMatch(/!important/);
