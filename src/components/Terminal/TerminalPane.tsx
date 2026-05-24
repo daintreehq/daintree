@@ -73,6 +73,7 @@ const LazyHybridInputBar = lazy(() =>
 );
 import {
   getTerminalFocusTarget,
+  isLikelyAtSynthesizedPointer,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
@@ -760,6 +761,15 @@ function TerminalPaneComponent({
     setFocused(id);
   };
 
+  // Timestamp of the last pointermove over the xterm wrapper, used to tell a
+  // physical click (preceded by movement) from an AT-synthesized routing event
+  // (a bare pointerdown). Uses the event `timeStamp` clock for monotonicity.
+  const lastXtermPointerMoveAtRef = useRef<number | null>(null);
+
+  const handleXtermPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    lastXtermPointerMoveAtRef.current = e.timeStamp;
+  };
+
   const handleXtermPointerDownCapture = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
 
@@ -786,6 +796,18 @@ function TerminalPaneComponent({
     }
 
     e.preventDefault();
+
+    // A bare pointerdown with no recent pointermove is likely screen reader
+    // cursor routing (VoiceOver/NVDA), not a physical click. AT routing events
+    // are indistinguishable from real clicks by their properties, so we infer
+    // it from the absence of preceding movement. Activate the pane but let the
+    // event reach xterm — stopPropagation/setPointerCapture would swallow the
+    // routing event and break cursor positioning for screen reader users.
+    if (isLikelyAtSynthesizedPointer(lastXtermPointerMoveAtRef.current, e.timeStamp)) {
+      setFocused(id);
+      return;
+    }
+
     e.stopPropagation();
 
     // Capture the pointer so follow-on pointermove/pointerup events route to
@@ -838,23 +860,21 @@ function TerminalPaneComponent({
     });
 
     if (focusTarget === "hybridInput") {
-      let cancelled = false;
-      let innerRafId: number | undefined;
-      const outerRafId = requestAnimationFrame(() => {
-        if (cancelled) return;
-        innerRafId = requestAnimationFrame(() => {
-          if (cancelled) return;
-          // xterm v6 clears selection on blur. Don't steal focus from
-          // xterm when the user has an active text selection.
-          const managed = terminalInstanceService.get(id);
-          if (managed?.terminal.hasSelection()) return;
-          inputBarRef.current?.focusWithCursorAtEnd();
-        });
+      // xterm v6 clears selection on blur, so read selection state
+      // synchronously here — before any focus handoff. Don't steal focus from
+      // xterm when the user has an active text selection. Checking up front
+      // (rather than inside a deferred RAF) also avoids focus briefly landing
+      // on the ContentPanel container, which made screen readers announce the
+      // container instead of the input bar. A single RAF then hands focus to
+      // the input once the pane has painted.
+      const managed = terminalInstanceService.get(id);
+      if (managed?.terminal.hasSelection()) return;
+
+      const rafId = requestAnimationFrame(() => {
+        inputBarRef.current?.focusWithCursorAtEnd();
       });
       return () => {
-        cancelled = true;
-        cancelAnimationFrame(outerRafId);
-        if (innerRafId !== undefined) cancelAnimationFrame(innerRafId);
+        cancelAnimationFrame(rafId);
         inputBarRef.current?.cancelPendingFocus();
       };
     }
@@ -1223,7 +1243,7 @@ function TerminalPaneComponent({
                   (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
                 )}
                 onPointerDownCapture={handleXtermPointerDownCapture}
-                onPointerMove={handleXtermPointerNoop}
+                onPointerMove={handleXtermPointerMove}
                 onPointerUp={handleXtermPointerNoop}
               >
                 <Suspense fallback={null}>

@@ -13,6 +13,7 @@ import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProto
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { resolveTerminalTabEscape } from "./terminalFocus";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
@@ -294,6 +295,32 @@ export function XtermAdapter({
 
         // Intercept F6 for macro-region focus cycling before terminal processing
         if (event.key === "F6") {
+          return false;
+        }
+
+        // Tab/Shift+Tab escape: xterm otherwise transmits Tab to the PTY as \t,
+        // trapping keyboard-only users in the terminal. Mirror F6 region cycling
+        // by dispatching the same navigation actions, then suppress the PTY
+        // write. xterm has already preventDefault'd the event, so the browser's
+        // own focus move won't fire — the dispatch is what moves focus. (#8935)
+        const tabEscape = resolveTerminalTabEscape(event);
+        if (tabEscape) {
+          void actionService
+            .dispatch(
+              tabEscape === "prev" ? "nav.focusRegion.prev" : "nav.focusRegion.next",
+              undefined,
+              { source: "keybinding" }
+            )
+            .then((dispatchResult) => {
+              if (!dispatchResult.ok) {
+                logError("[XtermTabEscape] Failed to move focus region", undefined, {
+                  error: dispatchResult.error,
+                });
+              }
+            })
+            .catch((error) => {
+              logError("[XtermTabEscape] Unexpected error", error);
+            });
           return false;
         }
 
@@ -615,6 +642,7 @@ export function XtermAdapter({
         ref={containerRef}
         className="w-full h-full min-h-0 min-w-0"
         aria-label="Terminal output"
+        aria-keyshortcuts="F6 Tab Shift+Tab"
         role="application"
       />
     </div>

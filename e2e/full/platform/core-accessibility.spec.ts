@@ -290,6 +290,40 @@ test.describe.serial("Core: Accessibility", () => {
           expect(visited.size).toBeGreaterThanOrEqual(3);
         });
 
+        test("Tab moves focus out of a focused terminal (no keyboard trap)", async () => {
+          const { window } = ctx;
+          await ensureWindowFocused(ctx.app);
+
+          const before = await getGridPanelCount(window);
+          await window.keyboard.press(`${mod}+Alt+t`);
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+          await window
+            .locator(SEL.terminal.xtermRows)
+            .first()
+            .waitFor({ state: "visible", timeout: T_LONG });
+
+          // Click into the terminal so xterm's textarea holds focus.
+          await window.locator(SEL.panel.gridPanel).first().locator(SEL.terminal.xtermRows).click();
+          await expect
+            .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
+              timeout: T_LONG,
+            })
+            .toBe(true);
+
+          // Tab must escape the terminal rather than being swallowed as \t.
+          await window.keyboard.press("Tab");
+          await expect
+            .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
+              timeout: T_LONG,
+            })
+            .toBe(false);
+
+          // Clean up via the close button (Cmd+W quits on the last panel).
+          const panel = window.locator(SEL.panel.gridPanel).first();
+          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
+        });
+
         test("Action Palette traps focus correctly", async () => {
           const { window } = ctx;
 
