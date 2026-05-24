@@ -234,6 +234,94 @@ describe("GitHubRateLimitService", () => {
       }
     });
 
+    it("re-arms to an earlier time when the same resource is re-blocked sooner", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not clear early when the same resource is re-blocked later", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clearResource() cancels the pending block timer", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "4999",
+            "x-ratelimit-reset": String(nowSec + 3600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(120_000);
+
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("a later block does not delay an earlier block's timer", () => {
       vi.useFakeTimers();
       try {

@@ -443,7 +443,9 @@ class GitHubRateLimitServiceImpl {
     for (const state of this.states.values()) {
       if (state.resumeAt < minResumeAt) minResumeAt = state.resumeAt;
     }
-    const delay = Math.max(0, minResumeAt - Date.now());
+    // Cap at the Node setTimeout int32 ceiling — without this a malformed
+    // far-future resumeAt wraps to a 1ms delay and the self-rearm spins.
+    const delay = Math.min(Math.max(0, minResumeAt - Date.now()), 2_147_483_647);
     const timer = setTimeout(() => {
       this._blockResetTimer = null;
       this.autoClearExpired();
