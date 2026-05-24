@@ -19,7 +19,13 @@ const OUTLINE_HIDDEN_PATTERN = /\boutline-hidden\b/g;
 // Element-owned focus pseudo-class variants. Excludes `group-focus`/`peer-focus`
 // (parent/sibling state, not structural focus on the element itself), matching the
 // existing `isFocusRing` precedent in `accentGuard.contract.test.ts`.
-const FOCUS_VARIANT_PATTERN = /(?<![\w-])focus(?:-visible|-within)?:/;
+//
+// The negative lookahead excludes "suppressor" utilities that hide the focus
+// outline without replacing it — `focus:outline-hidden`, `focus:outline-none`,
+// `focus:ring-0` etc. are not real focus indicators, so a string whose ONLY
+// `focus:` token is a suppressor must still be flagged as missing a fallback.
+const FOCUS_VARIANT_PATTERN =
+  /(?<![\w-])focus(?:-visible|-within)?:(?!(?:outline-hidden|outline-none|ring-0|border-transparent)\b)/;
 
 // Codebase macro-focus mechanism (TerminalDockRegion, HelpPanel) — paints a ring
 // via `data-[macro-focus=true]:ring-*` when the macro-focus app state owns the
@@ -319,6 +325,136 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason:
       "Listbox container with roving tabindex — focus indicator is owned by the active row, not the container",
   },
+
+  // ── Parent-shows-focus pattern ────────────────────────────────────────
+  // Inputs nested inside a wrapper that paints the focus indicator via
+  // `focus-within:border-*` / `focus-within:ring-*`. The child input
+  // suppresses its own default outline with `focus:outline-hidden` so the
+  // wrapper's ring is the only focus indication. The scanner can't see the
+  // sibling JSX parent, so these get per-occurrence allowlists.
+  {
+    file: "src/components/Settings/KeyboardShortcutsTab.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-muted focus:outline-hidden",
+    reason:
+      "Parent shows focus: wrapper at line 230 has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
+  {
+    file: "src/components/Settings/SettingsDialog.tsx",
+    fragment:
+      "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-hidden",
+    reason:
+      "Parent shows focus: wrapper at line 578 has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
+  {
+    file: "src/components/Project/QuickRun.tsx",
+    fragment: "focus:outline-hidden min-w-0",
+    reason:
+      "Parent shows focus: wrapper at line 397 has `focus-within:border-daintree-accent/35 focus-within:ring-1`",
+  },
+  {
+    file: "src/components/ui/AppPaletteDialog.tsx",
+    fragment: "focus:outline-hidden focus:border-transparent focus:ring-0",
+    reason:
+      "Parent shows focus: wrapper at line 421 has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
+  {
+    file: "src/components/Settings/ColorSchemePicker.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+    reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-daintree-accent`",
+  },
+  {
+    file: "src/components/ThemeBrowser/ThemeBrowser.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+    reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-daintree-accent`",
+  },
+  {
+    file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden",
+    reason:
+      "Parent shows focus: wrapper at line 141 has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
+
+  // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
+  // The new contract surfaced these standalone interactive elements that
+  // suppress the default focus outline with no replacement. Documented
+  // here for follow-up; each is a real keyboard-accessibility gap that
+  // should be addressed in a separate cleanup PR.
+  {
+    file: "src/components/Settings/AgentSelectorDropdown.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
+  },
+  {
+    file: "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+    fragment:
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
+  },
+  {
+    file: "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
+    fragment:
+      "flex-1 text-sm font-medium bg-daintree-bg border border-border-strong rounded px-2 py-0.5 focus:outline-hidden",
+    reason: "PRE-EXISTING #8940: preset rename input has no focus indicator — follow-up",
+  },
+  {
+    file: "src/components/Panel/PanelHeader.tsx",
+    fragment:
+      "text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-daintree-text select-text transition-colors focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: inline panel title rename input has no focus indicator — follow-up",
+  },
+  {
+    file: "src/components/Panel/TabButton.tsx",
+    fragment:
+      "text-xs bg-overlay-soft border px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text transition-colors focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: tab rename input relies on conditional border that doesn't change on focus — follow-up",
+  },
+  {
+    file: "src/components/Project/QuickRun.tsx",
+    fragment:
+      "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: QuickRun expand/collapse header button has no focus indicator — follow-up",
+  },
+  {
+    file: "src/components/Sidebar/SidebarContent.tsx",
+    fragment: "flex flex-col flex-1 min-h-0 focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: keyboard-accessible grid container (tabIndex=0) with no focus indicator — follow-up (HIGH SEVERITY)",
+  },
+  {
+    file: "src/components/Worktree/WorktreeOverviewModal.tsx",
+    fragment: '"focus:outline-hidden"',
+    reason:
+      "PRE-EXISTING #8940: keyboard-accessible grid container (tabIndex=0) with no focus indicator — follow-up (HIGH SEVERITY)",
+  },
+  {
+    file: "src/components/Terminal/HybridInputBar.tsx",
+    fragment:
+      "select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden",
+    reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
+  },
+  {
+    file: "plugins/builtin/github/renderer/components/CommitList.tsx",
+    fragment:
+      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+    reason: "PRE-EXISTING #8940: autoFocus commit search input lacks a focus indicator — follow-up",
+  },
+  {
+    file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
+    fragment:
+      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+    reason:
+      "PRE-EXISTING #8940: autoFocus issue/PR search input lacks a focus indicator — follow-up",
+  },
 ];
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -349,6 +485,14 @@ describe("focus-ring fallback contract", () => {
       '"outline-hidden peer-focus:ring-2"',
       // data-[state=*] is not a focus indicator
       '"outline-hidden data-[state=open]:ring-2"',
+      // `focus:outline-hidden` is the suppressor itself, not a replacement indicator
+      '"flex-1 text-xs bg-transparent focus:outline-hidden"',
+      '"px-2 focus-visible:outline-hidden hover:bg-overlay-soft"',
+      // The suppressors `focus:outline-none`, `focus:ring-0`, `focus:border-transparent`
+      // are also non-indicators
+      '"outline-hidden focus:outline-none"',
+      '"outline-hidden focus:ring-0"',
+      '"outline-hidden focus:border-transparent"',
     ];
 
     for (const input of withFallback) {
@@ -427,6 +571,14 @@ describe("focus-ring fallback contract", () => {
     const allFiles = scanRoots.flatMap((root) =>
       fs.existsSync(root) ? collectSourceFiles(root) : []
     );
+
+    // Sanity-check the scan is hitting real source so a broken path doesn't
+    // silently produce zero violations and a vacuous pass.
+    expect(allFiles.length, "scan must find source files").toBeGreaterThan(100);
+    expect(
+      allFiles.some((f) => f.endsWith(path.join("ui", "AppDialog.tsx"))),
+      "scan must include known sentinel file (src/components/ui/AppDialog.tsx)"
+    ).toBe(true);
 
     const violations: Array<{ file: string; line: number; snippet: string }> = [];
 

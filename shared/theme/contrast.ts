@@ -184,6 +184,11 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // must hit WCAG 1.4.11 (3:1) against every surface it can land on. A separate loop
   // (rather than rows in CONTRAST_PAIRS) keeps the message text distinguishable from
   // the 4.5:1 text-on-accent check and the `accentOverrideHasLowContrast` semantics.
+  //
+  // Note: this checks the opaque accent. Many focus rings in the codebase use
+  // partial opacity (`ring-daintree-accent/40` etc.), where the rendered contrast
+  // is meaningfully lower than the value reported here. Opacity composition is
+  // out of scope for this token-level check.
   const accent = scheme.tokens["accent-primary"];
   const accentHex = isHexColor(accent);
   for (const surfaceKey of ACCENT_SURFACE_BACKGROUNDS) {
