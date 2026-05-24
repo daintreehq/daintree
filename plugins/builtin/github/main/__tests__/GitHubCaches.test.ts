@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   prETagCache,
   branchListETagCache,
+  repoPRListETagCache,
   getETagCacheVersion,
   clearGitHubCaches,
   clearPRCaches,
@@ -14,6 +15,7 @@ describe("GitHubCaches ETag caches", () => {
   beforeEach(() => {
     prETagCache.clear();
     branchListETagCache.clear();
+    repoPRListETagCache.clear();
   });
 
   it("are Cache instances, not plain Maps", () => {
@@ -25,14 +27,21 @@ describe("GitHubCaches ETag caches", () => {
     expect(branchListETagCache.get).toBeInstanceOf(Function);
     expect(branchListETagCache.set).toBeInstanceOf(Function);
     expect(branchListETagCache.invalidate).toBeInstanceOf(Function);
+
+    expect(repoPRListETagCache.get).toBeInstanceOf(Function);
+    expect(repoPRListETagCache.set).toBeInstanceOf(Function);
+    expect(repoPRListETagCache.invalidate).toBeInstanceOf(Function);
   });
 
-  it("set and get work for both caches", () => {
+  it("set and get work for all caches", () => {
     prETagCache.set("owner/repo#42", '"abc123"');
     expect(prETagCache.get("owner/repo#42")).toBe('"abc123"');
 
     branchListETagCache.set("owner/repo@main", '"def456"');
     expect(branchListETagCache.get("owner/repo@main")).toBe('"def456"');
+
+    repoPRListETagCache.set("owner/repo", 'W/"ghi789"');
+    expect(repoPRListETagCache.get("owner/repo")).toBe('W/"ghi789"');
   });
 
   it("invalidate removes entries", () => {
@@ -57,22 +66,27 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
   beforeEach(() => {
     prETagCache.clear();
     branchListETagCache.clear();
+    repoPRListETagCache.clear();
   });
 
-  it("clearGitHubCaches clears both ETag caches", () => {
+  it("clearGitHubCaches clears all ETag caches", () => {
     prETagCache.set("k1", '"v1"');
     branchListETagCache.set("k2", '"v2"');
+    repoPRListETagCache.set("k3", 'W/"v3"');
     clearGitHubCaches();
     expect(prETagCache.get("k1")).toBeUndefined();
     expect(branchListETagCache.get("k2")).toBeUndefined();
+    expect(repoPRListETagCache.get("k3")).toBeUndefined();
   });
 
-  it("clearPRCaches clears both ETag caches (previously skipped them)", () => {
+  it("clearPRCaches clears all ETag caches (previously skipped them)", () => {
     prETagCache.set("k1", '"v1"');
     branchListETagCache.set("k2", '"v2"');
+    repoPRListETagCache.set("k3", 'W/"v3"');
     clearPRCaches();
     expect(prETagCache.get("k1")).toBeUndefined();
     expect(branchListETagCache.get("k2")).toBeUndefined();
+    expect(repoPRListETagCache.get("k3")).toBeUndefined();
   });
 
   it("clearPRCaches increments ETag cache version", () => {

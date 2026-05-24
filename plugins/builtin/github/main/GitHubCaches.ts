@@ -79,6 +79,18 @@ export const branchListETagCache = new Cache<string, string>({
   defaultTTL: ETAG_CACHE_TTL,
 });
 
+/**
+ * Repo-level ETag for `GET /repos/{owner}/{repo}/pulls?per_page=1&state=all&...`.
+ * `batchCheckLinkedPRs` sends it as a conditional request before any per-PR or
+ * per-branch probing — a `304` means no PR in the repo changed, so the whole
+ * batch (including GraphQL) is skipped at zero rate-limit cost. Keyed by
+ * `${owner}/${repo}`; 1-hour TTL matches the other ETag caches.
+ */
+export const repoPRListETagCache = new Cache<string, string>({
+  maxSize: ETAG_CACHE_MAX_SIZE,
+  defaultTTL: ETAG_CACHE_TTL,
+});
+
 let etagCacheVersion = 0;
 
 export function getETagCacheVersion(): number {
@@ -130,6 +142,7 @@ export function clearGitHubCaches(): void {
   prTooltipWrittenAt.clear();
   prETagCache.clear();
   branchListETagCache.clear();
+  repoPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
   forgeQueryCache.clear();
@@ -164,6 +177,7 @@ export function clearPRCaches(): void {
   prTooltipWrittenAt.clear();
   prETagCache.clear();
   branchListETagCache.clear();
+  repoPRListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
   // PR queries (GET_PR, LIST_PRS, PR CI status, batch-branch) all flow through
