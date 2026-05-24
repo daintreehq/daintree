@@ -7,6 +7,8 @@ import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal } from "@/store/slices";
 
+let emptyTrashSpy: ReturnType<typeof vi.fn>;
+
 // jsdom does not ship AnimationEvent.
 if (typeof AnimationEvent === "undefined") {
   (globalThis as Record<string, unknown>).AnimationEvent = class AnimationEvent extends Event {
@@ -60,6 +62,49 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@dnd-kit/core", () => ({
   useDroppable: () => ({ setNodeRef: () => {}, isOver: dndMocks.isOver }),
+}));
+
+let confirmDialogProps: {
+  isOpen: boolean;
+  title: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onClose: () => void;
+} | null = null;
+
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: (props: {
+    isOpen: boolean;
+    title: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+    onClose: () => void;
+    children: React.ReactNode;
+    description: string;
+    variant: string;
+    [key: string]: unknown;
+  }) => {
+    confirmDialogProps = {
+      isOpen: props.isOpen,
+      title: props.title,
+      confirmLabel: props.confirmLabel,
+      onConfirm: props.onConfirm,
+      onClose: props.onClose,
+    };
+    return props.isOpen ? (
+      <div data-testid="confirm-dialog">
+        <div data-testid="confirm-dialog-title">{props.title}</div>
+        <div data-testid="confirm-dialog-description">{props.description}</div>
+        <div data-testid="confirm-dialog-body">{props.children}</div>
+        <button data-testid="confirm-dialog-confirm" onClick={props.onConfirm}>
+          {props.confirmLabel}
+        </button>
+        <button data-testid="confirm-dialog-cancel" onClick={props.onClose}>
+          Cancel
+        </button>
+      </div>
+    ) : null;
+  },
 }));
 
 vi.mock("@/components/DragDrop", () => ({
@@ -147,6 +192,8 @@ describe("TrashContainer", () => {
     dndMocks.isDragging = false;
     dndMocks.isWorktreeSortDragging = false;
     dndMocks.isOver = false;
+    confirmDialogProps = null;
+    emptyTrashSpy = vi.fn();
   });
 
   afterEach(() => {
@@ -395,5 +442,118 @@ describe("TrashContainer", () => {
     // The countdown displayed by TrashGroupItem must use the soonest-to-expire
     // member; the sortKey/LIFO change must not bleed into this prop.
     expect(getByTestId("trash-group-item-grp").getAttribute("data-earliest")).toBe("1000");
+  });
+
+  describe("empty trash", () => {
+    it("renders Empty trash button when trash has items", () => {
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+      expect(getByTestId("empty-trash-button")).not.toBeNull();
+      expect(getByTestId("empty-trash-button").textContent).toBe("Empty trash");
+    });
+
+    it("shows Auto-clears hint when trash is empty (ghost pill path excluded)", () => {
+      // The empty trash button only renders inside the popover; the ghost pill
+      // path (count === 0) takes a different branch. Test via presence of items.
+      const { queryByTestId } = render(
+        <TrashContainer trashedTerminals={[makeTrashedItem("1")]} />
+      );
+      expect(queryByTestId("empty-trash-button")).not.toBeNull();
+    });
+
+    it("opens ConfirmDialog when Empty trash button is clicked", () => {
+      const items = [makeTrashedItem("1"), makeTrashedItem("2")];
+      const { getByTestId, queryByTestId } = render(<TrashContainer trashedTerminals={items} />);
+
+      expect(queryByTestId("confirm-dialog")).toBeNull();
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+
+      expect(getByTestId("confirm-dialog")).not.toBeNull();
+      expect(confirmDialogProps?.isOpen).toBe(true);
+      expect(confirmDialogProps?.title).toBe("Empty trash?");
+      expect(confirmDialogProps?.confirmLabel).toBe("Empty trash");
+    });
+
+    it("shows panel titles in the confirm dialog body", () => {
+      const items = [makeTrashedItem("a"), makeTrashedItem("b")];
+      items[0]!.terminal.title = "Build Server";
+      items[1]!.terminal.title = "Test Runner";
+
+      const { getByTestId } = render(<TrashContainer trashedTerminals={items} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+
+      const body = getByTestId("confirm-dialog-body");
+      expect(body.textContent).toContain("Build Server");
+      expect(body.textContent).toContain("Test Runner");
+    });
+
+    it("falls back to Untitled for missing panel title", () => {
+      const item = makeTrashedItem("orphan");
+      item.terminal.title = "";
+
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[item]} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+
+      const body = getByTestId("confirm-dialog-body");
+      expect(body.textContent).toContain("Untitled");
+    });
+
+    it("closes dialog on cancel", () => {
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      expect(confirmDialogProps?.isOpen).toBe(true);
+
+      act(() => {
+        getByTestId("confirm-dialog-cancel").click();
+      });
+      expect(confirmDialogProps?.isOpen).toBe(false);
+    });
+
+    it("closes dialog on confirm", () => {
+      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      expect(confirmDialogProps?.isOpen).toBe(true);
+
+      act(() => {
+        getByTestId("confirm-dialog-confirm").click();
+      });
+      expect(confirmDialogProps?.isOpen).toBe(false);
+    });
+
+    it("shows correct pluralisation in description", () => {
+      const single = [makeTrashedItem("1")];
+      const { getByTestId, rerender } = render(<TrashContainer trashedTerminals={single} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      expect(getByTestId("confirm-dialog-description").textContent).toContain(
+        "1 panel will be permanently removed"
+      );
+
+      const multi = [makeTrashedItem("1"), makeTrashedItem("2")];
+      rerender(<TrashContainer trashedTerminals={multi} />);
+
+      act(() => {
+        getByTestId("empty-trash-button").click();
+      });
+      expect(getByTestId("confirm-dialog-description").textContent).toContain(
+        "2 panels will be permanently removed"
+      );
+    });
   });
 });
