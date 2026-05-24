@@ -193,7 +193,7 @@ export function AppPaletteDialog({
       <div
         ref={dialogRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal={isOpen ? "true" : "false"}
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
