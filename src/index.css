@@ -705,7 +705,7 @@ code.hljs {
   --sidebar-accent: var(--theme-overlay-soft);
   --sidebar-accent-foreground: var(--theme-text-primary);
   --sidebar-border: var(--theme-border-default);
-  --sidebar-ring: var(--theme-focus-ring);
+  --sidebar-ring: var(--theme-accent-primary);
 }
 
 /* Compact density mode for dock - reduced padding and heights */
