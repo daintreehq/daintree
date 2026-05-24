@@ -1,7 +1,13 @@
-import { Loader2, Layers } from "lucide-react";
+import { Layers } from "lucide-react";
 import type { TerminalInstance } from "@/store";
 import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+import {
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "@/components/Worktree/terminalStateConfig";
+import { cn } from "@/lib/utils";
 
 interface TerminalDragPreviewProps {
   terminal: TerminalInstance;
@@ -19,7 +25,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
   // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
   const brandColor = chrome.color;
-  const isWorking = terminal.agentState === "working";
+  const displayAgentState = getTerminalAgentDisplayState(chrome, terminal.agentState);
+  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 
   return (
@@ -102,11 +109,14 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
           {terminal.title}
         </span>
 
-        {/* Working indicator */}
-        {isWorking && (
-          <Loader2
-            className="w-3 h-3 animate-spin motion-reduce:animate-none"
-            style={{ color: brandColor }}
+        {StateIcon && displayAgentState && (
+          <StateIcon
+            className={cn(
+              "w-3 h-3 shrink-0",
+              getEffectiveStateColor(displayAgentState),
+              displayAgentState === "working" && "animate-spin-slow",
+              "motion-reduce:animate-none"
+            )}
             aria-hidden="true"
           />
         )}
