@@ -474,7 +474,11 @@ export function AppLayout({
                 "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
               !showSidebar && "pointer-events-none"
             )}
-            style={{ width: effectiveSidebarWidth, overflowClipMargin: "6px" }}
+            style={{
+              width: effectiveSidebarWidth,
+              overflowClipMargin: "6px",
+              contain: "layout paint",
+            }}
           >
             <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
               {currentProject != null && (
@@ -518,7 +522,7 @@ export function AppLayout({
                   "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
                 !showAssistant && "pointer-events-none"
               )}
-              style={{ width: effectiveAssistantWidth }}
+              style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
             >
               <div
                 className="absolute top-0 right-0 h-full"
