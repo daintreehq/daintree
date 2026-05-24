@@ -42,23 +42,28 @@ export function isNotificationEventKind(v: string | undefined): v is Notificatio
 /**
  * Default auto-dismiss durations (ms) by notification type.
  *
- * Errors and warnings get a generous 12s so the user has time to read them;
- * success dismisses in 5s — Adobe Spectrum's accessibility minimum, leaving
- * room for short-sentence copy without rushing slow readers. Info gets 8s to
- * match the Atlassian accessibility minimum for sentence-length content. When
- * a toast fires, the persistent inbox is the WCAG 2.2.1 conforming alternative
- * — users who miss a toast can always recover it from the notification center.
- * When no toast is shown (priority "low"), the inbox is the primary channel and
- * carries no compliance load.
+ * Tuned toward the published industry midpoint rather than the high end.
+ * Surveyed defaults: Material Design 3 4s (short) / 10s (long), IBM Carbon 5s,
+ * Shopify Polaris 5s, Apple HIG 5s, Adobe Spectrum 5s (React) / 6s (Web
+ * Components a11y minimum), Microsoft Fluent 2 7s, Atlassian AutoDismissFlag
+ * 8s. The cluster centres on 5–8s, so:
+ *   - error/warning 8s — Atlassian's ceiling; the types where users most need
+ *     reading time, kept at the top of the range rather than above it.
+ *   - info 6s — Spectrum Web Components' accessibility minimum.
+ *   - success 5s — the cross-system consensus for confirmations.
+ * When a toast fires, the persistent inbox is the WCAG 2.2.1 conforming
+ * alternative — users who miss a toast can always recover it from the
+ * notification center. When no toast is shown (priority "low"), the inbox is
+ * the primary channel and carries no compliance load.
  *
  * Action-bearing toasts override this to `0` (sticky) so the action remains
  * available; explicit `duration` on the payload always wins.
  */
 export const TOAST_DURATION: Record<NotificationType, number> = {
-  error: 12000,
-  warning: 12000,
+  error: 8000,
+  warning: 8000,
   success: 5000,
-  info: 8000,
+  info: 6000,
 };
 
 export interface CoalesceOptions {
@@ -633,8 +638,8 @@ export function notify(payload: NotifyPayload): string {
 
   // Severity-based dismiss defaults. When a toast fires, the persistent inbox is
   // the WCAG 2.2.1 conforming alternative for time-limited content, so
-  // error/warning use a generous 12s instead of full sticky to keep the active
-  // stack from growing.
+  // error/warning use 8s instead of full sticky to keep the active stack from
+  // growing.
   if (payload.duration === undefined) {
     payload = { ...payload, duration: TOAST_DURATION[type] };
   }

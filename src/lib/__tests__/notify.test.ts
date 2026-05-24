@@ -684,20 +684,20 @@ describe("notify()", () => {
   });
 
   describe("default duration — severity-based defaults", () => {
-    it("applies a 12s default for error notifications", () => {
+    it("applies an 8s default for error notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({ type: "error", message: "Something failed" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(8000);
       expect(notification!.duration).toBe(TOAST_DURATION.error);
     });
 
-    it("applies a 12s default for warning notifications", () => {
+    it("applies an 8s default for warning notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "warning", message: "Heads up" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(8000);
       expect(notification!.duration).toBe(TOAST_DURATION.warning);
     });
 
@@ -709,11 +709,11 @@ describe("notify()", () => {
       expect(notification!.duration).toBe(TOAST_DURATION.success);
     });
 
-    it("applies an 8s default for info notifications", () => {
+    it("applies a 6s default for info notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "FYI" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(8000);
+      expect(notification!.duration).toBe(6000);
       expect(notification!.duration).toBe(TOAST_DURATION.info);
     });
 
