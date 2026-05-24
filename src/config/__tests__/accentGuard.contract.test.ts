@@ -121,9 +121,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
   "src/components/Project/QuickRun.tsx",
 
-  // HealthChip accent tone routing + color-mix CSS custom property usage
-  "src/components/Pulse/ProjectPulseCard.tsx",
-
   // Current worktree card left-edge accent bar (single primary anchor per active focus region)
   "src/components/Worktree/WorktreeCard.tsx",
 
