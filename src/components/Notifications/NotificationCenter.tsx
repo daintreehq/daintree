@@ -29,7 +29,7 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import { getWorstSeverity } from "@/lib/notificationSeverity";
+import { getWorstSeverity, SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
