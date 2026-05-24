@@ -282,6 +282,16 @@ export function createDragAnnouncements(
       return `Dropped ${label}`;
     },
     onDragCancel({ active }) {
+      // Worktree-sort drags are cancel-announced by the sidebar's own
+      // assertive live region (SidebarContent's useDndMonitor.onDragCancel).
+      // dnd-kit's announcer also fires onDragCancel for every drag, so without
+      // this guard a worktree-sort Escape/cancel speaks the cancellation twice
+      // — the real "two announcers competing" case behind issue #8942. Returning
+      // undefined is a safe no-op (useAnnouncement ignores nullish values) and
+      // leaves dnd-kit's announcements intact for all other drag types.
+      if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+        return undefined;
+      }
       const label = resolveActiveLabel(active);
       return `Drag cancelled. ${label} returned to its original position`;
     },
