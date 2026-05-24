@@ -58,7 +58,7 @@ describe("SettingsSwitchCard", () => {
     expect(classes).toContain("data-[state=checked]:bg-text-inverse");
   });
 
-  it("uses bg-text-inverse on the thumb in the ON state (sits on accent track)", () => {
+  it("uses bg-text-inverse on the thumb in the ON state (sits on text-primary track)", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const thumb = getThumb(container);
     expect(thumb).not.toBeNull();

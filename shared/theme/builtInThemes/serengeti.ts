@@ -20,7 +20,7 @@ export const theme: BuiltInThemeSource = {
       primary: "#3D2D19",
       secondary: "#68573D",
       muted: "#8A7A5C",
-      inverse: "#1E160C",
+      inverse: "#FDFAF2",
     },
     border: "#D4C499",
     accent: "#9E7F22",

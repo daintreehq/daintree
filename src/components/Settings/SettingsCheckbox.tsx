@@ -68,11 +68,10 @@ export function SettingsCheckbox({
             "relative flex shrink-0 w-4 h-4 mt-0.5 rounded border transition-colors duration-150",
             "bg-daintree-bg border-border-strong",
             "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
-            "data-[state=indeterminate]:bg-daintree-text data-[state=indeterminate]:border-daintree-text",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
             "disabled:opacity-50 disabled:cursor-not-allowed",
             isError &&
-              "border-status-error data-[state=checked]:border-status-error data-[state=indeterminate]:border-status-error"
+              "border-status-error data-[state=checked]:border-status-error"
           )}
         >
           <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
