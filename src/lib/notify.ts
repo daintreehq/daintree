@@ -638,8 +638,8 @@ export function notify(payload: NotifyPayload): string {
 
   // Severity-based dismiss defaults. When a toast fires, the persistent inbox is
   // the WCAG 2.2.1 conforming alternative for time-limited content, so
-  // error/warning use a generous 12s instead of full sticky to keep the active
-  // stack from growing.
+  // error/warning use 8s instead of full sticky to keep the active stack from
+  // growing.
   if (payload.duration === undefined) {
     payload = { ...payload, duration: TOAST_DURATION[type] };
   }
