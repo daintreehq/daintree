@@ -26,18 +26,22 @@ const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const DIST = path.join(ROOT, "dist");
 const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
+const SEEDS_FILE = path.join(DIST, ".vite", "first-render-seeds.json");
 const BASELINE_FILE = path.join(ROOT, "first-render-chunk-baseline.json");
 const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 
 // Seed list: every source path that is part of the renderer's first-paint
 // bundle. The renderer entry chunk is auto-detected via `isEntry`. The lazy
-// entries below are React.lazy boundaries in src/panels/registry.tsx that
-// resolve immediately when a persisted browser/dev-preview panel is restored
-// — i.e. on the first-render path even though they're nominally "lazy".
-export const LAZY_FIRST_RENDER_SEEDS = [
-  "src/components/Browser/BrowserPane.tsx",
-  "src/components/DevPreview/DevPreviewPane.tsx",
-];
+// entries are React.lazy boundaries in src/panels/registry.tsx that resolve
+// immediately when a persisted browser/dev-preview/review panel is restored —
+// i.e. on the first-render path even though they're nominally "lazy".
+//
+// The list is no longer hardcoded here: it's derived from the panel-kind
+// registry (shared/config/panelKindRegistry.ts → getFirstRenderSeeds) and
+// emitted to dist/.vite/first-render-seeds.json by firstRenderSeedsPlugin at
+// build time. This script can't import the TS registry directly from plain
+// Node ESM, so it reads the emitted artifact. Keeping the registry as the
+// single source of truth is the whole point — see #8895.
 
 const DEFAULT_THRESHOLD = 0.05;
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
@@ -91,6 +95,38 @@ function readManifest() {
   }
 }
 
+// Reads the registry-derived seed list emitted by firstRenderSeedsPlugin. Fails
+// loud on a missing/invalid/empty artifact rather than falling back to a
+// hardcoded list — a silently-empty seed set would measure only the entry chunk
+// and let a regression slip past the gate, exactly the drift #8895 closes.
+function readFirstRenderSeeds() {
+  if (!existsSync(SEEDS_FILE)) {
+    console.error(`::error::first-render seeds not found at ${path.relative(ROOT, SEEDS_FILE)}`);
+    console.error(
+      "   Run `vite build` first (seeds artifact emitted by firstRenderSeedsPlugin in vite.config.ts)."
+    );
+    process.exit(1);
+  }
+  let seeds;
+  try {
+    seeds = JSON.parse(readFileSync(SEEDS_FILE, "utf8"));
+  } catch (err) {
+    console.error(`::error::failed to parse first-render seeds: ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(seeds) || seeds.some((s) => typeof s !== "string" || s.length === 0)) {
+    console.error("::error::first-render seeds must be a non-empty array of source-path strings");
+    process.exit(1);
+  }
+  if (seeds.length === 0) {
+    console.error(
+      "::error::first-render seeds is empty — the registry produced no firstRenderRestore kinds"
+    );
+    process.exit(1);
+  }
+  return seeds;
+}
+
 // BFS the manifest graph. `imports[]` and `dynamicImports[]` reference other
 // manifest keys (source paths). Visiting by manifest key (not file name) avoids
 // double-counting chunks shared via Rolldown's `codeSplitting.groups`
@@ -105,10 +141,10 @@ function readManifest() {
 //     entire reachable bundle. Report-only, retained as a coarse total-bundle
 //     regression signal.
 //
-// The seeds (renderer entry + LAZY_FIRST_RENDER_SEEDS) are always enqueued
-// explicitly regardless of `followDynamic` — they're first-paint paths by
-// definition (a persisted browser/dev-preview panel restores synchronously),
-// not edges discovered by walking `dynamicImports[]`.
+// The seeds (renderer entry + the registry-derived first-render seeds) are
+// always enqueued explicitly regardless of `followDynamic` — they're first-paint
+// paths by definition (a persisted browser/dev-preview/review panel restores
+// synchronously), not edges discovered by walking `dynamicImports[]`.
 export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}) {
   const visited = new Set();
   const queue = [];
@@ -184,14 +220,14 @@ function sizeClosure(manifest, closure) {
   return { chunks, totals: { raw: totalRaw, gzip: totalGzip }, missing };
 }
 
-function buildReport(manifest) {
+function buildReport(manifest, lazySeeds) {
   const entryKey = findEntryKey(manifest);
   if (!entryKey) {
     console.error("::error::no entry chunk found in manifest (no chunk has isEntry: true)");
     process.exit(1);
   }
 
-  const seedKeys = [entryKey, ...LAZY_FIRST_RENDER_SEEDS];
+  const seedKeys = [entryKey, ...lazySeeds];
 
   // Eager walk (gated): the static first-render closure.
   const eagerClosure = collectClosure(manifest, seedKeys, { followDynamic: false });
@@ -204,8 +240,8 @@ function buildReport(manifest) {
 
   for (const m of [...eager.missing, ...total.missing]) console.warn(`::warning::${m}`);
 
-  const seedsResolved = LAZY_FIRST_RENDER_SEEDS.filter((s) => Boolean(manifest[s]));
-  const seedsMissing = LAZY_FIRST_RENDER_SEEDS.filter((s) => !manifest[s]);
+  const seedsResolved = lazySeeds.filter((s) => Boolean(manifest[s]));
+  const seedsMissing = lazySeeds.filter((s) => !manifest[s]);
   for (const s of seedsMissing) {
     console.warn(
       `::warning::seed ${s} not present in manifest — closure may be undercounted (rename or refactor?)`
@@ -330,7 +366,8 @@ function compareToBaseline(report, threshold) {
 function main() {
   const args = parseArgs(process.argv);
   const manifest = readManifest();
-  const report = buildReport(manifest);
+  const lazySeeds = readFirstRenderSeeds();
+  const report = buildReport(manifest, lazySeeds);
 
   if (args.isUpdate) {
     writeBaseline(report, { force: args.force });

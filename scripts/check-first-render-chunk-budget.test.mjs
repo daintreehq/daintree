@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
-import {
-  collectClosure,
-  shrinkageGuardError,
-  LAZY_FIRST_RENDER_SEEDS,
-} from "./check-first-render-chunk-budget.mjs";
+import { collectClosure, shrinkageGuardError } from "./check-first-render-chunk-budget.mjs";
+
+// The seed list is now registry-derived (shared/config/panelKindRegistry.ts) and
+// read from dist/.vite/first-render-seeds.json at runtime. collectClosure takes
+// seed keys as a parameter, so these tests pass the lazy seeds as a literal —
+// the registry contract itself is covered by panelKindRegistry.test.ts.
+const LAZY_FIRST_RENDER_SEEDS = [
+  "src/components/Browser/BrowserPane.tsx",
+  "src/components/DevPreview/DevPreviewPane.tsx",
+];
 
 // Synthetic manifest mirroring the Vite 8 / Rolldown shape: top-level keys are
 // either source paths (for entries / lazy seeds) or `_vendor-*.js` keys for
