@@ -29,6 +29,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
+    wake: vi.fn(),
   },
 }));
 
@@ -685,6 +686,86 @@ describe("review-kind dock fallback (#8946 — previous-focused policy)", () => 
 
     // Terminal kind = default "first-grid" policy → shell-first wins, not shell-last
     expect(usePanelStore.getState().focusedId).toBe("shell-first");
+  });
+
+  it("unknown dockFallbackTarget string degrades to first-grid", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "plugin-custom-fallback",
+      name: "Plugin Custom",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockFallbackTarget: "some-future-strategy" },
+    });
+
+    try {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      usePanelStore.setState({
+        panelsById: {
+          "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+          "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+          "plugin-1": {
+            id: "plugin-1",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            kind: "plugin-custom-fallback" as any,
+            worktreeId: "wt-1",
+            title: "plugin-1",
+            location: "grid" as const,
+          },
+        },
+        panelIds: ["shell-first", "shell-last", "plugin-1"],
+        focusedId: "plugin-1",
+        // Even with a valid previous-focused, an unknown strategy must
+        // degrade to first-grid rather than guessing.
+        previousFocusedId: "shell-last",
+      });
+
+      usePanelStore.getState().trashPanel("plugin-1");
+
+      expect(usePanelStore.getState().focusedId).toBe("shell-first");
+    } finally {
+      unregisterPanelKind("plugin-custom-fallback");
+    }
+  });
+
+  it("previous-focused via real focus-navigation mechanism (no injected previousFocusedId)", () => {
+    // End-to-end check: navigate via `setFocused` (the real mechanism the
+    // store uses when the user clicks/Tab/keyboard-focuses a panel), then
+    // trash a review panel and verify focus returns to the previously-
+    // focused panel without manually seeding `previousFocusedId`.
+    usePanelStore.setState({
+      panelsById: {
+        "real-shell-a": makeTerminal("real-shell-a", "terminal"),
+        "real-shell-b": makeTerminal("real-shell-b", "terminal"),
+        "real-review": makeReviewPanel("real-review"),
+      },
+      panelIds: ["real-shell-a", "real-shell-b", "real-review"],
+      focusedId: null,
+      previousFocusedId: null,
+    });
+
+    const { setFocused } = usePanelStore.getState();
+    // Simulate a real navigation sequence — `setFocused` is what every
+    // user-driven focus change goes through (click, Tab, keyboard, etc.).
+    setFocused("real-shell-a");
+    setFocused("real-shell-b");
+    expect(usePanelStore.getState().focusedId).toBe("real-shell-b");
+    expect(usePanelStore.getState().previousFocusedId).toBe("real-shell-a");
+
+    setFocused("real-review");
+    expect(usePanelStore.getState().focusedId).toBe("real-review");
+    expect(usePanelStore.getState().previousFocusedId).toBe("real-shell-b");
+
+    // Trash the review pane. Per the previous-focused policy, focus must
+    // return to shell-b (the panel the user was reading from).
+    usePanelStore.getState().trashPanel("real-review");
+    expect(usePanelStore.getState().focusedId).toBe("real-shell-b");
   });
 
   it("trashPanel: review respects worktree scoping when reading previousFocusedId", () => {
