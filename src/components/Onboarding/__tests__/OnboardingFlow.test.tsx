@@ -98,7 +98,7 @@ vi.mock("@/utils/env", () => ({
   isDaintreeEnvEnabled: (key: string) => isDaintreeEnvEnabledMock(key),
 }));
 
-type MockWizardStep = { type: "selection" | "cli" | "complete" };
+type MockWizardStep = { type: "appearance" | "agents" | "privacy" | "cli" | "complete" };
 
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
   AgentSetupWizard: vi.fn(
@@ -113,10 +113,10 @@ vi.mock("@/components/Setup/AgentSetupWizard", () => ({
             Close
           </button>
           <button
-            data-testid="emit-step-selection"
-            onClick={() => props.onStepChange?.({ type: "selection" })}
+            data-testid="emit-step-appearance"
+            onClick={() => props.onStepChange?.({ type: "appearance" })}
           >
-            selection
+            appearance
           </button>
           <button data-testid="emit-step-cli" onClick={() => props.onStepChange?.({ type: "cli" })}>
             cli
@@ -393,7 +393,7 @@ describe("OnboardingFlow telemetry tracking", () => {
 
     // Simulate the user advancing into the CLI sub-step.
     await act(async () => {
-      getByTestId("emit-step-selection").click();
+      getByTestId("emit-step-appearance").click();
       getByTestId("emit-step-cli").click();
     });
 
@@ -461,7 +461,7 @@ describe("OnboardingFlow telemetry tracking", () => {
       fireOpenWizard();
     });
     await act(async () => {
-      getByTestId("emit-step-selection").click();
+      getByTestId("emit-step-appearance").click();
       getByTestId("emit-step-cli").click();
     });
     await act(async () => {

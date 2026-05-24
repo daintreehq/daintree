@@ -173,7 +173,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
   );
 }
 
-// Tier arrays for the selection step — featured agents get prominent display,
+// Tier arrays for the agents step — featured agents get prominent display,
 // the rest fall into "More agents". New built-in agents automatically land in MORE_AGENT_IDS.
 export const FEATURED_AGENT_IDS: readonly string[] = ["claude", "gemini", "codex"];
 export const MORE_AGENT_IDS: readonly string[] = BUILT_IN_AGENT_IDS.filter(
@@ -223,7 +223,12 @@ const reducedStepVariants: Variants = {
 
 // --- Wizard state machine ---
 
-export type WizardStep = { type: "selection" } | { type: "cli" } | { type: "complete" };
+export type WizardStep =
+  | { type: "appearance" }
+  | { type: "agents" }
+  | { type: "privacy" }
+  | { type: "cli" }
+  | { type: "complete" };
 
 export interface WizardState {
   step: WizardStep;
@@ -231,42 +236,76 @@ export interface WizardState {
   availability: CliAvailability;
   selections: Record<string, boolean>;
   selectionsInitialized: boolean;
+  isFirstRun: boolean;
 }
 
 export type WizardAction =
-  | { type: "SELECTION_CONTINUE" }
+  | { type: "APPEARANCE_CONTINUE" }
+  | { type: "AGENTS_CONTINUE" }
+  | { type: "PRIVACY_CONTINUE" }
   | { type: "CLI_CONTINUE" }
   | { type: "BACK" }
   | { type: "SET_AVAILABILITY"; payload: CliAvailability }
   | { type: "INIT_SELECTIONS"; payload: Record<string, boolean> }
   | { type: "TOGGLE_SELECTION"; agentId: string; checked: boolean }
-  | { type: "RESET"; availability: CliAvailability };
+  | { type: "RESET"; availability: CliAvailability; isFirstRun: boolean };
 
-const TOTAL_STEPS = 3; // selection, cli, complete
+// First-run walks every step (appearance → agents → privacy → cli → complete);
+// re-runs from Settings start at `agents` and skip the first-run-only consent
+// steps. The `cli` step is conditionally skipped when all selected agents are
+// already installed, but the dot count reflects the maximum flow length —
+// mirroring the pre-split behavior where the skippable `cli` step still
+// counted toward the total.
+export function flowSteps(isFirstRun: boolean): WizardStep["type"][] {
+  return isFirstRun
+    ? ["appearance", "agents", "privacy", "cli", "complete"]
+    : ["agents", "cli", "complete"];
+}
 
-export function buildInitialState(availability: CliAvailability): WizardState {
+export function buildInitialState(availability: CliAvailability, isFirstRun = false): WizardState {
   return {
-    step: { type: "selection" },
+    step: { type: isFirstRun ? "appearance" : "agents" },
     history: [],
     availability,
     selections: {},
     selectionsInitialized: false,
+    isFirstRun,
   };
+}
+
+// The cli step is skipped when every selected agent is already launchable —
+// there is nothing left to install, so jump straight to the summary.
+function resolvePostInstallStep(state: WizardState): WizardStep {
+  const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
+  const allSelectedInstalled =
+    selectedIds.length > 0 && selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
+  return allSelectedInstalled ? { type: "complete" } : { type: "cli" };
 }
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case "SELECTION_CONTINUE": {
-      const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
-      const allSelectedInstalled =
-        selectedIds.length > 0 &&
-        selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
+    case "APPEARANCE_CONTINUE":
       return {
         ...state,
-        step: allSelectedInstalled ? { type: "complete" } : { type: "cli" },
+        step: { type: "agents" },
         history: [...state.history, state.step],
       };
-    }
+
+    case "AGENTS_CONTINUE":
+      // First-run users get the privacy consent step before install/summary;
+      // re-runs branch straight to cli/complete.
+      return {
+        ...state,
+        step: state.isFirstRun ? { type: "privacy" } : resolvePostInstallStep(state),
+        history: [...state.history, state.step],
+      };
+
+    case "PRIVACY_CONTINUE":
+      return {
+        ...state,
+        step: resolvePostInstallStep(state),
+        history: [...state.history, state.step],
+      };
 
     case "CLI_CONTINUE":
       return {
@@ -303,7 +342,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       };
 
     case "RESET":
-      return buildInitialState(action.availability);
+      return buildInitialState(action.availability, action.isFirstRun);
 
     default:
       return state;
@@ -330,7 +369,7 @@ export function AgentSetupWizard({
   const [state, dispatch] = useReducer(
     wizardReducer,
     initialAvailability ?? ({} as CliAvailability),
-    (avail) => buildInitialState(avail)
+    (avail) => buildInitialState(avail, isFirstRun)
   );
 
   const [hasFatalHealthFailure, setHasFatalHealthFailure] = useState(false);
@@ -371,6 +410,7 @@ export function AgentSetupWizard({
       dispatch({
         type: "RESET",
         availability: initialAvailability ?? ({} as CliAvailability),
+        isFirstRun,
       });
       initRef.current = false;
       hasAutoSelected.current = false;
@@ -381,7 +421,7 @@ export function AgentSetupWizard({
       directionRef.current = 1;
     }
     prevIsOpenRef.current = isOpen;
-  }, [isOpen, initialAvailability]);
+  }, [isOpen, initialAvailability, isFirstRun]);
 
   // Poll availability — paused when document is hidden
   useAgentSetupPoll(isOpen, (result) => {
@@ -404,7 +444,7 @@ export function AgentSetupWizard({
   // Auto-select theme based on OS preference (first-run only, once)
   useEffect(() => {
     if (!isFirstRun || !isOpen || hasAutoSelected.current) return;
-    if (state.step.type !== "selection") return;
+    if (state.step.type !== "appearance") return;
     hasAutoSelected.current = true;
     const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
     const targetId = prefersLight ? "bondi" : "daintree";
@@ -487,35 +527,38 @@ export function AgentSetupWizard({
     [state.selections]
   );
 
-  const totalSteps = TOTAL_STEPS;
-  const stepNumber = (() => {
-    switch (state.step.type) {
-      case "selection":
-        return 0;
-      case "cli":
-        return 1;
-      case "complete":
-        return 2;
-      default:
-        return 0;
-    }
-  })();
+  const flow = useMemo(() => flowSteps(isFirstRun), [isFirstRun]);
+  const totalSteps = flow.length;
+  const stepNumber = Math.max(0, flow.indexOf(state.step.type));
 
-  const handleSelectionContinue = useCallback(async () => {
+  const handleAppearanceContinue = useCallback(() => {
+    directionRef.current = 1;
+    dispatch({ type: "APPEARANCE_CONTINUE" });
+  }, []);
+
+  const handleAgentsContinue = useCallback(async () => {
     directionRef.current = 1;
     setIsSaving(true);
     try {
-      if (isFirstRun) {
-        await commitTelemetry(telemetryEnabled ? "errors" : "off");
-      }
       for (const [agentId, pinned] of Object.entries(state.selections)) {
         await setAgentPinned(agentId, pinned);
       }
-      dispatch({ type: "SELECTION_CONTINUE" });
+      dispatch({ type: "AGENTS_CONTINUE" });
     } finally {
       setIsSaving(false);
     }
-  }, [state.selections, setAgentPinned, isFirstRun, commitTelemetry, telemetryEnabled]);
+  }, [state.selections, setAgentPinned]);
+
+  const handlePrivacyContinue = useCallback(async () => {
+    directionRef.current = 1;
+    setIsSaving(true);
+    try {
+      await commitTelemetry(telemetryEnabled ? "errors" : "off");
+      dispatch({ type: "PRIVACY_CONTINUE" });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [commitTelemetry, telemetryEnabled]);
 
   const handleCliContinue = useCallback(() => {
     directionRef.current = 1;
@@ -541,8 +584,8 @@ export function AgentSetupWizard({
     });
   }, []);
 
-  const handleSelectionSkip = useCallback(async () => {
-    // Mirror handleSelectionContinue's isSaving lock so a rapid double-click
+  const handleSkip = useCallback(async () => {
+    // Mirror the Continue handlers' isSaving lock so a rapid double-click
     // can't race two commits and two close calls through `commitTelemetry`'s
     // ref guard before it flips.
     setIsSaving(true);
@@ -563,7 +606,10 @@ export function AgentSetupWizard({
   const showLoadingSelections = !state.selectionsInitialized && isAvailabilityLoading;
 
   const handleBeforeClose = useCallback(async () => {
-    if (isFirstRun && state.step.type === "selection") {
+    // Any first-run close before the summary records telemetry off — silence is
+    // not consent. Once the user reaches `complete` they have already passed the
+    // privacy step, so their choice is committed and we must not re-commit.
+    if (isFirstRun && state.step.type !== "complete") {
       const committedNow = await commitTelemetry("off");
       if (committedNow && !telemetryToggleTouchedRef.current) {
         notifyTelemetryDefault();
@@ -582,14 +628,9 @@ export function AgentSetupWizard({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-accent" />}>
-          {isFirstRun && state.step.type === "selection" ? "Welcome to Daintree" : "Agent Setup"}
+          {isFirstRun && state.step.type === "appearance" ? "Welcome to Daintree" : "Agent Setup"}
         </AppDialog.Title>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-daintree-text/40">
-            {stepNumber + 1} of {totalSteps}
-          </span>
-          <AppDialog.CloseButton />
-        </div>
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>
@@ -603,8 +644,14 @@ export function AgentSetupWizard({
               animate="animate"
               exit="exit"
             >
-              {state.step.type === "selection" && (
-                <SelectionStep
+              {state.step.type === "appearance" && (
+                <AppearanceStep
+                  selectedSchemeId={selectedSchemeId}
+                  onThemeSelect={handleThemeSelect}
+                />
+              )}
+              {state.step.type === "agents" && (
+                <AgentsStep
                   availability={state.availability}
                   selections={state.selections}
                   isLoading={showLoadingSelections}
@@ -615,8 +662,10 @@ export function AgentSetupWizard({
                   onFatalFailureChange={setHasFatalHealthFailure}
                   onCheckingChange={setIsHealthChecking}
                   isFirstRun={isFirstRun}
-                  selectedSchemeId={selectedSchemeId}
-                  onThemeSelect={handleThemeSelect}
+                />
+              )}
+              {state.step.type === "privacy" && (
+                <PrivacyStep
                   telemetryEnabled={telemetryEnabled}
                   onTelemetryChange={handleTelemetryChange}
                 />
@@ -626,7 +675,7 @@ export function AgentSetupWizard({
                   availability={state.availability}
                   selections={state.selections}
                   onInstallComplete={() => {
-                    cliAvailabilityClient.refresh().then((result) => {
+                    void cliAvailabilityClient.refresh().then((result) => {
                       if (isOpenRef.current) {
                         dispatch({ type: "SET_AVAILABILITY", payload: result });
                       }
@@ -660,40 +709,52 @@ export function AgentSetupWizard({
             ))}
           </div>
           <div className="flex items-center gap-2">
-            {state.step.type !== "selection" && state.step.type !== "complete" && (
-              <Button
-                variant="ghost"
-                onClick={handleBack}
-                className="text-daintree-text/70"
-                disabled={isSaving}
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Back
-              </Button>
-            )}
-            {state.step.type === "selection" && (
-              <>
+            {state.step.type !== "complete" &&
+              (state.history.length > 0 ? (
                 <Button
                   variant="ghost"
-                  onClick={handleSelectionSkip}
+                  onClick={handleBack}
+                  className="text-daintree-text/70"
+                  disabled={isSaving}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Back
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  onClick={handleSkip}
                   disabled={isSaving}
                   className="text-daintree-text/60"
                 >
                   Skip
                 </Button>
-                <Button
-                  onClick={handleSelectionContinue}
-                  disabled={
-                    selectedAgentIds.length === 0 ||
-                    isSaving ||
-                    hasFatalHealthFailure ||
-                    isHealthChecking
-                  }
-                >
-                  Continue
-                  <ArrowRight className="w-4 h-4 ml-1" />
-                </Button>
-              </>
+              ))}
+            {state.step.type === "appearance" && (
+              <Button onClick={handleAppearanceContinue} disabled={isSaving}>
+                Continue
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            )}
+            {state.step.type === "agents" && (
+              <Button
+                onClick={handleAgentsContinue}
+                disabled={
+                  selectedAgentIds.length === 0 ||
+                  isSaving ||
+                  hasFatalHealthFailure ||
+                  isHealthChecking
+                }
+              >
+                Continue
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            )}
+            {state.step.type === "privacy" && (
+              <Button onClick={handlePrivacyContinue} disabled={isSaving}>
+                Continue
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
             )}
             {state.step.type === "cli" && (
               <Button onClick={handleCliContinue}>
@@ -701,7 +762,7 @@ export function AgentSetupWizard({
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
-            {state.step.type === "complete" && <Button onClick={handleFinish}>Finish Setup</Button>}
+            {state.step.type === "complete" && <Button onClick={handleFinish}>Finish setup</Button>}
           </div>
         </div>
       </AppDialog.Footer>
@@ -709,9 +770,68 @@ export function AgentSetupWizard({
   );
 }
 
-// --- Selection step (merged from AgentSelectionStep) ---
+// --- Appearance step (first-run theme picker) ---
 
-function SelectionStep({
+function AppearanceStep({
+  selectedSchemeId,
+  onThemeSelect,
+}: {
+  selectedSchemeId?: string;
+  onThemeSelect: (id: string) => void;
+}) {
+  const schemes = [daintreeScheme, bondiScheme] as const;
+
+  return (
+    <section>
+      <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
+      <p className="text-sm text-daintree-text/60 mb-4">
+        Choose your preferred theme. More options available in Settings.
+      </p>
+      <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Select theme">
+        {schemes.map((scheme) => {
+          const isSelected = selectedSchemeId === scheme.id;
+          const isDark = scheme.type === "dark";
+          return (
+            <button
+              key={scheme.id}
+              type="button"
+              role="option"
+              aria-selected={isSelected}
+              onClick={() => onThemeSelect(scheme.id)}
+              className={cn(
+                "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
+                isSelected
+                  ? "border-border-strong bg-overlay-selected"
+                  : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
+              )}
+            >
+              <ThemeMockup scheme={scheme} />
+              <div className="flex items-center justify-between px-0.5">
+                <div className="flex items-center gap-1.5">
+                  {isDark ? (
+                    <Moon className="w-3 h-3 text-daintree-text/50" />
+                  ) : (
+                    <Sun className="w-3 h-3 text-daintree-text/50" />
+                  )}
+                  <span className="text-sm font-medium text-daintree-text">{scheme.name}</span>
+                  <span className="text-xs text-daintree-text/50">{isDark ? "Dark" : "Light"}</span>
+                </div>
+                {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-xs text-daintree-text/50 text-center mt-3">
+        More themes available in Settings → Appearance
+      </p>
+    </section>
+  );
+}
+
+// --- Agents step (system requirements + agent multi-select) ---
+
+function AgentsStep({
   availability,
   selections,
   isLoading,
@@ -720,10 +840,6 @@ function SelectionStep({
   onFatalFailureChange,
   onCheckingChange,
   isFirstRun = false,
-  selectedSchemeId,
-  onThemeSelect,
-  telemetryEnabled,
-  onTelemetryChange,
 }: {
   availability: CliAvailability;
   selections: Record<string, boolean>;
@@ -733,10 +849,6 @@ function SelectionStep({
   onFatalFailureChange: (hasFatal: boolean) => void;
   onCheckingChange: (checking: boolean) => void;
   isFirstRun?: boolean;
-  selectedSchemeId?: string;
-  onThemeSelect?: (id: string) => void;
-  telemetryEnabled?: boolean;
-  onTelemetryChange?: (enabled: boolean) => void;
 }) {
   const featuredAgents = useMemo(
     () => sortTierByInstalled(FEATURED_AGENT_IDS, availability),
@@ -747,9 +859,6 @@ function SelectionStep({
     [availability]
   );
 
-  const schemes = [daintreeScheme, bondiScheme] as const;
-  const crashReportingLabelId = useId();
-
   return (
     <div className="space-y-6">
       <SystemRequirementsSection
@@ -757,65 +866,7 @@ function SelectionStep({
         onCheckingChange={onCheckingChange}
       />
 
-      {isFirstRun && (
-        <section className="pb-6 border-b border-daintree-border">
-          <h3 className="text-base font-semibold text-daintree-text mb-2">Welcome to Daintree</h3>
-          <p className="text-sm text-daintree-text/60">
-            Pick a theme, choose your agents, and you&apos;re ready to go.
-          </p>
-        </section>
-      )}
-
-      {isFirstRun && onThemeSelect && (
-        <section className="pb-6 border-b border-daintree-border">
-          <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
-          <p className="text-sm text-daintree-text/60 mb-4">
-            Choose your preferred theme. More options available in Settings.
-          </p>
-          <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Select theme">
-            {schemes.map((scheme) => {
-              const isSelected = selectedSchemeId === scheme.id;
-              const isDark = scheme.type === "dark";
-              return (
-                <button
-                  key={scheme.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => onThemeSelect(scheme.id)}
-                  className={cn(
-                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
-                    isSelected
-                      ? "border-border-strong bg-overlay-selected"
-                      : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
-                  )}
-                >
-                  <ThemeMockup scheme={scheme} />
-                  <div className="flex items-center justify-between px-0.5">
-                    <div className="flex items-center gap-1.5">
-                      {isDark ? (
-                        <Moon className="w-3 h-3 text-daintree-text/50" />
-                      ) : (
-                        <Sun className="w-3 h-3 text-daintree-text/50" />
-                      )}
-                      <span className="text-sm font-medium text-daintree-text">{scheme.name}</span>
-                      <span className="text-xs text-daintree-text/50">
-                        {isDark ? "Dark" : "Light"}
-                      </span>
-                    </div>
-                    {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-daintree-text/50 text-center mt-3">
-            More themes available in Settings → Appearance
-          </p>
-        </section>
-      )}
-
-      <section className={cn(isFirstRun && "pb-6 border-b border-daintree-border")}>
+      <section>
         <h3 className="text-base font-semibold text-daintree-text mb-2">
           {isFirstRun ? "Agents" : "Choose your AI agents"}
         </h3>
@@ -882,59 +933,71 @@ function SelectionStep({
           </div>
         )}
       </section>
-
-      {isFirstRun && onTelemetryChange != null && (
-        <section>
-          <h3 className="text-base font-semibold text-daintree-text mb-2">Privacy</h3>
-          <p className="text-sm text-daintree-text/60 mb-4">
-            Help improve Daintree by sharing anonymous crash reports.
-          </p>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <p id={crashReportingLabelId} className="text-sm font-medium text-daintree-text">
-                Enable crash reporting
-              </p>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={telemetryEnabled}
-                aria-labelledby={crashReportingLabelId}
-                onClick={() => onTelemetryChange(!telemetryEnabled)}
-                className={cn(
-                  "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-                  telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                    telemetryEnabled
-                      ? "translate-x-4 ml-0.5 bg-text-inverse"
-                      : "translate-x-0 ml-0.5 bg-daintree-text"
-                  )}
-                />
-              </button>
-            </div>
-            <p className="text-xs text-daintree-text/50">
-              No file contents or credentials are ever sent.
-            </p>
-            <button
-              type="button"
-              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:underline"
-              onClick={() =>
-                void actionService.dispatch(
-                  "telemetry.togglePreview",
-                  { active: true },
-                  { source: "user" }
-                )
-              }
-            >
-              Preview what would be sent
-            </button>
-          </div>
-        </section>
-      )}
     </div>
+  );
+}
+
+// --- Privacy step (first-run crash-reporting consent) ---
+
+function PrivacyStep({
+  telemetryEnabled,
+  onTelemetryChange,
+}: {
+  telemetryEnabled?: boolean;
+  onTelemetryChange: (enabled: boolean) => void;
+}) {
+  const crashReportingLabelId = useId();
+
+  return (
+    <section>
+      <h3 className="text-base font-semibold text-daintree-text mb-2">Privacy</h3>
+      <p className="text-sm text-daintree-text/60 mb-4">
+        Help improve Daintree by sharing anonymous crash reports
+      </p>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <p id={crashReportingLabelId} className="text-sm font-medium text-daintree-text">
+            Enable crash reporting
+          </p>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={telemetryEnabled}
+            aria-labelledby={crashReportingLabelId}
+            onClick={() => onTelemetryChange(!telemetryEnabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+              telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                telemetryEnabled
+                  ? "translate-x-4 ml-0.5 bg-text-inverse"
+                  : "translate-x-0 ml-0.5 bg-daintree-text"
+              )}
+            />
+          </button>
+        </div>
+        <p className="text-xs text-daintree-text/50">
+          No file contents or credentials are ever sent.
+        </p>
+        <button
+          type="button"
+          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:underline"
+          onClick={() =>
+            void actionService.dispatch(
+              "telemetry.togglePreview",
+              { active: true },
+              { source: "user" }
+            )
+          }
+        >
+          Preview what would be sent
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -960,7 +1023,7 @@ export function CompleteStep({
         <div className="w-12 h-12 rounded-full bg-status-success/15 flex items-center justify-center mx-auto mb-4">
           <Sparkles className="w-6 h-6 text-status-success" />
         </div>
-        <h3 className="text-base font-semibold text-daintree-text mb-2">Setup Complete</h3>
+        <h3 className="text-base font-semibold text-daintree-text mb-2">Setup complete</h3>
         <p className="text-sm text-daintree-text/60">
           {hasAgents
             ? `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use. Launch them from the toolbar or with keyboard shortcuts.`
