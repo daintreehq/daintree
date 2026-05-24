@@ -168,14 +168,31 @@ jobs:
       - name: Budget summaries
         if: always()
         run: |
-          if [ -f dist/renderer-bundle-size-summary.md ]; then
-            cat dist/renderer-bundle-size-summary.md >> "$GITHUB_STEP_SUMMARY"
-            printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [ -f dist/first-render-chunk-summary.md ]; then
-            cat dist/first-render-chunk-summary.md >> "$GITHUB_STEP_SUMMARY"
-            printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for f in \
+            dist/renderer-bundle-size-summary.md \
+            dist/first-render-chunk-summary.md \
+            dist/renderer-import-budget-summary.md \
+            dist/import-budget-summary.md \
+            dist/compiler-budget-summary.md; do
+            if [ -f "$f" ]; then
+              cat "$f" >> "$GITHUB_STEP_SUMMARY"
+              printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload budget summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: budget-summaries
+          path: |
+            dist/renderer-bundle-size-summary.md
+            dist/first-render-chunk-summary.md
+            dist/renderer-import-budget-summary.md
+            dist/import-budget-summary.md
+            dist/compiler-budget-summary.md
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Gate performance budgets
         if: always()
