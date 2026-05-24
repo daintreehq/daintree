@@ -59,18 +59,18 @@ export const config: AgentConfig = {
   help: {
     args: [],
   },
-  // `agy` is a compiled Go binary that stores OAuth credentials in the
-  // OS-native keychain (macOS Keychain, Linux libsecret) — there is no
-  // on-disk credential file to probe. The old `~/.antigravity/oauth_creds.json`
-  // path never existed, so authenticated users always read as
-  // unauthenticated. `~/.gemini/antigravity-cli` is the non-credential
-  // settings directory `agy` writes on first run after setup, so its
-  // presence is the best available filesystem proxy for "set up and used"
-  // (fs.access works on directories too). The `GOOGLE_API_KEY` env var
-  // fallback remains the strong positive signal. This is a best-effort
-  // indicator — the auth check never gates launch.
+  // The `agy` CLI inherits credentials from the parent Gemini CLI: on a
+  // signed-in machine the authenticated user file is `~/.gemini/oauth_creds.json`
+  // (standard Gemini OAuth JSON), with `~/.gemini/google_accounts.json`
+  // alongside as the active-account signal — the same paths Gemini CLI
+  // probes. The old `~/.antigravity/oauth_creds.json` guess never existed
+  // on disk, so authenticated users always read as unauthenticated. (The
+  // Antigravity IDE stores its own OAuth state in a SQLite db under
+  // ~/Library/Application Support — secondary, since Daintree launches the
+  // CLI, not the IDE, and a `.vscdb` file needs a probe strategy beyond
+  // `fs.access`.) The `GOOGLE_API_KEY` env var fallback remains valid.
   authCheck: {
-    configPathsAll: [".gemini/antigravity-cli"],
+    configPathsAll: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
     envVar: "GOOGLE_API_KEY",
   },
   prerequisites: [
