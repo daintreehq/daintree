@@ -777,9 +777,22 @@ function TerminalPaneComponent({
     const xtermElement = target?.closest(".xterm");
     if (!xtermElement) return;
 
-    // Clicking xterm is an explicit "I want the terminal" gesture — record it
-    // so subsequent Cmd-Opt-Arrow navigation stays on xterm across panes.
-    setPreferredTerminalFocusTarget("xterm");
+    // A bare pointerdown with no recent pointermove is likely screen reader
+    // cursor routing (VoiceOver/NVDA), not a physical click. AT routing events
+    // are indistinguishable from real clicks by their properties, so we infer
+    // it from the absence of preceding movement.
+    const isAtSynthesized = isLikelyAtSynthesizedPointer(
+      lastXtermPointerMoveAtRef.current,
+      e.timeStamp
+    );
+
+    // A physical click on xterm is an explicit "I want the terminal" gesture —
+    // record it so subsequent Cmd-Opt-Arrow navigation stays on xterm across
+    // panes. Skip for AT routing so a screen reader reaching terminal output
+    // doesn't silently clobber the user's hybrid-input focus preference.
+    if (!isAtSynthesized) {
+      setPreferredTerminalFocusTarget("xterm");
+    }
 
     const shouldSuppress = shouldSuppressUnfocusedClick({
       location,
@@ -795,19 +808,15 @@ function TerminalPaneComponent({
       return;
     }
 
-    e.preventDefault();
-
-    // A bare pointerdown with no recent pointermove is likely screen reader
-    // cursor routing (VoiceOver/NVDA), not a physical click. AT routing events
-    // are indistinguishable from real clicks by their properties, so we infer
-    // it from the absence of preceding movement. Activate the pane but let the
-    // event reach xterm — stopPropagation/setPointerCapture would swallow the
-    // routing event and break cursor positioning for screen reader users.
-    if (isLikelyAtSynthesizedPointer(lastXtermPointerMoveAtRef.current, e.timeStamp)) {
+    if (isAtSynthesized) {
+      // Activate the pane but let the event reach xterm — preventDefault /
+      // stopPropagation / setPointerCapture would swallow the routing event and
+      // break cursor positioning for screen reader users.
       setFocused(id);
       return;
     }
 
+    e.preventDefault();
     e.stopPropagation();
 
     // Capture the pointer so follow-on pointermove/pointerup events route to
@@ -863,10 +872,10 @@ function TerminalPaneComponent({
       // xterm v6 clears selection on blur, so read selection state
       // synchronously here — before any focus handoff. Don't steal focus from
       // xterm when the user has an active text selection. Checking up front
-      // (rather than inside a deferred RAF) also avoids focus briefly landing
-      // on the ContentPanel container, which made screen readers announce the
-      // container instead of the input bar. A single RAF then hands focus to
-      // the input once the pane has painted.
+      // (rather than inside a deferred double-RAF) also avoids focus briefly
+      // landing on the ContentPanel container, which made screen readers
+      // announce the container instead of the input bar. A RAF then defers the
+      // handoff until the pane has painted; focus never lands on the container.
       const managed = terminalInstanceService.get(id);
       if (managed?.terminal.hasSelection()) return;
 
