@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ForgeBridge } from "../forgeBridge.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 import type { RepoRef } from "../../../shared/types/forge.js";
@@ -22,6 +22,12 @@ describe("ForgeBridge in-flight dedup", () => {
     });
   });
 
+  afterEach(() => {
+    // Reject any still-pending calls so their 30s RPC timers are cleared and
+    // don't leak across tests.
+    bridge.dispose();
+  });
+
   it("coalesces concurrent identical calls into one forge:rpc event", async () => {
     const a = bridge.getPR("ns", repo, 1);
     const b = bridge.getPR("ns", repo, 1);
@@ -40,15 +46,16 @@ describe("ForgeBridge in-flight dedup", () => {
   });
 
   it("sends separate events when args differ", () => {
-    void bridge.getPR("ns", repo, 1);
-    void bridge.getPR("ns", repo, 2);
+    // Never settled — afterEach dispose() rejects them, so swallow.
+    void bridge.getPR("ns", repo, 1).catch(() => {});
+    void bridge.getPR("ns", repo, 2).catch(() => {});
 
     expect(events).toHaveLength(2);
   });
 
   it("sends separate events when namespacedId differs", () => {
-    void bridge.getPR("ns-a", repo, 1);
-    void bridge.getPR("ns-b", repo, 1);
+    void bridge.getPR("ns-a", repo, 1).catch(() => {});
+    void bridge.getPR("ns-b", repo, 1).catch(() => {});
 
     expect(events).toHaveLength(2);
   });
@@ -80,7 +87,7 @@ describe("ForgeBridge in-flight dedup", () => {
     });
     await first;
 
-    void bridge.getPR("ns", repo, 1);
+    void bridge.getPR("ns", repo, 1).catch(() => {});
     expect(events).toHaveLength(2);
   });
 

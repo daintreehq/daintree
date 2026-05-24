@@ -166,4 +166,9 @@ export function clearPRCaches(): void {
   branchListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
+  // PR queries (GET_PR, LIST_PRS, PR CI status, batch-branch) all flow through
+  // forgeProvider.runQuery, so a manual PR refresh must drop their forge cache
+  // entries too or it would serve stale state for up to the 60s TTL.
+  forgeQueryCache.clear();
+  forgeQueryInflight.clear();
 }

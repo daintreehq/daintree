@@ -26,6 +26,7 @@ import { githubForgeProvider } from "../forgeProvider.js";
 import {
   _resetForgeQueryCachesForTests,
   clearGitHubCaches,
+  clearPRCaches,
   forgeQueryCache,
 } from "../GitHubCaches.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
@@ -277,6 +278,21 @@ describe("runQuery cache + in-flight dedup", () => {
     expect(forgeQueryCache.size()).toBe(1);
 
     clearGitHubCaches();
+    expect(forgeQueryCache.size()).toBe(0);
+
+    await githubForgeProvider.getIssue!(repo, 1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("clearPRCaches() drops the forge cache so a manual refresh refetches", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(makeIssueResponse(1))
+      .mockResolvedValueOnce(makeIssueResponse(1));
+
+    await githubForgeProvider.getIssue!(repo, 1);
+    expect(forgeQueryCache.size()).toBe(1);
+
+    clearPRCaches();
     expect(forgeQueryCache.size()).toBe(0);
 
     await githubForgeProvider.getIssue!(repo, 1);
