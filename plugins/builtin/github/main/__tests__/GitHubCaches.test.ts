@@ -9,6 +9,7 @@ import {
   velocityCache,
   repoEventsETagCache,
   repoEventsNoChangeCount,
+  repoEventsLastProbeAt,
   repoStatsAndPageSnapshotCache,
 } from "../GitHubCaches.js";
 
@@ -108,6 +109,7 @@ describe("polling-optimization caches (issues #8757, #9041)", () => {
     velocityCache.clear();
     repoEventsETagCache.clear();
     repoEventsNoChangeCount.clear();
+    repoEventsLastProbeAt.clear();
     repoStatsAndPageSnapshotCache.clear();
   });
 
@@ -115,6 +117,7 @@ describe("polling-optimization caches (issues #8757, #9041)", () => {
     velocityCache.set("owner/repo::velocity::2026-05-20", { 60: 1, 120: 2, 180: 3 });
     repoEventsETagCache.set("owner/repo", '"events-etag"');
     repoEventsNoChangeCount.set("owner/repo", 3);
+    repoEventsLastProbeAt.set("owner/repo", Date.now());
     repoStatsAndPageSnapshotCache.set("owner/repo", {
       stats: { issueCount: 4, prCount: 5, lastUpdated: 1 },
       issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 4 },
@@ -128,14 +131,16 @@ describe("polling-optimization caches (issues #8757, #9041)", () => {
     expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toBeUndefined();
     expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
     expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 
-  it("clearPRCaches drops the events ETag + snapshot and resets the backoff counter", () => {
+  it("clearPRCaches drops the events ETag + snapshot and resets the backoff state", () => {
     seedAll();
     clearPRCaches();
     expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
     expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 

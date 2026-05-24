@@ -351,6 +351,77 @@ describe("getRepoStatsAndPage — REST events activity-probe gate (issues #8757,
     expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBe(snapshotBefore);
   });
 
+  it("serves the full snapshot on a 304 even when the GraphQL bucket is blocked", async () => {
+    // The probe + snapshot draw from the REST "core" bucket, so a depleted
+    // GraphQL budget must not suppress a zero-cost 304 cache hit. The probe gate
+    // runs before the GraphQL rate-limit check for exactly this reason.
+    mockClient.mockResolvedValue(statsResponse(5, 3));
+    mockFetch
+      .mockResolvedValueOnce(eventsResponse(200, { etag: '"e1"' }))
+      .mockResolvedValue(eventsResponse(304));
+
+    await getRepoStatsAndPage("/test", false); // seed snapshot + ETag, all unblocked
+    expireMemoryCaches();
+    expireBackoffWindow();
+
+    // Block only GraphQL; the REST "core" probe is unaffected.
+    vi.mocked(gitHubRateLimitService.shouldBlockRequest).mockImplementation((resource?: string) =>
+      resource === "graphql"
+        ? { blocked: true, reason: "primary", resumeAt: Date.now() + 1000 }
+        : { blocked: false, reason: null }
+    );
+
+    const result = await getRepoStatsAndPage("/test", false);
+
+    // Full snapshot served (not the degraded disk fallback with null lists),
+    // and no second GraphQL query was issued.
+    expect(result.issues).not.toBeNull();
+    expect(result.prs).not.toBeNull();
+    expect(result.error).toBeUndefined();
+    expect(statsQueryCount()).toBe(1);
+  });
+
+  it("does not advance the events ETag when the full query fails (deferred commit)", async () => {
+    // The ETag must move in lockstep with the snapshot: if the full query fails
+    // after a changed probe, the old ETag has to survive so the next probe
+    // re-detects the change instead of masking it behind a later 304.
+    let statsShouldFail = false;
+    mockClient.mockImplementation(async () => {
+      if (statsShouldFail) throw new Error("stats boom");
+      return statsResponse(5, 3);
+    });
+    mockFetch
+      .mockResolvedValueOnce(eventsResponse(200, { etag: '"e1"' }))
+      .mockResolvedValue(eventsResponse(200, { etag: '"e2"' }));
+
+    await getRepoStatsAndPage("/test", false); // probe 200 e1, full ok -> commit e1
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+
+    expireMemoryCaches();
+    expireBackoffWindow();
+    statsShouldFail = true;
+    await getRepoStatsAndPage("/test", false); // probe 200 e2 (changed), full FAILS
+
+    // ETag stays e1 — the failed fetch never committed e2.
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+  });
+
+  it("clears the cached ETag when a 200 response omits the etag header", async () => {
+    mockClient.mockResolvedValue(statsResponse(5, 3));
+    mockFetch
+      .mockResolvedValueOnce(eventsResponse(200, { etag: '"e1"' }))
+      .mockResolvedValue(eventsResponse(200)); // changed, but no etag header
+
+    await getRepoStatsAndPage("/test", false);
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBe('"e1"');
+
+    expireMemoryCaches();
+    expireBackoffWindow();
+    await getRepoStatsAndPage("/test", false); // 200 without etag -> invalidate
+
+    expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
+  });
+
   it("re-runs the full query after clearPRCaches invalidates the snapshot", async () => {
     mockClient.mockResolvedValue(statsResponse(5, 3));
     mockFetch.mockResolvedValue(eventsResponse(200, { etag: '"e1"' }));
@@ -389,6 +460,26 @@ describe("getRepoStatsAndPage — REST events activity-probe gate (issues #8757,
       await getRepoStatsAndPage("/test", false);
 
       expect(repoEventsPollIntervalCache.get(CACHE_KEY)).toBe(120_000);
+    });
+
+    it("honors the stored X-Poll-Interval as the gate window boundary", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      mockFetch.mockResolvedValue(eventsResponse(200, { etag: '"e1"', pollInterval: "120" }));
+
+      await getRepoStatsAndPage("/test", false); // floor now 120_000ms, noChange 0
+      const probesAfterSeed = probeRestCallCount();
+
+      // Just inside the 120s window — must reuse the snapshot without probing.
+      repoEventsLastProbeAt.set(CACHE_KEY, Date.now() - 119_000);
+      expireMemoryCaches();
+      await getRepoStatsAndPage("/test", false);
+      expect(probeRestCallCount()).toBe(probesAfterSeed);
+
+      // Just past the window — the probe must fire again.
+      repoEventsLastProbeAt.set(CACHE_KEY, Date.now() - 121_000);
+      expireMemoryCaches();
+      await getRepoStatsAndPage("/test", false);
+      expect(probeRestCallCount()).toBe(probesAfterSeed + 1);
     });
 
     it("increments the consecutive-no-change counter on each 304 and resets on a 200", async () => {
