@@ -32,8 +32,7 @@ export default function NativePopoverSpike() {
           <div className="flex flex-col gap-6">
             <section className="flex flex-col gap-2">
               <p className="text-sm text-daintree-text/70">
-                Tooltip — hover or focus the trigger. Positioned with CSS anchor,
-                no Floating UI.
+                Tooltip — hover or focus the trigger. Positioned with CSS anchor, no Floating UI.
               </p>
               <NativeTooltip content="Native [popover=hint] tooltip">
                 <button
@@ -46,8 +45,8 @@ export default function NativePopoverSpike() {
             </section>
             <section className="flex flex-col gap-2">
               <p className="text-sm text-daintree-text/70">
-                Dropdown — arrow keys navigate, Enter selects, first Escape closes
-                the menu, second Escape closes this dialog.
+                Dropdown — arrow keys navigate, Enter selects, first Escape closes the menu, second
+                Escape closes this dialog.
               </p>
               <NativeDropdown
                 label="Open menu"
