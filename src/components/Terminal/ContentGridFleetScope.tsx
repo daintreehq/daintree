@@ -26,7 +26,7 @@ export function ContentGridFleetScope({
       ref={bindGridRegion}
       role="region"
       tabIndex={-1}
-      aria-label="Content"
+      aria-label="Panels"
       data-fleet-scope="true"
       data-macro-focus={ctx.isMacroFocused ? "true" : undefined}
       onKeyDown={ctx.handleGridRegionKeyDown}

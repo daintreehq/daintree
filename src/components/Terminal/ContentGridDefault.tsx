@@ -56,7 +56,7 @@ export function ContentGridDefault({
         ref={bindGridRegion}
         role="region"
         tabIndex={-1}
-        aria-label="Content"
+        aria-label="Panels"
         data-macro-focus={ctx.isMacroFocused ? "true" : undefined}
         onKeyDown={ctx.handleGridRegionKeyDown}
         className={cn(
