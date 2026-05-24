@@ -68,7 +68,7 @@ function renderRow(overrides: RenderOverrides = {}) {
         underlineOnHover={false}
         hasUpstreamDelta={overrides.hasUpstreamDelta ?? false}
         hasAuthFailedSignIn={overrides.hasAuthFailedSignIn ?? false}
-        hasIssueTitle={false}
+        hasDisplayTitle={false}
         hasPlanFile={false}
         badges={{}}
       />

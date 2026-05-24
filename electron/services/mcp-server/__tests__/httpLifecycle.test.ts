@@ -15,8 +15,21 @@ vi.mock("../../../store.js", () => ({
 
 import http from "node:http";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
+
+type BearerTestHandle = {
+  touchBearer: (
+    authHeader: string,
+    userAgent: string,
+    sessionId: string,
+    tier: "workbench" | "action" | "system" | "external"
+  ) => void;
+  detachBearerSession: (sessionId: string) => void;
+};
+
+const hashOf = (authHeader: string) => createHash("sha256").update(authHeader).digest("hex");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockServer = any;
@@ -24,6 +37,7 @@ type MockServer = any;
 function mockServer(port = 45454): MockServer {
   const s = new EventEmitter() as unknown as MockServer;
   s.closeAllConnections = vi.fn();
+  s.closeIdleConnections = vi.fn();
   s.close = vi.fn((cb?: () => void) => {
     cb?.();
     return s;
@@ -59,6 +73,8 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       armTierElevationTimer: vi.fn(),
       clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
+      registerClientMetadata: vi.fn(),
+      listExternalActiveClients: vi.fn(() => []),
     },
     auditService: {
       hydrate: vi.fn(),
@@ -201,13 +217,16 @@ describe("HttpLifecycle", () => {
   });
 
   describe("stop()", () => {
-    it("calls closeAllConnections before close", async () => {
+    it("drains gracefully: closeIdleConnections after close starts, no eager closeAllConnections (#8779)", async () => {
       const deps = fakeDeps();
       const s = mockServer();
       (s as MockServer & { listening: boolean }).listening = true;
       const callOrder: string[] = [];
       s.closeAllConnections.mockImplementation(() => {
         callOrder.push("closeAllConnections");
+      });
+      s.closeIdleConnections.mockImplementation(() => {
+        callOrder.push("closeIdleConnections");
       });
       s.close.mockImplementation((cb?: () => void) => {
         callOrder.push("close");
@@ -221,24 +240,50 @@ describe("HttpLifecycle", () => {
 
       await lc.stop();
 
-      expect(callOrder[0]).toBe("closeAllConnections");
-      expect(callOrder[1]).toBe("close");
+      // close() starts the drain; closeIdleConnections() drops bare keep-alive
+      // sockets immediately after. The eager force-kill is gone — when close
+      // completes within the deadline closeAllConnections is never called.
+      expect(callOrder[0]).toBe("close");
+      expect(callOrder).toContain("closeIdleConnections");
+      expect(s.closeAllConnections).not.toHaveBeenCalled();
     });
 
-    it("resolves after timeout when close hangs", async () => {
+    it("does not log a timeout warning when close completes within the deadline (#8779)", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const deps = fakeDeps();
       const s = mockServer();
       (s as MockServer & { listening: boolean }).listening = true;
-      s.close.mockImplementation(() => s); // never calls callback
+
+      const lc = new HttpLifecycle(deps);
+      (lc as unknown as { httpServer: MockServer }).httpServer = s;
+      (lc as unknown as { port: number }).port = 45454;
+
+      await lc.stop();
+      // Fire the (already-resolved) deadline timer — its callback must not warn.
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("server.close() timed out"));
+    });
+
+    it("force-closes connections only after the 3s drain deadline (#8779)", async () => {
+      const deps = fakeDeps();
+      const s = mockServer();
+      (s as MockServer & { listening: boolean }).listening = true;
+      s.close.mockImplementation(() => s); // never calls callback — close hangs
 
       const lc = new HttpLifecycle(deps);
       (lc as unknown as { httpServer: MockServer }).httpServer = s;
       (lc as unknown as { port: number }).port = 45454;
 
       const stopPromise = lc.stop();
-      await vi.advanceTimersByTimeAsync(11_000);
+      // Before the deadline the active sockets are left to drain.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(s.closeAllConnections).not.toHaveBeenCalled();
+      // Past the 3s deadline the remaining sockets are force-closed.
+      await vi.advanceTimersByTimeAsync(2_000);
 
       await expect(stopPromise).resolves.toBeUndefined();
+      expect(s.closeIdleConnections).toHaveBeenCalled();
       expect(s.closeAllConnections).toHaveBeenCalled();
       expect((lc as unknown as { httpServer: unknown }).httpServer).toBeNull();
     });
@@ -405,6 +450,105 @@ describe("HttpLifecycle", () => {
         .calls[0]?.[0];
       expect(callArgs).toBeDefined();
       expect(callArgs.turnId).toBeUndefined();
+    });
+  });
+
+  describe("bearer register", () => {
+    const authA = "Bearer secret-token-aaaa";
+    const authB = "Bearer secret-token-bbbb";
+
+    it("registers a bearer and exposes only the suffix, never the raw token", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      (lc as unknown as BearerTestHandle).touchBearer(
+        authA,
+        "Claude Code/1.0",
+        "sess-1",
+        "external"
+      );
+
+      const bearers = lc.listActiveBearers();
+      expect(bearers).toHaveLength(1);
+      expect(bearers[0]).toMatchObject({
+        tokenHash: hashOf(authA),
+        token4LastChars: "aaaa",
+        userAgent: "Claude Code/1.0",
+        requestsSinceLaunch: 1,
+      });
+      // The raw token must never cross the listing surface.
+      expect(JSON.stringify(bearers)).not.toContain("secret-token-aaaa");
+      // sessionIds is internal only.
+      expect(bearers[0]).not.toHaveProperty("sessionIds");
+    });
+
+    it("tracks only external-tier bearers, never internal (help/pane) tokens", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Help/1", "sess-help", "action");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      expect(lc.listActiveBearers()).toHaveLength(0);
+      // A subsequent external bearer is still tracked.
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+      expect(lc.listActiveBearers()).toHaveLength(1);
+    });
+
+    it("pushes a runtime-state change on connect and on final disconnect", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
+      handle.detachBearerSession("sess-1");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
+    });
+
+    it("coalesces two sessions onto one entry and only drops it when both close", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      handle.touchBearer(authA, "Client/2", "sess-2", "external");
+
+      const bearers = lc.listActiveBearers();
+      expect(bearers).toHaveLength(1);
+      // requestsSinceLaunch counts each handshake; userAgent reflects the latest.
+      expect(bearers[0]!.requestsSinceLaunch).toBe(2);
+      expect(bearers[0]!.userAgent).toBe("Client/2");
+
+      handle.detachBearerSession("sess-1");
+      expect(lc.listActiveBearers()).toHaveLength(1);
+
+      handle.detachBearerSession("sess-2");
+      expect(lc.listActiveBearers()).toHaveLength(0);
+    });
+
+    it("keys distinct tokens to distinct entries", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      handle.touchBearer(authB, "Client/2", "sess-2", "external");
+      expect(lc.listActiveBearers()).toHaveLength(2);
+    });
+
+    it("detachBearerSession is a no-op for unknown sessions", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      expect(() => (lc as unknown as BearerTestHandle).detachBearerSession("ghost")).not.toThrow();
+      expect(lc.listActiveBearers()).toHaveLength(0);
+    });
+
+    it("getBearerSessionIds returns a snapshot or null", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1", "external");
+      expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-1"]);
+      expect(lc.getBearerSessionIds("nonexistent")).toBeNull();
+    });
+
+    it("clearBearer evicts the entry and its reverse-lookup rows", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Client/1", "sess-1", "external");
+      lc.clearBearer(hashOf(authA));
+      expect(lc.listActiveBearers()).toHaveLength(0);
+      // Reverse rows gone: a late detach for the cleared session is harmless.
+      expect(() => handle.detachBearerSession("sess-1")).not.toThrow();
     });
   });
 

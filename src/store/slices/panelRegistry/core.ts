@@ -8,7 +8,6 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
@@ -375,40 +374,8 @@ export const createCorePanelActions = (
       terminal = state.panelsById[id];
       if (!terminal || terminal.location === "grid") return state;
 
-      const targetWorktreeId = terminal.worktreeId ?? null;
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      // Check grid capacity - count unique groups (each group = 1 slot)
-      const gridTerminalIds: string[] = [];
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-        )
-          gridTerminalIds.push(tid);
-      }
-
-      // Count groups using TabGroup data
-      const panelsInGroups = new Set<string>();
-      let explicitGroupCount = 0;
-      for (const g of state.tabGroups.values()) {
-        if (g.location === "grid" && (g.worktreeId ?? null) === targetWorktreeId) {
-          explicitGroupCount++;
-          g.panelIds.forEach((pid) => panelsInGroups.add(pid));
-        }
-      }
-      // Count ungrouped panels
-      let ungroupedCount = 0;
-      for (const tid of gridTerminalIds) {
-        if (!panelsInGroups.has(tid)) {
-          ungroupedCount++;
-        }
-      }
-      if (explicitGroupCount + ungroupedCount >= maxCapacity) {
-        return state;
-      }
-
+      // Scrollable grid (#8805): no screen-fit cap — moves to grid always
+      // succeed, the grid scrolls vertically to absorb additional panels.
       moveSucceeded = true;
       const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
       const newById = {

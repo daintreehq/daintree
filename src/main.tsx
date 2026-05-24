@@ -30,6 +30,15 @@ import {
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
+import { getSafeBootPromise } from "./lib/bootPromise";
+
+// Fire `app:boot` at module-eval time, before `bootstrap()` imports App and
+// calls `createRoot`. The IPC round-trip then overlaps React parse and the
+// first commit; `App` reads the cached promise via `use()` (#8820). Warming the
+// safe wrapper (not just `getBootPromise`) means its derived `.then` chain is
+// also annotated before first render, so `use()` can read it synchronously when
+// the IPC beats React's parse + commit.
+void getSafeBootPromise();
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;

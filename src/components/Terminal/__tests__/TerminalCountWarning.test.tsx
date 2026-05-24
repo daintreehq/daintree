@@ -47,6 +47,11 @@ vi.mock("@/store/panelLimitStore", () => ({
   },
 }));
 
+const requestPanelCloseMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+  requestPanelClose: requestPanelCloseMock,
+}));
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -73,6 +78,7 @@ beforeEach(() => {
   };
   panelState.panelIds = ["a", "b", "c", "d", "e"];
   panelState.trashPanel = vi.fn();
+  requestPanelCloseMock.mockClear();
   limitState.softWarningLimit = 4;
   limitState.warningsDisabled = false;
   limitState.lastSoftWarningDismissedAt = null;
@@ -131,6 +137,23 @@ describe("TerminalCountWarning", () => {
     expect(className).toContain("focus-visible:outline");
     expect(className).toContain("focus-visible:outline-daintree-accent");
     expect(className).not.toMatch(/(^|\s)focus:ring-/);
+  });
+
+  it("routes completed-agent cleanup through optimistic close", () => {
+    panelState.panelsById.f = {
+      id: "f",
+      location: "grid",
+      agentState: "completed",
+      ephemeral: false,
+    };
+    panelState.panelIds = [...panelState.panelIds, "f"];
+    render(<TerminalCountWarning />);
+
+    fireEvent.click(screen.getByRole("button", { name: /close.*completed agent/i }));
+
+    expect(requestPanelCloseMock).toHaveBeenCalledTimes(1);
+    expect(requestPanelCloseMock.mock.calls[0]?.[0].hideIds).toEqual(["f"]);
+    expect(panelState.trashPanel).not.toHaveBeenCalled();
   });
 
   it("waits the full 250ms exit animation before unmounting on dismiss", () => {

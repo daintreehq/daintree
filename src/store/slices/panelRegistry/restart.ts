@@ -11,6 +11,7 @@ import {
   generateAgentCommand,
   buildAgentLaunchFlags,
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
 } from "@shared/types";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
@@ -23,7 +24,6 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
@@ -158,7 +158,8 @@ export const createRestartActions = (
   | "toggleInputLocked"
   | "activateFallbackPreset"
 > => ({
-  restartTerminal: async (id) => {
+  restartTerminal: async (id, options) => {
+    const allowResumeLatest = options?.allowResumeLatest !== false;
     const terminal = get().panelsById[id];
 
     if (!terminal) {
@@ -261,6 +262,7 @@ export const createRestartActions = (
     // For agent terminals, regenerate command from current settings
     // For other terminals, use the saved command
     let commandToRun = currentTerminal.command;
+    let usedResumeLatest = false;
     const effectiveAgentId = currentTerminal.launchAgentId;
     // Gate on launch intent (`effectiveAgentId`, derived from the sealed
     // `launchAgentId`) plus two demotion
@@ -341,6 +343,18 @@ export const createRestartActions = (
         if (resumeCmd) {
           commandToRun = resumeCmd;
         }
+      } else if (allowResumeLatest) {
+        // No captured session ID — graceful-shutdown pattern match missed or
+        // timed out. Try the agent's resume-latest fallback (e.g. claude
+        // --continue, codex resume --last, gemini -r latest) before falling
+        // through to a fresh launch so the user keeps their prior CWD-scoped
+        // conversation. Suppressed by moveToNewWorktreeAndTransfer because the
+        // new CWD would resume a stale or unrelated session.
+        const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, nextAgentLaunchFlags);
+        if (resumeLatestCmd) {
+          commandToRun = resumeLatestCmd;
+          usedResumeLatest = true;
+        }
       }
 
       if (commandToRun === currentTerminal.command) {
@@ -409,9 +423,13 @@ export const createRestartActions = (
 
     const spawnCommand = commandToRun;
     // Track session ID for restore-on-failure; resume command is transient,
-    // so keep the original command as the durable stored command
+    // so keep the original command as the durable stored command. Same for
+    // the resume-latest fallback (e.g. `claude --continue`) — re-storing that
+    // as durable would re-resume on every subsequent restart instead of
+    // launching fresh.
     const consumedSessionId = currentTerminal.agentSessionId;
-    const durableCommand = consumedSessionId ? currentTerminal.command : spawnCommand;
+    const durableCommand =
+      consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
 
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
@@ -619,20 +637,10 @@ export const createRestartActions = (
     let movedToLocation: PanelLocation | null = null;
 
     set((state) => {
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      let targetGridCount = 0;
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.worktreeId ?? null) === (worktreeId ?? null) &&
-          t.location !== "trash" &&
-          (t.location === "grid" || t.location === undefined)
-        )
-          targetGridCount++;
-      }
-
-      const newLocation: PanelLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
+      // Scrollable grid (#8805): restoring a panel always lands it in the
+      // destination worktree's grid; the grid scrolls if it now exceeds the
+      // screen-fit count.
+      const newLocation: PanelLocation = "grid";
       movedToLocation = newLocation;
 
       const t = state.panelsById[id];
@@ -714,7 +722,9 @@ export const createRestartActions = (
                 return { panelsById: newById, panelIdsByWorktreeId: newIndex };
               });
 
-              await get().restartTerminal(id);
+              // Suppress resume-latest: the CWD has changed; we want a fresh
+              // launch + buffer-injected context, not a stale CWD-scoped session.
+              await get().restartTerminal(id, { allowResumeLatest: false });
 
               // After restart, inject captured history as a first prompt for agent terminals
               const restarted = get().panelsById[id];

@@ -1,6 +1,7 @@
 // AI Agent icons
 export { ClaudeIcon } from "./ClaudeIcon";
 export { GeminiIcon } from "./GeminiIcon";
+export { AntigravityIcon } from "./AntigravityIcon";
 export { CodexIcon } from "./CodexIcon";
 export { OpenCodeIcon } from "./OpenCodeIcon";
 export { CursorIcon } from "./CursorIcon";

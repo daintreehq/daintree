@@ -74,6 +74,14 @@ export function isBracketedPaste(data: string): boolean {
   return containsFullBracketedPaste(data);
 }
 
+// xterm.js 6.0 dispatches DEC ?1004 focus reports as isolated 3-byte writes
+// when the textarea gains/loses focus and the TUI has enabled focus tracking.
+// Tests `=== "\x1b[I"` rather than substring to avoid false positives on the
+// occasional sequence whose payload happens to contain CSI I/O (#8865).
+export function isFocusReport(data: string): boolean {
+  return data === "\x1b[I" || data === "\x1b[O";
+}
+
 export function chunkInput(data: string): string[] {
   if (data.length === 0) {
     return [];

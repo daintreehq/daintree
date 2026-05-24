@@ -486,6 +486,7 @@ export const CHANNELS = {
   HELP_PROVISION_SESSION: "help:provision-session",
   HELP_REVOKE_SESSION: "help:revoke-session",
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
+  HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
@@ -537,6 +538,12 @@ export const CHANNELS = {
   MCP_SERVER_SET_PORT: "mcp-server:set-port",
   MCP_SERVER_ROTATE_API_KEY: "mcp-server:rotate-api-key",
   MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
+  /**
+   * Snapshot the externally-connected MCP clients (api-key / unauthenticated
+   * loopback sessions, excluding renderer-pinned help-assistant bearers) so
+   * the disable-confirmation can name who's about to be severed (#8779).
+   */
+  MCP_SERVER_LIST_ACTIVE_CLIENTS: "mcp-server:list-active-clients",
   MCP_SERVER_GET_AUDIT_RECORDS: "mcp-server:get-audit-records",
   MCP_SERVER_CLEAR_AUDIT_LOG: "mcp-server:clear-audit-log",
   MCP_SERVER_SET_AUDIT_ENABLED: "mcp-server:set-audit-enabled",
@@ -606,6 +613,18 @@ export const CHANNELS = {
    * pin checked.
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
+  /**
+   * List the external bearers currently connected to the local MCP server.
+   * Returns only the display suffix and token hash — never the raw token.
+   * Backs the "External clients" row on the MCP Server settings tab (#8778).
+   */
+  MCP_SERVER_LIST_ACTIVE_BEARERS: "mcp-server:list-active-bearers",
+  /**
+   * Disconnect a single external bearer by its token hash: revoke every
+   * session it owns and evict it from the live register. One bearer only —
+   * key rotation (revoke-all) stays a separate action (#8778).
+   */
+  MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
   /**
    * Push channel: a grant lifecycle event (`issued`, `expired`, `revoked`)
    * fired for the help-session pinned to this renderer. Targeted send —
@@ -764,6 +783,7 @@ export const CHANNELS = {
   // Agent preset channels
   AGENT_PRESETS_UPDATED: "agent-presets:updated",
   AGENT_CAPABILITIES_GET_CCR_PRESETS: "agent-capabilities:get-ccr-presets",
+  AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST: "agent-capabilities:get-resolved-model-list",
 
   // Performance capture channels
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",

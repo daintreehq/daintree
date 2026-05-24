@@ -9,6 +9,7 @@ import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
@@ -157,6 +158,7 @@ export function inferAgentIdFromTitle(
 
   const titleLower = (title ?? "").toLowerCase();
   if (titleLower.includes("claude")) return "claude";
+  if (titleLower.includes("antigravity")) return "antigravity";
   if (titleLower.includes("gemini")) return "gemini";
   if (titleLower.includes("codex")) return "codex";
   if (titleLower.includes("opencode")) return "opencode";
@@ -387,14 +389,22 @@ export function buildArgsForRespawn(
           presetArgs: preset?.args?.join(" "),
         });
       }
-    } else if (hasPersistedFlags) {
-      command = buildFromPersistedFlags();
-    } else if (agentSettings) {
-      command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-        clipboardDirectory,
-        modelId: saved.agentModelId,
-        presetArgs: preset?.args?.join(" "),
-      });
+    } else {
+      // No session ID was captured (graceful-shutdown pattern match missed or
+      // timed out). Try the agent's resume-latest fallback before falling
+      // through to a fresh launch so the user keeps their prior conversation.
+      const resumeLatestCmd = buildResumeLatestCommand(agentId, persistedFlags);
+      if (resumeLatestCmd) {
+        command = resumeLatestCmd;
+      } else if (hasPersistedFlags) {
+        command = buildFromPersistedFlags();
+      } else if (agentSettings) {
+        command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+          clipboardDirectory,
+          modelId: saved.agentModelId,
+          presetArgs: preset?.args?.join(" "),
+        });
+      }
     }
   }
 

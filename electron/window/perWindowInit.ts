@@ -10,6 +10,7 @@ import {
 } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
+import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
 import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
@@ -19,7 +20,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { getEarlyPathRefreshPromise, isDemoMode } from "../setup/environment.js";
+import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -32,6 +33,8 @@ import {
   setMainProcessWatchdogClientRef,
   getAgentVersionService,
   setAgentVersionService,
+  getAgentModelCatalogService,
+  setAgentModelCatalogService,
   getAgentUpdateHandler,
   setAgentUpdateHandler,
   getWorkspaceClientRef,
@@ -99,27 +102,15 @@ export async function initPerWindowServices(
   if (!ptyClient) {
     console.log("[MAIN] Starting critical services...");
 
-    // Wait for the early PATH refresh (kicked off in app.whenReady) before
-    // forking the PTY host so node-pty inherits the user's full PATH —
-    // version-manager shims (mise/asdf/Volta) and user-local bin dirs are
-    // otherwise invisible to packaged builds (#8625). Awaiting a settled
-    // promise is a no-op when the refresh already finished. If the kick-off
-    // never ran (test/headless contexts), skip the await rather than block.
-    //
-    // Trade-off note: this still gates the first renderer load — IPC
-    // handlers and `startRendererLoad` in windowServices.ts run after
-    // `await initPerWindowServices`. In the P95 case the probe is already
-    // settled (~50ms via shell-env) and the await is instant; in the
-    // worst case it inherits refreshPath's 10s internal timeout, which is
-    // strictly better than the old fixPath() that ran synchronously at
-    // module load, before app.whenReady's intrinsic startup work could
-    // overlap. Fully unblocking renderer load is a follow-up — it requires
-    // registering IPC handlers with a deferred ptyClient ref so PtyClient
-    // construction can move past startRendererLoad.
-    const earlyPathRefresh = getEarlyPathRefreshPromise();
-    if (earlyPathRefresh) {
-      await earlyPathRefresh;
-    }
+    // PtyClient is constructed with `deferStart` so the PTY host fork does NOT
+    // happen here — it is triggered by `ptyClient.start()` in
+    // windowServices.ts *after* `startRendererLoad`, which awaits the early
+    // PATH refresh immediately before forking. That keeps the #8625 invariant
+    // (PATH refresh → PTY fork, so node-pty inherits version-manager shims and
+    // user-local bin dirs in packaged builds) while no longer gating the first
+    // renderer load on the refresh (#8827). Constructing the client here keeps
+    // a live `ptyClient` reference available to IPC handlers at registration
+    // time — only the host fork is deferred, not the client object.
 
     // Start the external main-process watchdog before PtyClient so a deadlock
     // during PTY host fork (worst case: a synchronous spawn that hangs) is
@@ -141,12 +132,26 @@ export async function initPerWindowServices(
     ptyClient = new PtyClient({
       healthCheckIntervalMs: 5000,
       showCrashDialog: false,
+      // Defer the host fork to windowServices.ts (#8827) — see the comment
+      // above. The client object is live now; the fork waits on the PATH
+      // refresh after startRendererLoad.
+      deferStart: true,
     });
     setPtyClientRef(ptyClient);
 
     const versionSvc = new AgentVersionService(cliAvailabilityService);
     setAgentVersionService(versionSvc);
     setAgentUpdateHandler(new AgentUpdateHandler(ptyClient, versionSvc, cliAvailabilityService));
+
+    if (!getAgentModelCatalogService()) {
+      const modelCatalogSvc = new AgentModelCatalogService();
+      setAgentModelCatalogService(modelCatalogSvc);
+      // Warm the cache in the background so the first renderer request hits
+      // populated data. Errors are already silenced inside getCatalog().
+      void modelCatalogSvc.getCatalog().catch(() => {
+        /* swallow — surfaced via console.warn inside the service */
+      });
+    }
 
     let lastCrashDetails: {
       crashType: string;

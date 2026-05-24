@@ -1,4 +1,3 @@
-import { Clock } from "lucide-react";
 import type { FreshnessLevel } from "@/hooks/useRepositoryStats";
 
 export type BadgeFreshnessCause = "stale" | "rate-limit" | "circuit-breaker";
@@ -15,13 +14,6 @@ export function freshnessClass(level: FreshnessLevel): string {
     default:
       return "";
   }
-}
-
-export function FreshnessGlyph({ level }: { level: FreshnessLevel }) {
-  if (level === "stale-disk" || level === "aging") {
-    return <Clock className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
-  }
-  return null;
 }
 
 export function formatTimeSince(timestamp: number | null, now: number): string {

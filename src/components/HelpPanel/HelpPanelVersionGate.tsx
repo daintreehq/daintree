@@ -5,9 +5,16 @@ import type { VersionTooOld } from "@/controllers/HelpSessionController";
 interface HelpPanelVersionGateProps {
   versionTooOld: VersionTooOld;
   onOpenSettings: () => void;
+  onCheckAgain: () => void;
+  isCheckingVersion: boolean;
 }
 
-export function HelpPanelVersionGate({ versionTooOld, onOpenSettings }: HelpPanelVersionGateProps) {
+export function HelpPanelVersionGate({
+  versionTooOld,
+  onOpenSettings,
+  onCheckAgain,
+  isCheckingVersion,
+}: HelpPanelVersionGateProps) {
   return (
     <div
       className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center"
@@ -32,6 +39,19 @@ export function HelpPanelVersionGate({ versionTooOld, onOpenSettings }: HelpPane
       >
         <Settings2 className="w-3.5 h-3.5" />
         <span>Update {versionTooOld.agentName}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onCheckAgain}
+        disabled={isCheckingVersion}
+        className={cn(
+          "text-[11px] text-daintree-text/40 transition-colors",
+          "hover:text-daintree-text/60",
+          "disabled:opacity-50 disabled:cursor-default disabled:hover:text-daintree-text/40",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        )}
+      >
+        Check again
       </button>
     </div>
   );

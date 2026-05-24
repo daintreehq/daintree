@@ -182,9 +182,18 @@ describe("buildActivityMonitorOptions", () => {
     expect(result.agentId).toBe("claude");
   });
 
-  it("defaults ignoredInputSequences to escape-return", () => {
+  it("defaults ignoredInputSequences to escape-return plus focus reports (#8865)", () => {
     const result = buildActivityMonitorOptions(undefined, {});
-    expect(result.ignoredInputSequences).toEqual(["\x1b\r"]);
+    expect(result.ignoredInputSequences).toEqual(["\x1b\r", "\x1b[I", "\x1b[O"]);
+  });
+
+  it("merges focus reports into agent-defined ignoredInputSequences (#8865)", () => {
+    // Every named agent overrides ignoredInputSequences; merging unconditionally
+    // guarantees focus filtering is present without each config re-listing it.
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.ignoredInputSequences).toContain("\x1b\r");
+    expect(result.ignoredInputSequences).toContain("\x1b[I");
+    expect(result.ignoredInputSequences).toContain("\x1b[O");
   });
 
   it("sets idle debounce for agent terminals", () => {

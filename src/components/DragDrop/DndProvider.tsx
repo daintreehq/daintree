@@ -35,12 +35,7 @@ import {
   type ScreenReaderInstructions,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import {
-  usePanelStore,
-  useLayoutConfigStore,
-  useWorktreeSelectionStore,
-  type TerminalInstance,
-} from "@/store";
+import { usePanelStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
 
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
@@ -58,7 +53,6 @@ import {
   filterTerminalsByContainer,
   detectTargetContainer,
   resolveTargetIndex,
-  isGridFull,
   resolveGroupPlacementIndex,
   findGroupIndex,
   type OverDropData,
@@ -561,7 +555,6 @@ export function DndProvider({ children }: DndProviderProps) {
   const moveTerminalToWorktree = usePanelStore((s) => s.moveTerminalToWorktree);
   const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-  const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
 
   const activeTerminal = useMemo(() => {
     if (!activeId && !activeData) return null;
@@ -868,18 +861,8 @@ export function DndProvider({ children }: DndProviderProps) {
           isAccordionOver
         );
 
-        // Block cross-container move from dock to grid if grid is full
-        const gridIsFull = isGridFull(
-          freshTerminalsById,
-          freshTerminalIds,
-          activeWorktreeId,
-          usePanelStore.getState().tabGroups,
-          getMaxGridCapacity()
-        );
-
-        if (sourceLocation === "dock" && targetContainer === "grid" && gridIsFull) {
-          return; // Defensive: cancelDrop should catch this
-        }
+        // Scrollable panel grid (#8805) — no grid-full rejection, the grid
+        // scrolls vertically to absorb new panels.
         if (isGroupDrag) {
           // Group-aware drag: move the entire tab group
           if (sourceLocation === targetContainer) {
@@ -1094,7 +1077,6 @@ export function DndProvider({ children }: DndProviderProps) {
       moveTerminalToWorktree,
       setFocused,
       activeWorktreeId,
-      getMaxGridCapacity,
     ]
   );
 
@@ -1140,38 +1122,12 @@ export function DndProvider({ children }: DndProviderProps) {
         return true;
       }
 
-      if (activeDataRaw.sourceLocation === "dock") {
-        const overId = String(over.id);
-        if (overId !== TRASH_DROPPABLE_ID) {
-          const store = usePanelStore.getState();
-          const targetContainer = detectTargetContainer(
-            overData,
-            overContainer,
-            overId,
-            store.panelsById,
-            parseAccordionDragId(overId) !== null
-          );
-
-          if (targetContainer === "grid") {
-            const gridIsFull = isGridFull(
-              store.panelsById,
-              store.panelIds,
-              useWorktreeSelectionStore.getState().activeWorktreeId,
-              store.tabGroups,
-              getMaxGridCapacity()
-            );
-
-            if (gridIsFull) {
-              setIsCancelDrop(true);
-              return true;
-            }
-          }
-        }
-      }
+      // Scrollable panel grid (#8805) — dock→grid drops are never rejected on
+      // capacity grounds; the grid scrolls vertically to absorb new panels.
 
       return false;
     },
-    [overContainer, getMaxGridCapacity]
+    [overContainer]
   );
 
   const handleDragCancel = useCallback(() => {

@@ -3,7 +3,6 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
@@ -330,50 +329,8 @@ export const createTabGroupActions = (
 
     if (group.location === location) return true;
 
-    if (location === "grid") {
-      const targetWorktreeId = group.worktreeId ?? null;
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const state = get();
-
-      const gridTerminalIds: string[] = [];
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-        )
-          gridTerminalIds.push(tid);
-      }
-
-      const panelsInGroups = new Set<string>();
-      let explicitGroupCount = 0;
-      for (const g of state.tabGroups.values()) {
-        if (
-          g.id !== groupId &&
-          g.location === "grid" &&
-          (g.worktreeId ?? null) === targetWorktreeId
-        ) {
-          explicitGroupCount++;
-          g.panelIds.forEach((pid) => panelsInGroups.add(pid));
-        }
-      }
-
-      const movingPanelIds = new Set(group.panelIds);
-      let ungroupedCount = 0;
-      for (const tid of gridTerminalIds) {
-        if (!panelsInGroups.has(tid) && !movingPanelIds.has(tid)) {
-          ungroupedCount++;
-        }
-      }
-
-      if (explicitGroupCount + ungroupedCount + 1 > maxCapacity) {
-        console.warn(
-          `[TabGroup] Cannot move group ${groupId} to grid: capacity exceeded (${explicitGroupCount + ungroupedCount + 1} > ${maxCapacity})`
-        );
-        return false;
-      }
-    }
+    // Scrollable grid (#8805): tab-group moves to the grid no longer gate on a
+    // screen-fit cap. The grid scrolls vertically so the move always succeeds.
 
     set((state) => {
       const newTabGroups = new Map(state.tabGroups);
@@ -422,50 +379,8 @@ export const createTabGroupActions = (
 
     if (group.worktreeId === worktreeId) return true;
 
-    if (group.location === "grid") {
-      const targetWorktreeId = worktreeId ?? null;
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const state = get();
-
-      const gridTerminalIds: string[] = [];
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-        )
-          gridTerminalIds.push(tid);
-      }
-
-      const panelsInGroups = new Set<string>();
-      let explicitGroupCount = 0;
-      for (const g of state.tabGroups.values()) {
-        if (
-          g.id !== groupId &&
-          g.location === "grid" &&
-          (g.worktreeId ?? null) === targetWorktreeId
-        ) {
-          explicitGroupCount++;
-          g.panelIds.forEach((pid) => panelsInGroups.add(pid));
-        }
-      }
-
-      const movingPanelIds = new Set(group.panelIds);
-      let ungroupedCount = 0;
-      for (const tid of gridTerminalIds) {
-        if (!panelsInGroups.has(tid) && !movingPanelIds.has(tid)) {
-          ungroupedCount++;
-        }
-      }
-
-      if (explicitGroupCount + ungroupedCount + 1 > maxCapacity) {
-        console.warn(
-          `[TabGroup] Cannot move group ${groupId} to worktree ${worktreeId}: capacity exceeded (${explicitGroupCount + ungroupedCount + 1} > ${maxCapacity})`
-        );
-        return false;
-      }
-    }
+    // Scrollable grid (#8805): no screen-fit cap — moving a group to another
+    // worktree's grid always succeeds; the destination grid scrolls.
 
     const targetLocation: TabGroupLocation = group.location === "grid" ? "grid" : "dock";
 

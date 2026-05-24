@@ -23,6 +23,7 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "github-stats",
   "notification-center",
   "copy-tree",
+  "command-palette",
   "settings",
   "problems",
 ];

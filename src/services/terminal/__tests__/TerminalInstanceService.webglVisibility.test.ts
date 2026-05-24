@@ -236,11 +236,11 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
-  it("setVisible(true) does not call terminal.refresh on the show path", () => {
-    // The pre-debounce rAF + the post-ensureContext refresh both painted
-    // stale DOM rows during the WebGL transition, producing the flash.
-    // WebglAddon.onLoad self-schedules its first frame; forceXtermReflow
-    // covers IntersectionObserver recovery. Removed in #6802.
+  it("setVisible(true) refreshes after the DOM-to-WebGL swap", () => {
+    // WebglAddon.onLoad activates the renderer but does not repaint existing
+    // buffer rows. After the debounced restore, TerminalWebGLManager performs
+    // one full-buffer refresh so terminals revealed after bulk open are not
+    // left blank until the next write/focus/resize event.
     const managed = makeMockManaged({ isVisible: false });
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
     (managed.terminal.refresh as ReturnType<typeof vi.fn>).mockClear();
@@ -248,7 +248,8 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", true);
     vi.advanceTimersByTime(100);
 
-    expect(managed.terminal.refresh).not.toHaveBeenCalled();
+    expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, managed.terminal.rows - 1);
   });
 
   it("rapid hide→show→hide keeps context held through dwell, then releases", () => {

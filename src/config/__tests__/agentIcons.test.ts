@@ -21,6 +21,7 @@ describe("agentIcons", () => {
   it("AGENT_ICON_MAP contains all expected agent icons", () => {
     expect(AGENT_ICON_MAP["claude"]).toBeDefined();
     expect(AGENT_ICON_MAP["gemini"]).toBeDefined();
+    expect(AGENT_ICON_MAP["antigravity"]).toBeDefined();
     expect(AGENT_ICON_MAP["codex"]).toBeDefined();
     expect(AGENT_ICON_MAP["opencode"]).toBeDefined();
     expect(AGENT_ICON_MAP["cursor"]).toBeDefined();

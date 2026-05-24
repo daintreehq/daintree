@@ -446,6 +446,160 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("preserves last known counts when a stale push payload arrives with null counts", async () => {
+      const project = { id: "p", path: "/repo/preserve-null" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      // Fresh poll establishes known good counts: 3 issues, 2 PRs.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 7,
+        issueCount: 3,
+        prCount: 2,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(3);
+        expect(result.current.stats?.prCount).toBe(2);
+      });
+
+      // A failed poll surfaces null counts with an error — preserve the last
+      // good counts instead of flashing a `—` dash in the toolbar badge.
+      const failedPush: RepositoryStats = {
+        commitCount: 7,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+        stale: true,
+        ghError: "rate limited",
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(makePushPayload(project.path, failedPush, 2000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+        // Preserved counts shown despite the nulls in the payload.
+        expect(result.current.stats?.issueCount).toBe(3);
+        expect(result.current.stats?.prCount).toBe(2);
+      });
+    });
+
+    it("preserves a confirmed 0 across a failed poll instead of flashing a dash", async () => {
+      const project = { id: "p", path: "/repo/preserve-zero" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      // Fresh poll confirms the repo genuinely has 0 open issues and 0 PRs.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 7,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(0);
+        expect(result.current.stats?.prCount).toBe(0);
+      });
+
+      // A failed poll surfaces null counts — the confirmed 0 must be preserved,
+      // not replaced with a `—` dash.
+      const failedPush: RepositoryStats = {
+        commitCount: 7,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+        stale: true,
+        ghError: "timeout",
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(makePushPayload(project.path, failedPush, 2000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+        expect(result.current.stats?.issueCount).toBe(0);
+        expect(result.current.stats?.prCount).toBe(0);
+      });
+    });
+
+    it("shows a genuine 0 from a fresh fetch instead of a preserved count", async () => {
+      const project = { id: "p", path: "/repo/confirmed-zero" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      // Fresh poll establishes known good counts: 3 issues, 2 PRs.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 7,
+        issueCount: 3,
+        prCount: 2,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(3);
+        expect(result.current.stats?.prCount).toBe(2);
+      });
+
+      // A fresh (non-stale) fetch confirms the repo now has 0 open issues/PRs —
+      // this is real data and must show 0, not the previously preserved counts.
+      const freshZero: RepositoryStats = {
+        commitCount: 7,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(makePushPayload(project.path, freshZero, 2000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(0);
+        expect(result.current.stats?.prCount).toBe(0);
+      });
+    });
+
     it("ignores a push payload whose projectPath differs from the active project", async () => {
       const project = { id: "p", path: "/repo/active" };
       getCurrentMock.mockResolvedValue(project);

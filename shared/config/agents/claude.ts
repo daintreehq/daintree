@@ -118,6 +118,7 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "claude --resume ([\\w-]+)",
+    resumeLatestArgs: ["--continue"],
   },
   env: {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

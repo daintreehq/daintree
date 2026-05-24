@@ -1,9 +1,19 @@
 {
   "name": "daintree",
   "productName": "Daintree",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
+  "sideEffects": [
+    "**/*.css",
+    "./electron/setup/environment.ts",
+    "./src/main.tsx",
+    "./src/lib/trustedTypesPolicy.ts",
+    "./src/config/terminalFont.ts",
+    "./src/components/Fleet/fleetRawInputBroadcast.ts",
+    "./src/clients/terminalClient.ts",
+    "./plugins/builtin/github/renderer/index.tsx"
+  ],
   "author": {
     "name": "Greg Priday",
     "email": "greg@siteorigin.com"
@@ -33,7 +43,7 @@
     "package:linux": "npm run build && electron-builder --linux",
     "package:local": "npm run build && electron-builder --mac --dir -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
     "package:local:dmg": "npm run build && electron-builder --mac dmg -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
-    "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3,win-job-object && node node_modules/node-pty/scripts/post-install.js",
+    "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3,win-job-object,posix-pty-reaper && node node_modules/node-pty/scripts/post-install.js",
     "postinstall": "node scripts/postinstall.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -116,6 +126,7 @@
     "js-yaml": "^4.1.1",
     "node-addon-api": "^7.1.0",
     "node-pty": "1.2.0-beta.12",
+    "posix-pty-reaper": "file:electron/native/posix-pty-reaper",
     "react-colorful": "^5.6.1",
     "safe-stable-stringify": "^2.5.0",
     "smol-toml": "^1.6.1",

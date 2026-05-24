@@ -175,6 +175,21 @@ exports.default = async function afterPack(context) {
     }
     console.log(`[afterPack] Native binary verified: ${nativeBinaryPath}`);
 
+    // posix-pty-reaper: help-session PTY tree reaping (#8769). Source-only
+    // executable — compiled by electron-rebuild during postinstall on the
+    // macOS / Linux runner. Mirrors the win-job-object check on Windows.
+    const posixReaperBinary = path.join(
+      unpackedPath,
+      "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
+    );
+    if (!fs.existsSync(posixReaperBinary)) {
+      throw new Error(
+        `[afterPack] CRITICAL: posix-pty-reaper supervisor binary not found at ${posixReaperBinary}. ` +
+          'Help-session crash-safe reaping (#8769) will be disabled. Run "npm run rebuild".'
+      );
+    }
+    console.log(`[afterPack] posix-pty-reaper verified: ${posixReaperBinary}`);
+
     if (electronPlatformName === "darwin") {
       // Inject pre-compiled Assets.car for macOS 26+ Liquid Glass icon.
       // The .car was compiled from build/AppIcon.icon via actool on a machine

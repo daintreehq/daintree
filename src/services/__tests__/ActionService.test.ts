@@ -325,7 +325,7 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
-    it("should show warning toast when disabled action has disabledReason", async () => {
+    it("should NOT show warning toast when disabled action has disabledReason (#8814)", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
         title: "Test Action",
@@ -346,13 +346,9 @@ describe("ActionService", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe("DISABLED");
+        expect(result.error.message).toBe("No focused terminal");
       }
-      expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock).toHaveBeenCalledWith({
-        type: "warning",
-        title: "'Test Action' disabled",
-        message: "No focused terminal",
-      });
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("should NOT show toast when disabled action has no disabledReason", async () => {
@@ -376,7 +372,7 @@ describe("ActionService", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
-    it("should show toast for disabled action from non-agent sources", async () => {
+    it("should NOT show toast for disabled action from any source (#8814)", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
         title: "Test Action",
@@ -397,11 +393,11 @@ describe("ActionService", () => {
         notifyMock.mockClear();
         const result = await service.dispatch("actions.list", undefined, { source });
         expect(result.ok).toBe(false);
-        expect(notifyMock).toHaveBeenCalledWith({
-          type: "warning",
-          title: "'Test Action' disabled",
-          message: "Disabled for test",
-        });
+        if (!result.ok) {
+          expect(result.error.code).toBe("DISABLED");
+          expect(result.error.message).toBe("Disabled for test");
+        }
+        expect(notifyMock).not.toHaveBeenCalled();
       }
     });
 
@@ -656,6 +652,147 @@ describe("ActionService", () => {
       const manifest = service.list();
       expect(manifest).toHaveLength(1);
       expect(manifest[0]!.id).toBe("actions.safe");
+    });
+
+    it("should omit actions whose isVisible returns false", () => {
+      const visibleAction: ActionDefinition = {
+        id: "actions.visible" as ActionId,
+        title: "Visible Action",
+        description:
+          "A visible action used for testing that isVisible: () => true keeps the entry in list() output.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => true,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const hiddenAction: ActionDefinition = {
+        id: "actions.hidden" as ActionId,
+        title: "Hidden Action",
+        description:
+          "A hidden action used for testing that isVisible: () => false removes the entry from list() output.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(visibleAction);
+      service.register(hiddenAction);
+
+      const manifest = service.list();
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0]!.id).toBe("actions.visible");
+    });
+
+    it("should default to visible when isVisible is undefined", () => {
+      const action: ActionDefinition = {
+        id: "actions.noVisible" as ActionId,
+        title: "No Visible Action",
+        description:
+          "An action without isVisible used for testing that the default behavior keeps the entry in list() output.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const manifest = service.list();
+
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0]!.id).toBe("actions.noVisible");
+    });
+
+    it("should still exclude restricted actions even when isVisible returns true", () => {
+      const restrictedVisible: ActionDefinition = {
+        id: "actions.restrictedVisible" as ActionId,
+        title: "Restricted Visible Action",
+        description:
+          "A restricted action with isVisible: () => true used for testing that the restricted gate takes precedence.",
+        category: "test",
+        kind: "command",
+        danger: "restricted",
+        scope: "renderer",
+        isVisible: () => true,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(restrictedVisible);
+      const manifest = service.list();
+
+      expect(manifest).toHaveLength(0);
+    });
+
+    it("should still return hidden actions from get()", () => {
+      const hiddenAction: ActionDefinition = {
+        id: "actions.hiddenButFetchable" as ActionId,
+        title: "Hidden But Fetchable Action",
+        description:
+          "A hidden action used for testing that get() ignores isVisible and returns the manifest entry by id.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(hiddenAction);
+      const entry = service.get("actions.hiddenButFetchable" as ActionId);
+
+      expect(entry).not.toBeNull();
+      expect(entry!.id).toBe("actions.hiddenButFetchable");
+    });
+
+    it("should still dispatch hidden actions (isVisible is discovery-only)", async () => {
+      const run = vi.fn().mockResolvedValue("ran");
+      const hiddenAction: ActionDefinition = {
+        id: "actions.hiddenButDispatchable" as ActionId,
+        title: "Hidden But Dispatchable Action",
+        description:
+          "A hidden action used for testing that dispatch() ignores isVisible and still invokes run.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run,
+      };
+
+      service.register(hiddenAction);
+      const result = await service.dispatch("actions.hiddenButDispatchable" as ActionId);
+
+      expect(result.ok).toBe(true);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("should forward the explicit ctx argument to isVisible", () => {
+      const action: ActionDefinition = {
+        id: "actions.ctxAware" as ActionId,
+        title: "Context-Aware Action",
+        description:
+          "An action whose isVisible inspects the provided context to validate context forwarding through list().",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: (ctx) => ctx.projectId === "project-visible",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+
+      const visibleManifest = service.list({ projectId: "project-visible" });
+      const hiddenManifest = service.list({ projectId: "project-other" });
+
+      expect(visibleManifest.map((e) => e.id)).toContain("actions.ctxAware");
+      expect(hiddenManifest.map((e) => e.id)).not.toContain("actions.ctxAware");
     });
 
     it("should propagate keywords to manifest entries", () => {

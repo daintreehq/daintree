@@ -24,6 +24,8 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
+import { useGridScrollRoot } from "./GridScrollRootContext";
+import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { getRestartBannerVariant } from "./restartStatus";
@@ -178,6 +180,17 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
       aria-hidden={isVisible ? undefined : true}
     >
       {visible ? children : cachedChildren}
+    </div>
+  );
+}
+
+function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-daintree-bg text-sm text-daintree-text/60">
+      <div className="flex items-center gap-2">
+        <Spinner size="sm" className="text-daintree-text/45" />
+        <span>{agentId ? "Starting agent" : "Starting terminal"}</span>
+      </div>
     </div>
   );
 }
@@ -549,6 +562,12 @@ function TerminalPaneComponent({
     isDraggingRef.current = isDragging;
   }, [isDragging]);
 
+  // Root the visibility observer at the panel grid's scroll container when this
+  // pane is mounted inside the scrollable grid (#8805). Panes outside the grid
+  // (dock, popout, two-pane split) fall back to the viewport root via a null
+  // context value, which is the correct default for those surfaces.
+  const gridScrollRoot = useGridScrollRoot();
+
   // Visibility observation - stable observer, ref-gated callback.
   // Capture attach generation so stale IntersectionObserver callbacks from a
   // previous mount site don't hide a terminal that has already been re-attached.
@@ -566,13 +585,21 @@ function TerminalPaneComponent({
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
       },
       {
+        // Grid-scoped root: when mounted inside the grid, the pre-warm margin
+        // upgrades panels that are one comfortable row away from the viewport
+        // from BACKGROUND → VISIBLE before they paint. Sized to the comfortable
+        // row height so the pre-warm fires a full row ahead now that rows no
+        // longer shrink to the minimum. Outside the grid we fall back to the
+        // document viewport with no margin.
+        root: gridScrollRoot ?? null,
+        rootMargin: gridScrollRoot ? `${COMFORTABLE_PANEL_HEIGHT_PX}px 0px` : "0px",
         threshold: 0.1,
       }
     );
 
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [id, restartKey, updateVisibility]);
+  }, [id, restartKey, updateVisibility, gridScrollRoot]);
 
   // Separate unmount cleanup — only update store visibility.
   // The service-level setVisible(false) is handled by XtermAdapter's own
@@ -1185,6 +1212,8 @@ function TerminalPaneComponent({
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
             onRunAnyway={handleRunAnyway}
           />
+        ) : spawnStatus === "spawning" ? (
+          <TerminalStartupPlaceholder agentId={agentId} />
         ) : (
           <>
             <div className="flex-1 relative min-h-0">

@@ -1,6 +1,6 @@
 import { AnimatePresence, LayoutGroup, m } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { MIN_TERMINAL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
+import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridShell } from "./GridShell";
@@ -44,7 +44,7 @@ export function ContentGridFleetScope({
           style={{
             display: "grid",
             gridTemplateColumns: `repeat(${ctx.fleetGridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
-            gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
+            gridAutoRows: `minmax(${COMFORTABLE_PANEL_HEIGHT_PX}px, 1fr)`,
             gap: "4px",
             backgroundColor: "var(--color-grid-bg)",
             overflowY: "auto",
@@ -91,7 +91,7 @@ export function ContentGridFleetScope({
                   return (
                     <m.div
                       key={terminal.id}
-                      layout="position"
+                      layout={ctx.layoutAnimationEnabled ? "position" : false}
                       transition={ctx.layoutTransition}
                       transformTemplate={pixelSnapTransform}
                       className="h-full min-w-0"

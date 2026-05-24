@@ -74,6 +74,12 @@ const GRID_RESIZE_COALESCE_MS = 120;
 // terminals instead of freezing the renderer for the whole batch.
 const RESIZE_PASS_CHUNK_SIZE = 1;
 
+interface Waiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeout: number;
+}
+
 function canAutoInitializeTerminalIngest(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -91,10 +97,8 @@ class TerminalInstanceService {
   private unseenTracker = new TerminalUnseenOutputTracker();
   private hibernationListeners = new Map<string, Set<() => void>>();
   private cwdProviders = new Map<string, () => string>();
-  private readinessWaiters = new Map<
-    string,
-    Array<{ resolve: () => void; reject: (error: Error) => void; timeout: number }>
-  >();
+  private readinessWaiters = new Map<string, Waiter[]>();
+  private attachSettledWaiters = new Map<string, Waiter[]>();
   private offscreenManager = new TerminalOffscreenManager();
   private linkHandler = new TerminalLinkHandler();
   private cachedSelections = new Map<string, string>();
@@ -309,6 +313,15 @@ class TerminalInstanceService {
 
   setGPUHardwareAvailable(available: boolean): void {
     this.webGLManager.setHardwareAvailable(available);
+  }
+
+  // Triggered when the renderer receives a new ResourceProfilePayload — the
+  // thresholds have already been written into TerminalWebGLConfig by the time
+  // this runs, so we just nudge the manager to re-check its mode against the
+  // new band. Without this, a profile downgrade can leave more wants on WebGL
+  // than the new upper allows until the next consumer event happens to land.
+  refreshWebGLMode(): void {
+    this.webGLManager.refreshMode();
   }
 
   notifyUserInput(id: string, data = ""): void {
@@ -586,6 +599,21 @@ class TerminalInstanceService {
     // Guard: if a generation was provided and it doesn't match the current
     // attach generation, this is a stale cleanup from a previous mount — skip.
     if (expectedGeneration !== undefined && managed.attachGeneration !== expectedGeneration) {
+      return;
+    }
+
+    // Cold-mount observer flaps are not authoritative. XtermAdapter forces
+    // visibility true immediately after attach() so the terminal can paint
+    // before IntersectionObserver settles. During recipe/bulk-open insertion
+    // the grid may briefly report "not intersecting"; persisting that false
+    // value would strand renderer recovery behind visibility guards. Real
+    // unmounts go through detach(), which marks the instance invisible.
+    if (!isVisible && managed.isAttaching) {
+      if (managed.webGLRestoreTimer !== undefined) {
+        clearTimeout(managed.webGLRestoreTimer);
+        managed.webGLRestoreTimer = undefined;
+      }
+      this.cancelWebGLHideTimer(managed);
       return;
     }
 
@@ -1118,6 +1146,36 @@ class TerminalInstanceService {
     });
   }
 
+  waitForAttachSettled(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
+    if (this.isAttachSettled(id)) {
+      return Promise.resolve();
+    }
+
+    const timeoutMs = options.timeoutMs ?? 1500;
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.removeAttachSettledWaiter(id, resolve);
+        reject(new Error(`Terminal ${id} attach settle timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      const waiters = this.attachSettledWaiters.get(id) || [];
+      waiters.push({ resolve, reject, timeout });
+      this.attachSettledWaiters.set(id, waiters);
+    });
+  }
+
+  private isAttachSettled(id: string): boolean {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return false;
+    return (
+      managed.isOpened &&
+      managed.isAttaching !== true &&
+      managed.hostElement.isConnected &&
+      managed.terminal.element !== undefined
+    );
+  }
+
   private notifyReadinessWaiters(id: string): void {
     const waiters = this.readinessWaiters.get(id);
     if (!waiters) return;
@@ -1141,6 +1199,33 @@ class TerminalInstanceService {
 
     if (waiters.length === 0) {
       this.readinessWaiters.delete(id);
+    }
+  }
+
+  private notifyAttachSettledWaiters(id: string): void {
+    if (!this.isAttachSettled(id)) return;
+    const waiters = this.attachSettledWaiters.get(id);
+    if (!waiters) return;
+
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.resolve();
+    }
+
+    this.attachSettledWaiters.delete(id);
+  }
+
+  private removeAttachSettledWaiter(id: string, resolve: () => void): void {
+    const waiters = this.attachSettledWaiters.get(id);
+    if (!waiters) return;
+
+    const index = waiters.findIndex((w) => w.resolve === resolve);
+    if (index >= 0) {
+      waiters.splice(index, 1);
+    }
+
+    if (waiters.length === 0) {
+      this.attachSettledWaiters.delete(id);
     }
   }
 
@@ -1278,6 +1363,7 @@ class TerminalInstanceService {
 
         if (!managed.terminal.element) {
           managed.hostElement.style.opacity = "";
+          this.notifyAttachSettledWaiters(id);
           return;
         }
 
@@ -1310,7 +1396,10 @@ class TerminalInstanceService {
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
 
-          if (earlyResizeApplied) return;
+          if (earlyResizeApplied) {
+            this.notifyAttachSettledWaiters(id);
+            return;
+          }
 
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
@@ -1322,6 +1411,7 @@ class TerminalInstanceService {
               logDebug(`[TIS.attach] Skipping resize for ${id} — dimensions match after detach`);
               managed.targetCols = undefined;
               managed.targetRows = undefined;
+              this.notifyAttachSettledWaiters(id);
               return;
             }
           }
@@ -1354,10 +1444,12 @@ class TerminalInstanceService {
               this.resizeController.lockResize(id, true, remainingSuppressionMs);
             }
           }
+          this.notifyAttachSettledWaiters(id);
         });
       });
     } else {
       managed.isAttaching = false;
+      this.notifyAttachSettledWaiters(id);
     }
 
     return managed;
@@ -1400,6 +1492,7 @@ class TerminalInstanceService {
     managed.terminal.blur();
     managed.hoveredLink = null;
     managed.lastDetachAt = Date.now();
+    managed.isVisible = false;
     managed.isDetached = true;
   }
 
@@ -1434,6 +1527,18 @@ class TerminalInstanceService {
 
   flushResize(id: string): void {
     this.resizeController.flushResize(id);
+  }
+
+  /**
+   * Cancel a panel's pending resize job and debounce timer *without* applying
+   * it. Used on optimistic close: `flushResize` would force-drain queued
+   * output and reflow scrollback synchronously inside the close click, but the
+   * pending job still has to be cleared so no stale resize fires after the
+   * panel is detached or restored from trash.
+   */
+  cancelPendingResize(id: string): void {
+    const managed = this.instances.get(id);
+    if (managed) this.resizeController.clearResizeJob(managed);
   }
 
   sendPtyResize(id: string, cols: number, rows: number): void {
@@ -1554,7 +1659,13 @@ class TerminalInstanceService {
     this.resizePassAbort?.abort();
     const controller = new AbortController();
     this.resizePassAbort = controller;
-    void this.executeResizePass(ids, controller).catch((error) => {
+    const run = () => this.executeResizePass(ids, controller);
+    const task =
+      typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
+        ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
+        : run();
+    void task.catch((error) => {
+      if (error instanceof Error && error.name === "AbortError") return;
       logError("terminal resize pass failed", error);
     });
   }
@@ -2215,6 +2326,15 @@ class TerminalInstanceService {
         waiter.reject(new Error(`Terminal ${id} destroyed before frontend became ready`));
       }
       this.readinessWaiters.delete(id);
+    }
+
+    const attachWaiters = this.attachSettledWaiters.get(id);
+    if (attachWaiters) {
+      for (const waiter of attachWaiters) {
+        clearTimeout(waiter.timeout);
+        waiter.reject(new Error(`Terminal ${id} destroyed before attach settled`));
+      }
+      this.attachSettledWaiters.delete(id);
     }
 
     this.cancelAttachReveal(managed);

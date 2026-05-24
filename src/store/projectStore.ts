@@ -152,6 +152,11 @@ let currentProjectRequestId = 0;
 
 const PROJECT_VIEW_CURRENT_RETRY_DELAYS_MS = [100, 250, 500, 1000, 2000, 3000];
 
+function cancelProjectReadRequests(): void {
+  projectListRequestId++;
+  currentProjectRequestId++;
+}
+
 function getLocationProjectId(): string | null {
   if (typeof window === "undefined") return null;
 
@@ -621,6 +626,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       throw new Error("Project is not currently active");
     }
 
+    cancelProjectReadRequests();
+
     try {
       // Closing the active project deletes its persisted panel state in main.
       // Drop any queued renderer-side saves so a debounce cannot rewrite the
@@ -628,6 +635,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       panelPersistence.cancel();
       const result = await projectClient.close(projectId, { killTerminals: true });
       panelPersistence.cancel();
+      cancelProjectReadRequests();
 
       logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
         projectId,
@@ -647,6 +655,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       });
 
       if (get().currentProject?.id === projectId) {
+        cancelProjectReadRequests();
         set({ currentProject: null });
         void get().loadProjects();
       }

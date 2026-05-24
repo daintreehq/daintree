@@ -107,6 +107,9 @@ vi.mock("@/config/xtermConfig", () => ({
 }));
 
 vi.mock("@/config/terminalFont", () => ({
+  DEFAULT_TERMINAL_FONT_FAMILY: "monospace",
+  DEFAULT_TERMINAL_FONT_SIZE: 12,
+  ensureTerminalFontLoaded: () => Promise.resolve(),
   terminalFontReady: Object.assign(Promise.resolve(), { status: "fulfilled", value: undefined }),
 }));
 

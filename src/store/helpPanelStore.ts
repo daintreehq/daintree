@@ -14,7 +14,12 @@ export const HELP_PANEL_MAX_WIDTH = 800;
 export const HELP_PANEL_DEFAULT_WIDTH = 380;
 
 export interface HelpHibernateSession {
-  /** Captured agent session ID (e.g. Claude resume token) */
+  /**
+   * Captured agent session ID (e.g. Claude resume token). Empty string is a
+   * valid value and signals "capture failed — use the agent's resume-latest
+   * fallback flag (e.g. `claude --continue`) on next open". See
+   * `HelpSessionController._spawnResumed` for the falsy-sessionId branch.
+   */
   sessionId: string;
   /** Working directory the resumed agent must launch from to find its transcript */
   cwd: string;
@@ -96,7 +101,9 @@ function sanitizeHibernateSessions(value: unknown): Record<string, HelpHibernate
     const sessionId = entry.sessionId;
     const cwd = entry.cwd;
     const agentId = entry.agentId;
-    if (typeof sessionId !== "string" || !sessionId) continue;
+    // sessionId may be empty string — that's the "use resume-latest fallback"
+    // sentinel persisted when graceful-shutdown capture missed (#8787).
+    if (typeof sessionId !== "string") continue;
     if (typeof cwd !== "string" || !cwd) continue;
     if (typeof agentId !== "string" || !agentId) continue;
     out[projectId] = { sessionId, cwd, agentId };

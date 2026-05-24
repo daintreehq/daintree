@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, fireEvent, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockDispatch,
@@ -217,7 +217,10 @@ vi.mock("@/config/agents", () => ({
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
+  actionService: {
+    dispatch: (...args: unknown[]) => mockDispatch(...args),
+    getContext: () => ({}),
+  },
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -417,6 +420,14 @@ function resetState() {
   });
 }
 
+afterEach(() => {
+  // Unmount any rendered HelpPanel so its controller's in-flight launch can't
+  // leak fire-and-forget state updates into the next test (#8771 added phase
+  // patches on the launch success/abandon paths, which surfaced this latent
+  // cross-test bleed).
+  cleanup();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetState();
@@ -456,6 +467,7 @@ beforeEach(() => {
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           takePendingHibernation: mockTakePendingHibernation,
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,
@@ -524,7 +536,7 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     );
   });
 
-  it("notifies and does not commit terminal when result.ok is false", async () => {
+  it("shows the launch-error banner (not a toast) and skips commit when result.ok is false", async () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: false });
 
@@ -533,12 +545,13 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    // Panel is open, so the failure surfaces inline rather than as a toast.
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(screen.getByText("Assistant couldn't start")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("notifies when result.ok is true but terminalId is null", async () => {
+  it("shows the launch-error banner when result.ok is true but terminalId is null", async () => {
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: null } });
 
@@ -547,12 +560,11 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("notifies and aborts when help folder is null", async () => {
+  it("shows the launch-error banner and aborts when help folder is null", async () => {
     mockGetFolderPath.mockResolvedValue(null);
 
     await act(async () => {
@@ -561,16 +573,15 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("surfaces a Start-MCP-failed toast and skips dispatch when provisionSession rejects with MCP_NOT_READY", async () => {
+  it("shows the services-unavailable banner with a settings shortcut when provisioning reports the server isn't started", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj" };
     mockGetFolderPath.mockResolvedValue("/help");
     const err = new Error("port collision") as Error & { code: string };
-    err.code = "MCP_NOT_READY";
+    err.code = "MCP_SERVER_NOT_STARTED";
     mockProvisionSession.mockRejectedValueOnce(err);
 
     await act(async () => {
@@ -579,19 +590,12 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Start MCP failed",
-        action: expect.objectContaining({
-          label: "Open settings",
-          actionId: "app.settings.openTab",
-        }),
-      })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(screen.getByText("Open settings")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("falls back to a generic launch-failed toast when provisionSession rejects without a typed code", async () => {
+  it("shows the launch-error banner when provisionSession rejects without a typed code", async () => {
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj" };
     mockGetFolderPath.mockResolvedValue("/help");
     mockProvisionSession.mockRejectedValueOnce(new Error("ipc disconnected"));
@@ -601,12 +605,8 @@ describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () =
     });
 
     expect(mockDispatch).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Assistant launch failed",
-      })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 });
 
@@ -630,6 +630,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-default",
       projectPath: "/repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -658,6 +659,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-late",
       projectPath: "/late-repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -677,9 +679,8 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
 
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("does not auto-launch when document.hidden is true (issue #7201 guard)", async () => {
@@ -715,6 +716,11 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
   it("does not commit terminal and cleans up if user navigated away (preferredAgentId cleared) during in-flight launch", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
+    // Two supported agents so clearing the preference doesn't trip the
+    // single-supported-agent auto-launch fallback — this test isolates the
+    // in-flight launch's cleanup, not the fallback path.
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
     let resolveDispatch: (v: unknown) => void = () => {};
     mockDispatch.mockReturnValue(
@@ -738,7 +744,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("stale-term");
   });
 
-  it("notifies and does not commit terminal on launch failure", async () => {
+  it("shows the launch-error banner and does not commit terminal on launch failure", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
     mockDispatch.mockResolvedValue({ ok: false });
@@ -748,9 +754,8 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     });
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("provisions and dispatches a Codex assistant launch when codex is the preferred agent", async () => {
@@ -775,6 +780,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       projectId: "proj-default",
       projectPath: "/repo",
       agentId: "codex",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -1008,9 +1014,8 @@ describe("HelpPanel — handleRunAnyway", () => {
       null
     );
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("reserves the new help-terminal id BEFORE dispatch resolves (race fix for #6951)", async () => {
@@ -1197,6 +1202,7 @@ describe("HelpPanel — session provisioning", () => {
       projectId: "proj-1",
       projectPath: "/repo",
       agentId: "claude",
+      context: {},
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -1992,9 +1998,8 @@ describe("HelpPanel — + New session destructive reset", () => {
     expect(setCalls.length).toBe(1);
     expect(setCalls[0]?.[2]).toBeNull();
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Assistant launch failed" })
-    );
+    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("reverts the reserved id when provisionHelpSession returns a non-ok outcome", async () => {
@@ -2399,6 +2404,65 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     );
   });
 
+  it("'Check again' re-probes with refresh=true and clears the gate when the CLI is now current", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "0.9.0",
+      latestVersion: "1.0.0",
+      updateAvailable: true,
+      lastChecked: Date.now(),
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    const { findByTestId, findByRole, queryByTestId } = render(<HelpPanel width={380} />);
+    await findByTestId("help-version-too-old");
+
+    // User updates the CLI outside Daintree, then clicks "Check again".
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "1.2.0",
+      latestVersion: "1.2.0",
+      updateAvailable: false,
+      lastChecked: Date.now(),
+    });
+
+    const checkAgain = await findByRole("button", { name: /check again/i });
+    await act(async () => {
+      fireEvent.click(checkAgain);
+    });
+
+    // The re-probe must bypass the 12h cache (refresh=true).
+    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", true);
+    // Passing probe clears the gate.
+    expect(queryByTestId("help-version-too-old")).toBeNull();
+  });
+
+  it("'Check again' keeps the gate when the CLI is still too old", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockGetAgentVersion.mockResolvedValue({
+      agentId: "claude",
+      installedVersion: "0.9.0",
+      latestVersion: "1.0.0",
+      updateAvailable: true,
+      lastChecked: Date.now(),
+    });
+
+    const { findByTestId, findByRole, getByTestId } = render(<HelpPanel width={380} />);
+    await findByTestId("help-version-too-old");
+
+    const checkAgain = await findByRole("button", { name: /check again/i });
+    await act(async () => {
+      fireEvent.click(checkAgain);
+    });
+
+    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", true);
+    // Still blocked — the gate stays visible.
+    expect(getByTestId("help-version-too-old")).toBeTruthy();
+  });
+
   it("passes through when installed version equals assistantMinVersion", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
@@ -2785,5 +2849,54 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
 
     document.body.removeChild(editor);
+  });
+});
+
+describe("HelpPanel — launch loading state (issue #8771)", () => {
+  it("renders the phase-labeled launch skeleton once the Doherty gate elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      helpPanelState.preferredAgentId = "claude";
+      mockGetFolderPath.mockResolvedValue("/help");
+      // Hold dispatch so the launch parks at the "launching" phase.
+      let resolveDispatch: (value: unknown) => void = () => {};
+      mockDispatch.mockReturnValue(
+        new Promise((r) => {
+          resolveDispatch = r;
+        })
+      );
+
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+
+      // Drain the in-flight launch microtasks and open the 400ms gate.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(450);
+      });
+
+      // The label renders twice — once sr-only (Skeleton aria) and once visible.
+      expect(screen.getAllByText("Starting assistant…").length).toBeGreaterThan(0);
+      // The static empty-state value prop must not show while launching.
+      expect(screen.queryByText(/Use Daintree Assistant to configure/i)).toBeNull();
+
+      await act(async () => {
+        resolveDispatch({ ok: true, result: { terminalId: "term-1" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not render the launch skeleton on the idle multi-agent empty state", () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(screen.queryByText("Starting assistant…")).toBeNull();
+    expect(screen.queryByText("Provisioning session…")).toBeNull();
+    expect(screen.getByText(/Use Daintree Assistant to configure/i)).toBeTruthy();
   });
 });

@@ -566,6 +566,58 @@ describe("SessionStore dropAbuseState wiring (#8467)", () => {
   });
 });
 
+describe("SessionStore dropBearerState wiring (#8778)", () => {
+  let dropBearerSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    dropBearerSpy = vi.fn<(sessionId: string) => void>();
+    store = new SessionStore(() => {}, { dropBearerState: dropBearerSpy });
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("invokes dropBearerState on SSE idle expiry", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("s1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("invokes dropBearerState on Streamable-HTTP idle expiry", () => {
+    const session = fakeHttpSession();
+    store.httpSessions.set("h1", session);
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("h1");
+
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("h1");
+  });
+
+  it("invokes dropBearerState on explicit revokeSession", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s1", session);
+
+    store.revokeSession("s1");
+
+    expect(dropBearerSpy).toHaveBeenCalledWith("s1");
+  });
+
+  it("does not fire dropBearerState when revokeSession returns false (unknown session)", () => {
+    expect(store.revokeSession("ghost")).toBe(false);
+    expect(dropBearerSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("SessionStore tier-elevation decay (#8462)", () => {
   let store: SessionStore;
   let decayed: string[];
@@ -777,5 +829,116 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
     expect(store.sessions.has("s")).toBe(false);
     expect(decayed).toEqual([]);
+  });
+});
+
+describe("SessionStore.listExternalActiveClients (#8779)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  function addExternal(
+    sessionId: string,
+    userAgent: string | null,
+    transport: "sse" | "streamable-http"
+  ): void {
+    if (transport === "sse") {
+      store.sessions.set(sessionId, fakeSseSession());
+    } else {
+      store.httpSessions.set(sessionId, fakeHttpSession());
+    }
+    store.sessionTierMap.set(sessionId, "external");
+    store.registerClientMetadata(sessionId, userAgent, transport);
+  }
+
+  it("lists external SSE and HTTP clients with their captured metadata", () => {
+    vi.setSystemTime(new Date("2026-05-21T00:00:00Z"));
+    addExternal("ext-sse", "Claude Code/1.2", "sse");
+    addExternal("ext-http", "Cursor/0.9", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients).toHaveLength(2);
+    const bySession = new Map(clients.map((c) => [c.sessionId, c]));
+    expect(bySession.get("ext-sse")).toMatchObject({
+      userAgent: "Claude Code/1.2",
+      transport: "sse",
+      connectedAtMs: Date.now(),
+    });
+    expect(bySession.get("ext-http")).toMatchObject({
+      userAgent: "Cursor/0.9",
+      transport: "streamable-http",
+    });
+  });
+
+  it("excludes the internal help-assistant (renderer-pinned) session", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    // A help-session bearer: external-classified at handshake but pinned to a
+    // renderer WebContents — Daintree's own consumer, must not self-name.
+    store.httpSessions.set("internal", fakeHttpSession());
+    store.sessionTierMap.set("internal", "external");
+    store.sessionWebContentsMap.set("internal", 7);
+    store.registerClientMetadata("internal", "node", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("excludes non-external (workbench/action/system) sessions", () => {
+    addExternal("ext", "Claude Code", "sse");
+    store.sessions.set("pane", fakeSseSession());
+    store.sessionTierMap.set("pane", "action");
+    store.registerClientMetadata("pane", "pane-token-client", "sse");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("falls back to null user-agent and a present timestamp when none captured", () => {
+    store.sessions.set("ext", fakeSseSession());
+    store.sessionTierMap.set("ext", "external");
+    // No registerClientMetadata call — simulates a pre-metadata session.
+
+    const clients = store.listExternalActiveClients();
+    expect(clients).toHaveLength(1);
+    expect(clients[0]!.userAgent).toBeNull();
+    expect(typeof clients[0]!.connectedAtMs).toBe("number");
+  });
+
+  it("drops metadata on revokeSession so the client no longer lists", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    expect(store.listExternalActiveClients()).toHaveLength(1);
+
+    store.revokeSession("ext");
+
+    expect(store.listExternalActiveClients()).toEqual([]);
+  });
+
+  it("clears all metadata on drain()", () => {
+    addExternal("a", "ua-a", "sse");
+    addExternal("b", "ua-b", "streamable-http");
+
+    store.drain();
+
+    expect(store.listExternalActiveClients()).toEqual([]);
+  });
+
+  it("clearClientMetadata drops a normally-disconnected client from the list", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    expect(store.listExternalActiveClients()).toHaveLength(1);
+
+    // Mirrors the inline transport.onclose cleanup in httpLifecycle, which
+    // deletes the session map entry and clears its metadata.
+    store.httpSessions.delete("ext");
+    store.clearClientMetadata("ext");
+
+    expect(store.listExternalActiveClients()).toEqual([]);
   });
 });

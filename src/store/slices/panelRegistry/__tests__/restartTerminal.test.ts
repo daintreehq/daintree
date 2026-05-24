@@ -90,6 +90,7 @@ vi.mock("@shared/types", () => ({
   generateAgentCommand: vi.fn().mockReturnValue("claude"),
   buildAgentLaunchFlags: (...args: unknown[]) => buildAgentLaunchFlagsMock(...args),
   buildResumeCommand: vi.fn().mockReturnValue(null),
+  buildResumeLatestCommand: vi.fn().mockReturnValue(null),
   buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude --flag"),
 }));
 
@@ -472,5 +473,115 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.launchAgentId).toBe("claude");
     expect(payload.command).toBeDefined();
+  });
+});
+
+describe("restartTerminal resume-latest fallback (#8787)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  it("uses resume-latest fallback when no session ID was captured", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    // Active agent (working state) with NO session ID — graceful-shutdown
+    // pattern match missed.
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeLatestCommand).toHaveBeenCalledWith("claude", ["--persisted-flag"]);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --continue");
+  });
+
+  it("prefers primary buildResumeCommand when session ID is present", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --resume abc");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: "abc",
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeCommand).toHaveBeenCalledWith("claude", "abc", ["--persisted-flag"]);
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --resume abc");
+  });
+
+  it("does not call resume-latest when allowResumeLatest is false (worktree-move case)", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1", { allowResumeLatest: false });
+
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    // Falls through to the existing fresh-launch path
+    expect(payload.command).not.toBe("claude --continue");
+  });
+
+  it("falls through to fresh launch when no session ID and no resume-latest available", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeLatestCommand).toHaveBeenCalledOnce();
+    const payload = mockSpawn.mock.calls[0]![0];
+    // Existing fallback chain (persisted flags / generated command)
+    expect(payload.command).toBeDefined();
+    expect(payload.command).not.toBe("claude --continue");
   });
 });

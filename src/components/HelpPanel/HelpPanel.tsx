@@ -23,6 +23,7 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
+import { HelpLaunchingState } from "./HelpLaunchingState";
 import {
   useHelpPanelStore,
   HELP_PANEL_MIN_WIDTH,
@@ -44,6 +45,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
+import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { HelpSessionController } from "@/controllers/HelpSessionController";
@@ -129,6 +131,7 @@ export function HelpPanel({
     isOpen,
     width,
     terminalId,
+    sessionId,
     agentId,
     preferredAgentId,
     droppedPreferredAgentId,
@@ -159,6 +162,47 @@ export function HelpPanel({
   const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const currentProject = useProjectStore((s) => s.currentProject);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+
+  // The ActionContext pinned to this session at launch (#8772). Fetched once
+  // per session id — the binding is fixed at provision time and only changes
+  // when the session itself is replaced, which swaps `sessionId`. The token
+  // never crosses the bridge; the getter is keyed on the public session id.
+  const [pinnedContext, setPinnedContext] = useState<PinnedActionContextSnapshot | null>(null);
+  useEffect(() => {
+    if (!sessionId) {
+      setPinnedContext(null);
+      return;
+    }
+    let cancelled = false;
+    void window.electron.help
+      .getPinnedActionContext(sessionId)
+      .then((snapshot) => {
+        if (!cancelled) setPinnedContext(snapshot);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to fetch pinned action context", err);
+        if (!cancelled) setPinnedContext(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
+  const pinnedTerminalPanel = usePanelStore((s) =>
+    pinnedContext?.terminalId ? s.panelsById[pinnedContext.terminalId] : undefined
+  );
+  // Escalation: danger when the pinned terminal is gone or has exited (its
+  // PTY can no longer receive dispatched commands), warning when the user has
+  // since focused a different worktree than the one the session is bound to.
+  // Danger wins — a dead target is the more urgent mismatch.
+  const isPinnedTerminalDead =
+    pinnedContext?.terminalId != null &&
+    (!pinnedTerminalPanel || pinnedTerminalPanel.exitCode !== undefined);
+  const isPinnedWorktreeDiverged =
+    pinnedContext?.worktreeId != null &&
+    focusedWorktreeId !== null &&
+    pinnedContext.worktreeId !== focusedWorktreeId;
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   const effectiveAgentId = isBuiltInAgentId(agentId) ? agentId : undefined;
@@ -512,6 +556,13 @@ export function HelpPanel({
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
+  const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
+  const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
+  const dismissLaunchError = useCallback(() => controller.dismissLaunchError(), [controller]);
+  const retryLaunch = useCallback(() => {
+    const agentId = session.launchError?.agentId;
+    if (agentId) controller.launch({ agentId });
+  }, [controller, session.launchError]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
   // running PTY when the assistant terminal has focus; the .cm-editor check
@@ -588,6 +639,25 @@ export function HelpPanel({
 
       {/* Content */}
       <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+        {/* Banners render above every content state — the launch-error banner
+            must stay visible in the empty state a failed launch falls back to.
+            The other banners are null unless a session is live, so this mount
+            position is behaviorally identical for them. */}
+        <HelpPanelBanners
+          showResumeBanner={session.showResumeBanner}
+          preflightSnapshot={session.preflightSnapshot}
+          tierMismatch={session.tierMismatch}
+          launchError={session.launchError}
+          isApprovingTier={session.isApprovingTier}
+          onDismissResume={dismissResume}
+          onDismissSnapshot={dismissSnapshot}
+          onDismissTierMismatch={dismissTierMismatch}
+          onApproveOnce={approveTierOnce}
+          onAlwaysAllow={alwaysAllowTier}
+          onRetryLaunch={retryLaunch}
+          onDismissLaunchError={dismissLaunchError}
+          onOpenAssistantSettings={handleOpenSettings}
+        />
         {showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate
@@ -600,17 +670,6 @@ export function HelpPanel({
               {!introDismissed && !hasEverLaunchedAgent && (
                 <HelpIntroBanner onDismiss={dismissIntro} />
               )}
-              <HelpPanelBanners
-                showResumeBanner={session.showResumeBanner}
-                preflightSnapshot={session.preflightSnapshot}
-                tierMismatch={session.tierMismatch}
-                isApprovingTier={session.isApprovingTier}
-                onDismissResume={dismissResume}
-                onDismissSnapshot={dismissSnapshot}
-                onDismissTierMismatch={dismissTierMismatch}
-                onApproveOnce={approveTierOnce}
-                onAlwaysAllow={alwaysAllowTier}
-              />
               <div className="flex-1 relative min-h-0">
                 <Suspense fallback={null}>
                   <XtermAdapter
@@ -656,7 +715,11 @@ export function HelpPanel({
           <HelpPanelVersionGate
             versionTooOld={session.assistantVersionTooOld}
             onOpenSettings={handleOpenSettings}
+            onCheckAgain={checkVersionAgain}
+            isCheckingVersion={session.isCheckingVersion}
           />
+        ) : session.phase !== "idle" && session.phase !== "live" ? (
+          <HelpLaunchingState phase={session.phase} isLoading onCancel={cancelLaunch} />
         ) : (
           <div className="flex-1 flex flex-col">
             {droppedPreferredAgentId && (
@@ -729,26 +792,57 @@ export function HelpPanel({
 
       {/* Bottom info bar */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-daintree-border shrink-0 text-[11px] text-daintree-text/40">
-          <span className="flex items-center gap-1">
-            Using
-            <agentConfig.icon className="w-3.5 h-3.5" />
-            {agentConfig.name}
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              void actionService.dispatch(
-                "system.openExternal",
-                { url: DAINTREE_HOME_URL },
-                { source: "user" }
-              )
-            }
-            className="flex items-center gap-1 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-          >
-            <DaintreeIcon className="w-3.5 h-3.5" />
-            Daintree.org
-          </button>
+        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+          {pinnedContext && (
+            <span
+              className="flex items-center gap-1.5 min-w-0"
+              title={
+                isPinnedTerminalDead
+                  ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
+                  : isPinnedWorktreeDiverged
+                    ? "This assistant is pinned to a different worktree than the one you have focused."
+                    : "Assistant tool calls are pinned to this worktree and terminal."
+              }
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "w-1.5 h-1.5 rounded-full shrink-0",
+                  isPinnedTerminalDead
+                    ? "bg-status-danger"
+                    : isPinnedWorktreeDiverged
+                      ? "bg-status-warning"
+                      : "bg-daintree-text/30"
+                )}
+              />
+              <span className="truncate">
+                {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
+                  .filter(Boolean)
+                  .join(" · ") || "Pinned session"}
+              </span>
+            </span>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              Using
+              <agentConfig.icon className="w-3.5 h-3.5" />
+              {agentConfig.name}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                void actionService.dispatch(
+                  "system.openExternal",
+                  { url: DAINTREE_HOME_URL },
+                  { source: "user" }
+                )
+              }
+              className="flex items-center gap-1 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              <DaintreeIcon className="w-3.5 h-3.5" />
+              Daintree.org
+            </button>
+          </div>
         </div>
       )}
       <ConfirmDialog

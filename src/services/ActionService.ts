@@ -12,7 +12,6 @@ import type {
 } from "../../shared/types/actions.js";
 import type { AnyActionDefinition } from "./actions/actionTypes";
 import { logWarn } from "@/utils/logger";
-import { notify } from "@/lib/notify";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -332,16 +331,9 @@ export class ActionService {
         logWarn("Action disabledReason threw during dispatch", { actionId, error: err });
       }
       const disabledReason = reasonText ?? "Action is currently disabled";
-      // Suppress the toast for agent-sourced dispatches — MCP introspection
-      // probes shouldn't surface as user-visible warnings. The DISABLED error
-      // is still returned to the caller.
-      if (reasonText && source !== "agent") {
-        notify({
-          type: "warning",
-          title: `'${definition.title}' disabled`,
-          message: reasonText,
-        });
-      }
+      // No toast: disabled state is already visible on the originating surface
+      // (palette row, menu item, button). Callers receive the DISABLED error
+      // and may decide to surface it themselves (issue #8814).
       const error: ActionError = {
         code: "DISABLED",
         message: disabledReason,
@@ -417,6 +409,14 @@ export class ActionService {
     const context = ctx ?? this.getActionContext();
     return Array.from(this.registry.values())
       .filter((def) => def.danger !== "restricted")
+      .filter((def) => {
+        try {
+          return def.isVisible?.(context) ?? true;
+        } catch (err) {
+          logWarn("Action isVisible threw", { actionId: def.id, error: err });
+          return true;
+        }
+      })
       .map((def) => this.toManifestEntry(def, context));
   }
 

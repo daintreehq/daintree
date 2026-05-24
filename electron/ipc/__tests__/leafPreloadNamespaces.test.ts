@@ -80,6 +80,9 @@ describe("leaf preload namespace bindings", () => {
       expect(HELP_METHOD_CHANNELS.getFolderPath).toBe(CHANNELS.HELP_GET_FOLDER_PATH);
       expect(HELP_METHOD_CHANNELS.markTerminal).toBe(CHANNELS.HELP_MARK_TERMINAL);
       expect(HELP_METHOD_CHANNELS.unmarkTerminal).toBe(CHANNELS.HELP_UNMARK_TERMINAL);
+      expect(HELP_METHOD_CHANNELS.getPinnedActionContext).toBe(
+        CHANNELS.HELP_GET_PINNED_ACTION_CONTEXT
+      );
     });
 
     it("accessibility matches", () => {
@@ -339,6 +342,16 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("help:unmark-terminal", "term-1");
+    });
+
+    it("routes getPinnedActionContext() to help:get-pinned-action-context with the sessionId forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue(null);
+      const bindings = buildHelpPreloadBindings(invoke);
+
+      await bindings.getPinnedActionContext("session-7");
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("help:get-pinned-action-context", "session-7");
     });
   });
 

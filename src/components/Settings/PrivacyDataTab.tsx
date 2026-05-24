@@ -1,5 +1,14 @@
 import { useState, useEffect } from "react";
-import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle, Eye } from "lucide-react";
+import {
+  Signal,
+  FolderOpen,
+  Trash2,
+  Clock,
+  HardDrive,
+  AlertTriangle,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
@@ -8,6 +17,7 @@ import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
+import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
 
 type TelemetryLevel = "off" | "errors" | "full";
@@ -236,6 +246,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     void actionService.dispatch("telemetry.togglePreview", { active: true }, { source: "user" });
   };
 
+  const hiddenActionCount = useActionPrefsStore((state) => state.hiddenActionIds.length);
+  const handleResetHiddenCommands = () => {
+    useActionPrefsStore.getState().resetHiddenActions();
+    notify({
+      type: "success",
+      title: "Hidden commands reset",
+      message: "All previously hidden commands will appear in Recently used again.",
+      transient: true,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <SettingsSubtabBar
@@ -420,6 +441,25 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             >
               <Trash2 className={cn("w-4 h-4", cacheClearing && "animate-spin")} />
               {cacheClearing ? "Clearing…" : cacheCleared ? "Cache Cleared" : "Clear Cache"}
+            </Button>
+          </SettingsSection>
+
+          <SettingsSection
+            icon={EyeOff}
+            title="Hidden commands"
+            description="Commands you've hidden from 'Recently used' in the action palette. Resetting restores all of them."
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleResetHiddenCommands}
+              disabled={hiddenActionCount === 0}
+              className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+            >
+              <EyeOff className="w-4 h-4" />
+              {hiddenActionCount === 0
+                ? "No hidden commands"
+                : `Reset hidden commands (${hiddenActionCount})`}
             </Button>
           </SettingsSection>
 

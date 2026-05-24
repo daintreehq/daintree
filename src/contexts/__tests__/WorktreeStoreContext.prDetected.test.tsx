@@ -1081,9 +1081,40 @@ describe("WorktreeStoreProvider issue-detected handler", () => {
     });
 
     const wt = store.getState().worktrees.get("wt-1");
-    expect(wt?.issueNumber).toBeUndefined();
+    // issueNumber survives a not-found response — the local branch-parsed
+    // value is authoritative, not the forge claim (#8851).
+    expect(wt?.issueNumber).toBe(88);
+    expect(wt?.issueTitle).toBeUndefined();
     expect(wt?.linked?.issue).toBeUndefined();
     expect(wt?.linked?.pr?.ref.number).toBe(1234);
+  });
+
+  it("issue-not-found preserves branchDerivedTitle so the sidebar still has a readable fallback (#8851)", async () => {
+    const store = await renderProvider();
+    act(() => {
+      store.getState().applyUpdate(
+        makeWorktree("wt-1", {
+          branch: "feature/issue-8851-sidebar",
+          issueNumber: 8851,
+          issueTitle: undefined,
+          branchDerivedTitle: "Sidebar shows branch",
+        }),
+        nextV()
+      );
+    });
+
+    act(() => {
+      emit("issue-not-found", {
+        type: "issue-not-found",
+        worktreeId: "wt-1",
+        issueNumber: 8851,
+      });
+    });
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBe(8851);
+    expect(wt?.branchDerivedTitle).toBe("Sidebar shows branch");
+    expect(wt?.issueTitle).toBeUndefined();
   });
 });
 

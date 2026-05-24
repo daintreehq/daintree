@@ -12,6 +12,7 @@ const {
   mockRevokeSession,
   mockGracefulKill,
   mockBuildResumeCommand,
+  mockBuildResumeLatestCommand,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
   mockSystemSleepGetMetrics,
@@ -38,6 +39,7 @@ const {
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGracefulKill: vi.fn().mockResolvedValue(null),
   mockBuildResumeCommand: vi.fn(),
+  mockBuildResumeLatestCommand: vi.fn(),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
@@ -173,10 +175,14 @@ vi.mock("@/config/agents", () => ({
 
 vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: (...args: unknown[]) => mockBuildResumeCommand(...args),
+  buildResumeLatestCommand: (...args: unknown[]) => mockBuildResumeLatestCommand(...args),
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
+  actionService: {
+    dispatch: (...args: unknown[]) => mockDispatch(...args),
+    getContext: () => ({}),
+  },
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -389,6 +395,7 @@ beforeEach(() => {
           markTerminal: mockMarkTerminal,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
         helpAssistant: {
           getSettings: mockGetHelpAssistantSettings,

@@ -35,6 +35,7 @@ import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
+import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
@@ -117,6 +118,11 @@ const ptyManager = new PtyManager();
 // `claude --version`-style blips. Adaptive backoff (see ProcessTreeCache)
 // stretches this out when the tree is quiet.
 const processTreeCache = new ProcessTreeCache(1500);
+// Image-path identity signal — defeats `process.title`/`setproctitle` rewrites
+// where comm/argv have been clobbered but the on-disk binary path still
+// identifies the agent. Shared across all terminals so the per-PID cache is
+// reused when a process appears in multiple detection passes. #8790
+const imagePathProbe = new ImagePathProbe();
 const terminalResourceMonitor = new TerminalResourceMonitor(
   processTreeCache,
   ptyManager,
@@ -943,6 +949,7 @@ function cleanup(): void {
 
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
+  imagePathProbe.dispose();
 
   if (ptyPool) {
     ptyPool.dispose();
@@ -976,6 +983,7 @@ async function initialize(): Promise<void> {
     // Start the process tree cache (shared across all terminals)
     processTreeCache.start();
     ptyManager.setProcessTreeCache(processTreeCache);
+    ptyManager.setImagePathProbe(imagePathProbe);
     console.log("[PtyHost] ProcessTreeCache started");
 
     // Notify Main that we're ready (after cache is initialized, before pool is warmed)

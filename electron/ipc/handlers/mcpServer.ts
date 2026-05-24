@@ -8,7 +8,10 @@ import { broadcastToRenderer } from "../utils.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import { scrubSecrets } from "../../utils/secretScrubber.js";
 import type {
+  ActiveBearerRecord,
   AssistantTurnRecord,
+  DisconnectBearerResult,
+  McpActiveClientInfo,
   McpAuditRecord,
   McpAuditStats,
   McpIssueGrantResult,
@@ -69,6 +72,13 @@ export const mcpServerNamespace = defineIpcNamespace({
       const svc = await getMcpServerService();
       return svc.getConfigSnippet();
     }),
+    listActiveClients: op(
+      MCP_SERVER_METHOD_CHANNELS.listActiveClients,
+      async (): Promise<McpActiveClientInfo[]> => {
+        const svc = await getMcpServerService();
+        return svc.listActiveClients();
+      }
+    ),
     getAuditRecords: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditRecords,
       async (): Promise<McpAuditRecord[]> => {
@@ -231,6 +241,25 @@ export const mcpServerNamespace = defineIpcNamespace({
         return svc.revokeSessionGrants(sessionId, ctx.webContentsId);
       },
       { withContext: true }
+    ),
+    listActiveBearers: op(
+      MCP_SERVER_METHOD_CHANNELS.listActiveBearers,
+      async (): Promise<ActiveBearerRecord[]> => {
+        const svc = await getMcpServerService();
+        return svc.listActiveBearers();
+      }
+    ),
+    disconnectBearer: op(
+      MCP_SERVER_METHOD_CHANNELS.disconnectBearer,
+      async (tokenHash: string): Promise<DisconnectBearerResult> => {
+        // tokenHash is the SHA-256 hex of an Authorization header — a 64-char
+        // lowercase hex string. Reject anything else before touching state.
+        if (typeof tokenHash !== "string" || !/^[0-9a-f]{64}$/.test(tokenHash)) {
+          throw new Error("Invalid tokenHash");
+        }
+        const svc = await getMcpServerService();
+        return svc.disconnectBearer(tokenHash);
+      }
     ),
   },
 });

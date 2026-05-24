@@ -1,15 +1,14 @@
-import { useMemo, useCallback, useEffect, useRef, useState } from "react";
-import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
+import { useMemo, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import { getClosingIdsSnapshot } from "@/services/terminal/optimisticPanelClose";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useShallow } from "zustand/react/shallow";
-import { computeGridColumns, getMaxGridCapacity } from "@/lib/terminalLayout";
-import {
-  isSidebarLayoutTransitionLocked,
-  subscribeSidebarLayoutTransitionUnlock,
-} from "@/lib/layoutTransitionLock";
 import { buildFleetPanels } from "@/components/Terminal/contentGridFleetPanels";
+import {
+  getGridLayoutSnapshot,
+  subscribeGridLayoutSnapshot,
+} from "@/components/Terminal/gridLayoutSnapshot";
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -19,13 +18,8 @@ interface GridPosition {
   col: number;
 }
 
-interface UseGridNavigationOptions {
-  containerSelector?: string;
-}
-
-export function useGridNavigation(options: UseGridNavigationOptions = {}) {
+export function useGridNavigation() {
   "use no memo";
-  const { containerSelector = "#panel-grid" } = options;
 
   const { panelIds, panelsById, focusedId, tabGroups, getTabGroups } = usePanelStore(
     useShallow((state) => ({
@@ -43,16 +37,6 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const { armedIds, armOrder } = useFleetArmingStore(
     useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
   );
-  const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
-  // Subscribe reactively to the capacity cap so the keyboard-nav model
-  // tracks viewport changes. Without this, arrow keys would cycle into cells
-  // that don't exist on screen after a sidebar toggle (#8702). Falls back to
-  // `Infinity` pre-measurement so nothing is incorrectly clipped before the
-  // ResizeObserver fires.
-  const maxGridCapacity = useLayoutConfigStore((state) => {
-    if (!state.gridDimensions) return Number.POSITIVE_INFINITY;
-    return getMaxGridCapacity(state.gridDimensions.width, state.gridDimensions.height);
-  });
 
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
@@ -86,9 +70,6 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     [panelIds, panelsById, activeWorktreeId]
   );
 
-  // Track container width for responsive layout (mirrors ContentGrid)
-  const [gridWidth, setGridWidth] = useState<number | null>(null);
-
   // Fleet scope projection: must mirror ContentGrid's fleetPanels exactly so
   // the focus model lines up with what's rendered. Drift here was the cause
   // of #5989 (Cmd+Alt+Arrow no-op when fleet scope spanned worktrees).
@@ -102,111 +83,28 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   // the normal active-worktree grid; the nav model has to match.
   const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
-  useEffect(() => {
-    let observedContainer: Element | null = null;
-
-    const findAndObserve = () => {
-      const container = document.querySelector(containerSelector);
-      if (!container) return null;
-
-      const observer = new ResizeObserver((entries) => {
-        const entry = entries[0];
-        if (!entry) return;
-        // Skip mid-transition widths so keyboard-nav column count doesn't
-        // briefly snap to a different grid layout while sidebars animate
-        // (#6979).
-        if (isSidebarLayoutTransitionLocked()) return;
-        const newWidth = entry.contentRect.width;
-        setGridWidth((prev) => (prev === newWidth ? prev : newWidth));
-      });
-
-      observer.observe(container);
-      observedContainer = container;
-      // Skip initial measurement during a sidebar lock — the unlock
-      // subscriber below will resync once the transition completes.
-      if (!isSidebarLayoutTransitionLocked()) {
-        setGridWidth(container.clientWidth);
-      }
-
-      return observer;
-    };
-
-    const observer = findAndObserve();
-
-    const unsubscribe = subscribeSidebarLayoutTransitionUnlock(() => {
-      const node = observedContainer ?? document.querySelector(containerSelector);
-      if (!node) return;
-      const width = node.clientWidth;
-      setGridWidth((prev) => (prev === width ? prev : width));
-    });
-
-    if (!observer) {
-      const retryTimer = setTimeout(findAndObserve, 100);
-      return () => {
-        clearTimeout(retryTimer);
-        unsubscribe();
-      };
-    }
-
-    return () => {
-      observer.disconnect();
-      unsubscribe();
-    };
-    // isFleetScopeRender is a dep because ContentGrid swaps the rendered tree
-    // (different React key) when fleet scope toggles, which detaches the old
-    // #panel-grid node. Re-running the effect re-binds the observer to the
-    // new node so gridCols continues to track resizes.
-  }, [containerSelector, isFleetScopeRender]);
-
   // Derive visual grid groups (one cell per tab group), matching ContentGrid.
   // getTabGroups reads tabGroups/panelIds/panelsById from the store via get();
   // reference them so exhaustive-deps treats them as real deps without a
   // suppression (which would force the React Compiler to bail out).
   //
-  // Cap at `maxGridCapacity` so the nav model stays in sync with what
-  // ContentGridDefault actually renders — overflow panels live in the status
-  // strip, not the grid, and arrow keys must not cycle into cells that don't
-  // exist on screen (#8702).
+  // No capacity cap — the scrollable grid (#8805) keeps every group in the
+  // grid, and keyboard nav must reach scrolled-off cells just like the mouse.
   const gridGroups = useMemo(() => {
     void tabGroups;
     void panelIds;
     void panelsById;
-    const groups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    return groups.length <= maxGridCapacity ? groups : groups.slice(0, maxGridCapacity);
-  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById, maxGridCapacity]);
+    return getTabGroups("grid", activeWorktreeId ?? undefined);
+  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
 
-  // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
-  // track the visual grid through the same sticky boundaries, otherwise arrow
-  // navigation maps to wrong cells when count drops into the buffer zone.
-  // Two refs (normal vs fleet) mirror ContentGrid's split so a normal-grid
-  // history doesn't bleed into a fleet-scope render.
-  const hysteresisNavGridColsRef = useRef<number | undefined>(undefined);
-  const hysteresisNavFleetColsRef = useRef<number | undefined>(undefined);
-
-  // Compute gridCols using visual group count, matching ContentGrid's gridItemCount.
-  // In fleet scope render, count is fleet panels (matches ContentGrid.fleetGridCols).
-  const gridCols = useMemo(() => {
-    const { strategy, value } = layoutConfig;
-    const count = isFleetScopeRender ? Math.max(fleetPanels.length, 1) : gridGroups.length;
-    return computeGridColumns(
-      count,
-      gridWidth,
-      strategy,
-      value,
-      isFleetScopeRender ? hysteresisNavFleetColsRef.current : hysteresisNavGridColsRef.current
-    );
-  }, [isFleetScopeRender, fleetPanels.length, gridGroups.length, layoutConfig, gridWidth]);
-
-  useEffect(() => {
-    // Only retain hysteresis state for the automatic strategy. Fixed strategies
-    // produce user-chosen counts that must not bias a later auto computation.
-    const value = layoutConfig.strategy === "automatic" ? gridCols : undefined;
-    if (isFleetScopeRender) {
-      hysteresisNavFleetColsRef.current = value;
-    } else {
-      hysteresisNavGridColsRef.current = value;
-    }
-  }, [gridCols, isFleetScopeRender, layoutConfig.strategy]);
+  // Read the authoritative column counts from `useContentGridContext`'s
+  // snapshot. Computing them independently here drifted from the rendered
+  // grid whenever maximize/restore, drag placeholder, or hysteresis state
+  // were in flight (#8857). `useSyncExternalStore` re-renders this hook on
+  // every column change — including pure-resize changes that don't otherwise
+  // touch subscribed store state.
+  const snapshot = useSyncExternalStore(subscribeGridLayoutSnapshot, getGridLayoutSnapshot);
+  const gridCols = isFleetScopeRender ? snapshot.fleetGridCols : snapshot.gridCols;
 
   // Compute grid layout from visual groups (no DOM measurement). Fleet branch
   // treats each armed panel as its own single-cell position, mirroring how
@@ -356,14 +254,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     if (isFleetScopeRender) {
       return fleetPanels.map((t) => t.id);
     }
-    // Same overflow cap as `gridGroups` — Cmd+N maps to visible cells only,
-    // never into the overflow status strip where panels can't take focus.
+    // Scrollable grid (#8805): all groups participate in nav order; Cmd+N
+    // reaches every grid cell, including scrolled-off ones.
     const orderedGroups = getTabGroups("grid", activeWorktreeId ?? undefined);
-    const cappedGroups =
-      orderedGroups.length <= maxGridCapacity
-        ? orderedGroups
-        : orderedGroups.slice(0, maxGridCapacity);
-    return cappedGroups.flatMap((group) => {
+    return orderedGroups.flatMap((group) => {
       const resolvedId = group.panelIds.includes(group.activeTabId)
         ? group.activeTabId
         : group.panelIds[0];
@@ -377,7 +271,6 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     tabGroups,
     panelIds,
     panelsById,
-    maxGridCapacity,
   ]);
 
   const findByIndex = useCallback(
@@ -412,6 +305,23 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     if (!terminal) return null;
     return terminal.location === "dock" ? "dock" : "grid";
   }, [focusedId, panelsById]);
+
+  // Scrollable grid (#8805): when keyboard navigation lands focus on a panel
+  // that's currently scrolled out of the viewport, bring it into view so the
+  // user can see what they just focused. Cheap no-op for already-visible cells.
+  //
+  // `panelsById` is read non-reactively here. Including it in deps would
+  // re-fire this effect on every agent-state tick (which mutates the
+  // `panelsById` reference), snapping the user's scroll position back to the
+  // focused panel and overriding any manual scroll they did to inspect
+  // off-screen panels.
+  useEffect(() => {
+    if (!focusedId) return;
+    const terminal = usePanelStore.getState().panelsById[focusedId];
+    if (!terminal || terminal.location === "dock") return;
+    const element = document.querySelector<HTMLElement>(`[data-panel-id="${focusedId}"]`);
+    element?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+  }, [focusedId]);
 
   return {
     gridLayout,

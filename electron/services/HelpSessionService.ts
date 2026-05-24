@@ -205,14 +205,22 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
 
 /**
  * Typed provision failure surfaced through the IPC layer with a structured
- * code so the renderer can match-and-display without parsing prose. Today
- * the only non-validation code is `MCP_NOT_READY` — used when Daintree
- * control is enabled but the in-process MCP server cannot be made ready,
- * which would otherwise launch the assistant with a broken MCP wiring.
+ * code so the renderer can match-and-display without parsing prose. Used when
+ * Daintree control is enabled but the in-process assistant services can't be
+ * made ready, which would otherwise launch the assistant with broken wiring.
+ *
+ * The two failure modes are distinguished so the renderer can show distinct
+ * recovery copy: `MCP_SERVER_NOT_STARTED` means the in-process server never
+ * came up, while `MCP_PROBE_FAILED` means it bound a port and minted a session
+ * but the readiness probe didn't respond in time. `MCP_NOT_READY` is retained
+ * as a legacy alias the renderer still classifies (falling back to the
+ * probe-failed shape) so older serialized errors keep displaying.
  */
+export type HelpSessionErrorCode = "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED";
+
 export class HelpSessionError extends Error {
-  readonly code: "MCP_NOT_READY";
-  constructor(code: "MCP_NOT_READY", message: string) {
+  readonly code: HelpSessionErrorCode;
+  constructor(code: HelpSessionErrorCode, message: string) {
     super(message);
     this.name = "HelpSessionError";
     this.code = code;
@@ -349,6 +357,34 @@ export class HelpSessionService {
   }
 
   /**
+   * Renderer-safe sibling of `getActionContextForToken`, keyed on the public
+   * `sessionId` (persisted in `helpPanelStore`) instead of the bearer token.
+   * The HelpPanel footer uses this to surface the pinned worktree/terminal
+   * binding to the user (#8772) without the token ever crossing the IPC
+   * bridge. Returns null for unknown, revoked, or context-less sessions.
+   */
+  getActionContextForSessionId(sessionId: string): ActionContext | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.actionContext ?? null;
+  }
+
+  /**
+   * Session-id keyed sibling of `getWebContentsIdForToken`. Lets the
+   * sessionId-facing IPC handlers (#8772) reject reads from a window other
+   * than the one that minted the session, mirroring the per-window pin from
+   * #7002 without exposing the bearer token. Returns null for unknown or
+   * revoked sessions.
+   */
+  getWebContentsIdForSessionId(sessionId: string): number | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.projectViewWebContentsId;
+  }
+
+  /**
    * Inverse of `terminalBySessionId` for the assistant-turn audit. Returns
    * the help-session id currently bound to a given terminal id, or null
    * when the terminal is not (or no longer) a help-session terminal. Linear
@@ -433,7 +469,7 @@ export class HelpSessionService {
         const reason = formatErrorMessage(err, "in-process MCP server isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
         throw new HelpSessionError(
-          "MCP_NOT_READY",
+          "MCP_SERVER_NOT_STARTED",
           `Daintree Assistant needs the in-process MCP server, but it isn't ready: ${reason}`
         );
       }
@@ -609,7 +645,7 @@ export class HelpSessionService {
         const reason = formatErrorMessage(err, "assistant MCP session isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
         throw new HelpSessionError(
-          "MCP_NOT_READY",
+          "MCP_PROBE_FAILED",
           `Daintree Assistant minted an MCP session, but the assistant bearer was not ready: ${reason}`
         );
       }

@@ -24,6 +24,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./agentCapabilities.js").AgentRegistry;
   };
+  "agent-capabilities:get-resolved-model-list": {
+    args: [agentId: string];
+    result: import("./agentCapabilities.js").ResolvedModelCatalog | null;
+  };
   "agent-capabilities:is-agent-enabled": {
     args: [agentId: string];
     result: boolean;
@@ -293,6 +297,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string | null;
   };
+  "help:get-pinned-action-context": {
+    args: [sessionId: string];
+    result: import("./help.js").PinnedActionContextSnapshot | null;
+  };
   "help:mark-terminal": {
     args: [terminalId: string];
     result: void;
@@ -359,6 +367,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "mcp-server:disconnect-bearer": {
+    args: [tokenHash: string];
+    result: import("./mcpServer.js").DisconnectBearerResult;
+  };
   "mcp-server:export-audit-log": {
     args: [records: import("./mcpServer.js").McpAuditRecord[]];
     result: boolean;
@@ -394,6 +406,14 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:issue-grant": {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
+  };
+  "mcp-server:list-active-bearers": {
+    args: [];
+    result: import("./mcpServer.js").ActiveBearerRecord[];
+  };
+  "mcp-server:list-active-clients": {
+    args: [];
+    result: import("./mcpServer.js").McpActiveClientInfo[];
   };
   "mcp-server:revoke-session-grants": {
     args: [payload: { sessionId: string }];

@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { AppDialog, type DialogInitialFocus, type DialogZIndex } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 
@@ -46,6 +46,22 @@ type ConfirmDialogBaseProps = {
    * either gate fails.
    */
   confirmDisabled?: boolean;
+  /**
+   * Opt-in lower-bound read-time gate: disable the primary action for this
+   * many milliseconds after the dialog opens (or after {@link cooldownKey}
+   * changes). Stops a rapid click from confirming a destructive action before
+   * the user has had time to read it. Off by default; stacks with
+   * {@link confirmDisabled} and the typed-name gate.
+   */
+  confirmCooldownMs?: number;
+  /**
+   * Resets the {@link confirmCooldownMs} clock whenever it changes, even while
+   * the dialog stays mounted with `isOpen` continuously true. Required for
+   * queue-driven singletons (e.g. McpConfirmDialog) where one confirmation is
+   * promoted into the same dialog as the previous one resolves — pass the
+   * per-item id so each freshly-promoted item earns its own cooldown.
+   */
+  cooldownKey?: string | number;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
 };
@@ -72,6 +88,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     onConfirm,
     isConfirmLoading = false,
     confirmDisabled = false,
+    confirmCooldownMs,
+    cooldownKey,
     variant,
     zIndex,
     initialFocus,
@@ -85,6 +103,31 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   useEffect(() => {
     if (!isOpen) setTypedValue("");
   }, [isOpen]);
+
+  // Lazily seed the cooldown as active so the primary button never flashes
+  // enabled for a frame before the effect runs. `confirmCooldownMs <= 0` (and
+  // NaN, which is falsy) falls through to "no cooldown".
+  const [isCooldownActive, setIsCooldownActive] = useState(() =>
+    Boolean(isOpen && confirmCooldownMs && confirmCooldownMs > 0)
+  );
+
+  // useLayoutEffect (not useEffect) so the re-arm is synchronous before paint:
+  // when the singleton dialog transitions isOpen false→true, or cooldownKey
+  // changes to a freshly-promoted item while staying open, the button must
+  // already be disabled in the first painted frame — a passive effect would
+  // leave a one-frame enabled gap that defeats the read-time guarantee.
+  useLayoutEffect(() => {
+    if (!isOpen || !confirmCooldownMs || confirmCooldownMs <= 0) {
+      setIsCooldownActive(false);
+      return;
+    }
+    setIsCooldownActive(true);
+    const timer = setTimeout(() => setIsCooldownActive(false), confirmCooldownMs);
+    // Cleanup is load-bearing: under React StrictMode the effect runs
+    // setup/cleanup/setup on mount, so without clearing the first timer it
+    // would resolve early and drop the cooldown before it elapsed.
+    return () => clearTimeout(timer);
+  }, [isOpen, confirmCooldownMs, cooldownKey]);
 
   if (variant !== "destructive" && DESTRUCTIVE_CONFIRM_LABEL_RE.test(confirmLabel)) {
     warnOnce(
@@ -127,6 +170,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const isTypedMatched = !hasTypedNameGate || typedValue === typedNameTarget;
 
   const handleConfirm = () => {
+    if (isCooldownActive) return;
     if (hasTypedNameGate && !isTypedMatched) return;
     if (confirmDisabled) return;
     return onConfirm();
@@ -171,7 +215,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           label: confirmLabel,
           onClick: handleConfirm,
           loading: isConfirmLoading,
-          disabled: (hasTypedNameGate && !isTypedMatched) || confirmDisabled,
+          disabled: (hasTypedNameGate && !isTypedMatched) || confirmDisabled || isCooldownActive,
           intent: variant === "destructive" ? "destructive" : "default",
         }}
       />

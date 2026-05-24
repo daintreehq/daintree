@@ -6,7 +6,9 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
+  ActiveBearerRecord,
   AssistantTurnRecord,
+  DisconnectBearerResult,
   McpAuditRecord,
   McpAuditStats,
   McpGrantLifecyclePayload,
@@ -91,6 +93,10 @@ export class McpServerService {
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
         dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
+        // The live bearer register is owned by `httpLifecycle` (created
+        // below). The closure defers the reference until teardown time, by
+        // which point the field is assigned. Mirrors `dropAbuseState`.
+        dropBearerState: (sessionId) => this.httpLifecycle.detachBearerSession(sessionId),
         onTierDecayed: (sessionId) => {
           // Tier just decayed to the workbench baseline (#8462). Push a
           // tools/list_changed so the model re-fetches the now-narrowed
@@ -286,7 +292,10 @@ export class McpServerService {
     this.persistConfig({ enabled });
     if (enabled && this._registry && !this.isRunning) {
       await this.httpLifecycle.start(this._registry);
-    } else if (!enabled && this.isRunning) {
+    } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
+      // `stop()` awaits any in-flight `start()` before closing, so a disable
+      // that races a slow start still tears the server down instead of
+      // leaving it listening after the user turned it off.
       await this.httpLifecycle.stop();
     } else if (wasEnabled !== enabled) {
       if (!enabled) this.httpLifecycle.setLastError(null);
@@ -352,6 +361,10 @@ export class McpServerService {
 
   async stop(): Promise<void> {
     await this.httpLifecycle.stop();
+  }
+
+  listActiveClients(): import("../../shared/types/ipc/mcpServer.js").McpActiveClientInfo[] {
+    return this.httpLifecycle.listActiveClients();
   }
 
   getStatus(): {
@@ -443,6 +456,37 @@ export class McpServerService {
    */
   revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
     return this.httpLifecycle.revokeSessionGrants(sessionId, callerWcId);
+  }
+
+  /**
+   * Snapshot of the bearers currently connected to the local MCP server for
+   * the settings tab. Raw tokens are never returned — only the display suffix
+   * and the hash used to target {@link disconnectBearer}.
+   */
+  listActiveBearers(): ActiveBearerRecord[] {
+    return this.httpLifecycle.listActiveBearers();
+  }
+
+  /**
+   * Disconnect a single bearer: revoke every session it owns and evict it
+   * from the live register, then push a runtime-state change so the settings
+   * tab refreshes. Targets one token only — key rotation (revoke-all) stays a
+   * separate D3 action.
+   */
+  disconnectBearer(tokenHash: string): DisconnectBearerResult {
+    const sessionIds = this.httpLifecycle.getBearerSessionIds(tokenHash);
+    if (sessionIds === null) {
+      return { tokenHash, disconnected: false };
+    }
+    for (const sessionId of sessionIds) {
+      this.sessionStore.revokeSession(sessionId);
+    }
+    // Clear any residual entry — `revokeSession` already detaches each
+    // session via the `dropBearerState` callback, but a stale entry with no
+    // live sessions (client dropped the socket) wouldn't be covered.
+    this.httpLifecycle.clearBearer(tokenHash);
+    this.emitRuntimeStateChange();
+    return { tokenHash, disconnected: true };
   }
 
   /**

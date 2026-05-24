@@ -1,4 +1,5 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
+import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
 import type { McpTier, McpSseSession, McpHttpSession, RateLimitConfig } from "./shared.js";
 import {
   MCP_SSE_IDLE_TIMEOUT_MS,
@@ -27,6 +28,16 @@ export interface SessionStoreOptions {
    * fixtures construct without one.
    */
   dropAbuseState?: (sessionId: string) => void;
+  /**
+   * Fired alongside the other per-session cleanup hooks so the live
+   * bearer-connection register in `httpLifecycle` drops this session from
+   * its owning bearer entry (and the entry itself once its last session
+   * closes). Mirrors {@link dropAbuseState} — the register is owned by
+   * `HttpLifecycle`, so the store reaches it through this callback rather
+   * than holding a reference. Optional so bare test fixtures construct
+   * without one.
+   */
+  dropBearerState?: (sessionId: string) => void;
   /**
    * Fired when a session's renderer-approved tier elevation expires and the
    * session is silently decayed back to the `workbench` baseline (#8462).
@@ -117,6 +128,16 @@ export class SessionStore {
   private readonly idleStartedAt = new Map<string, number>();
   private readonly httpIdleStartedAt = new Map<string, number>();
 
+  // Connection metadata captured at handshake, keyed by sessionId, so the
+  // MCP-disable confirmation can name the external clients about to be
+  // severed (#8779). `connectedAtMs` is the handshake wall-clock; `userAgent`
+  // is the raw header (null when absent); `clientTransport` records which
+  // surface the session arrived on. Torn down in lockstep with the other
+  // per-session maps on drain / revoke / idle expiry.
+  private readonly sessionConnectedAtMs = new Map<string, number>();
+  private readonly sessionUserAgent = new Map<string, string | null>();
+  private readonly sessionTransport = new Map<string, "sse" | "streamable-http">();
+
   // Tier-elevation decay timers, keyed by sessionId (unique across SSE and
   // HTTP). A renderer-approved "Always allow" elevation is bounded to
   // MCP_TIER_ELEVATION_TTL_MS; on expiry the session silently decays to the
@@ -140,6 +161,7 @@ export class SessionStore {
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
   private readonly dropAbuseStateFn: (sessionId: string) => void;
+  private readonly dropBearerStateFn: (sessionId: string) => void;
   private readonly onTierDecayedFn: (sessionId: string) => void;
 
   constructor(
@@ -148,6 +170,7 @@ export class SessionStore {
   ) {
     this.cleanupResourceSubscriptionsFn = cleanupResourceSubscriptions;
     this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
+    this.dropBearerStateFn = options.dropBearerState ?? (() => {});
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
   }
@@ -155,6 +178,59 @@ export class SessionStore {
   clearDedupState(sessionId: string): void {
     this.dedupInFlight.delete(sessionId);
     this.dedupResultCache.delete(sessionId);
+  }
+
+  /**
+   * Record handshake-time connection metadata for a session so the
+   * MCP-disable confirmation can name it later (#8779). Called once per
+   * session from the SSE and Streamable HTTP handshake paths, after the
+   * tier has been stamped. Cleared by every per-session teardown path.
+   */
+  registerClientMetadata(
+    sessionId: string,
+    userAgent: string | null,
+    transport: "sse" | "streamable-http"
+  ): void {
+    this.sessionConnectedAtMs.set(sessionId, Date.now());
+    this.sessionUserAgent.set(sessionId, userAgent);
+    this.sessionTransport.set(sessionId, transport);
+  }
+
+  /**
+   * Drop a session's connection metadata. Public so the inline
+   * `transport.onclose` / connect-failure cleanup closures in `httpLifecycle`
+   * can tear it down in lockstep with the other per-session maps on a normal
+   * disconnect (not just idle expiry / revoke / drain).
+   */
+  clearClientMetadata(sessionId: string): void {
+    this.sessionConnectedAtMs.delete(sessionId);
+    this.sessionUserAgent.delete(sessionId);
+    this.sessionTransport.delete(sessionId);
+  }
+
+  /**
+   * Snapshot the currently-connected external clients — sessions classified
+   * `external` (api-key / unauthenticated loopback) that are NOT pinned to a
+   * renderer WebContents. Renderer-pinned sessions are Daintree's own
+   * help-assistant bearers; naming them in the disable dialog would be
+   * recursive (#8779). Pane-token sessions resolve to a non-`external` tier
+   * and are filtered out by the tier check. Returns one entry per live
+   * session across both transports.
+   */
+  listExternalActiveClients(): McpActiveClientInfo[] {
+    const out: McpActiveClientInfo[] = [];
+    const sessionIds = new Set<string>([...this.sessions.keys(), ...this.httpSessions.keys()]);
+    for (const sessionId of sessionIds) {
+      if (this.sessionTierMap.get(sessionId) !== "external") continue;
+      if (this.sessionWebContentsMap.has(sessionId)) continue;
+      out.push({
+        sessionId,
+        userAgent: this.sessionUserAgent.get(sessionId) ?? null,
+        connectedAtMs: this.sessionConnectedAtMs.get(sessionId) ?? Date.now(),
+        transport: this.sessionTransport.get(sessionId) ?? "streamable-http",
+      });
+    }
+    return out;
   }
 
   /**
@@ -200,9 +276,11 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
+    this.clearClientMetadata(sessionId);
     this.idleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -254,9 +332,11 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
+    this.clearClientMetadata(sessionId);
     this.httpIdleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
@@ -500,8 +580,10 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
+    this.clearClientMetadata(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
     this.cleanupResourceSubscriptionsFn(sessionId);
     return true;
   }
@@ -549,6 +631,9 @@ export class SessionStore {
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
+    this.sessionConnectedAtMs.clear();
+    this.sessionUserAgent.clear();
+    this.sessionTransport.clear();
     // Wholesale teardown: drop grants without per-entry audit noise but
     // keep the sweep timer so the store can be reused after a subsequent
     // `start()`. The audit ring buffer still carries each grant's original

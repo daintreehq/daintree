@@ -10,6 +10,7 @@ import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -229,7 +230,12 @@ export const GridTabGroup = React.memo(function GridTabGroup({
           setFocused(nextPanel.id);
         }
       }
-      trashPanel(tabId);
+      requestPanelClose({
+        hideIds: [tabId],
+        commit: () => {
+          trashPanel(tabId);
+        },
+      });
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );

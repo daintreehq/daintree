@@ -266,6 +266,52 @@ describe("getRepoStatsAndPage — activity-probe gate (issue #8757)", () => {
     expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toEqual(goodSnapshot);
   });
 
+  it("re-stamps the durable disk cache on a probe-match hit so the fallback can't age out (issue #8826)", async () => {
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");
+      return statsResponse(5, 3);
+    });
+
+    await getRepoStatsAndPage("/test", false);
+
+    // Only the 60s memory caches expire; the durable caches survive so the
+    // next call takes the probe-match fast path.
+    expireMemoryCaches();
+    mockStatsCache.set.mockClear();
+
+    await getRepoStatsAndPage("/test", false);
+
+    // Optimization preserved — no second expensive stats query.
+    expect(statsQueryCount()).toBe(1);
+    // The durable disk cache is re-written on the fast path so it can't age out
+    // behind the in-memory caches and leave the error-path fallback empty.
+    expect(mockStatsCache.set).toHaveBeenCalledWith(
+      CACHE_KEY,
+      expect.objectContaining({ issueCount: 5, prCount: 3 }),
+      "/test"
+    );
+  });
+
+  it("does not re-stamp the probe/snapshot TTLs on a probe-match hit (keeps the 10-min staleness cap)", async () => {
+    mockClient.mockImplementation(async (query: string) => {
+      if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");
+      return statsResponse(5, 3);
+    });
+
+    await getRepoStatsAndPage("/test", false);
+    const probeBefore = repoActivityProbeCache.get(CACHE_KEY);
+    const snapshotBefore = repoStatsAndPageSnapshotCache.get(CACHE_KEY);
+
+    expireMemoryCaches();
+    await getRepoStatsAndPage("/test", false);
+
+    // Probe/snapshot caches are read, not rewritten — their original entries
+    // (and TTLs) are untouched so list content can't live indefinitely behind
+    // a continuously-matching probe.
+    expect(repoActivityProbeCache.get(CACHE_KEY)).toBe(probeBefore);
+    expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBe(snapshotBefore);
+  });
+
   it("re-runs the full query after clearPRCaches invalidates the snapshot", async () => {
     mockClient.mockImplementation(async (query: string) => {
       if (query.includes("GetRepoActivityProbe")) return probeResponse("p1", "i1", "r1");

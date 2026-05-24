@@ -393,3 +393,54 @@ export interface McpServerStatusSnapshot {
   configuredPort: number | null;
   apiKey: string;
 }
+
+/**
+ * Descriptor for one externally-connected MCP client, returned by
+ * `mcp-server:list-active-clients`. Powers the Tier-D2 confirmation that
+ * names the clients about to be severed when the user disables the server
+ * (#8779). Only sessions classified as `external` (api-key bearer or
+ * unauthenticated loopback) are listed — renderer-pinned help-session
+ * bearers and pane tokens are Daintree's own internal consumers and would
+ * be recursive to name in a dialog the user is using to turn them off.
+ *
+ * `userAgent` is the raw `User-Agent` header captured at handshake (Claude
+ * Code, Cursor, a custom script…), or `null` when the client sent none.
+ * `connectedAtMs` is the wall-clock epoch the session handshook so the
+ * renderer can render a relative "connected N minutes ago".
+ */
+export interface McpActiveClientInfo {
+  sessionId: string;
+  userAgent: string | null;
+  connectedAtMs: number;
+  transport: "sse" | "streamable-http";
+}
+
+/**
+ * Live snapshot of one bearer token currently connected to the local MCP
+ * server, surfaced on the MCP Server settings tab. Tracked per-token in a
+ * register separate from the audit ring buffer — the audit log is an event
+ * history, this is the current-connection view.
+ *
+ * `tokenHash` is the SHA-256 of the full `Authorization` header and is the
+ * stable identity used to target {@link disconnectBearer}; the raw token is
+ * never exposed across IPC. `token4LastChars` is the display-only suffix.
+ * `requestsSinceLaunch` counts new session handshakes for this bearer since
+ * the server last started (reset on restart), not per-message traffic.
+ */
+export interface ActiveBearerRecord {
+  tokenHash: string;
+  token4LastChars: string;
+  userAgent: string;
+  lastActiveAt: number;
+  requestsSinceLaunch: number;
+}
+
+/**
+ * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true
+ * when a matching bearer entry existed and its sessions were revoked — false
+ * when the token hash was already absent (e.g. the client disconnected first).
+ */
+export interface DisconnectBearerResult {
+  tokenHash: string;
+  disconnected: boolean;
+}

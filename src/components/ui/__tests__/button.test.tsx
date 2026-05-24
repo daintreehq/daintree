@@ -66,6 +66,22 @@ describe("Button loading state", () => {
     expect(content.className).not.toContain("opacity-30");
   });
 
+  // Regression: #8843 — the content wrapper must be transparent to layout when
+  // not loading, so caller patterns like `w-full justify-between` + `truncate`
+  // reach the actual text/chevron row. `display: contents` is what makes the
+  // wrapper's children behave as direct flex items of the <button>.
+  it("renders the content wrapper as display:contents when not loading", () => {
+    const { container } = render(
+      <Button className="w-full justify-between">
+        <span className="truncate">label</span>
+        <svg data-testid="chevron" />
+      </Button>
+    );
+    const content = container.querySelector('[data-slot="button-content"]')!;
+    expect(content.className).toBe("contents");
+    expect(content.className).not.toContain("inline-flex");
+  });
+
   it("renders an aria-hidden spinner overlay and sets ARIA state when loading", () => {
     const { container } = render(<Button loading>Save</Button>);
     const button = container.querySelector("button")!;
@@ -170,9 +186,11 @@ describe("Button loading state", () => {
     expect(button.hasAttribute("aria-busy")).toBe(false);
     expect(button.hasAttribute("aria-disabled")).toBe(false);
     expect(button.hasAttribute("data-loading")).toBe(false);
-    expect(container.querySelector('[data-slot="button-content"]')!.className).not.toContain(
-      "opacity-30"
-    );
+    const content = container.querySelector('[data-slot="button-content"]')!;
+    expect(content.className).not.toContain("opacity-30");
+    // Wrapper must return to display:contents so caller layout (truncate,
+    // justify-between) keeps working after loading resolves.
+    expect(content.className).toBe("contents");
   });
 
   it("preserves the accessible name on an icon-only loading button", () => {

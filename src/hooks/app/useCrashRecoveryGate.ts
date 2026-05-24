@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { PendingCrash, CrashRecoveryAction, CrashRecoveryConfig } from "@shared/types/ipc";
+import type { BootResult } from "@shared/types/ipc/app";
 import { isElectronAvailable } from "../useElectron";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
-import type { AppBootState } from "./useAppBoot";
 import { startRendererSpan } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
 
@@ -15,10 +15,12 @@ export type CrashRecoveryGateState =
  * Derive crash-gate state from the batched boot payload. The pending/config
  * pair used to come from two separate IPC calls (`crash-recovery:get-pending`
  * and `crash-recovery:get-config`) — the renderer now reads them from the
- * single `app:boot` invoke. `resolve` and `updateConfig` still use the
+ * single `app:boot` invoke that `use()` resolves before this hook runs (#8820).
+ * `bootResult` is `null` when boot failed or Electron is unavailable, in which
+ * case the gate collapses to `none`. `resolve` and `updateConfig` still use the
  * standalone crash-recovery handlers because they fire post-gate.
  */
-export function useCrashRecoveryGate(boot: AppBootState): {
+export function useCrashRecoveryGate(bootResult: BootResult | null): {
   state: CrashRecoveryGateState;
   resolve: (action: CrashRecoveryAction) => Promise<void>;
   updateConfig: (patch: Partial<CrashRecoveryConfig>) => Promise<void>;
@@ -26,11 +28,14 @@ export function useCrashRecoveryGate(boot: AppBootState): {
   const [state, setState] = useState<CrashRecoveryGateState>(() =>
     isElectronAvailable() ? { status: "loading" } : { status: "none" }
   );
+  // Guards the auto-restore IPC against Strict Mode's double-invoked effect —
+  // `use()` removes render double-invocation, but mount→cleanup→mount still
+  // fires the effect twice and a duplicate `crashRecovery.resolve` would be a
+  // real bug.
   const hasProcessed = useRef(false);
 
   useEffect(() => {
     if (!isElectronAvailable() || hasProcessed.current) return;
-    if (!boot.settled) return;
     hasProcessed.current = true;
 
     const done = startRendererSpan(PERF_MARKS.CRASH_RECOVERY_GATE);
@@ -38,13 +43,13 @@ export function useCrashRecoveryGate(boot: AppBootState): {
     // Boot failed — drop the gate so the app can still render. The cold-start
     // skeleton stays up until hydration resolves (or also fails); a stuck gate
     // would deadlock the loading screen.
-    if (!boot.result) {
+    if (!bootResult) {
       done();
       setState({ status: "none" });
       return;
     }
 
-    const { crashPending: pending, crashConfig: config } = boot.result;
+    const { crashPending: pending, crashConfig: config } = bootResult;
     if (!pending) {
       done();
       setState({ status: "none" });
@@ -95,7 +100,7 @@ export function useCrashRecoveryGate(boot: AppBootState): {
     void import("@/components/Recovery/CrashRecoveryDialog").catch(() => {});
     done();
     setState({ status: "pending", crash: pending, config });
-  }, [boot]);
+  }, [bootResult]);
 
   const resolve = async (action: CrashRecoveryAction) => {
     if (!isElectronAvailable()) return;

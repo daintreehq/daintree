@@ -94,6 +94,7 @@ export interface HydrationOptions {
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
   hydrateActionMru?: (list: ActionFrecencyEntry[] | string[]) => void;
+  hydrateActionPrefs?: (prefs: { pinnedIds?: string[]; hiddenIds?: string[] }) => void;
   restoreTerminalOrder?: (orderedIds: string[]) => void;
   /**
    * Optional hydration-batch hooks. When both are provided, each restore phase is
@@ -548,6 +549,19 @@ export async function hydrateAppState(
     // Restore action MRU list
     if (options.hydrateActionMru && Array.isArray(appState.actionMruList)) {
       options.hydrateActionMru(appState.actionMruList);
+    }
+
+    // Restore pinned/hidden action prefs (Favorites + hidden Recently used)
+    if (options.hydrateActionPrefs) {
+      const pinnedIds = Array.isArray(appState.actionPinnedIds)
+        ? appState.actionPinnedIds
+        : undefined;
+      const hiddenIds = Array.isArray(appState.actionHiddenIds)
+        ? appState.actionHiddenIds
+        : undefined;
+      if (pinnedIds || hiddenIds) {
+        options.hydrateActionPrefs({ pinnedIds, hiddenIds });
+      }
     }
   } catch (error) {
     logError("Failed to hydrate app state", error);

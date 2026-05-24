@@ -18,18 +18,25 @@
 //   node scripts/check-renderer-import-budget.mjs --update           # rewrite baseline
 //   node scripts/check-renderer-import-budget.mjs --update --force   # bypass 10% shrink guard
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-const MANIFEST_FILE = path.join(ROOT, "dist", ".vite", "manifest.json");
+const DIST = path.join(ROOT, "dist");
+const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
 const BASELINE_FILE = path.join(ROOT, "renderer-import-baseline.json");
 
 // Refuse to overwrite the baseline in --update mode if the eager chunk count
 // shrinks by more than this fraction. Mirrors check-import-budget.mjs.
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
+
+// Allowed growth of eager gzip bytes before the byte gate fails. lazyBarrel's
+// real payoff is parse/eval cost (bytes), not chunk count — #8819 — so the
+// eager byte total is gated independently of the (strict) chunk-count gate.
+const BYTE_GROWTH_THRESHOLD = 0.05;
 
 function parseArgs(argv) {
   return {
@@ -96,6 +103,24 @@ export function stableChunkId(manifest, key) {
   return key;
 }
 
+// Sum raw + gzip bytes of the on-disk files backing a set of manifest keys.
+// Mirrors check-first-render-chunk-budget.mjs (gzip level 9). Missing chunk
+// files are skipped — the gate measures real on-disk bytes.
+function sumChunkBytes(manifest, keys) {
+  let raw = 0;
+  let gzip = 0;
+  for (const key of keys) {
+    const file = manifest[key]?.file;
+    if (!file) continue;
+    const filePath = path.join(DIST, file);
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) continue;
+    const buf = readFileSync(filePath);
+    raw += buf.byteLength;
+    gzip += gzipSync(buf, { level: 9 }).byteLength;
+  }
+  return { raw, gzip };
+}
+
 function buildReport() {
   const manifest = readManifest();
   const entryKey = findEntryKey(manifest);
@@ -106,11 +131,14 @@ function buildReport() {
 
   const closure = collectEagerChunks(manifest, entryKey);
   const chunkIds = [...new Set([...closure].map((k) => stableChunkId(manifest, k)))].sort();
+  const { raw: eagerRaw, gzip: eagerGzip } = sumChunkBytes(manifest, closure);
 
   return {
     entryName: stableChunkId(manifest, entryKey),
     eagerChunkCount: chunkIds.length,
     eagerChunks: chunkIds,
+    eagerRaw,
+    eagerGzip,
   };
 }
 
@@ -153,16 +181,20 @@ function writeBaseline(report, { force }) {
     entryName: report.entryName,
     eagerChunkCount: report.eagerChunkCount,
     eagerChunks: report.eagerChunks,
+    eagerRaw: report.eagerRaw,
+    eagerGzip: report.eagerGzip,
   };
   writeFileSync(BASELINE_FILE, JSON.stringify(out, null, 2) + "\n");
   console.log(
-    `[check-renderer-import-budget] baseline updated: entry=${report.entryName}, eagerChunkCount=${report.eagerChunkCount}`
+    `[check-renderer-import-budget] baseline updated: entry=${report.entryName}, eagerChunkCount=${report.eagerChunkCount}, eagerGzip=${report.eagerGzip}`
   );
 }
 
 // Pure helper — exported for tests. Returns the comparison result without
-// performing I/O or side effects.
-export function compareReport(report, baseline) {
+// performing I/O or side effects. The eager byte gate (#8819) only engages
+// when both baseline and report carry a positive `eagerGzip` — older baselines
+// without the field are compared on chunk count alone.
+export function compareReport(report, baseline, byteThreshold = BYTE_GROWTH_THRESHOLD) {
   const baselineCount = baseline?.eagerChunkCount;
   if (typeof baselineCount !== "number" || baselineCount < 0) {
     return {
@@ -189,25 +221,38 @@ export function compareReport(report, baseline) {
   const added = report.eagerChunks.filter((k) => !baselineKeys.has(k));
   const removed = (baselineChunks ?? []).filter((k) => !currentKeys.has(k));
 
-  if (currentCount > baselineCount) {
-    return {
-      ok: false,
-      grew: true,
-      baselineCount,
-      currentCount,
-      added,
-      removed,
-    };
+  const countGrew = currentCount > baselineCount;
+
+  // Independent byte gate: lazyBarrel can grow chunk count while shrinking
+  // eager bytes, so a count-only baseline ratchet would let bytes regress
+  // unnoticed. Allow BYTE_GROWTH_THRESHOLD slack to absorb minifier jitter.
+  const baselineGzip = baseline?.eagerGzip;
+  const currentGzip = report.eagerGzip;
+  const byteGateActive =
+    typeof baselineGzip === "number" && baselineGzip > 0 && typeof currentGzip === "number";
+  let byteRatio = 0;
+  let bytesGrew = false;
+  if (byteGateActive) {
+    byteRatio = (currentGzip - baselineGzip) / baselineGzip;
+    bytesGrew = byteRatio > byteThreshold;
   }
 
-  return {
-    ok: true,
-    shrank: currentCount < baselineCount,
+  const result = {
+    ok: !countGrew && !bytesGrew,
     baselineCount,
     currentCount,
     added,
     removed,
   };
+  if (countGrew) result.grew = true;
+  else result.shrank = currentCount < baselineCount;
+  if (byteGateActive) {
+    result.baselineGzip = baselineGzip;
+    result.currentGzip = currentGzip;
+    result.byteRatio = byteRatio;
+    if (bytesGrew) result.grewBytes = true;
+  }
+  return result;
 }
 
 function readBaseline() {
@@ -243,6 +288,11 @@ function main() {
     process.exit(1);
   }
 
+  const byteSummary =
+    typeof result.byteRatio === "number"
+      ? `, eager gzip=${result.currentGzip} (baseline=${result.baselineGzip}, ${(result.byteRatio * 100).toFixed(2)}%)`
+      : "";
+
   if (result.ok) {
     if (result.shrank) {
       console.log(
@@ -250,21 +300,28 @@ function main() {
       );
     }
     console.log(
-      `[check-renderer-import-budget] OK — ${result.currentCount} eager chunk(s) (baseline=${result.baselineCount}).`
+      `[check-renderer-import-budget] OK — ${result.currentCount} eager chunk(s) (baseline=${result.baselineCount})${byteSummary}.`
     );
     return;
   }
 
-  console.error(
-    `::error::renderer eager chunk count grew from ${result.baselineCount} to ${result.currentCount}`
-  );
-  if (result.added.length > 0) {
-    console.error("   New eager chunks:");
-    for (const key of result.added) console.error(`     + ${key}`);
+  if (result.grew) {
+    console.error(
+      `::error::renderer eager chunk count grew from ${result.baselineCount} to ${result.currentCount}`
+    );
+    if (result.added.length > 0) {
+      console.error("   New eager chunks:");
+      for (const key of result.added) console.error(`     + ${key}`);
+    }
+    if (result.removed.length > 0) {
+      console.error("   Removed eager chunks (counted against budget but still worth noting):");
+      for (const key of result.removed) console.error(`     - ${key}`);
+    }
   }
-  if (result.removed.length > 0) {
-    console.error("   Removed eager chunks (counted against budget but still worth noting):");
-    for (const key of result.removed) console.error(`     - ${key}`);
+  if (result.grewBytes) {
+    console.error(
+      `::error::renderer eager gzip bytes grew from ${result.baselineGzip} to ${result.currentGzip} (+${(result.byteRatio * 100).toFixed(2)}%, threshold +${(BYTE_GROWTH_THRESHOLD * 100).toFixed(1)}%)`
+    );
   }
   console.error(
     "   If the regression is intentional (a new boot-critical module), run `npm run renderer-import-budget:update` to refresh the baseline."

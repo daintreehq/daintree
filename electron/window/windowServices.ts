@@ -16,7 +16,12 @@ import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isSmokeTest, smokeTestStart } from "../setup/environment.js";
+import {
+  isSmokeTest,
+  smokeTestStart,
+  getEarlyPathRefreshPromise,
+  kickOffEarlyPathRefresh,
+} from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E, shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -182,24 +187,72 @@ export async function setupWindowServices(
     console.log("[MAIN] E2E renderer-load deferral enabled — waiting for services");
   }
 
+  // Fork the PTY host now — *after* startRendererLoad — so first paint is no
+  // longer blocked by the early PATH refresh (#8827). PtyClient was constructed
+  // with `deferStart` in initPerWindowServices, so the host has not forked yet.
+  // We await the early PATH refresh here, immediately before forking, so
+  // node-pty inherits the user's full PATH (the #8625 invariant: PATH refresh →
+  // PTY fork). Awaiting a settled promise is a no-op; on the P95 path the probe
+  // resolved in ~50ms during the renderer bundle load, so the host forks before
+  // the renderer hydrates. First window only — `start()` is idempotent and
+  // `isHostStarted()` short-circuits subsequent windows.
+  const ptyClient = getPtyClient();
+  if (ptyClient && !ptyClient.isHostStarted()) {
+    // Fall back to kicking off the refresh here if it was never started (e.g. a
+    // custom entry path that skips main.ts's app.whenReady kickoff). The kickoff
+    // is idempotent — it returns the cached promise when already running — so
+    // this never double-runs the probe and guarantees the #8625 invariant holds
+    // before the fork rather than silently skipping it on a null promise.
+    await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
+    ptyClient.start();
+  }
+
   // Initialize workspace client (first window only) — per-project hosts
   // are started on-demand when loadProject() is called, not at init time.
-  const ptyClient = getPtyClient();
   if (!getWorkspaceClientRef()) {
-    console.log("[MAIN] Waiting for Pty Host to be ready before initializing Workspace Client...");
-    try {
-      await ptyClient!.waitForReady();
-      console.log("[MAIN] Pty Host ready, initializing Workspace Client...");
-      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
-    } catch (error) {
-      console.error("[MAIN] Pty Host failed to start:", error);
-    }
-
+    // Construct the workspace client and prewarm its per-project host
+    // concurrently with the PTY host fork. The two utility processes load
+    // native modules independently (node-pty vs better-sqlite3 + @parcel/watcher)
+    // and share no IPC/memory, so dispatching the workspace host fork while we
+    // await PTY-ready overlaps the two native loads instead of serializing them
+    // behind the PTY handshake (#8828).
     const workspaceClient = getWorkspaceClient({
       maxRestartAttempts: 3,
       healthCheckIntervalMs: 10000,
       showCrashDialog: false,
     });
+
+    // Resolve the project path this window will load so the workspace host can
+    // start forking now. getProjectById is a synchronous SQLite read on the
+    // already-open shared DB, so it's safe before projectStore.initialize().
+    // Derivation + dispatch are wrapped together: a failed lookup or a
+    // synchronous prewarm error must not abort startup — the host self-heals
+    // and loadProject() forks a fresh one later if needed.
+    try {
+      const prewarmPath =
+        opts.initialProjectPath ??
+        (opts.initialProjectId
+          ? projectStore.getProjectById(opts.initialProjectId)?.path
+          : undefined);
+      if (prewarmPath) {
+        console.log("[MAIN] Prewarming workspace host concurrently with PTY host:", prewarmPath);
+        // Fire-and-forget: prewarmProject sets up the host initPromise and a
+        // dormant-cleanup timer; async failure self-heals inside the pool.
+        workspaceClient.prewarmProject(prewarmPath);
+      }
+    } catch (error) {
+      console.warn("[MAIN] Workspace host prewarm failed; will fork on demand:", error);
+    }
+
+    console.log("[MAIN] Waiting for Pty Host to be ready...");
+    try {
+      await ptyClient!.waitForReady();
+      console.log("[MAIN] Pty Host ready");
+      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
+    } catch (error) {
+      console.error("[MAIN] Pty Host failed to start:", error);
+    }
+
     setWorkspaceClientRef(workspaceClient);
 
     // Give PluginService the WorkspaceClient reference now that it's ready.

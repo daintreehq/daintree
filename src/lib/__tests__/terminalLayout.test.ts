@@ -1,445 +1,295 @@
 import { describe, it, expect } from "vitest";
 import {
   getAutoGridCols,
-  getMaxGridCapacity,
+  computeAutomaticGridCols,
   computeGridColumns,
+  applyHysteresis,
+  computeScrollRowHeight,
+  gridRowsOverflow,
+  getGridFitMetrics,
+  getMaxGridCapacity,
+  getPanelLayoutMode,
+  pxForCols,
+  pxForRows,
+  maxFeasibleCols,
+  DEFAULT_TERMINAL_METRICS,
+  GRID_MIN_PANEL_COLS,
+  GRID_MIN_PANEL_ROWS,
+  ABSOLUTE_MIN_COLS,
+  AUTO_GRID_MAX_COLS,
+  GRID_GAP_PX,
+  GRID_PADDING_PX,
   MIN_TERMINAL_WIDTH_PX,
   MIN_TERMINAL_HEIGHT_PX,
   ABSOLUTE_MAX_GRID_TERMINALS,
   GRID_TRANSITION_DURATION_MS,
+  type TerminalMetrics,
 } from "../terminalLayout";
 
-describe("getAutoGridCols", () => {
-  describe("single terminal", () => {
-    it("should return 1 for count of 0", () => {
-      expect(getAutoGridCols(0, null)).toBe(1);
-    });
+// Exact container width at which `n` minimum-width panels fit across. Mirrors
+// `maxFeasibleCols`' nth boundary — `wCols(n)` yields exactly n columns of
+// feasibility, `wCols(n) - 1` yields n - 1. Derived from the engine's own
+// metric model so the tests survive a metric tune.
+const wCols = (n: number) =>
+  pxForCols(GRID_MIN_PANEL_COLS) * n + GRID_GAP_PX * (n - 1) + GRID_PADDING_PX;
 
-    it("should return 1 for count of 1 regardless of width", () => {
-      expect(getAutoGridCols(1, null)).toBe(1);
-      expect(getAutoGridCols(1, 500)).toBe(1);
-      expect(getAutoGridCols(1, 1000)).toBe(1);
-      expect(getAutoGridCols(1, 2000)).toBe(1);
-    });
+describe("getPanelLayoutMode", () => {
+  it("routes 1 → single, 2 → split, 3+ → grid", () => {
+    expect(getPanelLayoutMode(0)).toBe("single");
+    expect(getPanelLayoutMode(1)).toBe("single");
+    expect(getPanelLayoutMode(2)).toBe("split");
+    expect(getPanelLayoutMode(3)).toBe("grid");
+    expect(getPanelLayoutMode(12)).toBe("grid");
+  });
+});
 
-    it("should handle negative counts defensively", () => {
-      expect(getAutoGridCols(-1, null)).toBe(1);
-      expect(getAutoGridCols(-10, null)).toBe(1);
-    });
+describe("pxForCols / pxForRows — character-cell geometry", () => {
+  it("derives panel size from cell geometry plus chrome", () => {
+    const m = DEFAULT_TERMINAL_METRICS;
+    expect(pxForCols(60)).toBe(
+      Math.ceil(60 * m.cellWidth + m.paddingX + m.scrollbarWidth + m.borderX)
+    );
+    expect(pxForRows(16)).toBe(
+      Math.ceil(16 * m.cellHeight + m.headerHeight + m.paddingY + m.borderY)
+    );
+    expect(pxForCols(120)).toBeGreaterThan(pxForCols(60));
   });
 
-  describe("progressive column caps", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5; // Room for 5 columns
+  it("honors custom measured metrics", () => {
+    const wide: TerminalMetrics = { ...DEFAULT_TERMINAL_METRICS, cellWidth: 12 };
+    expect(pxForCols(60, wide)).toBeGreaterThan(pxForCols(60));
+  });
+});
 
-    it("should return 2 columns for 2-5 terminals (when width permits)", () => {
-      expect(getAutoGridCols(2, wideWidth)).toBe(2);
-      expect(getAutoGridCols(3, wideWidth)).toBe(2);
-      expect(getAutoGridCols(4, wideWidth)).toBe(2);
-      expect(getAutoGridCols(5, wideWidth)).toBe(2);
-    });
-
-    it("should return 3 columns for 6-11 terminals (when width permits)", () => {
-      expect(getAutoGridCols(6, wideWidth)).toBe(3);
-      expect(getAutoGridCols(7, wideWidth)).toBe(3);
-      expect(getAutoGridCols(8, wideWidth)).toBe(3);
-      expect(getAutoGridCols(9, wideWidth)).toBe(3);
-      expect(getAutoGridCols(10, wideWidth)).toBe(3);
-      expect(getAutoGridCols(11, wideWidth)).toBe(3);
-    });
-
-    it("should return 4 columns for 12+ terminals (when width permits)", () => {
-      expect(getAutoGridCols(12, wideWidth)).toBe(4);
-      expect(getAutoGridCols(13, wideWidth)).toBe(4);
-      expect(getAutoGridCols(14, wideWidth)).toBe(4);
-      expect(getAutoGridCols(15, wideWidth)).toBe(4);
-      expect(getAutoGridCols(16, wideWidth)).toBe(4);
-    });
-
-    it("should never exceed 4 columns even with many terminals", () => {
-      expect(getAutoGridCols(20, wideWidth)).toBe(4);
-      expect(getAutoGridCols(100, wideWidth)).toBe(4);
-    });
+describe("maxFeasibleCols", () => {
+  it("returns at least 1 for degenerate inputs", () => {
+    expect(maxFeasibleCols(0, 532)).toBe(1);
+    expect(maxFeasibleCols(532, 0)).toBe(1);
+    expect(maxFeasibleCols(-100, 532)).toBe(1);
   });
 
-  describe("width constraints", () => {
-    it("should return 1 column when width only fits 1 (except 2 panes which use computeGridColumns)", () => {
-      const narrowWidth = MIN_TERMINAL_WIDTH_PX * 1.5;
-      // Note: 2 panes should use computeGridColumns which enforces 2x1 layout
-      // getAutoGridCols itself doesn't have the 2-pane invariant
-      expect(getAutoGridCols(2, narrowWidth)).toBe(1);
-      expect(getAutoGridCols(6, narrowWidth)).toBe(1);
-      expect(getAutoGridCols(12, narrowWidth)).toBe(1);
-    });
+  it("counts how many minimum-width panels fit, accounting for gaps", () => {
+    const mpw = pxForCols(GRID_MIN_PANEL_COLS);
+    expect(maxFeasibleCols(wCols(1), mpw)).toBe(1);
+    expect(maxFeasibleCols(wCols(2), mpw)).toBe(2);
+    expect(maxFeasibleCols(wCols(4), mpw)).toBe(4);
+    expect(maxFeasibleCols(wCols(3) - 1, mpw)).toBe(2);
+  });
+});
 
-    it("should return 2 columns max when width only fits 2", () => {
-      const mediumWidth = MIN_TERMINAL_WIDTH_PX * 2.5;
-      expect(getAutoGridCols(2, mediumWidth)).toBe(2);
-      expect(getAutoGridCols(6, mediumWidth)).toBe(2); // Would want 3, but only 2 fit
-      expect(getAutoGridCols(12, mediumWidth)).toBe(2); // Would want 4, but only 2 fit
-    });
-
-    it("should return 3 columns max when width only fits 3", () => {
-      const width = MIN_TERMINAL_WIDTH_PX * 3.5;
-      expect(getAutoGridCols(6, width)).toBe(3);
-      expect(getAutoGridCols(12, width)).toBe(3); // Would want 4, but only 3 fit
-    });
-
-    it("should use fallback width when null", () => {
-      // Fallback width is 800, which fits 2 columns (800 / 380 = 2.1)
-      expect(getAutoGridCols(2, null)).toBe(2);
-      expect(getAutoGridCols(5, null)).toBe(2);
-      expect(getAutoGridCols(6, null)).toBe(2); // Would want 3, but fallback only fits 2
-    });
+describe("getAutoGridCols — size-driven, fit-as-many-across", () => {
+  it("returns 1 for 0 or 1 panel, 2 for exactly 2 panels", () => {
+    expect(getAutoGridCols(0, 5000)).toBe(1);
+    expect(getAutoGridCols(1, 5000)).toBe(1);
+    expect(getAutoGridCols(2, 300)).toBe(2);
+    expect(getAutoGridCols(2, 5000)).toBe(2);
   });
 
-  describe("no empty columns", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-
-    it("should not use more columns than terminals", () => {
-      // 2 terminals should use 2 columns, not more
-      expect(getAutoGridCols(2, wideWidth)).toBe(2);
-      // 3 terminals could use 3 but is capped at 2 for this count range
-      expect(getAutoGridCols(3, wideWidth)).toBe(2);
-    });
+  it("scales the column count with available width", () => {
+    expect(getAutoGridCols(8, wCols(1))).toBe(1);
+    expect(getAutoGridCols(8, wCols(2))).toBe(2);
+    expect(getAutoGridCols(8, wCols(3))).toBe(3);
+    expect(getAutoGridCols(8, wCols(4))).toBe(4);
   });
 
-  describe("stability within ranges", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-
-    it("column count stays stable within 2-5 terminal range", () => {
-      const cols2 = getAutoGridCols(2, wideWidth);
-      const cols3 = getAutoGridCols(3, wideWidth);
-      const cols4 = getAutoGridCols(4, wideWidth);
-      const cols5 = getAutoGridCols(5, wideWidth);
-      expect(cols2).toBe(cols3);
-      expect(cols3).toBe(cols4);
-      expect(cols4).toBe(cols5);
-    });
-
-    it("column count stays stable within 6-11 terminal range", () => {
-      const cols6 = getAutoGridCols(6, wideWidth);
-      const cols9 = getAutoGridCols(9, wideWidth);
-      const cols11 = getAutoGridCols(11, wideWidth);
-      expect(cols6).toBe(cols9);
-      expect(cols9).toBe(cols11);
-    });
-
-    it("column count stays stable within 12-16 terminal range", () => {
-      const cols12 = getAutoGridCols(12, wideWidth);
-      const cols14 = getAutoGridCols(14, wideWidth);
-      const cols16 = getAutoGridCols(16, wideWidth);
-      expect(cols12).toBe(cols14);
-      expect(cols14).toBe(cols16);
-    });
+  it("gives a wide display 3-4 columns for a large fleet (not a 2-col rail)", () => {
+    // The core fix: many panels on a big screen spread across 3-4 columns
+    // instead of being pinned to 2.
+    expect(getAutoGridCols(12, wCols(3))).toBe(3);
+    expect(getAutoGridCols(12, wCols(4))).toBe(4);
+    expect(getAutoGridCols(20, 6000)).toBe(4);
   });
 
-  describe("transition points", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
+  it("caps at the at-a-glance ceiling of 4 columns", () => {
+    expect(getAutoGridCols(30, 100000)).toBe(AUTO_GRID_MAX_COLS);
+    expect(AUTO_GRID_MAX_COLS).toBe(4);
+  });
 
-    it("transitions from 2 to 3 columns at 6 terminals", () => {
-      expect(getAutoGridCols(5, wideWidth)).toBe(2);
-      expect(getAutoGridCols(6, wideWidth)).toBe(3);
-    });
+  it("never shows more columns than panels", () => {
+    expect(getAutoGridCols(3, 100000)).toBe(3);
+    expect(getAutoGridCols(2, 100000)).toBe(2);
+  });
 
-    it("transitions from 3 to 4 columns at 12 terminals", () => {
-      expect(getAutoGridCols(11, wideWidth)).toBe(3);
-      expect(getAutoGridCols(12, wideWidth)).toBe(4);
-    });
+  it("packs a 3-panel row across only when three panels fit", () => {
+    expect(getAutoGridCols(3, wCols(3))).toBe(3);
+    expect(getAutoGridCols(3, wCols(3) - 1)).toBe(2);
+    expect(getAutoGridCols(3, wCols(2) - 1)).toBe(1);
+  });
+
+  it("first paint (unknown width) assumes the count-justified shape fits", () => {
+    expect(getAutoGridCols(2, null)).toBe(2);
+    expect(getAutoGridCols(3, null)).toBe(3);
+    expect(getAutoGridCols(12, null)).toBe(4);
+  });
+
+  it("compact density packs to a tighter floor", () => {
+    // A width that fits 2 comfortable columns fits 3 compact ones.
+    const width = pxForCols(ABSOLUTE_MIN_COLS) * 3 + GRID_GAP_PX * 2 + GRID_PADDING_PX;
+    expect(getAutoGridCols(8, width)).toBeLessThan(3);
+    expect(getAutoGridCols(8, width, undefined, { density: "compact" })).toBe(3);
   });
 
   describe("breakpoint hysteresis", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5; // Room for 5 columns
-
-    it("holds 3 columns at count=5 once widened (sticky narrow boundary)", () => {
-      // Was at 3 cols (count had reached ≥6), now back at 5 — must stay at 3.
-      expect(getAutoGridCols(5, wideWidth, 3)).toBe(3);
+    it("holds the wider column count through the narrow buffer", () => {
+      const fresh = getAutoGridCols(8, wCols(3) - 1, undefined);
+      const held = getAutoGridCols(8, wCols(3) - 1, 3);
+      expect(fresh).toBe(2);
+      expect(held).toBe(3);
     });
 
-    it("narrows to 2 columns at count=4 (drops at narrowAt)", () => {
-      expect(getAutoGridCols(4, wideWidth, 3)).toBe(2);
+    it("narrows once the container drops well past the threshold", () => {
+      expect(getAutoGridCols(8, wCols(2), 3)).toBe(2);
     });
 
-    it("holds 4 columns at count=11 once widened (3→4 sticky)", () => {
-      expect(getAutoGridCols(11, wideWidth, 4)).toBe(4);
-    });
-
-    it("narrows to 3 columns at count=10 (3→4 narrowAt)", () => {
-      expect(getAutoGridCols(10, wideWidth, 4)).toBe(3);
-    });
-
-    it("maxFeasibleCols overrides sticky hysteresis", () => {
-      // Even with previousCols=3, a 1.5×min-width viewport only fits 1 column.
-      const narrowWidth = MIN_TERMINAL_WIDTH_PX * 1.5;
-      expect(getAutoGridCols(5, narrowWidth, 3)).toBe(1);
-    });
-
-    it("preserves backward-compatible behavior when previousCols is undefined", () => {
-      // Cold start (no prior state): pure count-based, symmetric.
-      expect(getAutoGridCols(5, wideWidth, undefined)).toBe(2);
-      expect(getAutoGridCols(11, wideWidth, undefined)).toBe(3);
-    });
-
-    it("does not widen past the natural target when previousCols is smaller", () => {
-      // previousCols=2 must not bias an upward widen — count drives that.
-      expect(getAutoGridCols(6, wideWidth, 2)).toBe(3);
-      expect(getAutoGridCols(12, wideWidth, 3)).toBe(4);
-    });
-
-    it("ignores stale previousCols beyond the natural target", () => {
-      // count=2 naturally caps at 2 cols even if a stale previousCols=4 leaks in.
-      expect(getAutoGridCols(2, wideWidth, 4)).toBe(2);
-    });
-
-    it("respects no-empty-columns rule under hysteresis", () => {
-      // count=2 wants ≤2 cols regardless of any sticky prior.
-      expect(getAutoGridCols(2, wideWidth, 3)).toBe(2);
-    });
-
-    it("cascades through intermediate bands on multi-tier drops", () => {
-      // From 4 cols, dropping straight to count=5 should pass through 3 cols
-      // (the 2→3 band is still sticky at count=5), not skip to 2.
-      expect(getAutoGridCols(5, wideWidth, 4)).toBe(3);
-      // count=4 clears both bands' narrowAt thresholds → drops to 2.
-      expect(getAutoGridCols(4, wideWidth, 4)).toBe(2);
-    });
-
-    it("holds chained sequence through staged decrements (6→5→4)", () => {
-      // Simulate the per-render previousCols handoff for a 6→5→4 sequence.
-      const at6 = getAutoGridCols(6, wideWidth, 2);
-      const at5 = getAutoGridCols(5, wideWidth, at6);
-      const at4 = getAutoGridCols(4, wideWidth, at5);
-      expect(at6).toBe(3); // widens
-      expect(at5).toBe(3); // sticky
-      expect(at4).toBe(2); // drops at narrowAt
-    });
-
-    it("holds chained sequence at the 3→4 band (12→11→10)", () => {
-      const at12 = getAutoGridCols(12, wideWidth, 3);
-      const at11 = getAutoGridCols(11, wideWidth, at12);
-      const at10 = getAutoGridCols(10, wideWidth, at11);
-      expect(at12).toBe(4);
-      expect(at11).toBe(4); // sticky at 3→4 band
-      expect(at10).toBe(3); // drops to 3, still sticky there (10>4) until count<=4
+    it("a narrowing viewport overrides a stale wide previousCols", () => {
+      expect(getAutoGridCols(8, wCols(1), 4)).toBe(1);
     });
   });
 });
 
-describe("getMaxGridCapacity", () => {
-  describe("null dimensions", () => {
-    it("returns absolute max when dimensions are null", () => {
-      expect(getMaxGridCapacity(null, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(1000, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(null, 800)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
+describe("computeAutomaticGridCols — explicit options form", () => {
+  it("matches getAutoGridCols for the comfortable default", () => {
+    expect(computeAutomaticGridCols({ count: 12, width: wCols(4) })).toBe(4);
   });
 
-  describe("laptop screen (15-inch, ~1200x700)", () => {
-    it("calculates 3x3 = 9 terminals for typical laptop viewport", () => {
-      // Simulate a 15" laptop: ~1200px wide, ~700px tall usable grid area
-      const width = 1200;
-      const height = 700;
-      const capacity = getMaxGridCapacity(width, height);
-
-      // 1200px / 384px ≈ 3 cols, 700px / 204px ≈ 3 rows = 9 terminals
-      expect(capacity).toBeGreaterThanOrEqual(6);
-      expect(capacity).toBeLessThanOrEqual(9);
-    });
-  });
-
-  describe("large monitor (32-inch, ~2200x1200)", () => {
-    it("calculates larger capacity for 32-inch monitor", () => {
-      // Simulate a 32" monitor: ~2200px wide, ~1200px tall usable grid area
-      const width = 2200;
-      const height = 1200;
-      const capacity = getMaxGridCapacity(width, height);
-
-      // Should be capped at ABSOLUTE_MAX_GRID_TERMINALS (16)
-      expect(capacity).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
-  });
-
-  describe("respects absolute maximum", () => {
-    it("never exceeds ABSOLUTE_MAX_GRID_TERMINALS even on huge screens", () => {
-      expect(getMaxGridCapacity(5000, 3000)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-      expect(getMaxGridCapacity(10000, 5000)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
-    });
-  });
-
-  describe("very small viewports", () => {
-    it("returns at least 1 for any valid dimensions", () => {
-      expect(getMaxGridCapacity(400, 250)).toBeGreaterThanOrEqual(1);
-      expect(getMaxGridCapacity(MIN_TERMINAL_WIDTH_PX, MIN_TERMINAL_HEIGHT_PX)).toBe(1);
-    });
+  it("respects custom metrics — wider cells fit fewer columns", () => {
+    const wideCells: TerminalMetrics = { ...DEFAULT_TERMINAL_METRICS, cellWidth: 16 };
+    expect(
+      computeAutomaticGridCols({ count: 8, width: wCols(4), metrics: wideCells })
+    ).toBeLessThan(4);
   });
 });
 
-describe("grid transition timing constants", () => {
-  it("GRID_TRANSITION_DURATION_MS is 200", () => {
+describe("applyHysteresis", () => {
+  it("passes the target through without a previous count", () => {
+    expect(applyHysteresis(2, undefined, 1500, 532, 4)).toBe(2);
+  });
+
+  it("never lowers a count that already grew", () => {
+    expect(applyHysteresis(3, 2, 1500, 532, 4)).toBe(3);
+  });
+
+  it("caps a held count by the count-justified ceiling", () => {
+    expect(applyHysteresis(2, 4, 100000, 532, 2)).toBe(2);
+  });
+});
+
+describe("gridRowsOverflow — the only thing that triggers scroll mode", () => {
+  it("never overflows for a single row", () => {
+    expect(gridRowsOverflow(1, 100)).toBe(false);
+    expect(gridRowsOverflow(0, 100)).toBe(false);
+  });
+
+  it("does not overflow when unknown height", () => {
+    expect(gridRowsOverflow(8, null)).toBe(false);
+  });
+
+  it("overflows only once minimum-height rows exceed the viewport", () => {
+    const minRow = pxForRows(GRID_MIN_PANEL_ROWS);
+    const threeRows = 3 * minRow + 2 * GRID_GAP_PX + GRID_PADDING_PX;
+    expect(gridRowsOverflow(3, threeRows)).toBe(false);
+    expect(gridRowsOverflow(3, threeRows - 1)).toBe(true);
+  });
+
+  it("fits many rows on a tall display before scrolling", () => {
+    // A tall display packs several rows in — panel count alone never scrolls.
+    expect(gridRowsOverflow(4, 1600)).toBe(false);
+    expect(gridRowsOverflow(2, 700)).toBe(false);
+  });
+});
+
+describe("computeScrollRowHeight — packed, viewport-only", () => {
+  it("falls back to the minimum row height when height is unknown", () => {
+    expect(computeScrollRowHeight(null)).toBe(pxForRows(GRID_MIN_PANEL_ROWS));
+  });
+
+  it("never goes below the minimum row height", () => {
+    for (const h of [300, 700, 1200, 2400]) {
+      expect(computeScrollRowHeight(h)).toBeGreaterThanOrEqual(pxForRows(GRID_MIN_PANEL_ROWS));
+    }
+  });
+
+  it("stays packed — a scroll row is never more than twice the minimum", () => {
+    for (const h of [300, 700, 1200, 2400]) {
+      expect(computeScrollRowHeight(h)).toBeLessThanOrEqual(2 * pxForRows(GRID_MIN_PANEL_ROWS));
+    }
+  });
+
+  it("divides the viewport across the rows it can hold", () => {
+    const minRow = pxForRows(GRID_MIN_PANEL_ROWS);
+    const height = 1200;
+    const rh = computeScrollRowHeight(height);
+    const visible = Math.floor((height - GRID_PADDING_PX + GRID_GAP_PX) / (minRow + GRID_GAP_PX));
+    expect(visible * rh + (visible - 1) * GRID_GAP_PX).toBeLessThanOrEqual(height);
+  });
+});
+
+describe("computeGridColumns — strategy dispatch", () => {
+  it("returns 1 for an empty grid", () => {
+    expect(computeGridColumns(0, wCols(3), "automatic")).toBe(1);
+  });
+
+  it("keeps the 2-pane invariant across every strategy", () => {
+    expect(computeGridColumns(2, null, "automatic")).toBe(2);
+    expect(computeGridColumns(2, 300, "automatic")).toBe(2);
+    expect(computeGridColumns(2, wCols(4), "automatic")).toBe(2);
+    expect(computeGridColumns(2, 300, "fixed-rows", 3)).toBe(2);
+    expect(computeGridColumns(2, 300, "fixed-columns", 1)).toBe(2);
+  });
+
+  it("uses the size-driven automatic engine for 3+ panels", () => {
+    expect(computeGridColumns(12, wCols(4), "automatic")).toBe(4);
+    expect(computeGridColumns(12, wCols(2), "automatic")).toBe(2);
+  });
+
+  it("honors the fixed-columns strategy", () => {
+    expect(computeGridColumns(8, wCols(4), "fixed-columns", 3)).toBe(3);
+    expect(computeGridColumns(8, wCols(4), "fixed-columns", 0)).toBe(1);
+    expect(computeGridColumns(8, wCols(4), "fixed-columns", 15)).toBe(10);
+  });
+
+  it("derives columns from the fixed-rows strategy", () => {
+    expect(computeGridColumns(6, wCols(4), "fixed-rows", 2)).toBe(3);
+    expect(computeGridColumns(6, wCols(4), "fixed-rows", 3)).toBe(2);
+  });
+
+  it("forwards previousCols into the automatic hysteresis path", () => {
+    expect(computeGridColumns(8, wCols(3) - 1, "automatic", undefined, 3)).toBe(3);
+    expect(computeGridColumns(8, wCols(3) - 1, "automatic", undefined, undefined)).toBe(2);
+  });
+});
+
+describe("getGridFitMetrics / getMaxGridCapacity", () => {
+  it("returns null when dimensions are unknown", () => {
+    expect(getGridFitMetrics(null, null)).toBeNull();
+  });
+
+  it("returns max cols, rows, and fit count for a known viewport", () => {
+    const fit = getGridFitMetrics(1200, 700);
+    expect(fit).not.toBeNull();
+    expect(fit!.fitCount).toBe(fit!.maxCols * fit!.maxRows);
+  });
+
+  it("returns at least 1 col and 1 row at the smallest valid viewport", () => {
+    const fit = getGridFitMetrics(MIN_TERMINAL_WIDTH_PX, MIN_TERMINAL_HEIGHT_PX);
+    expect(fit!.maxCols).toBe(1);
+    expect(fit!.maxRows).toBe(1);
+  });
+
+  it("falls back to the legacy constant when dimensions are unknown", () => {
+    expect(getMaxGridCapacity(null, null)).toBe(ABSOLUTE_MAX_GRID_TERMINALS);
+  });
+});
+
+describe("layout constants", () => {
+  it("keeps the panel minimums reasonably small", () => {
+    expect(GRID_MIN_PANEL_COLS).toBeLessThan(80);
+    expect(GRID_MIN_PANEL_COLS).toBeGreaterThanOrEqual(ABSOLUTE_MIN_COLS);
+    expect(GRID_MIN_PANEL_ROWS).toBeLessThan(24);
+  });
+
+  it("pins the at-a-glance ceiling and transition timing", () => {
+    expect(AUTO_GRID_MAX_COLS).toBe(4);
     expect(GRID_TRANSITION_DURATION_MS).toBe(200);
-  });
-});
-
-describe("computeGridColumns", () => {
-  describe("2→3 panel transitions (regression test for issue #1754)", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-
-    it("should return 2 columns for 3 panels after being at 2 panels", () => {
-      // Simulate the transition: first 2 panels, then 3
-      const colsFor2 = computeGridColumns(2, wideWidth, "automatic");
-      const colsFor3 = computeGridColumns(3, wideWidth, "automatic");
-
-      expect(colsFor2).toBe(2);
-      expect(colsFor3).toBe(2); // 3 panels should still be 2 columns (automatic mode)
-    });
-
-    it("should handle rapid transitions between 2 and 3+ panels", () => {
-      // Simulate quick transitions that could trigger race conditions
-      const results = [
-        computeGridColumns(2, wideWidth, "automatic"),
-        computeGridColumns(3, wideWidth, "automatic"),
-        computeGridColumns(2, wideWidth, "automatic"),
-        computeGridColumns(4, wideWidth, "automatic"),
-        computeGridColumns(3, wideWidth, "automatic"),
-      ];
-
-      expect(results).toEqual([2, 2, 2, 2, 2]);
-    });
-
-    it("should return correct columns for 3 panels with different strategies", () => {
-      // Issue #1754: grid layout was breaking when transitioning from 2-pane split
-      // to standard grid. This tests that all strategies work correctly for 3 panels.
-      expect(computeGridColumns(3, wideWidth, "automatic")).toBe(2);
-      expect(computeGridColumns(3, wideWidth, "fixed-columns", 2)).toBe(2);
-      expect(computeGridColumns(3, wideWidth, "fixed-columns", 3)).toBe(3);
-      expect(computeGridColumns(3, wideWidth, "fixed-rows", 1)).toBe(3);
-      expect(computeGridColumns(3, wideWidth, "fixed-rows", 2)).toBe(2);
-    });
-
-    it("should handle transition with varying widths", () => {
-      // The bug could manifest when gridWidth changes during transition
-      const narrowWidth = MIN_TERMINAL_WIDTH_PX * 1.5;
-      const mediumWidth = MIN_TERMINAL_WIDTH_PX * 2.5;
-
-      // Narrow width: only 1 column fits, but 2 panels get special 2-column treatment
-      expect(computeGridColumns(2, narrowWidth, "automatic")).toBe(2);
-      // 3 panels with narrow width: constrained to 1 column
-      expect(computeGridColumns(3, narrowWidth, "automatic")).toBe(1);
-
-      // Medium width: 2 columns fit
-      expect(computeGridColumns(2, mediumWidth, "automatic")).toBe(2);
-      expect(computeGridColumns(3, mediumWidth, "automatic")).toBe(2);
-    });
-
-    it("should not be affected by null width during transition", () => {
-      // Width might be null briefly during layout transitions
-      expect(computeGridColumns(2, null, "automatic")).toBe(2);
-      expect(computeGridColumns(3, null, "automatic")).toBe(2); // Fallback width (800px) fits 2 cols
-    });
-  });
-
-  describe("2-pane invariant", () => {
-    const narrowWidth = MIN_TERMINAL_WIDTH_PX * 1.5;
-    const mediumWidth = MIN_TERMINAL_WIDTH_PX * 2.5;
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-
-    it("should always return 2 columns for 2 panes in automatic mode", () => {
-      expect(computeGridColumns(2, narrowWidth, "automatic")).toBe(2);
-      expect(computeGridColumns(2, mediumWidth, "automatic")).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "automatic")).toBe(2);
-      expect(computeGridColumns(2, null, "automatic")).toBe(2);
-    });
-
-    it("should always return 2 columns for 2 panes in fixed-rows mode", () => {
-      expect(computeGridColumns(2, wideWidth, "fixed-rows", 1)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-rows", 2)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-rows", 3)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-rows", 10)).toBe(2);
-    });
-
-    it("should always return 2 columns for 2 panes in fixed-columns mode", () => {
-      // Even when user explicitly sets columns=1, 2 panes should be 2x1
-      expect(computeGridColumns(2, wideWidth, "fixed-columns", 1)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-columns", 2)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-columns", 4)).toBe(2);
-    });
-
-    it("should return 2 columns for 2 panes regardless of narrow width", () => {
-      // This is the key fix: even at very narrow widths, 2 panes should be 2x1
-      expect(computeGridColumns(2, 300, "automatic")).toBe(2);
-      expect(computeGridColumns(2, 500, "fixed-rows", 3)).toBe(2);
-    });
-  });
-
-  describe("non-2-pane cases follow normal logic", () => {
-    const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-    const narrowWidth = MIN_TERMINAL_WIDTH_PX * 1.5;
-
-    it("should return 1 column for 0 or 1 pane in automatic/fixed-rows mode", () => {
-      expect(computeGridColumns(0, wideWidth, "automatic")).toBe(1);
-      expect(computeGridColumns(1, wideWidth, "automatic")).toBe(1);
-      expect(computeGridColumns(1, wideWidth, "fixed-rows", 3)).toBe(1);
-    });
-
-    it("should respect fixed-columns setting even for 1 pane", () => {
-      // fixed-columns respects the user's explicit column choice
-      expect(computeGridColumns(1, wideWidth, "fixed-columns", 2)).toBe(2);
-      expect(computeGridColumns(1, wideWidth, "fixed-columns", 1)).toBe(1);
-    });
-
-    it("should respect width constraints for 3+ panes", () => {
-      expect(computeGridColumns(6, narrowWidth, "automatic")).toBe(1);
-      expect(computeGridColumns(6, wideWidth, "automatic")).toBe(3);
-    });
-
-    it("should use fixed-columns value for 3+ panes", () => {
-      expect(computeGridColumns(4, wideWidth, "fixed-columns", 2)).toBe(2);
-      expect(computeGridColumns(4, wideWidth, "fixed-columns", 4)).toBe(4);
-    });
-
-    it("should calculate columns from fixed-rows for 3+ panes", () => {
-      expect(computeGridColumns(6, wideWidth, "fixed-rows", 2)).toBe(3);
-      expect(computeGridColumns(6, wideWidth, "fixed-rows", 3)).toBe(2);
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle null width gracefully", () => {
-      expect(computeGridColumns(4, null, "automatic")).toBe(2);
-      expect(computeGridColumns(2, null, "automatic")).toBe(2);
-    });
-
-    it("should clamp fixed-columns value to valid range", () => {
-      const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-      expect(computeGridColumns(4, wideWidth, "fixed-columns", 0)).toBe(1);
-      expect(computeGridColumns(4, wideWidth, "fixed-columns", 15)).toBe(10);
-    });
-
-    it("should clamp fixed-rows value to valid range", () => {
-      const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-      expect(computeGridColumns(4, wideWidth, "fixed-rows", 0)).toBe(4);
-      expect(computeGridColumns(4, wideWidth, "fixed-rows", 15)).toBe(1);
-    });
-
-    it("should handle 2 panes with missing value parameter", () => {
-      const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-      // 2-pane invariant should work even without explicit value
-      expect(computeGridColumns(2, wideWidth, "fixed-rows")).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-columns")).toBe(2);
-    });
-
-    it("should handle 2 panes with invalid value parameters", () => {
-      const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-      // 2-pane invariant applies before value clamping
-      expect(computeGridColumns(2, wideWidth, "fixed-rows", 0)).toBe(2);
-      expect(computeGridColumns(2, wideWidth, "fixed-columns", 0)).toBe(2);
-    });
-
-    it("should handle non-even division for fixed-rows", () => {
-      const wideWidth = MIN_TERMINAL_WIDTH_PX * 5;
-      // 5 panes / 2 rows = ceil(2.5) = 3 columns
-      expect(computeGridColumns(5, wideWidth, "fixed-rows", 2)).toBe(3);
-      // 7 panes / 3 rows = ceil(2.33) = 3 columns
-      expect(computeGridColumns(7, wideWidth, "fixed-rows", 3)).toBe(3);
-    });
   });
 });

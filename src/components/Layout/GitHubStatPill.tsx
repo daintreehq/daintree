@@ -27,7 +27,6 @@ export interface GitHubStatPillProps {
   onPointerLeave?: (e: React.PointerEvent) => void;
 
   activityChip?: React.ReactNode;
-  freshnessGlyph?: React.ReactNode;
 }
 
 export function GitHubStatPill({
@@ -49,7 +48,6 @@ export function GitHubStatPill({
   onPointerEnter,
   onPointerLeave,
   activityChip,
-  freshnessGlyph,
 }: GitHubStatPillProps) {
   return (
     <>
@@ -84,7 +82,6 @@ export function GitHubStatPill({
             >
               {count ?? "—"}
             </span>
-            {freshnessGlyph}
             {activityChip}
           </Button>
         </TooltipTrigger>

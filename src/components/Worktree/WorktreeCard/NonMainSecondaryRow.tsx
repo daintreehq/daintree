@@ -19,7 +19,12 @@ interface NonMainSecondaryRowProps {
   underlineOnHover: boolean;
   hasUpstreamDelta: boolean;
   hasAuthFailedSignIn: boolean;
-  hasIssueTitle: boolean;
+  /**
+   * True when the headline above renders a title — canonical `issueTitle` or
+   * the offline `branchDerivedTitle` fallback. Drives the branch secondary
+   * line, which surfaces below either form of title (#8851).
+   */
+  hasDisplayTitle: boolean;
   hasPlanFile: boolean;
   badges: {
     onOpenIssue?: () => void;
@@ -36,7 +41,7 @@ export function NonMainSecondaryRow({
   underlineOnHover,
   hasUpstreamDelta,
   hasAuthFailedSignIn,
-  hasIssueTitle,
+  hasDisplayTitle,
   hasPlanFile,
   badges,
 }: NonMainSecondaryRowProps) {
@@ -99,7 +104,7 @@ export function NonMainSecondaryRow({
 
   return (
     <div className="flex flex-col gap-0.5 mt-1.5">
-      {worktree.issueNumber && !hasIssueTitle && (
+      {worktree.issueNumber && !hasDisplayTitle && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
           worktreePath={worktree.path}
@@ -111,7 +116,7 @@ export function NonMainSecondaryRow({
       )}
       {upstreamFirst ? upstreamBadge : prBadge}
       {upstreamFirst ? prBadge : upstreamBadge}
-      {hasIssueTitle && (
+      {hasDisplayTitle && (
         <BranchLabel
           label={branchLabel}
           isActive={isActive}

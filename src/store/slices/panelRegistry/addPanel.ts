@@ -10,10 +10,9 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
-import { getXtermOptions } from "@/config/xtermConfig";
+import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
-import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { saveNormalized } from "./persistence";
@@ -50,19 +49,42 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
   return count;
 }
 
-function countGridTerminals(state: PanelRegistrySlice, targetWorktreeId: string | null): number {
-  let count = 0;
-  for (const id of state.panelIds) {
-    const t = state.panelsById[id];
-    if (
-      t &&
-      (t.location === "grid" || t.location === undefined) &&
-      (t.worktreeId ?? null) === targetWorktreeId
-    )
-      count++;
+const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
+
+class TerminalStartupQueue {
+  private readonly tasks: Array<() => Promise<void>> = [];
+  private isDraining = false;
+
+  enqueue(task: () => Promise<void>): void {
+    this.tasks.push(task);
+    void this.drain();
   }
-  return count;
+
+  private async drain(): Promise<void> {
+    if (this.isDraining) return;
+    this.isDraining = true;
+
+    try {
+      while (this.tasks.length > 0) {
+        const task = this.tasks.shift();
+        if (!task) continue;
+
+        try {
+          await task();
+        } catch (error) {
+          logError("[TerminalStore] Terminal startup task failed", error);
+        }
+      }
+    } finally {
+      this.isDraining = false;
+      if (this.tasks.length > 0) {
+        void this.drain();
+      }
+    }
+  }
 }
+
+const terminalStartupQueue = new TerminalStartupQueue();
 
 export const createAddPanelActions = (
   set: Set,
@@ -130,14 +152,10 @@ export const createAddPanelActions = (
       const id = options.requestedId || `${requestedKind}-${crypto.randomUUID()}`;
       const title = options.title || getDefaultTitle(requestedKind);
 
-      const targetWorktreeId = options.worktreeId ?? null;
-      const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const currentGridCount = countGridTerminals(get(), targetWorktreeId);
-      const requestedLocation = options.location || "grid";
-      const location =
-        requestedLocation === "grid" && currentGridCount >= maxCapacity
-          ? "dock"
-          : requestedLocation;
+      // The scrollable grid (#8805) accepts every panel — there's no
+      // screen-fit cap any more. Honor the requested location directly; the
+      // hard ceiling has already been enforced upstream by `panelLimitStore`.
+      const location = options.location || "grid";
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
@@ -248,51 +266,10 @@ export const createAddPanelActions = (
       requestedKind === "dev-preview" ? "dev-preview" : "terminal";
     const title = options.title || getDefaultTitle(kind, { launchAgentId });
 
-    // Auto-dock if grid is full and user requested grid location
-    // Use dynamic capacity based on current viewport dimensions
-    const targetWorktreeId = options.worktreeId ?? null;
-    const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-    const currentGridGroupCount = (() => {
-      // Count unique groups in grid (each group = 1 slot)
-      // Groups come from two sources: explicit TabGroups and ungrouped panels
-      const state = get();
-      const gridTerminalIds: string[] = [];
-      for (const tid of state.panelIds) {
-        const t = state.panelsById[tid];
-        if (
-          t &&
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-        )
-          gridTerminalIds.push(tid);
-      }
-      const tabGroups = state.tabGroups;
-      const panelsInGroups = new Set<string>();
-      const explicitGroups = new Set<string>();
-
-      // Count explicit groups in this location/worktree
-      for (const group of tabGroups.values()) {
-        if (group.location === "grid" && (group.worktreeId ?? null) === targetWorktreeId) {
-          explicitGroups.add(group.id);
-          group.panelIds.forEach((gid) => panelsInGroups.add(gid));
-        }
-      }
-
-      // Count ungrouped panels (each is its own virtual group)
-      let ungroupedCount = 0;
-      for (const tid of gridTerminalIds) {
-        if (!panelsInGroups.has(tid)) {
-          ungroupedCount++;
-        }
-      }
-
-      return explicitGroups.size + ungroupedCount;
-    })();
-    const requestedLocation = options.location || "grid";
-    const location =
-      requestedLocation === "grid" && currentGridGroupCount >= maxCapacity
-        ? "dock"
-        : requestedLocation;
+    // The scrollable panel grid no longer caps panels at the screen-fit count
+    // (#8805). Honor the requested location directly; the hardware-adaptive
+    // hard ceiling is enforced upstream by `panelLimitStore`.
+    const location = options.location || "grid";
     const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
     // When activeWorktreeId is null (worktree store not yet hydrated — common during
     // project switch), treat the terminal as being in the active worktree to avoid
@@ -517,21 +494,20 @@ export const createAddPanelActions = (
         screenReaderMode: appearance.screenReaderMode,
       });
 
-      // Prewarm ALL terminal types to ensure managed instance exists.
-      // This is critical for terminals in inactive worktrees - they need a managed
-      // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
+      // Prewarm ALL terminal types to ensure the managed instance and data
+      // listeners exist before the backend PTY can emit output. Do not attach
+      // to an offscreen or visible DOM node here. Visible xterm.open() is
+      // gated by spawnStatus below so burst-created panels realize one at a
+      // time instead of all mounting xterm/WebGL during the same grid layout.
       const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-      // When activeWorktreeId is null (hydration in progress), don't treat the
-      // terminal as offscreen — it would be prewarmed in the offscreen container
-      // at -20000px and backgrounded, suppressing data flow from the pty-host.
-      const offscreenOrInactive =
+      const isDockOrInactive =
         location === "dock" ||
         (currentActiveWorktreeId !== null &&
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
       if (!isAgent) {
         terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
-          offscreen: offscreenOrInactive,
+          offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
         });
@@ -542,19 +518,17 @@ export const createAddPanelActions = (
         const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
         terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
-          offscreen: offscreenOrInactive,
+          offscreen: false,
           widthPx,
           heightPx,
         });
 
-        // For offscreen/inactive agents, prewarmTerminal's fit() already handles
-        // initial PTY resize through settled strategy. Only send explicit resize
-        // for active grid spawns where fit() is skipped.
-        if (!offscreenOrInactive) {
-          const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
-          const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
-          const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
-          const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
+        // Only send explicit resize for active grid spawns. Background/dock
+        // terminals can boot at the spawn default and will be resized on reveal.
+        // Cell metrics come from calculateTerminalDimensions so the lineHeight
+        // assumption stays in sync with xtermConfig.
+        if (!isDockOrInactive) {
+          const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
         }
       }
@@ -600,70 +574,76 @@ export const createAddPanelActions = (
       return id;
     }
 
-    // Fire env fetch + spawn IPC in the background so the panel render is not
-    // blocked on ~200-500ms of IPC round-trips. Any caller that needs to pipe
-    // input after spawn already gates on agentState (which starts at "working"
-    // for agents and only drops to "idle" once the PTY reports ready).
-    const spawnPromise = (async () => {
-      let mergedEnv: Record<string, string> | undefined = options.env;
+    const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
+
+    // The panel chrome is already committed. Realize backend PTY startup and
+    // visible xterm.open() through a single queue so bulk recipes can add many
+    // panels without making Chromium/xterm settle every terminal in the same
+    // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
+    // lightweight chrome instead of mounting XtermAdapter.
+    terminalStartupQueue.enqueue(async () => {
+      if (get().panelsById[id]?.spawnStatus !== "spawning") return;
+
       try {
-        const [globalEnvVars, projectEnvVars] = await Promise.all([
-          globalEnvClient.get().catch((error: unknown) => {
-            logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
-            return {} as Record<string, string>;
-          }),
-          capturedProjectId
-            ? projectClient.getSettings(capturedProjectId).then(
-                (s) => s?.environmentVariables ?? ({} as Record<string, string>),
-                (error: unknown) => {
-                  logWarn("[TerminalStore] Failed to fetch project environment variables", {
-                    error,
-                  });
-                  return {} as Record<string, string>;
-                }
-              )
-            : Promise.resolve({} as Record<string, string>),
-        ]);
+        let mergedEnv: Record<string, string> | undefined = options.env;
+        try {
+          const [globalEnvVars, projectEnvVars] = await Promise.all([
+            globalEnvClient.get().catch((error: unknown) => {
+              logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+              return {} as Record<string, string>;
+            }),
+            capturedProjectId
+              ? projectClient.getSettings(capturedProjectId).then(
+                  (s) => s?.environmentVariables ?? ({} as Record<string, string>),
+                  (error: unknown) => {
+                    logWarn("[TerminalStore] Failed to fetch project environment variables", {
+                      error,
+                    });
+                    return {} as Record<string, string>;
+                  }
+                )
+              : Promise.resolve({} as Record<string, string>),
+          ]);
 
-        const hasGlobal = Object.keys(globalEnvVars).length > 0;
-        const hasProject = Object.keys(projectEnvVars).length > 0;
-        if (hasGlobal || hasProject) {
-          mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+          const hasGlobal = Object.keys(globalEnvVars).length > 0;
+          const hasProject = Object.keys(projectEnvVars).length > 0;
+          if (hasGlobal || hasProject) {
+            mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+          }
+        } catch (error) {
+          logWarn("[TerminalStore] Failed to fetch environment variables", { error });
         }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch environment variables", { error });
-      }
 
-      const commandToExecute = options.skipCommandExecution ? undefined : options.command;
-      await terminalClient.spawn({
-        id,
-        projectId: capturedProjectId,
-        cwd: options.cwd,
-        shell: options.shell,
-        cols: 80,
-        rows: 24,
-        command: commandToExecute,
-        kind,
-        launchAgentId,
-        title,
-        env: mergedEnv,
-        restore: options.restore,
-        agentLaunchFlags: options.agentLaunchFlags,
-        agentModelId: options.agentModelId,
-        worktreeId: options.worktreeId,
-        agentPresetId: options.agentPresetId,
-        agentPresetColor: options.agentPresetColor,
-        originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-      });
-    })();
+        if (get().panelsById[id]?.spawnStatus !== "spawning") return;
 
-    void spawnPromise.then(
-      () => {
+        const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+        await terminalClient.spawn({
+          id,
+          projectId: capturedProjectId,
+          cwd: options.cwd,
+          shell: options.shell,
+          cols: 80,
+          rows: 24,
+          command: commandToExecute,
+          kind,
+          launchAgentId,
+          title,
+          env: mergedEnv,
+          restore: options.restore,
+          agentLaunchFlags: options.agentLaunchFlags,
+          agentModelId: options.agentModelId,
+          worktreeId: options.worktreeId,
+          agentPresetId: options.agentPresetId,
+          agentPresetColor: options.agentPresetColor,
+          originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+        });
+
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
         // removed during the spawn window, issue a compensating kill to avoid
         // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
         // at the time because the backend had no terminal yet).
         let orphaned = false;
+        let mountedPanel = false;
         set((state) => {
           const current = state.panelsById[id];
           if (!current) {
@@ -671,6 +651,7 @@ export const createAddPanelActions = (
             return state;
           }
           if (current.spawnStatus !== "spawning") return state;
+          mountedPanel = true;
           return {
             panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
           };
@@ -683,8 +664,20 @@ export const createAddPanelActions = (
             });
           });
         }
-      },
-      (error) => {
+
+        if (mountedPanel && shouldWaitForVisibleAttach) {
+          try {
+            await terminalInstanceService.waitForAttachSettled(id, {
+              timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
+            });
+          } catch (error) {
+            logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
+              id,
+              error,
+            });
+          }
+        }
+      } catch (error) {
         logError("[TerminalStore] Failed to spawn terminal", error);
         // Only remove the placeholder we committed. If the id has been reused
         // (e.g. the user closed the panel mid-spawn and a reconnect slot picked
@@ -701,7 +694,7 @@ export const createAddPanelActions = (
           });
         }
       }
-    );
+    });
 
     return id;
   },

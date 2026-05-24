@@ -73,7 +73,15 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.trashPanel(targetId);
+        const target = state.panelsById[targetId];
+        if (target?.location === "grid" || target?.location === undefined) {
+          requestPanelClose({
+            hideIds: [targetId],
+            commit: () => usePanelStore.getState().trashPanel(targetId),
+          });
+        } else {
+          state.trashPanel(targetId);
+        }
       }
     },
   }));
@@ -443,7 +451,14 @@ export function registerTerminalLifecycleActions(
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
       });
-      idsToClose.forEach((id) => state.trashPanel(id));
+      if (idsToClose.length === 0) return;
+      requestPanelClose({
+        hideIds: idsToClose,
+        commit: () => {
+          const latest = usePanelStore.getState();
+          idsToClose.forEach((id) => latest.trashPanel(id));
+        },
+      });
     },
   }));
 

@@ -5,8 +5,6 @@ export type { TerminalPaneProps, ActivityState } from "./TerminalPane";
 export { ContentGrid } from "./ContentGrid";
 export type { ContentGridProps } from "./ContentGrid";
 export { TerminalCountWarning } from "./TerminalCountWarning";
-export { GridFullOverlay } from "./GridFullOverlay";
-export type { GridFullOverlayProps } from "./GridFullOverlay";
 export { TerminalIcon } from "./TerminalIcon";
 export type { TerminalIconProps } from "./TerminalIcon";
 export { TerminalHeaderContent } from "./TerminalHeaderContent";

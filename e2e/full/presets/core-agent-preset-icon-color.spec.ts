@@ -57,7 +57,10 @@ async function dispatchAction<T = unknown>(
 }
 
 function writeFakeAgent(agentId: "claude" | "codex"): void {
-  const scriptPath = path.join(fakeBinDir, agentId);
+  const scriptPath =
+    process.platform === "win32"
+      ? path.join(fakeBinDir, `${agentId}.js`)
+      : path.join(fakeBinDir, agentId);
   const label = agentId.toUpperCase();
   writeFileSync(
     scriptPath,
@@ -112,7 +115,7 @@ function writeFakeAgent(agentId: "claude" | "codex"): void {
   if (process.platform === "win32") {
     writeFileSync(
       path.join(fakeBinDir, `${agentId}.cmd`),
-      [`@echo off`, `node "%~dp0\\${agentId}" %*`, ""].join("\r\n")
+      [`@echo off`, `node "%~dp0\\${agentId}.js" %*`, ""].join("\r\n")
     );
   }
 }

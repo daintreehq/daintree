@@ -780,6 +780,20 @@ code.hljs {
     background: var(--scrollbar-track);
   }
 
+  /* The agent grid draws its own scrollbar — the GridScrollbar component, a
+     chunky physical handle modelled on xterm's (VS Code's) slider, sitting in
+     a real reserved gutter. The native scrollbar is hidden entirely: the grid
+     still scrolls via wheel, keyboard and programmatic scroll; only the visual
+     bar is replaced. xterm's own viewport scrollbar is unaffected — it is
+     scoped by `.xterm .xterm-viewport`. */
+  #panel-grid {
+    scrollbar-width: none;
+  }
+
+  #panel-grid::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */
   html[data-colorblind="red-green"] {
     --theme-status-success: #009e73;
@@ -813,9 +827,12 @@ code.hljs {
     font-family: var(--font-mono);
   }
 
-  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar */
+  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar.
+     Contain overscroll so terminal scrollback can't chain into the outer
+     scrollable panel grid (#8805). */
   .xterm .xterm-viewport {
     scrollbar-width: none;
+    overscroll-behavior-y: contain;
   }
   .xterm .xterm-viewport::-webkit-scrollbar {
     display: none;
@@ -1281,6 +1298,26 @@ body,
   animation: diagnostics-state-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
+/* Upstream sync badge value-change flash — one-shot opacity dip when the
+ * displayed ahead/behind counts actually change, not while a poll is in flight.
+ * Issue #8872: fetch-in-flight pulse was firing on every poll cycle. */
+@keyframes upstream-badge-update-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-upstream-badge-flash {
+  animation: upstream-badge-update-flash 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: opacity;
+}
+
 /* Activity blip animation - for new activity signals */
 @keyframes activity-blip {
   0% {
@@ -1577,6 +1614,7 @@ body,
   .animate-trash-pulse,
   .animate-all-clear-flash,
   .animate-diagnostics-flash,
+  .animate-upstream-badge-flash,
   .animate-border-flash {
     animation: none;
     opacity: 1;

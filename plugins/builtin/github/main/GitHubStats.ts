@@ -342,6 +342,17 @@ export async function getRepoStatsAndPage(
             endCursor: snapshot.prs.endCursor,
           },
         });
+        // Re-stamp the durable disk cache too. The 60s in-memory caches above
+        // keep hot polls fast, but the disk cache is the failure-mode fallback:
+        // the error paths below read `persistentCache.get` to serve last-known
+        // counts when a full fetch fails. Without this, a run of probe-match
+        // hits lets the disk cache age out behind the in-memory caches, so the
+        // eventual probe-miss + failed fetch has no fallback and the badge goes
+        // `—`. The probe/snapshot caches are intentionally NOT re-stamped — they
+        // keep their 10-min TTL so list content can't go stale indefinitely
+        // behind a continuously-matching probe; aging out just forces a full
+        // refresh, which the disk re-stamp keeps safe.
+        persistentCache.set(cacheKey, freshStats, cwd);
         return {
           stats: freshStats,
           issues: { ...snapshot.issues },

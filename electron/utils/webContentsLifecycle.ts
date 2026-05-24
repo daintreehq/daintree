@@ -62,6 +62,7 @@ async function setLifecycleState(
 }
 
 async function setCpuThrottlingRate(wc: Electron.WebContents, rate: number): Promise<void> {
+  if (process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE === "1") return;
   if (wc.isDestroyed()) return;
   try {
     ensureAttached(wc);

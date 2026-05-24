@@ -74,7 +74,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { buildResumeCommand } from "@shared/types/agentSettings";
+import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
@@ -314,6 +314,11 @@ import {
   usePreferencesStore,
 } from "./store";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+// Eager side-effect import: registers the GitHub plugin's builtin view slots
+// (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
+// render. Must stay static — a deferred/idle import races the user, so
+// getBuiltinView returns null and the bulk-create dialog silently never opens.
+import "@github-renderer/index";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -326,7 +331,7 @@ import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./co
 
 const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
-function App() {
+function AppInner() {
   useErrors();
   useHibernationNotifications();
   useIdleTerminalNotifications();
@@ -461,48 +466,33 @@ function App() {
 
   // Batched cold-start payload — replaces the legacy fan-out of
   // crash-recovery:get-pending + crash-recovery:get-config + app:hydrate +
-  // terminal-config:get into a single IPC round-trip (#8620).
-  const boot = useAppBoot();
+  // terminal-config:get into a single IPC round-trip (#8620). The IPC is fired
+  // at module-eval time and read here via `use()` (#8820); a boot failure
+  // resolves to `{ ok: false }` so the app still renders its cold-start chrome.
+  const safeBoot = useAppBoot();
+  const bootResult = safeBoot.ok ? safeBoot.result : null;
 
   // Crash recovery gate — must resolve before hydration runs
   const {
     state: crashState,
     resolve: resolveCrash,
     updateConfig: updateCrashConfig,
-  } = useCrashRecoveryGate(boot);
+  } = useCrashRecoveryGate(bootResult);
 
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
   // When crash recovery was pending at boot, the resolve path (`restoreBackup`
   // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
-  // `boot.result` was captured. Passing the stale prefetched payload would
+  // `bootResult` was captured. Passing the stale prefetched payload would
   // hydrate from the pre-resolution terminal list and skip the one-shot
   // `consumePanelFilter` the restore path queued. Force the live IPC path in
   // that case so hydration reads the post-resolution store.
-  const hadPendingCrash = boot.result?.crashPending != null;
+  const hadPendingCrash = bootResult?.crashPending != null;
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : boot.result);
+  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : bootResult);
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
-  // Signal the main process that React has committed its first frame so
-  // ProjectViewManager can release the outgoing view of a cold project
-  // switch. Fires once per V8 context, before hydration completes — the
-  // inline app-shell skeleton has already painted by this point. Double
-  // rAF mirrors `removeStartupSkeleton`: first rAF lands after React's
-  // commit, second waits for Chromium to submit that frame. Cleanup only
-  // cancels the outer rAF — under React Strict Mode's intentional
-  // double-mount the inner rAF may still fire, but `notifyViewPainted`
-  // is idempotent (one-shot module-level guard) so the second call is a
-  // no-op.
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        notifyViewPainted();
-      });
-    });
-    return () => cancelAnimationFrame(id);
-  }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
   // listener is registered before `notifyViewPainted` fires, then defers the
   // local `agent.focusNextWaiting` dispatch until hydration completes (the
@@ -550,7 +540,6 @@ function App() {
       void preloadRecoveryBannerCoordinator();
       void preloadGitHubTokenBanner();
       void preloadCloudSyncBanner();
-      import("@github-renderer/index").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -661,7 +650,7 @@ function App() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  usePanelStoreBootstrap(boot.result?.terminalConfig ?? null);
+  usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
   useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
   useAccessibilityAnnouncements();
@@ -918,11 +907,12 @@ function App() {
                       if (result.resumeSession) {
                         const session = result.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const command = buildResumeCommand(
-                          session.agentId,
-                          session.sessionId,
-                          session.agentLaunchFlags
-                        );
+                        const command =
+                          buildResumeCommand(
+                            session.agentId,
+                            session.sessionId,
+                            session.agentLaunchFlags
+                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
@@ -955,11 +945,12 @@ function App() {
                       if (selected.resumeSession) {
                         const session = selected.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const command = buildResumeCommand(
-                          session.agentId,
-                          session.sessionId,
-                          session.agentLaunchFlags
-                        );
+                        const command =
+                          buildResumeCommand(
+                            session.agentId,
+                            session.sessionId,
+                            session.agentLaunchFlags
+                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
@@ -1119,6 +1110,7 @@ function App() {
                     totalResults={actionPalette.totalResults}
                     selectedIndex={actionPalette.selectedIndex}
                     isStale={actionPalette.isStale}
+                    pinnedCount={actionPalette.pinnedCount}
                     close={actionPalette.close}
                     setQuery={actionPalette.setQuery}
                     setSelectedIndex={actionPalette.setSelectedIndex}
@@ -1126,6 +1118,9 @@ function App() {
                     selectNext={actionPalette.selectNext}
                     executeAction={actionPalette.executeAction}
                     confirmSelection={actionPalette.confirmSelection}
+                    pinAction={actionPalette.pinAction}
+                    unpinAction={actionPalette.unpinAction}
+                    hideAction={actionPalette.hideAction}
                   />
                 </Suspense>
               )}
@@ -1385,6 +1380,38 @@ function App() {
         </ErrorBoundary>
       </MotionConfig>
     </LazyMotion>
+  );
+}
+
+// `AppInner` suspends on the module-scope `app:boot` promise via `use()`. The
+// Suspense boundary lives here rather than in `main.tsx` so the boot read has a
+// fallback if the IPC hasn't settled by first render. `fallback={null}` keeps
+// the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
+// flight — it's removed by `removeStartupSkeleton()` once hydration completes.
+function App() {
+  // Signal the main process that React has committed its first frame so
+  // ProjectViewManager can release the outgoing view of a cold project switch.
+  // This lives in the Suspense *parent* (not `AppInner`) so it fires the moment
+  // the boundary commits — even while `AppInner` is suspended on `app:boot` —
+  // preserving the pre-#8820 guarantee that the paint signal lands before
+  // hydration regardless of IPC latency. Double rAF mirrors
+  // `removeStartupSkeleton`: first rAF lands after React's commit, second waits
+  // for Chromium to submit that frame. Cleanup only cancels the outer rAF —
+  // under Strict Mode's double-mount the inner rAF may still fire, but
+  // `notifyViewPainted` is idempotent (one-shot module-level guard).
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        notifyViewPainted();
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  return (
+    <Suspense fallback={null}>
+      <AppInner />
+    </Suspense>
   );
 }
 

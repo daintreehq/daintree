@@ -314,6 +314,7 @@ export {
   generateAgentCommand,
   buildAgentLaunchFlags,
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
 } from "./agentSettings.js";
 
@@ -330,6 +331,7 @@ export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
 
 // MCP server audit log + runtime state + turn outcomes
 export type {
+  McpActiveClientInfo,
   McpAuditRecord,
   McpAuditResult,
   McpAuditStats,
@@ -342,6 +344,8 @@ export type {
   McpAnomalySignal,
   McpRuntimeSnapshot,
   McpRuntimeState,
+  ActiveBearerRecord,
+  DisconnectBearerResult,
 } from "./ipc/mcpServer.js";
 export {
   MCP_AUDIT_MIN_RECORDS,

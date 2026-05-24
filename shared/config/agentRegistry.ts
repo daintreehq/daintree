@@ -235,6 +235,15 @@ export type AgentResume =
       sessionIdPattern: string;
       /** Optional raw key sequence sent before `quitCommand` (e.g. Ctrl-C). */
       shutdownKeySequence?: string;
+      /**
+       * CLI args for resuming the most recent session without a captured ID
+       * (e.g. ["--continue"] for Claude, ["-r", "latest"] for Gemini,
+       * ["resume", "--last"] for Codex). When present, the relaunch path uses
+       * these args as a fallback when `sessionIdPattern` capture missed
+       * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
+       * Omit for agents that have no resume-latest flag.
+       */
+      resumeLatestArgs?: string[];
     }
   | {
       kind: "rolling-history";
@@ -513,6 +522,7 @@ import { config as claudeConfig } from "./agents/claude.js";
 import { config as opencodeConfig } from "./agents/opencode.js";
 import { config as aiderConfig } from "./agents/aider.js";
 import { config as geminiConfig } from "./agents/gemini.js";
+import { config as antigravityConfig } from "./agents/antigravity.js";
 import { config as codexConfig } from "./agents/codex.js";
 import { config as cursorConfig } from "./agents/cursor.js";
 import { config as copilotConfig } from "./agents/copilot.js";
@@ -537,11 +547,28 @@ import { config as kiroConfig } from "./agents/kiro.js";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "./agentIds.js";
 import type { BuiltInAgentId } from "./agentIds.js";
 
+/**
+ * Mapping from `models.dev/api.json` provider keys to our agent IDs. The
+ * remote catalog groups models by provider (e.g. `"anthropic"` → claude),
+ * which is the inverse of how the local registry is keyed. Only agents whose
+ * model lists are covered by the remote catalog appear here; agents like
+ * `copilot` (multi-provider) and `aider` (broker without a single provider)
+ * stay on their bundled snapshot.
+ */
+export const PROVIDER_TO_AGENT_ID: Record<string, BuiltInAgentId> = {
+  anthropic: "claude",
+  openai: "codex",
+  google: "gemini",
+  alibaba: "qwen",
+  mistral: "mistral",
+};
+
 export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   claude: claudeConfig,
   opencode: opencodeConfig,
   aider: aiderConfig,
   gemini: geminiConfig,
+  antigravity: antigravityConfig,
   codex: codexConfig,
   cursor: cursorConfig,
   copilot: copilotConfig,

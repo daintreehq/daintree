@@ -165,6 +165,14 @@ describe("CRASH_CRITICAL_FIELDS", () => {
     expect(CRASH_CRITICAL_FIELDS.has("actionMruList")).toBe(true);
   });
 
+  it("includes actionPinnedIds", () => {
+    expect(CRASH_CRITICAL_FIELDS.has("actionPinnedIds")).toBe(true);
+  });
+
+  it("includes actionHiddenIds", () => {
+    expect(CRASH_CRITICAL_FIELDS.has("actionHiddenIds")).toBe(true);
+  });
+
   it("includes developerMode", () => {
     expect(CRASH_CRITICAL_FIELDS.has("developerMode")).toBe(true);
   });
@@ -189,8 +197,8 @@ describe("CRASH_CRITICAL_FIELDS", () => {
     expect(CRASH_CRITICAL_FIELDS.has("unknownField")).toBe(false);
   });
 
-  it("has exactly 10 fields", () => {
-    expect(CRASH_CRITICAL_FIELDS.size).toBe(10);
+  it("has exactly 12 fields", () => {
+    expect(CRASH_CRITICAL_FIELDS.size).toBe(12);
   });
 });
 
@@ -223,6 +231,14 @@ describe("shouldTriggerBackup", () => {
 
   it("returns true for actionMruList", () => {
     expect(shouldTriggerBackup({ actionMruList: [] })).toBe(true);
+  });
+
+  it("returns true for actionPinnedIds", () => {
+    expect(shouldTriggerBackup({ actionPinnedIds: [] })).toBe(true);
+  });
+
+  it("returns true for actionHiddenIds", () => {
+    expect(shouldTriggerBackup({ actionHiddenIds: [] })).toBe(true);
   });
 
   it("returns true for developerMode", () => {

@@ -334,6 +334,40 @@ async function dispatchXtermContextMenu(xterm: Locator): Promise<boolean> {
   });
 }
 
+async function dispatchTerminalTriggerContextMenu(
+  page: Page,
+  panelLocator: Locator,
+  xterm: Locator
+): Promise<boolean> {
+  const panelId = await getPanelId(panelLocator);
+  if (!panelId) return false;
+
+  const trigger = page.locator(`[data-context-trigger="${panelId}"]`).first();
+  return trigger.evaluate((el, selector) => {
+    if (!(el instanceof HTMLElement)) return false;
+    const xtermEl = document.querySelector(selector);
+    const rect =
+      xtermEl instanceof HTMLElement ? xtermEl.getBoundingClientRect() : el.getBoundingClientRect();
+    const clientX = rect.left + (rect.width > 2 ? Math.min(24, rect.width / 2) : 1);
+    const clientY = rect.top + (rect.height > 2 ? Math.min(24, rect.height / 2) : 1);
+
+    el.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        button: 2,
+        buttons: 2,
+        clientX,
+        clientY,
+      })
+    );
+
+    return true;
+  }, SEL.terminal.xtermRows);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -347,16 +381,22 @@ export async function openTerminalContextMenu(
   const xterm = panelLocator.locator(SEL.terminal.xtermRows);
   await expect(xterm).toBeVisible({ timeout: T_SHORT });
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     await dismissBlockingPalette(page);
     // Skip Escape when preserveSelection is true: xterm.js calls clearSelection()
     // synchronously in _keyDown for non-browser-handled keys (including Escape),
     // so sending Escape while xterm has focus destroys any prior selectAll() call.
     if (!preserveSelection) {
       await page.keyboard.press("Escape").catch(() => undefined);
+    } else {
+      await selectAllTerminalText(panelLocator);
     }
 
-    if (attempt === 0) {
+    if (preserveSelection && attempt === 0) {
+      await dispatchTerminalTriggerContextMenu(page, panelLocator, xterm).catch(() => false);
+    } else if (preserveSelection && attempt === 1) {
+      await dispatchXtermContextMenu(xterm).catch(() => false);
+    } else if (attempt === 0) {
       await xterm.click({ button: "right", timeout: 5_000 }).catch(() => undefined);
     } else if (attempt === 1) {
       const box = await xterm.boundingBox();
@@ -367,6 +407,8 @@ export async function openTerminalContextMenu(
           { button: "right" }
         );
       }
+    } else if (attempt === 2) {
+      await dispatchTerminalTriggerContextMenu(page, panelLocator, xterm).catch(() => false);
     } else {
       await dispatchXtermContextMenu(xterm).catch(() => false);
     }

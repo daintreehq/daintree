@@ -1,5 +1,5 @@
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -18,6 +18,8 @@ import type {
   McpTier,
 } from "./shared.js";
 import type {
+  ActiveBearerRecord,
+  McpActiveClientInfo,
   McpIssueGrantResult,
   McpRevokeSessionGrantsResult,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -40,6 +42,7 @@ import {
   RESTART_MAX_DELAY_MS,
   RESTART_JITTER_MS,
   RESTART_STABLE_RESET_MS,
+  MCP_STOP_DRAIN_TIMEOUT_MS,
   MCP_SERVER_KEY,
 } from "./shared.js";
 
@@ -90,6 +93,33 @@ export interface HttpLifecycleDeps {
   setConfig: (patch: Record<string, unknown>) => void;
 }
 
+/**
+ * Best-effort client label for the bearer register. `user-agent` is always a
+ * single string per Node's HTTP parser, but MCP clients aren't required to
+ * send one — fall back to a neutral label so the settings row never shows a
+ * blank.
+ */
+function resolveUserAgent(req: http.IncomingMessage): string {
+  const ua = req.headers["user-agent"];
+  return typeof ua === "string" && ua.trim().length > 0 ? ua : "Unknown client";
+}
+
+/**
+ * Live per-bearer connection record. Keyed in {@link HttpLifecycle.bearerRegister}
+ * by the SHA-256 of the full `Authorization` header so distinct tokens never
+ * collide on a shared 4-char suffix. `sessionIds` is the forward set used to
+ * tear sessions down when the renderer disconnects the bearer; it is never
+ * exposed across IPC.
+ */
+interface BearerEntry {
+  tokenHash: string;
+  token4LastChars: string;
+  userAgent: string;
+  lastActiveAt: number;
+  requestsSinceLaunch: number;
+  sessionIds: Set<string>;
+}
+
 export class HttpLifecycle {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
@@ -106,11 +136,31 @@ export class HttpLifecycle {
   private restartAttempts = 0;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  // Live register of bearers currently connected to the server, keyed by the
+  // SHA-256 of the full Authorization header. Populated at session handshake
+  // (`touchBearer`) and torn down per-session (`detachBearerSession`) plus
+  // wholesale on stop/restart. Distinct from the audit ring buffer — this is
+  // the current-connection view surfaced on the settings tab (#8778).
+  private readonly bearerRegister = new Map<string, BearerEntry>();
+  // Reverse lookup so the per-session teardown callbacks (idle expiry,
+  // explicit revoke, transport close) can find which bearer owns a closing
+  // session without re-parsing the header they no longer hold.
+  private readonly sessionToTokenHash = new Map<string, string>();
 
   constructor(private readonly deps: HttpLifecycleDeps) {}
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.httpServer.listening && this.port !== null;
+  }
+
+  /**
+   * True while a `start()` is mid-flight (socket not yet bound). Lets
+   * `setEnabled(false)` route through `stop()` — which awaits the start —
+   * instead of no-op'ing and leaving a server that comes up after the user
+   * already turned it off.
+   */
+  get isStartInFlight(): boolean {
+    return this.startPromise !== null;
   }
 
   get currentPort(): number | null {
@@ -184,6 +234,130 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.helpSessionActionContextResolver(token);
+  }
+
+  /** Normalize a possibly-array request header to a trimmed string or null. */
+  private headerString(value: string | string[] | undefined): string | null {
+    const raw = Array.isArray(value) ? value[0] : value;
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  /**
+   * Record (or refresh) the bearer behind an authenticated session handshake.
+   * Called once per new session — not per request — because only handshake
+   * requests carry the `Authorization` header through this path. Only
+   * `external`-tier bearers are tracked: the "External clients" row is for
+   * third-party MCP clients (Claude Code, Cursor, scripts), never the
+   * Daintree Assistant's own help-session or in-pane agent tokens — surfacing
+   * those would let the user disconnect their own assistant.
+   *
+   * The hash of the full header is the stable per-token identity; `userAgent`
+   * and `lastActiveAt` refresh on every (re)connect. `requestsSinceLaunch`
+   * counts handshakes for the bearer since the server last started. Pushes a
+   * runtime-state change so an open settings tab reflects the new connection
+   * live (session handshakes are infrequent, so this is not chatty).
+   */
+  private touchBearer(
+    authHeader: string,
+    userAgent: string,
+    sessionId: string,
+    tier: McpTier
+  ): void {
+    if (tier !== "external") return;
+    const tokenHash = createHash("sha256").update(authHeader).digest("hex");
+    const token4LastChars = extractBearerToken(authHeader)?.slice(-4) ?? "****";
+    const now = Date.now();
+    let entry = this.bearerRegister.get(tokenHash);
+    if (!entry) {
+      entry = {
+        tokenHash,
+        token4LastChars,
+        userAgent,
+        lastActiveAt: now,
+        requestsSinceLaunch: 0,
+        sessionIds: new Set<string>(),
+      };
+      this.bearerRegister.set(tokenHash, entry);
+    }
+    entry.userAgent = userAgent;
+    entry.lastActiveAt = now;
+    entry.requestsSinceLaunch += 1;
+    entry.sessionIds.add(sessionId);
+    this.sessionToTokenHash.set(sessionId, tokenHash);
+    this.deps.emitRuntimeStateChange();
+  }
+
+  /**
+   * Bump a tracked bearer's `lastActiveAt` on a subsequent (non-handshake)
+   * authenticated request so the settings row reflects real recency, not just
+   * connection time. No-op for untracked (internal-tier) sessions. Does not
+   * push a runtime-state change — per-message traffic would be far too chatty;
+   * the refreshed value is picked up on the next list fetch.
+   */
+  private markBearerActive(sessionId: string): void {
+    const tokenHash = this.sessionToTokenHash.get(sessionId);
+    if (tokenHash === undefined) return;
+    const entry = this.bearerRegister.get(tokenHash);
+    if (entry) entry.lastActiveAt = Date.now();
+  }
+
+  /**
+   * Drop a closing session from its owning bearer entry. Idempotent — a
+   * no-op when the session was never registered (non-handshake / internal
+   * tier) or the entry was already cleared by an explicit disconnect. Removes
+   * the bearer entry once its last session closes so the settings tab reflects
+   * only live connections, and pushes a runtime-state change so an open tab
+   * updates. Wired into every per-session teardown path via the
+   * `dropBearerState` callback plus the inline transport-close handlers.
+   */
+  detachBearerSession(sessionId: string): void {
+    const tokenHash = this.sessionToTokenHash.get(sessionId);
+    if (tokenHash === undefined) return;
+    this.sessionToTokenHash.delete(sessionId);
+    const entry = this.bearerRegister.get(tokenHash);
+    if (!entry) return;
+    entry.sessionIds.delete(sessionId);
+    if (entry.sessionIds.size === 0) {
+      this.bearerRegister.delete(tokenHash);
+    }
+    this.deps.emitRuntimeStateChange();
+  }
+
+  /** Live snapshot for the settings tab. The raw token is never exposed. */
+  listActiveBearers(): ActiveBearerRecord[] {
+    return Array.from(this.bearerRegister.values(), (entry) => ({
+      tokenHash: entry.tokenHash,
+      token4LastChars: entry.token4LastChars,
+      userAgent: entry.userAgent,
+      lastActiveAt: entry.lastActiveAt,
+      requestsSinceLaunch: entry.requestsSinceLaunch,
+    }));
+  }
+
+  /**
+   * Snapshot the session ids owned by a bearer so the caller can revoke each
+   * one. Returns null when the token hash isn't currently connected.
+   */
+  getBearerSessionIds(tokenHash: string): string[] | null {
+    const entry = this.bearerRegister.get(tokenHash);
+    if (!entry) return null;
+    return Array.from(entry.sessionIds);
+  }
+
+  /** Evict a bearer entry and its reverse-lookup rows. Idempotent. */
+  clearBearer(tokenHash: string): void {
+    const entry = this.bearerRegister.get(tokenHash);
+    if (!entry) return;
+    for (const sessionId of entry.sessionIds) {
+      this.sessionToTokenHash.delete(sessionId);
+    }
+    this.bearerRegister.delete(tokenHash);
+  }
+
+  private clearAllBearers(): void {
+    this.bearerRegister.clear();
+    this.sessionToTokenHash.clear();
   }
 
   private getConfig() {
@@ -301,6 +475,9 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    // Wipe the bearer register so a restart starts from zero live clients —
+    // every external client must reconnect, re-registering on handshake.
+    this.clearAllBearers();
     // Mirror the planned-stop path so an unexpected close also wipes
     // the abuse-policy state. Otherwise denial counters would leak
     // into the lifetime of any subsequent restart.
@@ -394,6 +571,7 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        this.clearAllBearers();
         // The drain wipes session-scoped state (grants, dedup, pins);
         // the abuse-policy denial Map is owned alongside but lives on
         // `HttpLifecycle.deps` so we clear it here in lockstep. Without
@@ -426,19 +604,41 @@ export class HttpLifecycle {
 
         let wasRunning = false;
         if (this.httpServer) {
-          wasRunning = this.httpServer.listening;
-          this.httpServer.closeAllConnections();
+          const server = this.httpServer;
+          wasRunning = server.listening;
+          // Graceful drain (#8779): stop accepting new connections, then let
+          // in-flight requests finish naturally. `closeIdleConnections()`
+          // drops bare keep-alive sockets immediately so they don't hold
+          // `close()` open; active requests keep their socket until the
+          // response ends. The eager `closeAllConnections()` that used to
+          // run *here* force-destroyed in-flight tool calls before they
+          // could complete — it now fires only as the deadline fallback
+          // below so a hung external client can't block the toggle forever.
+          let drained = false;
           await Promise.race([
             new Promise<void>((resolve) => {
-              this.httpServer!.close(() => resolve());
+              server.close(() => {
+                drained = true;
+                resolve();
+              });
+              server.closeIdleConnections();
             }),
             new Promise<void>((resolve) => {
               setTimeout(() => {
-                console.warn("[MCP] server.close() timed out after 10s — force-clearing");
+                if (!drained) {
+                  console.warn(
+                    "[MCP] server.close() timed out after 3s — force-closing connections"
+                  );
+                }
                 resolve();
-              }, 10_000).unref?.();
+              }, MCP_STOP_DRAIN_TIMEOUT_MS).unref?.();
             }),
           ]);
+          if (!drained) {
+            // Deadline hit with sockets still active — sever them so the
+            // listening port is released before the next start.
+            server.closeAllConnections();
+          }
           this.httpServer = null;
           this.port = null;
         }
@@ -563,6 +763,12 @@ export class HttpLifecycle {
       const sessionId = transport.sessionId;
       const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
       this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
+      this.deps.sessionStore.registerClientMetadata(
+        sessionId,
+        this.headerString(req.headers["user-agent"]),
+        "sse"
+      );
+      this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
       const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
       if (pinnedWebContentsId !== null) {
@@ -597,7 +803,9 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
+        this.detachBearerSession(sessionId);
         cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
       };
 
@@ -615,7 +823,9 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
+        this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
+        this.detachBearerSession(sessionId);
         transport.onclose = undefined;
         await transport.close().catch(() => {});
         throw err;
@@ -626,6 +836,7 @@ export class HttpLifecycle {
 
       if (session) {
         this.deps.sessionStore.resetIdleTimer(sid);
+        this.markBearerActive(sid);
         await session.transport.handlePostMessage(req, res);
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
@@ -668,6 +879,7 @@ export class HttpLifecycle {
         return;
       }
       this.deps.sessionStore.resetHttpIdleTimer(sessionId);
+      this.markBearerActive(sessionId);
       await session.transport.handleRequest(req, res);
       return;
     }
@@ -676,6 +888,11 @@ export class HttpLifecycle {
     const authHeader = req.headers.authorization ?? "";
     const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
+    this.deps.sessionStore.registerClientMetadata(
+      newSessionId,
+      this.headerString(req.headers["user-agent"]),
+      "streamable-http"
+    );
 
     const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
     if (pinnedWebContentsId !== null) {
@@ -705,6 +922,10 @@ export class HttpLifecycle {
           server,
           idleTimer,
         });
+        // Register the bearer against the SDK-confirmed session id (not the
+        // pre-generated `newSessionId`) so detachment keys match the ids the
+        // teardown paths see.
+        this.touchBearer(authHeader, resolveUserAgent(req), initializedSessionId, tier);
       },
     });
 
@@ -727,7 +948,9 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionContextMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
       this.deps.sessionStore.clearRateLimitState(id);
+      this.deps.sessionStore.clearClientMetadata(id);
       this.deps.abusePolicy.dropSession(id);
+      this.detachBearerSession(id);
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
@@ -750,7 +973,9 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
         this.deps.sessionStore.clearRateLimitState(id);
+        this.deps.sessionStore.clearClientMetadata(id);
         this.deps.abusePolicy.dropSession(id);
+        this.detachBearerSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
         this.deps.sessionStore.clearElevationTimer(newSessionId);
@@ -760,7 +985,9 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
         this.deps.sessionStore.clearRateLimitState(newSessionId);
+        this.deps.sessionStore.clearClientMetadata(newSessionId);
         this.deps.abusePolicy.dropSession(newSessionId);
+        this.detachBearerSession(newSessionId);
         cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
       }
       await transport.close().catch(() => {});
@@ -1015,6 +1242,15 @@ export class HttpLifecycle {
     }
     const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
     return { sessionId, revokedCount };
+  }
+
+  /**
+   * Snapshot the externally-connected clients for the disable-confirmation
+   * dialog (#8779). Empty when the server isn't listening.
+   */
+  listActiveClients(): McpActiveClientInfo[] {
+    if (!this.isRunning) return [];
+    return this.deps.sessionStore.listExternalActiveClients();
   }
 
   getStatus(): {

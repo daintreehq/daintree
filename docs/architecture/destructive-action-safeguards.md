@@ -185,6 +185,15 @@ The emergency recovery page (`public/recovery.html`) is a zero-React surface loa
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `public/recovery-renderer.js` `btn-reset` → `RECOVERY_RESET_AND_RELOAD` | (bypass — static HTML, no `ActionService`) | **Yes** — inline Disclosure confirm section with panel-count + backup-timestamp preview (#8697) | n/a (bypass) | local-irreversible (`appState` overwritten; `cachedBackupSnapshot` nulled; backup file on disk survives) | one window's sessions + layout | D1 | Done (#8697) — confirm wired at the JS call site; IPC fires only after explicit confirm button click | — |
 
+### MCP server
+
+The MCP server is a shared surface: while it's running, external clients (Claude Code, Cursor, custom scripts) hold live sessions against it. Disabling it severs those sessions, which is a Tier-D2 shared-state mutation _only when external clients are connected_ — with zero external clients it's reversible-local (D0, flip the toggle back on). Both disable paths call IPC directly and bypass `ActionService`. On the server side, `httpLifecycle.stop()` now drains in-flight requests (`server.close()` + `closeIdleConnections()`, racing a 3s deadline before force-closing) instead of eagerly destroying every socket (#8779).
+
+| Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `McpServerSettingsTab.tsx` `handleToggle` → `mcpServer.setEnabled(false)` (bypass — direct IPC) | confirm-when-connected | **Yes** — `ConfirmDialog` (default variant) names each connected external client (user-agent + relative connect time) before the stop fires; gated on `listActiveClients().length > 0`, zero clients disables immediately (#8779) | n/a (bypass) | shared-state (live external sessions severed; recovery is re-enable + each client reconnects) | every connected external client | D2 (D0 when no external clients) | Done (#8779) — confirm wired at the toggle call site; the named-client preview satisfies the "content, not count" rule; in-flight calls drain gracefully on the server side | — |
+| `DaintreeAssistantSettingsTab.tsx` `toggleDaintreeControl` → `helpAssistant.setSettings({ daintreeControl: false })` (bypass — direct IPC) | safe | n/a — turning off Daintree control does not stop the MCP server (the auto-couple is one-directional: turning it _on_ enables MCP, turning it _off_ leaves the server up for any other clients) | n/a (bypass) | reversible (toggle back on) | the assistant's own consumer only | D0 | Leave — no MCP side-effect on disable, so no clients are severed and no confirm is warranted (#8779) | — |
+
 ## Known bypasses
 
 Direct `window.electron.*` IPC calls that skip `ActionService`. These are the highest-risk locations because the action's `danger` rating cannot gate them — the confirmation must live in the component itself.
@@ -202,6 +211,24 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/components/Recovery/SafeModeBanner.tsx` | `app.resetAndRelaunch` (safe-mode restart) | **Yes** — `ConfirmDialog` with destructive variant + `logs.openFile` recovery (#8685) |
 | `public/recovery-renderer.js` | `recovery:reset-and-reload` (emergency recovery page) | **Yes** — inline vanilla-JS Disclosure confirm with panel count + backup timestamp preview; React is unavailable on this surface (#8697) |
 | `src/components/Fleet/fleetEnterBroadcast.ts` | `fleet.broadcast` (Enter-broadcast → `executeFleetBroadcast` → `terminalClient.submit`) | **Yes** — `ConfirmDialog` via `fleetBroadcastConfirmStore` + `FleetArmingRibbon` with per-target resolved-payload preview, destructive-substring callout, and per-target opt-out (#8689) |
+| `src/components/Settings/McpServerSettingsTab.tsx` | `mcpServer.setEnabled(false)` (server toggle) | **Yes** — `ConfirmDialog` naming each connected external client; fires only when `listActiveClients()` is non-empty, else disables immediately (#8779) |
+| `src/components/Settings/DaintreeAssistantSettingsTab.tsx` | `helpAssistant.setSettings({ daintreeControl: false })` (assistant toggle) | **No** — disabling Daintree control has no MCP stop side-effect, so no external clients are severed; D0, no confirm needed (#8779) |
+
+## Palette pre-warn layers
+
+The action palette renders confirm-tier rows (`danger:"confirm"`) with a non-chromatic pre-warn so the destructive classification is visible before the user presses Enter. These signals supplement the `ConfirmDialog` wired at the call site — they do not replace it. The accent color stays reserved for the 2px selection bar; pre-warn relies on shape, position, and opacity only.
+
+Five layers ride on the existing manifest data (`danger`, `dangerRationale`); no per-action wiring is required:
+
+1. **Title ellipsis** — render-time `…` (`…`) suffix on the title text node. The action definition's `title` is never mutated. Apple HIG convention: an ellipsis on a label means activation requires further input or confirmation.
+2. **`TriangleAlert` icon** — monochrome Lucide glyph right-aligned next to the keybinding hint, at `text-daintree-text/40 group-aria-selected:text-daintree-text/50`. Parallels the keybinding hint opacity so it reads as secondary metadata, not as an alert chrome.
+3. **`dangerRationale` second line** — dimmed italic span inside the row's content column. CSS-hidden by default (`hidden group-aria-selected:block`) so unselected rows stay single-line; expands inline when the row is the active selection. The span carries a stable `id` (`${item.id}-danger-rationale`) so `aria-describedby` can point at a real DOM node.
+4. **`aria-haspopup="dialog"`** — set on every confirm-tier row regardless of selection state, so assistive tech announces that activation opens a dialog.
+5. **`aria-describedby`** — set on the row element only when the row is the active selection AND a rationale is present, so screen readers read title → rationale on the selected row without leaking unrelated rationale text on other rows.
+
+Implementation lives in `src/components/ActionPalette/ActionPaletteItem.tsx`; the data plumbing is in `src/hooks/useActionPalette.ts` (`ActionPaletteItem` interface + `toActionPaletteItem` mapper copy `dangerRationale` through from the manifest entry).
+
+This is a separate signal from the MRU exclusion documented in Hard rule #2 — confirm-tier actions are simultaneously excluded from the "Recently used" rail and from `ActionService.repeatLast`, and surfaced with pre-warn chrome when they appear via search.
 
 ## Maintenance
 

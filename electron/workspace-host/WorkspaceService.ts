@@ -151,6 +151,7 @@ export class WorkspaceService {
   // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
   // are no-ops while paused/disabled via scheduleTopologyReconcile's guards.
   private periodicSafetyTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly inFlightWorktreeCreates = new Map<string, Promise<string>>();
 
   /**
    * Host-run identity, minted once per WorkspaceService instance — i.e. once
@@ -360,7 +361,11 @@ export class WorkspaceService {
         if (!monitor) return;
         if (monitor.issueNumber !== issueNumber) return;
 
-        monitor.setIssueNumber(undefined);
+        // Don't clear monitor.issueNumber: it's the branch-parsed local fact
+        // (e.g., `issue-123` in `bugfix/issue-123-foo`). A "not found" from
+        // the forge means the issue may be private, deleted, or in another
+        // org — none of which invalidates the local number. Keeping it lets
+        // the offline branchDerivedTitle stay visible (#8851).
         monitor.setIssueTitle(undefined);
 
         // Clear the linked.issue projection but preserve any PR linkage
@@ -1523,6 +1528,74 @@ export class WorkspaceService {
     rootPath: string,
     options: CreateWorktreeOptions
   ): Promise<void> {
+    const createKey = this.getCreateWorktreeInFlightKey(rootPath, options);
+    const existingCreate = this.inFlightWorktreeCreates.get(createKey);
+    if (existingCreate) {
+      try {
+        const worktreeId = await existingCreate;
+        this.sendEvent({
+          type: "create-worktree-result",
+          requestId,
+          success: true,
+          worktreeId,
+        });
+      } catch (error) {
+        this.sendEvent({
+          type: "create-worktree-result",
+          requestId,
+          success: false,
+          error: (error as Error).message,
+        });
+      }
+      return;
+    }
+
+    const createPromise = this.performCreateWorktree(rootPath, options);
+    this.inFlightWorktreeCreates.set(createKey, createPromise);
+
+    try {
+      const worktreeId = await createPromise;
+      this.sendEvent({
+        type: "create-worktree-result",
+        requestId,
+        success: true,
+        worktreeId,
+      });
+    } catch (error) {
+      this.sendEvent({
+        type: "create-worktree-result",
+        requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    } finally {
+      if (this.inFlightWorktreeCreates.get(createKey) === createPromise) {
+        this.inFlightWorktreeCreates.delete(createKey);
+      }
+    }
+  }
+
+  private getCreateWorktreeInFlightKey(rootPath: string, options: CreateWorktreeOptions): string {
+    const absoluteCreatePath = isAbsolute(options.path)
+      ? pathResolve(options.path)
+      : pathResolve(rootPath, options.path);
+    const normalizedRootPath = this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath));
+    const normalizedCreatePath = this.normalizeCreateWorktreeKeyPath(absoluteCreatePath);
+    const branchName =
+      typeof options.newBranch === "string" ? options.newBranch.trim() : String(options.newBranch);
+
+    return `${normalizedRootPath}\0${normalizedCreatePath}\0${branchName}`;
+  }
+
+  private normalizeCreateWorktreeKeyPath(pathValue: string): string {
+    const resolvedPath = pathResolve(pathValue);
+    return os.platform() === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+  }
+
+  private async performCreateWorktree(
+    rootPath: string,
+    options: CreateWorktreeOptions
+  ): Promise<string> {
     // Hoisted so the catch can clear the pending entry even though
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
@@ -1710,13 +1783,6 @@ export class WorkspaceService {
         }
       }
 
-      this.sendEvent({
-        type: "create-worktree-result",
-        requestId,
-        success: true,
-        worktreeId: canonicalWorktreeId,
-      });
-
       // Fire-and-forget tail: cache invalidation, .daintree copy, and
       // lifecycle setup are non-blocking for callers of create-worktree-result.
       // Tail failures are logged but never re-emit a result event.
@@ -1744,16 +1810,12 @@ export class WorkspaceService {
           details: stack,
         });
       });
+      return canonicalWorktreeId;
     } catch (error) {
       // Create failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingCreateKey) this.topologyClearPending(pendingCreateKey);
-      this.sendEvent({
-        type: "create-worktree-result",
-        requestId,
-        success: false,
-        error: (error as Error).message,
-      });
+      throw error;
     }
   }
 

@@ -115,6 +115,15 @@ export interface PtyClientConfig {
   showCrashDialog?: boolean;
   /** Memory limit in MB for PTY Host process (default: 512) */
   memoryLimitMb?: number;
+  /**
+   * When true the constructor wires up the host lifecycle but does NOT fork the
+   * PTY host. The caller forks it later via {@link PtyClient.start} once its
+   * prerequisites are met — for the app boot path that is the early PATH
+   * refresh (#8625), deferred so the host fork no longer blocks the first
+   * renderer load (#8827). Defaults to false so every other caller keeps the
+   * construct-and-fork behavior.
+   */
+  deferStart?: boolean;
 }
 
 const DEFAULT_CONFIG: Required<PtyClientConfig> = {
@@ -125,6 +134,7 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   healthCheckIntervalMs: 5000,
   showCrashDialog: true,
   memoryLimitMb: 512,
+  deferStart: false,
 };
 
 const MAX_MISSED_HEARTBEATS = 3;
@@ -182,6 +192,7 @@ export class PtyClient extends EventEmitter {
     { projectId: string | null; projectPath?: string; mode: "active" | "switch" }
   >();
   private shouldResyncProjectContext = false;
+  private hostStartRequested = false;
   private pendingMessagePorts = new Map<number, MessagePortMain>();
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
@@ -306,9 +317,32 @@ export class PtyClient extends EventEmitter {
       logWarn: (message) => console.warn(message),
     };
 
-    this.lifecycle.start();
+    if (!this.config.deferStart) {
+      this.start();
+    }
+  }
 
+  /**
+   * Fork the PTY host. Called automatically from the constructor unless
+   * `deferStart` was set, in which case the caller invokes this once the early
+   * PATH refresh has resolved so node-pty inherits the user's full PATH
+   * (#8625/#8827). Idempotent — a second call once the host has already been
+   * requested is a no-op, so the multi-window boot path can call it
+   * unconditionally. Auto-restarts go through `lifecycle.start()` directly and
+   * are unaffected by this guard.
+   */
+  start(): void {
+    if (this.hostStartRequested) {
+      return;
+    }
+    this.hostStartRequested = true;
+    this.lifecycle.start();
     console.log("[PtyClient] Pty Host started");
+  }
+
+  /** Whether {@link PtyClient.start} has forked (or requested) the host yet. */
+  isHostStarted(): boolean {
+    return this.hostStartRequested;
   }
 
   /** Wait for the host to be ready */
@@ -344,6 +378,19 @@ export class PtyClient extends EventEmitter {
     if (this.needsRespawn) {
       this.needsRespawn = false;
       this.respawnPending();
+    } else if (this.pendingSpawns.size > 0) {
+      // Initial host-ready replay (#8827). With deferred start the host forks
+      // only after the early PATH refresh, so any spawn requested during that
+      // window had its send() dropped — the host's message listener isn't
+      // attached until it emits "ready" (also true for the brief construct→
+      // ready window on the non-deferred path). Replay those spawns now so a
+      // terminal launched before the host was ready isn't silently lost.
+      // Double-spawn-safe: on the first "ready" no spawn could have been
+      // delivered yet. The restart-only side effects (port refresh, stale-kill
+      // clearing) stay in respawnPending() above.
+      for (const [id, options] of this.pendingSpawns) {
+        this.send({ type: "spawn", id, options });
+      }
     }
     const pendingPortWindowIds = new Set(this.pendingMessagePorts.keys());
     this.flushPendingMessagePorts();

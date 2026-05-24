@@ -78,6 +78,7 @@ import { useUIStore } from "@/store/uiStore";
 import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
+import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
@@ -693,6 +694,10 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      "command-palette": {
+        render: () => <ToolbarCommandPaletteButton key="command-palette" data-toolbar-item="" />,
+        isAvailable: true,
+      },
       settings: {
         render: () => (
           <ToolbarSettingsButton
@@ -968,6 +973,9 @@ export function Toolbar({
       },
       "copy-tree": () => {
         void handleCopyTreeClick();
+      },
+      "command-palette": () => {
+        void actionService.dispatch("action.palette.open", undefined, { source: "user" });
       },
       settings: onSettings,
       problems: onToggleProblems,

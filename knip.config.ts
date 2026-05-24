@@ -74,6 +74,10 @@ const config: KnipConfig = {
     // "fixtures"). Knip cannot trace runtime path resolution, so these
     // files appear unused.
     "scripts/codegen/__tests__/fixtures/*.ts",
+    // why: renderer API codegen fixtures loaded dynamically by
+    // scripts/codegen/__tests__/ipc-renderer.test.ts via path.join(__dirname,
+    // "fixtures-renderer"). Knip cannot trace runtime path resolution.
+    "scripts/codegen/__tests__/fixtures-renderer/*.ts",
 
     // why: compat shims preserved for legacy test/import paths after the
     // GitHub services moved into plugins/builtin/github/main (#8060). No
@@ -96,8 +100,8 @@ const config: KnipConfig = {
   // explicit-declare fix should happen in a follow-up:
   //   - conf: imported in electron/__tests__/storeBackupRestore.test.ts;
   //     transitive via electron-store.
-  //   - glob, @babel/core: imported in scripts/find-critical-compiler-errors.mjs;
-  //     transitive via babel-plugin-react-compiler and related toolchain.
+  //   - glob: imported in scripts/find-critical-compiler-errors.mjs;
+  //     transitive via the React Compiler toolchain.
   //   - @types/trusted-types: provides the ambient `TrustedHTML` /
   //     `TrustedTypePolicyFactory` globals used in src/lib/trustedTypesPolicy.ts.
   //     Knip walks `import` edges and never sees ambient type references.
@@ -109,7 +113,6 @@ const config: KnipConfig = {
     "fast-check",
     "conf",
     "glob",
-    "@babel/core",
     "@types/trusted-types",
     "@octokit/request-error",
     "@octokit/types",

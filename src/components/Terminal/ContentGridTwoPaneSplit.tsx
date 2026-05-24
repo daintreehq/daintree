@@ -1,6 +1,5 @@
 import { cn } from "@/lib/utils";
 import { GridNotificationBar } from "./GridNotificationBar";
-import { GridFullOverlay } from "./GridFullOverlay";
 import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
 import { GridShell } from "./GridShell";
 import type { ContentGridContext } from "./useContentGridContext";
@@ -51,7 +50,6 @@ export function ContentGridTwoPaneSplit({
             isInTrash={ctx.isInTrash}
             onAddTabForPanel={ctx.handleAddTabForPanel}
           />
-          <GridFullOverlay maxTerminals={ctx.maxGridCapacity} show={ctx.showGridFullOverlay} />
         </div>
       </GridShell>
     </div>

@@ -1,5 +1,124 @@
 # Changelog
 
+## [0.13.0] - 2026-05-24
+
+The panel grid was reworked from count-driven to size-driven and now scrolls when fleets exceed the viewport, with a custom scroll chrome that survives panel churn. Cold-start trimmed further — PTY and workspace hosts fork concurrently, app:boot IPC overlaps the first render, and four background services defer past first paint. The action palette grew pinning, scope chips, mode-prefix routing, and destructive-action disclosure. The Daintree Assistant surfaces launch failures, MCP cascade, and pinned context inline. Antigravity (agy) joins the built-in agent roster.
+
+### Features
+
+**Panel grid**
+
+- Size-driven scrollable grid replaces the count-driven layout — large fleets scroll instead of crowding (#8805, #8830)
+- Custom GridScrollbar replaces the native scrollbar and stabilizes against panel open/close (#8858)
+- Automatic grid recalibrated for laptop and wide displays
+
+**Action palette**
+
+- Pinning and eviction on the empty-query rail (#8815)
+- Scope chip and mode-prefix routing narrow the search context (#8812, #8814)
+- Destructive classification surfaces on action rows (#8825)
+- Frecency now drives the MRU bonus (#8823)
+- Enter on a disabled row is a silent no-op
+
+**Command palette**
+
+- Dedicated command-palette toolbar button (#8813)
+
+**Daintree Assistant**
+
+- Inline banners surface launch failures instead of leaving the panel blank (#8773)
+- Version gate gained a Check again button so an indeterminate probe is recoverable (#8774)
+- Launch FSM phase is shown in HelpPanel during auto-launch (#8771)
+- Pinned ActionContext binding shows in the HelpPanel footer (#8772)
+- Resume-latest fallback when session-ID capture fails (#8787)
+- Daintree Assistant tab discloses the MCP-server cascade (#8777)
+
+**MCP server**
+
+- Stopping the MCP server now confirms and gracefully drains (#8779)
+- Settings tab surfaces currently connected clients (#8778)
+- McpConfirmDialog hardened with a read-time cooldown (#8824)
+
+**Agents**
+
+- Antigravity CLI (agy) added as a built-in agent (#8808)
+- Terminal agents identified by executable image path, not just title heuristics (#8790)
+- Agent model lists and context windows resolve at runtime (#8789)
+
+**Crash safety**
+
+- Help-session PTY reaping extended to macOS and Linux (#8769)
+
+**Theme**
+
+- Low-contrast accent color overrides now surface a contrast warning (#8822)
+
+**Worktree sidebar**
+
+- Bordered-row loading state replaced with shimmer cards (#8804)
+
+**Actions**
+
+- New isVisible structural hide-tier on ActionDefinition (#8816)
+
+### Bug Fixes
+
+**Worktree**
+
+- Worktree sidebar shows the linked PR under the issue title again — forge provider calls now route through the IPC bridge (#8870)
+- Upstream sync badge no longer merges counts or pulses on every poll (#8872)
+- Worktree sidebar branch indicator preserved when the GitHub fetch hasn't landed yet (#8851)
+- Renderer preserves issueNumber on issue-not-found and derives a readable title from the branch
+
+**Terminal & grid**
+
+- Bulk-opening agent terminals no longer leaves a second pane blank (#8864)
+- Clicking between agent terminals no longer flips state to working (#8865)
+- Grid keyboard navigation reads column counts from the rendered grid snapshot (#8857)
+- Move-up/move-down terminal actions use the real grid width (#8859)
+- Terminal buffer repaints after DOM→WebGL renderer swap on attach
+- Optimistic close wired to all grid panel close paths; pending resize cancelled
+- Grid scrollbar uses scrollTo() and forwards wheel events correctly
+
+**UI polish**
+
+- Combobox trigger buttons restore truncation (#8843)
+- Toolbar issue/PR count badge no longer shows a persistent dash (#8826)
+- Freshness clock glyph no longer clips in the toolbar pill (#8849)
+
+**Boot & host stability**
+
+- Utility-host bootstraps hardened against native-load hang (#8829)
+- GpuCrashMonitor kept eager so its listener installs before the GPU process spawns (#8817)
+- Pre-ready spawn replay and PATH-refresh gate hardened (#8827)
+- Cold-switch paint gate tightened (#8818)
+- Workspace prewarm-path derivation hardened against errors
+
+**MCP & GitHub**
+
+- MCP confirm-dialog cooldown render-gap and timeout overlap closed
+- GitHub toolbar count badge preserves confirmed-zero counts and bounds snapshot TTL
+- GitHub bulk-create dialog view registered eagerly so it always opens
+
+### Performance
+
+**Cold start**
+
+- PTY host fork deferred past first renderer load (#8827)
+- Workspace host forks concurrently with the PTY host (#8828)
+- app:boot IPC overlaps the first render via React `use()` (#8820)
+- Four background service inits deferred and the DB-maintenance probe made lazy (#8817)
+
+**Build**
+
+- Package sideEffects declared to activate lazyBarrel (#8819)
+- domMax chunk genuinely deferred via $initial-scoped vendor-motion split (#8821)
+
+### Other Changes
+
+- Worktree sidebar no longer shows a redundant 'dirty' label (#8868)
+- `.antigravitycli` directory now ignored
+
 ## [0.12.1] - 2026-05-22
 
 Patch release closing six issues found in 0.12.0 — the file diff viewer always failed to load, the workspace sidebar hung when a project folder was missing, and the Daintree Assistant silently dropped an unsupported saved agent preference. Also lands faster panel closing plus fleet-scope and picker-footer polish.

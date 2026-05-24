@@ -3,12 +3,13 @@ import fs from "fs/promises";
 import path from "path";
 
 /**
- * GitHubStatsToolbarButton — freshness tier wiring (issue #6536).
+ * GitHubStatsToolbarButton — freshness tier wiring (issue #6536, updated #8849).
  *
- * After extracting `freshnessOpacityClass`, `FreshnessGlyph`, `formatTimeSince`,
- * and `freshnessSuffix` to `FreshnessUtils.tsx`, the parent still wires these
- * into the three `GitHubStatPill` instances via the `className`, `freshnessGlyph`,
- * `ariaLabel`, and `tooltipContent` props.
+ * The parent wires freshness state into the three `GitHubStatPill` instances
+ * via `ariaLabel` and `tooltipContent` (both populated from `freshnessSuffix`).
+ * The in-pill clock glyph was removed in #8849 because it overflowed the
+ * fixed-width pill container; freshness is now signalled solely through the
+ * tooltip + aria-label copy.
  *
  * These are source assertions rather than render tests for the same reason as
  * `freshFetch`: the toolbar's eager dynamic-import effect resolves on a
@@ -26,22 +27,22 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
 
   it("imports freshness helpers from co-located FreshnessUtils", () => {
     expect(source).toContain('from "./FreshnessUtils"');
-    expect(source).toContain("FreshnessGlyph");
     expect(source).toContain("freshnessSuffix");
   });
 
   it("does not import or use freshnessOpacityClass or freshnessClass (issue #8180)", () => {
     // Opacity-as-stale reads as a disabled control on always-clickable pills
-    // (WCAG 1.4.3/1.4.11/4.1.2). Staleness is carried by FreshnessGlyph + the
-    // freshnessSuffix tooltip copy instead.
+    // (WCAG 1.4.3/1.4.11/4.1.2). Staleness is carried by the freshnessSuffix
+    // tooltip + aria-label copy instead (issue #8849 removed the in-pill glyph).
     expect(source).not.toContain("freshnessOpacityClass");
     expect(source).not.toContain("freshnessClass");
   });
 
-  it("passes FreshnessGlyph to all three GitHubStatPill instances", () => {
-    const glyphs = source.match(/freshnessGlyph=\{/g);
-    expect(glyphs).not.toBeNull();
-    expect(glyphs?.length).toBe(3);
+  it("does not pass an in-pill freshness glyph (issue #8849)", () => {
+    // The clock glyph overflowed the fixed-width pill container; freshness is
+    // now signalled via tooltip + aria-label only.
+    expect(source).not.toMatch(/freshnessGlyph=\{/);
+    expect(source).not.toContain("FreshnessGlyph");
   });
 
   it("does not dim any pill className via freshness opacity (issue #8180)", () => {
@@ -54,12 +55,6 @@ describe("GitHubStatsToolbarButton freshness wiring", () => {
     // opacity-75 (aging) and opacity-60 (stale-disk); neither should reappear.
     expect(source).not.toContain("opacity-75");
     expect(source).not.toContain("opacity-60");
-  });
-
-  it("wires the commits pill glyph to commitFreshnessLevel, not freshnessLevel", () => {
-    // Commits are git-local — a GitHub connectivity error must not dim or
-    // glyph the commits pill. commitFreshnessLevel maps errored→fresh.
-    expect(source).toContain("<FreshnessGlyph level={commitFreshnessLevel} />");
   });
 
   it("uses freshnessSuffix in ariaLabel and tooltipContent for freshness-aware copy", () => {

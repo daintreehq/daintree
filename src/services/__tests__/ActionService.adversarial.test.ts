@@ -25,7 +25,15 @@ vi.mock("../KeybindingService", () => ({
   },
 }));
 
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
 import { ActionService } from "../ActionService";
+import { logWarn } from "@/utils/logger";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 type EmitFn = (channel: string, payload: unknown) => Promise<void>;
@@ -270,5 +278,42 @@ describe("ActionService adversarial", () => {
 
     expect(result.ok).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("isVisible that throws leaves action in list() and logs a warning (fail open)", () => {
+    vi.mocked(logWarn).mockClear();
+    service.register(
+      safeAction("actions.list", {
+        isVisible: () => {
+          throw new Error("visibility predicate boom");
+        },
+      })
+    );
+
+    const manifest = service.list();
+
+    expect(manifest).toHaveLength(1);
+    expect(manifest[0]!.id).toBe("actions.list");
+    expect(logWarn).toHaveBeenCalledWith(
+      "Action isVisible threw",
+      expect.objectContaining({ actionId: "actions.list" })
+    );
+  });
+
+  it("isVisible that throws does not drop sibling actions from list()", () => {
+    service.register(
+      safeAction("actions.list", {
+        isVisible: () => {
+          throw new Error("visibility predicate boom");
+        },
+      })
+    );
+    service.register(safeAction("actions.help", { isVisible: () => true }));
+
+    const manifest = service.list();
+    const ids = manifest.map((entry) => entry.id);
+
+    expect(ids).toContain("actions.list");
+    expect(ids).toContain("actions.help");
   });
 });

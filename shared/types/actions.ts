@@ -86,6 +86,21 @@ export interface ActionDefinition<
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;
   disabledReason?: (ctx: ActionContext) => string | undefined;
+  /**
+   * Structural visibility predicate evaluated when `ActionService.list()`
+   * enumerates actions. Returning `false` removes the action from the listing
+   * entirely (palette, context menus, MCP manifest), distinct from `isEnabled`
+   * which only dims it. Default when unset is `() => true`.
+   *
+   * Fails OPEN — if the predicate throws, the action remains visible. This is
+   * the explicit inverse of `isEnabled` (which fails closed) because hiding a
+   * command silently on a bug is more surprising than briefly showing one.
+   *
+   * Note: visibility is a discovery-layer concern, not an authorization gate.
+   * `get(id)` and `dispatch(id)` deliberately ignore `isVisible` so direct
+   * lookups and keybindings continue to work.
+   */
+  isVisible?: (ctx: ActionContext) => boolean;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
   /**
    * Opt-in allowlist of top-level arg keys that are safe to include in Sentry

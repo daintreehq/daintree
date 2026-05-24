@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   buildResumeCommand,
+  buildResumeLatestCommand,
   buildAgentLaunchFlags,
   buildLaunchCommandFromFlags,
   generateAgentCommand,
@@ -104,6 +105,91 @@ describe("buildResumeCommand", () => {
     expect(cmd).toBeDefined();
     expect(cmd).toContain("--dangerously-skip-permissions");
     // Non-flag value should be shell-escaped
+    expect(cmd).not.toContain(" some value ");
+  });
+});
+
+describe("buildResumeLatestCommand", () => {
+  forcePosixPlatform();
+
+  it("builds claude resume-latest command with --continue", () => {
+    expect(buildResumeLatestCommand("claude")).toBe("claude --continue");
+  });
+
+  it("builds gemini resume-latest command with -r latest (positional required)", () => {
+    // Bare `-r` opens an interactive picker that blocks the PTY; `latest`
+    // must be passed positionally.
+    expect(buildResumeLatestCommand("gemini")).toBe("gemini -r latest");
+  });
+
+  it("builds codex resume-latest command with subcommand + --last", () => {
+    const cmd = buildResumeLatestCommand("codex");
+    expect(cmd).toBe("codex resume --last");
+    expect(cmd).toContain("resume");
+    expect(cmd).toContain("--last");
+  });
+
+  it("returns undefined for unknown agent", () => {
+    expect(buildResumeLatestCommand("unknown-agent")).toBeUndefined();
+  });
+
+  it("returns undefined for agent without resume config", () => {
+    expect(buildResumeLatestCommand("my-custom-agent")).toBeUndefined();
+  });
+
+  it("returns undefined for agents whose resume kind is not session-id", () => {
+    // Kimi uses rolling-history; Kiro uses project-scoped. Neither has the
+    // session-id resumeLatestArgs surface — they already always launch with
+    // resume flags via their own resume.args() path.
+    expect(buildResumeLatestCommand("kimi")).toBeUndefined();
+    expect(buildResumeLatestCommand("kiro")).toBeUndefined();
+  });
+
+  it("returns undefined for session-id agents that don't declare resumeLatestArgs", () => {
+    // Copilot/Goose/Qwen/Mistral/OpenCode are session-id agents that didn't
+    // ship a resume-latest fallback in this issue; should return undefined.
+    expect(buildResumeLatestCommand("copilot")).toBeUndefined();
+    expect(buildResumeLatestCommand("goose")).toBeUndefined();
+    expect(buildResumeLatestCommand("qwen")).toBeUndefined();
+    expect(buildResumeLatestCommand("mistral")).toBeUndefined();
+    expect(buildResumeLatestCommand("opencode")).toBeUndefined();
+  });
+
+  it("prepends launch flags before resume-latest args for claude", () => {
+    const cmd = buildResumeLatestCommand("claude", ["--dangerously-skip-permissions"]);
+    expect(cmd).toBe("claude --dangerously-skip-permissions --continue");
+  });
+
+  it("prepends launch flags before resume-latest args for codex", () => {
+    const cmd = buildResumeLatestCommand("codex", [
+      "--no-alt-screen",
+      "--dangerously-bypass-approvals-and-sandbox",
+    ]);
+    expect(cmd).toBe(
+      "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume --last"
+    );
+  });
+
+  it("prepends launch flags before resume-latest args for gemini", () => {
+    const cmd = buildResumeLatestCommand("gemini", ["--yolo"]);
+    expect(cmd).toBe("gemini --yolo -r latest");
+  });
+
+  it("handles empty launch flags array like no flags", () => {
+    expect(buildResumeLatestCommand("claude", [])).toBe("claude --continue");
+  });
+
+  it("handles undefined launch flags like no flags", () => {
+    expect(buildResumeLatestCommand("claude", undefined)).toBe("claude --continue");
+  });
+
+  it("escapes non-flag launch flag values", () => {
+    const cmd = buildResumeLatestCommand("claude", [
+      "--dangerously-skip-permissions",
+      "some value",
+    ]);
+    expect(cmd).toBeDefined();
+    expect(cmd).toContain("--dangerously-skip-permissions");
     expect(cmd).not.toContain(" some value ");
   });
 });

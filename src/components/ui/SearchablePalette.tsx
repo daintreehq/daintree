@@ -89,7 +89,13 @@ export interface SearchablePaletteProps<T> {
   emptyEntityName?: string;
 
   /** Additional keyboard handler called before default handling */
-  onKeyDown?: (e: React.KeyboardEvent) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  /**
+   * Optional leading adornment rendered inside the input's border (e.g. the
+   * action palette's mode-prefix chip). Forwarded to `AppPaletteDialog.Input`
+   * — see that component for layout details.
+   */
+  inputPrefix?: React.ReactNode;
   /** Custom footer content. Omit for default keyboard hints. */
   footer?: React.ReactNode;
   /**
@@ -165,6 +171,7 @@ export function SearchablePalette<T>({
   emptyShortcut,
   emptyEntityName,
   onKeyDown,
+  inputPrefix,
   footer,
   getFooter,
   getActionLabel,
@@ -198,7 +205,7 @@ export function SearchablePalette<T>({
   });
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
 
       if (onKeyDown) {
@@ -300,6 +307,7 @@ export function SearchablePalette<T>({
       >
         <AppPaletteDialog.Input
           inputRef={inputRef}
+          inputPrefix={inputPrefix}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}

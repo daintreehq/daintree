@@ -21,7 +21,7 @@ import {
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { Skeleton, SkeletonBone, SkeletonText, SkeletonHint } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import {
   useAgentLauncher,
@@ -31,7 +31,6 @@ import {
   useAriaKeyshortcuts,
   useKeybindingDisplay,
   useDohertyGate,
-  useResizeObserverRaf,
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
@@ -118,10 +117,17 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 // ~14s workspace-host restart budget so it fires before `setFatalError`.
 const RECONNECT_ESCALATE_MS = 10_000;
 
-// Skeleton row height matching collapsed WorktreeCard sidebar variant
-// (py-3=12px + min-h-[22px]=22px + py-3=12px + border-b=1px).
-const SKELETON_ROW_HEIGHT_PX = 47;
-const MIN_SKELETON_ROWS = 3;
+// Fixed-count shimmer card placeholders for the worktree sidebar loading state.
+// Follows the same 3-bone structure as the `.skel-card` design in the
+// index.html startup ghost — title / subtitle / detail at 13px / 11px / 32px,
+// padding py-3 px-4, gap-2 between bones. Card height ≈ 100px (24 padding +
+// 56 bones + 16 gap + 4 mt). Varied widths avoid a picket-fence read.
+const WORKTREE_SKELETON_CARDS = [
+  { id: "a", titleWidth: "58%", subtitleWidth: "44%" },
+  { id: "b", titleWidth: "42%", subtitleWidth: "55%" },
+  { id: "c", titleWidth: "52%", subtitleWidth: "38%" },
+  { id: "d", titleWidth: "36%", subtitleWidth: "48%" },
+] as const;
 
 function truncateSearchQuery(trimmedQuery: string) {
   const codepoints = Array.from(trimmedQuery);
@@ -483,18 +489,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const openFleetPicker = useCallback(() => setIsFleetPickerOpen(true), []);
   const closeFleetPicker = useCallback(() => setIsFleetPickerOpen(false), []);
 
-  const [skeletonContainerEl, setSkeletonContainerEl] = useState<HTMLElement | null>(null);
-  const [skeletonHeight, setSkeletonHeight] = useState(0);
-  const skeletonContainerRef = useCallback((el: HTMLElement | null) => {
-    setSkeletonContainerEl(el);
-  }, []);
-  useResizeObserverRaf(skeletonContainerEl, (entry) => {
-    setSkeletonHeight(entry.contentRect.height);
-  });
-  const skeletonRowCount = Math.max(
-    MIN_SKELETON_ROWS,
-    Number.isFinite(skeletonHeight) ? Math.floor(skeletonHeight / SKELETON_ROW_HEIGHT_PX) : 0
-  );
   useEffect(() => {
     if (!error) setIsRestartConfirmOpen(false);
   }, [error]);
@@ -1281,21 +1275,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
-        <div className="flex-1 min-h-0 relative overflow-hidden pb-8" ref={skeletonContainerRef}>
+        <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
-            {Array.from({ length: skeletonRowCount }).map((_, i) => (
-              <div
-                key={i}
-                aria-hidden="true"
-                className="border-b border-border-default px-4 py-3"
-                style={{ height: SKELETON_ROW_HEIGHT_PX }}
-              >
-                <div className="flex items-center gap-2 min-h-[22px]">
-                  <SkeletonBone className="w-3.5 h-3.5 rounded-full shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <SkeletonText lines={2} lineHeightClassName="h-3" gapClassName="space-y-1" />
-                  </div>
-                </div>
+            {WORKTREE_SKELETON_CARDS.map((card) => (
+              <div key={card.id} aria-hidden="true" className="flex flex-col gap-2 px-4 py-3">
+                <SkeletonBone
+                  shimmer
+                  className="rounded-sm"
+                  heightPx={13}
+                  style={{ width: card.titleWidth }}
+                />
+                <SkeletonBone
+                  shimmer
+                  className="rounded-sm"
+                  heightPx={11}
+                  style={{ width: card.subtitleWidth }}
+                />
+                <SkeletonBone shimmer className="mt-1 w-[90%] rounded-md" heightPx={32} />
               </div>
             ))}
           </Skeleton>

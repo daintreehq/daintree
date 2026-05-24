@@ -35,7 +35,11 @@ export const BASE_TERMINAL_OPTIONS = {
   cursorBlink: true,
   cursorStyle: "block" as const,
   cursorInactiveStyle: "block" as const,
-  lineHeight: 1.1,
+  // Exactly 1.0 — a fractional line height makes xterm's DOM renderer leave
+  // vertical sub-pixel gaps between stacked box-drawing characters, breaking
+  // the box borders that agent TUIs draw. (The WebGL renderer hid this by
+  // custom-drawing those glyphs to the cell; the DOM renderer cannot.)
+  lineHeight: 1.0,
   letterSpacing: 0,
   fontWeight: "normal" as const,
   fontWeightBold: "700" as const,
@@ -109,11 +113,11 @@ export function getTerminalMetrics(fontSize: number): {
   cellWidth: number;
   cellHeight: number;
 } {
-  // These ratios are based on typical monospace font rendering
-  // and should match the lineHeight setting
+  // These ratios are based on typical monospace font rendering and must match
+  // the `lineHeight` setting in BASE_TERMINAL_OPTIONS (1.0).
   return {
     cellWidth: Math.max(6, Math.floor(fontSize * 0.6)),
-    cellHeight: Math.max(10, Math.floor(fontSize * 1.1)),
+    cellHeight: Math.max(10, Math.floor(fontSize)),
   };
 }
 

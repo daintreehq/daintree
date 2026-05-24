@@ -380,17 +380,17 @@ describe("help.launchAgent", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Assistant launch failed",
+        title: "Assistant couldn't start",
       })
     );
   });
 
-  it("does not launch when provisioning reports MCP_NOT_READY", async () => {
+  it("does not launch when provisioning reports the assistant services aren't ready", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
     const err = new Error("port collision") as Error & { code: string };
-    err.code = "MCP_NOT_READY";
+    err.code = "MCP_SERVER_NOT_STARTED";
     (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err);
 
     await action.run(undefined, stubCtx);
@@ -399,7 +399,8 @@ describe("help.launchAgent", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Start MCP failed",
+        title: "Assistant couldn't start",
+        message: expect.stringContaining("assistant services didn't start"),
       })
     );
   });

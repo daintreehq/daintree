@@ -145,33 +145,38 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const shouldPreserve = repoStats.stale === true || repoStats.ghError !== undefined;
 
       if (!shouldPreserve) {
-        // Fresh successful data - update preserved counts and accept genuine 0s
-        if (repoStats.issueCount !== null && repoStats.issueCount > 0) {
+        // Fresh successful data — record the confirmed counts so a later
+        // stale/errored poll can fall back to them. `null` in the ref means
+        // "no count ever confirmed"; a confirmed `0` is stored as `0` (not
+        // `null`) so a repo with genuinely zero open issues/PRs still preserves
+        // that `0` on a failed poll instead of flashing a `—` dash.
+        if (repoStats.issueCount !== null) {
           lastKnownCountsRef.current.issueCount = repoStats.issueCount;
-        } else if (repoStats.issueCount === 0) {
-          // Clear preserved count on confirmed 0 from successful fetch
-          lastKnownCountsRef.current.issueCount = null;
         }
 
-        if (repoStats.prCount !== null && repoStats.prCount > 0) {
+        if (repoStats.prCount !== null) {
           lastKnownCountsRef.current.prCount = repoStats.prCount;
-        } else if (repoStats.prCount === 0) {
-          // Clear preserved count on confirmed 0 from successful fetch
-          lastKnownCountsRef.current.prCount = null;
         }
       }
 
       // Apply preservation: use preserved counts only when data is stale/errored
+      // and the incoming count is either a failed-fetch null or a stale 0. A
+      // failed poll surfaces `issueCount: null`, which would otherwise erase a
+      // valid prior count and flash a `—` dash in the toolbar badge; a stale
+      // broadcast can surface `0`, which would flash a `0`. Both are preserved
+      // while a genuine fresh `0` (shouldPreserve === false) still shows `0`.
       const preservedStats: RepositoryStats = {
         ...repoStats,
         issueCount:
           shouldPreserve &&
-          repoStats.issueCount === 0 &&
+          (repoStats.issueCount === null || repoStats.issueCount === 0) &&
           lastKnownCountsRef.current.issueCount !== null
             ? lastKnownCountsRef.current.issueCount
             : repoStats.issueCount,
         prCount:
-          shouldPreserve && repoStats.prCount === 0 && lastKnownCountsRef.current.prCount !== null
+          shouldPreserve &&
+          (repoStats.prCount === null || repoStats.prCount === 0) &&
+          lastKnownCountsRef.current.prCount !== null
             ? lastKnownCountsRef.current.prCount
             : repoStats.prCount,
       };

@@ -15,6 +15,10 @@ import {
 } from "lucide-react";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { useDeferredLoading } from "@/hooks";
+import { useMcpReadiness } from "@/hooks/useMcpReadiness";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsInput } from "./SettingsInput";
@@ -110,6 +114,10 @@ const HIBERNATE_OPTIONS = [
 export function DaintreeAssistantSettingsTab() {
   const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
   const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
+  // useMcpReadiness drives the 4-state Connection display reactively; the
+  // separate mcpStatus state still supplies apiKey for copy/rotate (not in
+  // the runtime snapshot). Keep both — they update independently (lesson #4958).
+  const runtimeSnapshot = useMcpReadiness();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -457,6 +465,15 @@ export function DaintreeAssistantSettingsTab() {
   const apiKeySuffix =
     mcpStatus?.apiKey && mcpStatus.apiKey.length >= 8 ? mcpStatus.apiKey.slice(-4) : "";
 
+  // Doherty gate for the initial status round-trip: render section chrome
+  // immediately and only show the inline "Loading…" text if it outlasts the
+  // threshold, avoiding a sub-400ms flicker.
+  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+
+  const handleGoToMcpSettings = () => {
+    void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" });
+  };
+
   const handleCopyConfig = async () => {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
@@ -545,6 +562,19 @@ export function DaintreeAssistantSettingsTab() {
           ariaLabel="Allow the assistant to call Daintree control tools"
           disabled={loading}
         />
+        {!loading && settings.daintreeControl && (
+          <div
+            className={cn(
+              "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
+              "bg-overlay-subtle border border-daintree-border"
+            )}
+          >
+            <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
+              Enabling this starts a local HTTP server on 127.0.0.1 so the assistant can call
+              Daintree actions. The MCP server tab has the connection details and API key.
+            </div>
+          </div>
+        )}
       </SettingsSection>
 
       {/* Hibernation */}
@@ -658,25 +688,56 @@ export function DaintreeAssistantSettingsTab() {
         description="The assistant talks to Daintree through the local MCP server. Use these controls to share access with external clients."
       >
         {loading ? (
-          <p className="text-xs text-daintree-text/50">Loading…</p>
+          showInlineLoading ? (
+            <p className="text-xs text-daintree-text/50">Loading…</p>
+          ) : null
+        ) : runtimeSnapshot.state === "disabled" ? (
+          <div className="space-y-2">
+            <p className="text-xs text-daintree-text/60 select-text">
+              MCP server is off. Turn it on to share the connection with external clients.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleGoToMcpSettings}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+              >
+                Open MCP server settings
+              </button>
+            </div>
+          </div>
+        ) : runtimeSnapshot.state === "starting" ? (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+            <span className="text-xs text-daintree-text/60">Server is starting…</span>
+          </div>
+        ) : runtimeSnapshot.state === "failed" ? (
+          <div className="space-y-2">
+            <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+              <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
+              <p className="text-xs text-status-danger leading-relaxed select-text">
+                MCP server failed to start.{" "}
+                {runtimeSnapshot.lastError ?? "Check the MCP server tab for details."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleGoToMcpSettings}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+              >
+                Open MCP server settings
+              </button>
+            </div>
+          </div>
         ) : !mcpStatus ? (
           <p className="text-xs text-daintree-text/50">Couldn't load MCP status.</p>
-        ) : !mcpStatus.enabled ? (
-          <p className="text-xs text-daintree-text/60 select-text">
-            MCP server is off. Turn it on in the MCP Server tab to share the connection with
-            external clients.
-          </p>
         ) : (
           <div className="contents">
             <div className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "w-2 h-2 rounded-full shrink-0",
-                  mcpStatus.port ? "bg-status-success" : "bg-daintree-text/30"
-                )}
-              />
+              <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
               <span className="text-xs text-daintree-text/60">
-                {mcpStatus.port ? `Running on port ${mcpStatus.port}` : "Server is starting…"}
+                {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
               </span>
             </div>
 

@@ -104,7 +104,9 @@ describe("Tab Group Worktree Invariant", () => {
   });
 
   describe("moveTerminalToWorktree with grouped panels", () => {
-    it("logs warning when group move fails due to capacity", () => {
+    it("moves the group even when target worktree already has many grid panels", () => {
+      // Scrollable grid (#8805): cross-worktree group moves no longer fail on
+      // capacity grounds — the destination grid scrolls.
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"], "grid");
@@ -120,14 +122,16 @@ describe("Tab Group Worktree Invariant", () => {
 
       usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      // No capacity-warning should fire any more.
+      expect(consoleWarnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("[TabGroup] Failed to move group to worktree"),
         expect.anything()
       );
 
       const state = usePanelStore.getState();
-      expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-a");
-      expect(state.panelsById["t1"]?.worktreeId).toBe("wt-a");
+      expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-b");
+      expect(state.panelsById["t1"]?.worktreeId).toBe("wt-b");
+      expect(state.panelsById["t2"]?.worktreeId).toBe("wt-b");
 
       consoleWarnSpy.mockRestore();
     });
@@ -196,12 +200,13 @@ describe("Tab Group Worktree Invariant", () => {
   });
 
   describe("moveTabGroupToWorktree", () => {
-    it("rejects move when target worktree grid is at capacity", () => {
+    it("moves the group even when target worktree grid already has many panels", () => {
+      // Scrollable grid (#8805): the legacy "fail when full" path is gone;
+      // the destination scrolls vertically to absorb the moved group.
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"], "grid");
 
-      // Fill up target worktree grid (default capacity is 6)
       const targetGridTerminals = Array.from({ length: 10 }, (_, i) =>
         createMockTerminal(`target-${i}`, "wt-b", "grid")
       );
@@ -211,18 +216,17 @@ describe("Tab Group Worktree Invariant", () => {
 
       const result = usePanelStore.getState().moveTabGroupToWorktree("g1", "wt-b");
 
-      expect(result).toBe(false);
+      expect(result).toBe(true);
 
       const state = usePanelStore.getState();
-      const unchangedGroup = state.tabGroups.get("g1");
-      expect(unchangedGroup?.worktreeId).toBe("wt-a");
+      expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-b");
+      expect(state.panelsById["t1"]?.worktreeId).toBe("wt-b");
+      expect(state.panelsById["t2"]?.worktreeId).toBe("wt-b");
 
-      const unchangedT1 = state.panelsById["t1"];
-      const unchangedT2 = state.panelsById["t2"];
-      expect(unchangedT1?.worktreeId).toBe("wt-a");
-      expect(unchangedT2?.worktreeId).toBe("wt-a");
-
-      expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
+      expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+        "t1",
+        TerminalRefreshTier.VISIBLE
+      );
     });
 
     it("moves entire group and all member panels to new worktree", () => {

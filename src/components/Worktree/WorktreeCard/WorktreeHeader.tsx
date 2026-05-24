@@ -254,7 +254,8 @@ export function WorktreeHeader({
     [menu]
   );
 
-  const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
+  const displayTitle = worktree.issueTitle ?? worktree.branchDerivedTitle;
+  const hasDisplayTitle = !!(worktree.issueNumber && displayTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const underlineOnHover = variant !== "sidebar" || isActive;
@@ -271,7 +272,7 @@ export function WorktreeHeader({
     worktree.fetchAuthFailed &&
     (worktree.isGitHubRemote || worktree.linked?.providerId === BUILTIN_GITHUB_PROVIDER_ID)
   );
-  const isMainStandardLayout = !!(isMainOnStandardBranch && !hasIssueTitle);
+  const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
@@ -309,10 +310,10 @@ export function WorktreeHeader({
               aria-hidden="true"
             />
           )}
-          {hasIssueTitle ? (
+          {hasDisplayTitle ? (
             <IssueBadge
               issueNumber={worktree.issueNumber!}
-              issueTitle={worktree.issueTitle}
+              issueTitle={displayTitle}
               worktreePath={worktree.path}
               onOpen={badges.onOpenIssue}
               isHeadline
@@ -348,8 +349,7 @@ export function WorktreeHeader({
               className={cn(
                 "text-xs font-medium shrink-0 pointer-events-none",
                 gitStateIndicator.tone === "error" && "text-status-error",
-                gitStateIndicator.tone === "warning" && "text-status-warning",
-                gitStateIndicator.tone === "info" && "text-status-info"
+                gitStateIndicator.tone === "warning" && "text-status-warning"
               )}
             >
               {gitStateIndicator.label}
@@ -444,8 +444,8 @@ export function WorktreeHeader({
 
       {!isCollapsed &&
         !isMainStandardLayout &&
-        (hasIssueTitle ||
-          (worktree.issueNumber && !hasIssueTitle) ||
+        (hasDisplayTitle ||
+          worktree.issueNumber ||
           (worktree.linked?.pr &&
             worktree.linked.pr.state !== "closed" &&
             worktree.linked.pr.state !== "declined") ||
@@ -460,7 +460,7 @@ export function WorktreeHeader({
             underlineOnHover={underlineOnHover}
             hasUpstreamDelta={hasUpstreamDelta}
             hasAuthFailedSignIn={hasAuthFailedSignIn}
-            hasIssueTitle={hasIssueTitle}
+            hasDisplayTitle={hasDisplayTitle}
             hasPlanFile={hasPlanFile}
             badges={badges}
           />

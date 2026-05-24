@@ -6,6 +6,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setPort: "mcp-server:set-port",
   rotateApiKey: "mcp-server:rotate-api-key",
   getConfigSnippet: "mcp-server:get-config-snippet",
+  listActiveClients: "mcp-server:list-active-clients",
   getAuditRecords: "mcp-server:get-audit-records",
   getAuditConfig: "mcp-server:get-audit-config",
   getAuditStats: "mcp-server:get-audit-stats",
@@ -19,6 +20,8 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setSessionTier: "mcp-server:set-session-tier",
   issueGrant: "mcp-server:issue-grant",
   revokeSessionGrants: "mcp-server:revoke-session-grants",
+  listActiveBearers: "mcp-server:list-active-bearers",
+  disconnectBearer: "mcp-server:disconnect-bearer",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MCP_SERVER_METHOD_CHANNELS;

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
@@ -1240,36 +1240,16 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.textContent).toContain("↓1");
   });
 
-  it("defers animate-pulse-immediate until 200ms gate elapses", () => {
-    vi.useFakeTimers();
+  it("does not flash on initial render", () => {
     renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 2,
-        behindCount: 0,
-        isFetchInFlight: true,
-      },
+      worktree: { ...baseWorktree, aheadCount: 2, behindCount: 0 },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
-    // data-fetch-in-flight reflects raw state immediately (not deferred)
-    expect(indicator.getAttribute("data-fetch-in-flight")).toBe("true");
-    // Pulse class absent before the gate elapses
+    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
     expect(indicator.className).not.toContain("animate-pulse-immediate");
-
-    act(() => {
-      vi.advanceTimersByTime(199);
-    });
-    expect(indicator.className).not.toContain("animate-pulse-immediate");
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(indicator.className).toContain("animate-pulse-immediate");
-    vi.useRealTimers();
   });
 
-  it("never pulses when fetch completes before 200ms gate", () => {
-    vi.useFakeTimers();
+  it("does not flash when fetch is in-flight without count change", () => {
     renderHeader({
       worktree: {
         ...baseWorktree,
@@ -1278,26 +1258,10 @@ describe("WorktreeHeader upstream sync indicator", () => {
         isFetchInFlight: true,
       },
     });
-    // Fetch completes at 150ms — rerender with isFetchInFlight: false
-    act(() => {
-      vi.advanceTimersByTime(150);
-    });
-    cleanup();
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        aheadCount: 2,
-        behindCount: 0,
-        isFetchInFlight: false,
-      },
-    });
-    // Advance past the 200ms gate to confirm no lingering pulse
-    act(() => {
-      vi.advanceTimersByTime(100);
-    });
     const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.getAttribute("data-fetch-in-flight")).toBe("true");
+    expect(indicator.className).not.toContain("animate-upstream-badge-flash");
     expect(indicator.className).not.toContain("animate-pulse-immediate");
-    vi.useRealTimers();
   });
 
   it("does not pulse when no fetch is in-flight", () => {
