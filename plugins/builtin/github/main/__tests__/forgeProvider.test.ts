@@ -23,9 +23,20 @@ vi.mock("../GitHubErrors.js", () => ({
 }));
 
 import { githubForgeProvider } from "../forgeProvider.js";
+import {
+  _resetForgeQueryCachesForTests,
+  clearGitHubCaches,
+  forgeQueryCache,
+} from "../GitHubCaches.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
+
+// runQuery caches + coalesces across all provider methods, so every suite must
+// start from a clean cache or call-count assertions become order-dependent.
+beforeEach(() => {
+  _resetForgeQueryCachesForTests();
+});
 
 function makePRNode(number: number, headRefName: string) {
   return {
@@ -177,6 +188,99 @@ describe("findPRsByBranches", () => {
     const calledQuery = mockGraphQLClient.mock.calls[0][0] as string;
     const matches = calledQuery.match(/headRefName: "shared"/g);
     expect(matches?.length).toBe(1);
+  });
+});
+
+function makeIssueResponse(number: number) {
+  return {
+    repository: {
+      issue: {
+        number,
+        title: `Issue ${number}`,
+        bodyText: "",
+        state: "OPEN",
+        url: `https://github.com/owner/repo/issues/${number}`,
+        createdAt: "2025-01-01T00:00:00Z",
+        updatedAt: "2025-01-01T00:00:00Z",
+        closedAt: null,
+        author: { login: "user", avatarUrl: "" },
+      },
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
+describe("runQuery cache + in-flight dedup", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  it("coalesces concurrent identical queries into one client call", async () => {
+    let resolveClient!: (value: unknown) => void;
+    mockGraphQLClient.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveClient = resolve;
+      })
+    );
+
+    const a = githubForgeProvider.getIssue!(repo, 1);
+    const b = githubForgeProvider.getIssue!(repo, 1);
+
+    resolveClient(makeIssueResponse(1));
+    const [ra, rb] = await Promise.all([a, b]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(ra?.number).toBe(1);
+    expect(rb?.number).toBe(1);
+  });
+
+  it("serves a cache hit for a repeat query within the TTL", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makeIssueResponse(1));
+
+    const first = await githubForgeProvider.getIssue!(repo, 1);
+    const second = await githubForgeProvider.getIssue!(repo, 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(first?.number).toBe(1);
+    expect(second?.number).toBe(1);
+  });
+
+  it("issues a separate request when variables differ", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(makeIssueResponse(1))
+      .mockResolvedValueOnce(makeIssueResponse(2));
+
+    await githubForgeProvider.getIssue!(repo, 1);
+    await githubForgeProvider.getIssue!(repo, 2);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache errors — a retry issues a fresh request", async () => {
+    mockGraphQLClient
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(makeIssueResponse(1));
+
+    await expect(githubForgeProvider.getIssue!(repo, 1)).rejects.toThrow();
+    const retry = await githubForgeProvider.getIssue!(repo, 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(retry?.number).toBe(1);
+  });
+
+  it("clearGitHubCaches() drops the forge cache so the next call refetches", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(makeIssueResponse(1))
+      .mockResolvedValueOnce(makeIssueResponse(1));
+
+    await githubForgeProvider.getIssue!(repo, 1);
+    expect(forgeQueryCache.size()).toBe(1);
+
+    clearGitHubCaches();
+    expect(forgeQueryCache.size()).toBe(0);
+
+    await githubForgeProvider.getIssue!(repo, 1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
   });
 });
 

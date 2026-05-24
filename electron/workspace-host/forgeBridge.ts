@@ -1,9 +1,14 @@
+import { configure } from "safe-stable-stringify";
 import type {
   WorkspaceHostEvent,
   ForgeRpcMethod,
   ForgeResolveProviderResult,
 } from "../../shared/types/workspace-host.js";
 import type { CIStatus, Issue, PR, RateLimitInfo, RepoRef } from "../../shared/types/forge.js";
+
+// Deterministic stringify so identical arg shapes coalesce regardless of
+// property order.
+const stringifyArgs = configure({ bigint: false });
 
 type SendEvent = (event: WorkspaceHostEvent) => void;
 
@@ -33,6 +38,11 @@ const FORGE_RPC_TIMEOUT_MS = 30_000;
 export class ForgeBridge {
   private pending = new Map<string, PendingCall>();
   private counter = 0;
+  // Strict singleflight at the IPC boundary: concurrent identical calls join
+  // one in-flight promise instead of crossing the process boundary twice.
+  // Evicted on settlement (not TTL-cached) — the 60s response cache in
+  // `forgeProvider.runQuery` absorbs staggered bursts on the main-process side.
+  private inFlightByArgs = new Map<string, Promise<unknown>>();
 
   constructor(private readonly sendEvent: SendEvent) {}
 
@@ -109,9 +119,34 @@ export class ForgeBridge {
       pending.reject(new Error(`Forge bridge disposed (pending ${pending.method})`));
     }
     this.pending.clear();
+    this.inFlightByArgs.clear();
+  }
+
+  private buildInvokeKey(
+    method: ForgeRpcMethod,
+    namespacedId: string | undefined,
+    args: unknown[]
+  ): string {
+    return `${method}\0${namespacedId ?? ""}\0${stringifyArgs(args) ?? ""}`;
   }
 
   private invoke<T>(
+    method: ForgeRpcMethod,
+    namespacedId: string | undefined,
+    args: unknown[]
+  ): Promise<T> {
+    const key = this.buildInvokeKey(method, namespacedId, args);
+    const existing = this.inFlightByArgs.get(key);
+    if (existing !== undefined) return existing as Promise<T>;
+
+    const request = this.dispatch<T>(method, namespacedId, args).finally(() => {
+      this.inFlightByArgs.delete(key);
+    });
+    this.inFlightByArgs.set(key, request);
+    return request;
+  }
+
+  private dispatch<T>(
     method: ForgeRpcMethod,
     namespacedId: string | undefined,
     args: unknown[]
