@@ -67,6 +67,44 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
     []
   );
 
+  const quickActions = useMemo(
+    () => [
+      {
+        id: "open-folder",
+        icon: FolderOpen,
+        title: "Open folder",
+        description: "Open an existing project on your machine",
+        onClick: () => void addProject(),
+        primary: true,
+      },
+      {
+        id: "create-project",
+        icon: FolderPlus,
+        title: "Create project",
+        description: "Start fresh in a new folder",
+        onClick: openCreateFolderDialog,
+        primary: false,
+      },
+      {
+        id: "clone-repository",
+        icon: GitBranch,
+        title: "Clone repository",
+        description: "Pull a repo from a Git URL",
+        onClick: openCloneRepoDialog,
+        primary: false,
+      },
+      {
+        id: "launch-agent",
+        icon: Rocket,
+        title: "Launch agent",
+        description: "Open the panel palette to start an agent",
+        onClick: () => void actionService.dispatch("panel.palette", undefined, { source: "user" }),
+        primary: false,
+      },
+    ],
+    [addProject, openCreateFolderDialog, openCloneRepoDialog]
+  );
+
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
   const allDone = checklist ? Object.values(checklist.items).every(Boolean) : false;
   const showChecklist = gettingStarted.visible && checklist && !checklist.dismissed && !allDone;
@@ -100,31 +138,55 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
         {/* Quick Actions */}
         <div className="w-full">
-          <div className="flex flex-wrap gap-3 justify-center">
-            <Button size="lg" onClick={() => void addProject()}>
-              <FolderOpen />
-              Open Folder
-            </Button>
-            <Button size="lg" variant="outline" onClick={openCreateFolderDialog}>
-              <FolderPlus />
-              Create Project
-            </Button>
-            <Button size="lg" variant="outline" onClick={openCloneRepoDialog}>
-              <GitBranch />
-              Clone Repository
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              onClick={() =>
-                void actionService.dispatch("panel.palette", undefined, {
-                  source: "user",
-                })
-              }
+          {hasProjects && (
+            <h3
+              id="quick-actions-heading"
+              className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3"
             >
-              <Rocket />
-              Launch Agent
-            </Button>
+              Quick actions
+            </h3>
+          )}
+          <div
+            role="group"
+            aria-label={hasProjects ? undefined : "Quick actions"}
+            aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
+            data-testid="quick-actions"
+            className="grid grid-cols-2 gap-3"
+          >
+            {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
+              // Subtle surface lift marks the recommended first step for new
+              // users only; once recents exist the list owns the primary path,
+              // so every card drops to equal, demoted weight. Not the accent
+              // color — that load-bearing signal is owned by the checklist.
+              const lifted = primary && !hasProjects;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={onClick}
+                  aria-describedby={`qa-desc-${id}`}
+                  className={cn(
+                    "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left",
+                    "transition-colors duration-150",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    lifted
+                      ? "ring-1 ring-border-strong bg-surface-panel-elevated/95 hover:bg-surface-panel-elevated"
+                      : "ring-1 ring-border-strong/40 hover:bg-overlay-soft"
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-daintree-text">
+                    <Icon className="h-4 w-4 shrink-0 text-daintree-text/70" />
+                    {title}
+                  </span>
+                  <span
+                    id={`qa-desc-${id}`}
+                    className="text-xs text-daintree-text/50 leading-relaxed"
+                  >
+                    {description}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

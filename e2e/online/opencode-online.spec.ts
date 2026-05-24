@@ -50,7 +50,7 @@ async function openFixtureProject(): Promise<void> {
   const { app, window } = ctx;
 
   await mockOpenDialog(app, fixtureDir);
-  await window.getByRole("button", { name: "Open Folder" }).click();
+  await window.getByRole("button", { name: "Open folder" }).click();
 
   // Re-acquire window after open — ProjectViewManager creates a new
   // WebContentsView for the project — then dismiss the telemetry consent

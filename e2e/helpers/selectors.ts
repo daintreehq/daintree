@@ -160,7 +160,7 @@ export const SEL = {
     noUnstagedChanges: 'text="All changes staged"',
   },
   welcome: {
-    openFolder: 'button:has-text("Open Folder")',
+    openFolder: 'button:has-text("Open folder")',
   },
   firstRun: {
     welcomeTitle: 'h1:has-text("Welcome to Daintree")',

@@ -119,7 +119,7 @@ test.describe("Claude Online Flow", () => {
       const { app, window } = ctx;
 
       await mockOpenDialog(app, fixtureDir);
-      await window.getByRole("button", { name: "Open Folder" }).click();
+      await window.getByRole("button", { name: "Open folder" }).click();
     });
 
     // Re-acquire window after open — ProjectViewManager creates a new

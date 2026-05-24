@@ -102,7 +102,7 @@ async function ensureFleetProjectOpen(): Promise<void> {
 
     if (
       await ctx.window
-        .getByRole("button", { name: "Open Folder" })
+        .getByRole("button", { name: "Open folder" })
         .isVisible({ timeout: 500 })
         .catch(() => false)
     ) {
