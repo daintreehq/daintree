@@ -407,7 +407,11 @@ describe("compareReport", () => {
     });
 
     it("flags t0Missing when a gated chunk left the eager set", () => {
-      const report = { eagerChunkCount: 1, eagerChunks: ["vendor-xterm"], chunkGzip: { "vendor-xterm": 500 } };
+      const report = {
+        eagerChunkCount: 1,
+        eagerChunks: ["vendor-xterm"],
+        chunkGzip: { "vendor-xterm": 500 },
+      };
       const baseline = { ...base, chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 } };
       const result = compareReport(report, baseline, 0.05);
       expect(result.ok).toBe(false);

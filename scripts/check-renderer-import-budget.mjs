@@ -67,7 +67,9 @@ export function parseArgs(argv) {
       // trailing `--threshold` would be silently ignored, both of which would
       // run CI against the wrong threshold without any signal.
       if (val === undefined || !/^\d*\.?\d+$/.test(val)) {
-        console.error(`::error::--threshold requires a numeric value 0–1 (got: ${val ?? "(none)"})`);
+        console.error(
+          `::error::--threshold requires a numeric value 0–1 (got: ${val ?? "(none)"})`
+        );
         process.exit(1);
       }
       args.threshold = parseFloat(val);
@@ -355,7 +357,9 @@ export function compareReport(report, baseline, byteThreshold = BYTE_GROWTH_THRE
   // baseline carries `chunkModules` — older baselines skip the gate entirely.
   const baselineModules = baseline?.chunkModules;
   const moduleGateActive =
-    baselineModules != null && typeof baselineModules === "object" && !Array.isArray(baselineModules);
+    baselineModules != null &&
+    typeof baselineModules === "object" &&
+    !Array.isArray(baselineModules);
   let moduleSetChanged = false;
   let staleBuild = false;
   const moduleDiffs = [];
@@ -567,7 +571,9 @@ function main() {
     console.error(
       "::error::baseline carries per-chunk module sets but the build produced none — dist/chunk-modules.json is missing."
     );
-    console.error("   Re-run `vite build` (or `npm run renderer-import-budget:update`) on a fresh dist/.");
+    console.error(
+      "   Re-run `vite build` (or `npm run renderer-import-budget:update`) on a fresh dist/."
+    );
   }
   if (result.t0Missing) {
     console.error(
@@ -582,7 +588,9 @@ function main() {
     }
   }
   if (result.moduleSetChanged) {
-    console.error("::error::T0 chunk module composition changed (a module migrated between chunks):");
+    console.error(
+      "::error::T0 chunk module composition changed (a module migrated between chunks):"
+    );
     for (const d of result.moduleDiffs) {
       console.error(`   ${d.chunk}:`);
       for (const m of d.added) console.error(`     + ${m}`);
