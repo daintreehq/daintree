@@ -43,6 +43,11 @@ export function triggerPanelTransition(
     return;
   }
 
+  // Check for app-level reduce-animations toggle
+  if (document.body.getAttribute("data-reduce-animations") === "true") {
+    return;
+  }
+
   // Check for performance mode
   if (document.body.getAttribute("data-performance-mode") === "true") {
     return;

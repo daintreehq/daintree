@@ -57,6 +57,7 @@ describe("appThemeViewTransition", () => {
   beforeEach(() => {
     setReducedMotion(false);
     setVisibility("visible");
+    document.body.dataset.reduceAnimations = "false";
     document.body.dataset.performanceMode = "false";
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 });
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
@@ -65,6 +66,7 @@ describe("appThemeViewTransition", () => {
   afterEach(() => {
     delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
     delete (document as unknown as { activeViewTransition?: unknown }).activeViewTransition;
+    delete document.body.dataset.reduceAnimations;
     delete document.body.dataset.performanceMode;
     vi.restoreAllMocks();
   });
@@ -77,6 +79,11 @@ describe("appThemeViewTransition", () => {
 
     it("returns true when performance mode is enabled", () => {
       document.body.dataset.performanceMode = "true";
+      expect(prefersReducedMotion()).toBe(true);
+    });
+
+    it("returns true when reduce-animations is enabled", () => {
+      document.body.dataset.reduceAnimations = "true";
       expect(prefersReducedMotion()).toBe(true);
     });
 
