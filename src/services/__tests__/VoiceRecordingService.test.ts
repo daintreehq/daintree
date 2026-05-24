@@ -511,6 +511,19 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     const panel = (await import("@/store/panelStore")) as unknown as {
       __state: { focusedId: string | null; panelsById: Record<string, unknown> };
     };
+    // The mock factories run once, so __state and the vi.fn() handlers are
+    // singletons shared across tests — reset them to a clean baseline here.
+    macro.isAssistantFocused.mockReset();
+    macro.isAssistantFocused.mockReturnValue(false);
+    help.__fns.setOpen.mockClear();
+    help.__fns.requestFocus.mockClear();
+    help.__state.isOpen = false;
+    help.__state.terminalId = null;
+    panel.__state.focusedId = null;
+    panel.__state.panelsById = {};
+    const voice = await import("@/store/voiceRecordingStore");
+    voice.useVoiceRecordingStore.getState().setError.mockClear();
+    voice.useVoiceRecordingStore.getState().announce.mockClear();
     return { macro, help, panel };
   }
 
@@ -519,6 +532,9 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     const { macro, help, panel } = await importMocks();
     macro.isAssistantFocused.mockReturnValue(true);
     help.__state.terminalId = "assistant-term-1";
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "background" },
+    };
     // A grid terminal is the last-focused panel — it must NOT win.
     panel.__state.focusedId = "grid-panel-9";
 
@@ -527,6 +543,7 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
 
     await voiceRecordingService.toggleFocusedPanel();
 
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         panelId: "assistant-term-1",
@@ -592,12 +609,38 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     );
   });
 
+  it("falls back to the focused grid panel even when an assistant terminal exists but is unfocused", async () => {
+    setupGlobals();
+    const { macro, help, panel } = await importMocks();
+    macro.isAssistantFocused.mockReturnValue(false);
+    // An assistant terminal exists, but focus is in the grid — the grid wins.
+    help.__state.terminalId = "assistant-term-1";
+    panel.__state.focusedId = "grid-panel-9";
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "background" },
+      "grid-panel-9": { id: "grid-panel-9", title: "Terminal", location: "grid" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "grid-panel-9", panelTitle: "Terminal" })
+    );
+  });
+
   it("toggleAssistant routes to the assistant terminal regardless of grid focus", async () => {
     setupGlobals();
     const { help, panel } = await importMocks();
     help.__state.isOpen = true;
     help.__state.terminalId = "assistant-term-1";
     panel.__state.focusedId = "grid-panel-9";
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "background" },
+    };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
@@ -605,6 +648,7 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
 
     await voiceRecordingService.toggleAssistant();
 
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         panelId: "assistant-term-1",
@@ -612,5 +656,46 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
       })
     );
     expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("toggleAssistant does not re-open or re-focus when the assistant is already open", async () => {
+    setupGlobals();
+    const { help, panel } = await importMocks();
+    help.__state.isOpen = true;
+    help.__state.terminalId = "assistant-term-1";
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "background" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    await voiceRecordingService.toggleAssistant();
+
+    expect(help.__fns.setOpen).not.toHaveBeenCalled();
+    expect(help.__fns.requestFocus).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggleAssistant toasts instead of dictating into a trashed assistant terminal", async () => {
+    setupGlobals();
+    const { help, panel } = await importMocks();
+    help.__state.isOpen = true;
+    help.__state.terminalId = "assistant-term-1";
+    // The terminal id is still set, but the panel has been sent to trash.
+    panel.__state.panelsById = {
+      "assistant-term-1": { id: "assistant-term-1", location: "trash" },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+
+    await voiceRecordingService.toggleAssistant();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
+      expect.stringContaining("Start the Daintree Assistant")
+    );
   });
 });

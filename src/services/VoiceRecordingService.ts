@@ -952,6 +952,13 @@ class VoiceRecordingService {
     const terminalId = useHelpPanelStore.getState().terminalId;
     if (!terminalId) return null;
 
+    // Guard the brief window where the assistant terminal has been trashed (or
+    // not yet committed to panelStore) but helpPanelStore.terminalId is still
+    // set — mirrors getFocusedPanelTarget(). A missing/trashed panel means the
+    // assistant is starting or tearing down, so dictation must not target it.
+    const panelEntry = usePanelStore.getState().panelsById[terminalId];
+    if (!panelEntry || panelEntry.location === "trash") return null;
+
     const currentProject = useProjectStore.getState().currentProject;
     return {
       panelId: terminalId,
