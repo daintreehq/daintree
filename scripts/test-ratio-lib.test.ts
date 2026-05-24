@@ -323,6 +323,14 @@ describe("wilsonLowerBound", () => {
     expect(wilsonLowerBound(0, 50)).toBe(0);
   });
 
+  it("returns 0 for out-of-contract inputs instead of NaN", () => {
+    expect(wilsonLowerBound(20, 10)).toBe(0); // successes > n
+    expect(wilsonLowerBound(NaN, 10)).toBe(0);
+    expect(wilsonLowerBound(Infinity, 10)).toBe(0);
+    expect(wilsonLowerBound(-1, 10)).toBe(0);
+    expect(wilsonLowerBound(5, 10, NaN)).toBe(0);
+  });
+
   it("stays strictly below 1 even when every observation is a success", () => {
     const lb = wilsonLowerBound(50, 50);
     expect(lb).toBeGreaterThan(0);
@@ -445,6 +453,37 @@ describe("validateBaseline", () => {
     };
     const errs = validateBaseline(base);
     expect(errs.some((e) => e.includes("fixWithTestCount cannot exceed fixCount"))).toBe(true);
+  });
+
+  it("accepts a baseline with valid precomputed lower bounds", () => {
+    const errs = validateBaseline({
+      rollingWindowSize: 100,
+      updatedAt: "2026-01-01",
+      fixWithTestRatio: 0.72,
+      fixCount: 50,
+      fixWithTestCount: 36,
+      fixWithTestLowerBound: 0.58,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      allWithTestLowerBound: 0.56,
+    });
+    expect(errs).toEqual([]);
+  });
+
+  it("rejects a non-finite lower bound", () => {
+    const errs = validateBaseline({
+      rollingWindowSize: 100,
+      updatedAt: "2026-01-01",
+      fixWithTestRatio: 0.72,
+      fixCount: 50,
+      fixWithTestCount: 36,
+      fixWithTestLowerBound: NaN,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+    });
+    expect(errs.some((e) => e.includes("fixWithTestLowerBound"))).toBe(true);
   });
 
   it("rejects allWithTestCount exceeding totalCount", () => {
@@ -715,6 +754,54 @@ describe("compareToBaseline", () => {
     const r = compareToBaseline(current, baselineWithBounds);
     expect(r.ok).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+
+  it("passes at exactly the lower bound but fails just below it", () => {
+    const baselineWithBounds = {
+      ...baseline,
+      fixWithTestLowerBound: 0.6,
+      allWithTestLowerBound: 0,
+    };
+    const atBound = {
+      fixWithTestRatio: 0.6,
+      fixCount: 50,
+      fixWithTestCount: 30,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    expect(compareToBaseline(atBound, baselineWithBounds).ok).toBe(true);
+    const belowBound = { ...atBound, fixWithTestRatio: 0.599, fixWithTestCount: 29 };
+    const r = compareToBaseline(belowBound, baselineWithBounds);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.kind === "fix-with-test-regression")).toBe(true);
+  });
+
+  it("honors a stored allWithTestLowerBound independently of the recomputed value", () => {
+    // Recomputed all-bound for 66/100 ≈ 0.56 would pass 0.66; the stored 0.7
+    // bound must trip the gate instead.
+    const baselineWithBounds = {
+      ...baseline,
+      fixWithTestLowerBound: 0,
+      allWithTestLowerBound: 0.7,
+    };
+    const current = {
+      fixWithTestRatio: 0.72,
+      fixCount: 50,
+      fixWithTestCount: 36,
+      allWithTestRatio: 0.66,
+      totalCount: 100,
+      allWithTestCount: 66,
+      rollingWindowSize: 100,
+      windowCompleted: true,
+      skippedCount: 0,
+    };
+    const r = compareToBaseline(current, baselineWithBounds);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.kind === "all-with-test-regression")).toBe(true);
   });
 
   it("names the Wilson lower bound in the regression message", () => {

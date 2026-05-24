@@ -138,6 +138,12 @@ function writeBaseline(report, { force }) {
     }
   }
 
+  if (!report.windowCompleted) {
+    console.warn(
+      `::warning::writing baseline from an incomplete window (${report.totalCount}/${report.rollingWindowSize} eligible PRs) — stored Wilson lower bounds will be wider than a full window's.`
+    );
+  }
+
   // Precompute the Wilson lower bounds at write time so the gate reads a
   // self-documenting threshold from the baseline rather than recomputing it.
   const formatted = formatBaseline({

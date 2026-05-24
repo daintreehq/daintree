@@ -131,6 +131,8 @@ export function computeTestRatioReport(classified, rollingWindowSize) {
  */
 export function wilsonLowerBound(successes, n, z = WILSON_Z) {
   if (!Number.isFinite(n) || n <= 0) return 0;
+  if (!Number.isFinite(successes) || successes < 0 || successes > n) return 0;
+  if (!Number.isFinite(z)) return 0;
   const p = successes / n;
   const zSq = z * z;
   const numerator = p + zSq / (2 * n) - z * Math.sqrt((p * (1 - p)) / n + zSq / (4 * n * n));
@@ -183,7 +185,7 @@ export function validateBaseline(data) {
   // but when present they must be valid proportions.
   for (const key of ["fixWithTestLowerBound", "allWithTestLowerBound"]) {
     const v = data[key];
-    if (v !== undefined && (typeof v !== "number" || v < 0 || v > 1)) {
+    if (v !== undefined && (!Number.isFinite(v) || v < 0 || v > 1)) {
       errs.push(`${key} must be a number between 0 and 1`);
     }
   }
