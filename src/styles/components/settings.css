@@ -66,6 +66,14 @@
   }
 }
 
+@media (prefers-contrast: more) {
+  .settings-section-header {
+    --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 .settings-card {
   background: var(--settings-card-bg, var(--theme-surface-panel));
 }
