@@ -6,7 +6,11 @@ import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
-import { stopDevPreviewByPanelId } from "./helpers";
+import {
+  stopDevPreviewByPanelId,
+  dissolvePanelFromGroup,
+  computeRestoredTabGroup,
+} from "./helpers";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -63,26 +67,10 @@ export const createBackgroundActions = (
         ...(groupMetadata && { groupMetadata }),
       });
 
-      // Remove panel from tab group (same dissolve logic as trashPanel)
-      let newTabGroups = state.tabGroups;
-      for (const g of state.tabGroups.values()) {
-        if (g.panelIds.includes(id)) {
-          newTabGroups = new Map(state.tabGroups);
-          const newPanelIds = g.panelIds.filter((pid) => pid !== id);
-
-          if (newPanelIds.length <= 1) {
-            newTabGroups.delete(g.id);
-          } else {
-            const newActiveTabId = g.activeTabId === id ? (newPanelIds[0] ?? "") : g.activeTabId;
-            newTabGroups.set(g.id, {
-              ...g,
-              panelIds: newPanelIds,
-              activeTabId: newActiveTabId,
-            });
-          }
-          saveTabGroups(newTabGroups);
-          break;
-        }
+      const dissolved = dissolvePanelFromGroup(state.tabGroups, id);
+      const newTabGroups = dissolved.tabGroups;
+      if (dissolved.dissolved) {
+        saveTabGroups(newTabGroups);
       }
 
       saveNormalized(newById, state.panelIds);
@@ -303,31 +291,14 @@ export const createBackgroundActions = (
     const existingIds = new Set(get().panelIds);
     const validPanelIds = restoredPanelIds.filter((id) => existingIds.has(id));
 
-    if (validPanelIds.length > 1) {
-      let orderedPanelIds = validPanelIds;
-      let activeTabId = validPanelIds[0];
-
-      if (anchorPanel?.groupMetadata) {
-        const { panelIds, activeTabId: metadataActiveTabId } = anchorPanel.groupMetadata;
-        orderedPanelIds = panelIds.filter((id) => validPanelIds.includes(id));
-        for (const id of validPanelIds) {
-          if (!orderedPanelIds.includes(id)) {
-            orderedPanelIds.push(id);
-          }
-        }
-        activeTabId = orderedPanelIds.includes(metadataActiveTabId)
-          ? metadataActiveTabId
-          : orderedPanelIds[0];
-      }
-
-      if (orderedPanelIds.length > 1) {
-        get().createTabGroup(
-          restoreLocation as "dock" | "grid",
-          worktreeId,
-          orderedPanelIds,
-          activeTabId
-        );
-      }
+    const groupResult = computeRestoredTabGroup(validPanelIds, anchorPanel?.groupMetadata);
+    if (groupResult) {
+      get().createTabGroup(
+        restoreLocation as "dock" | "grid",
+        worktreeId,
+        groupResult.orderedPanelIds,
+        groupResult.activeTabId
+      );
     }
 
     for (const { id } of groupPanels) {
