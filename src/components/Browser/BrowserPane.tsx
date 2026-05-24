@@ -755,6 +755,7 @@ export function BrowserPane({
                 allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                   isDragging && "invisible pointer-events-none"
                 )}
               />
