@@ -31,6 +31,7 @@ import { getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 
 interface WelcomeScreenProps {
@@ -240,6 +241,27 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   );
 }
 
+/* ---------- Shared helpers ---------- */
+
+export function isAgentWelcomeCardEligible({
+  agentSettings,
+  hasRealData,
+  welcomeCardDismissed,
+  availability,
+}: {
+  agentSettings: { agents?: Record<string, { pinned?: boolean }> } | null;
+  hasRealData: boolean;
+  welcomeCardDismissed: boolean;
+  availability: Record<string, AgentAvailabilityState> | null;
+}): boolean {
+  if (!agentSettings) return false;
+  if (!hasRealData || welcomeCardDismissed) return false;
+  const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
+  if (!hasReady) return false;
+  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  return !hasPinned;
+}
+
 /* ---------- Sub-sections ---------- */
 
 function NudgeSequencer({
@@ -262,12 +284,12 @@ function NudgeSequencer({
   // return null (no launchable agents, or any built-in already pinned) we
   // fall through to the checklist instead of silently suppressing it.
   const welcomeCardEligible = useMemo(() => {
-    if (!agentSettings) return false;
-    if (!hasRealData || welcomeCardDismissed) return false;
-    const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
-    if (!hasReady) return false;
-    const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings?.agents?.[id]));
-    return !hasPinned;
+    return isAgentWelcomeCardEligible({
+      agentSettings,
+      hasRealData,
+      welcomeCardDismissed,
+      availability,
+    });
   }, [hasRealData, welcomeCardDismissed, availability, agentSettings]);
 
   // Wait for hydration so we don't briefly render setup banner before its
@@ -423,14 +445,11 @@ function AgentWelcomeCard() {
     return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
   }, [availability]);
 
-  const hasNoPinnedAgents = useMemo(() => {
-    if (!agentSettings?.agents) return true;
-    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents[id]));
-  }, [agentSettings]);
-
-  if (!hasRealData || !loaded) return null;
-  if (welcomeCardDismissed) return null;
-  if (readyAgentIds.length === 0 || !hasNoPinnedAgents) return null;
+  if (!loaded) return null;
+  if (
+    !isAgentWelcomeCardEligible({ agentSettings, hasRealData, welcomeCardDismissed, availability })
+  )
+    return null;
 
   const handlePinAll = async () => {
     if (busy) return;
