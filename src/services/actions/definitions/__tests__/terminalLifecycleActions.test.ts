@@ -6,6 +6,7 @@ const terminalInstanceServiceMock = vi.hoisted(() => ({
   focus: vi.fn(),
   cleanup: vi.fn(),
   applyRendererPolicy: vi.fn(),
+  onPanelBackgrounded: vi.fn(),
   resetRenderer: vi.fn(),
   hibernate: vi.fn(),
 }));

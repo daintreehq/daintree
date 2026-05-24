@@ -388,7 +388,13 @@ describe("TerminalHibernationManager adversarial", () => {
 
       vi.advanceTimersByTime(30_000);
 
+      // hibernate() must not have been attempted — assert the teardown side
+      // effects never fired, not just the isHibernated flag (which alone
+      // could pass vacuously if hibernate() was never called for any reason).
       expect(managed.isHibernated).toBe(false);
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+      expect(deps.resetBufferedOutput).not.toHaveBeenCalled();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
     } finally {
       vi.setSystemTime(new Date());
       vi.useRealTimers();

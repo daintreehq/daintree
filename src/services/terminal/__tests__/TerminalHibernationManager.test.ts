@@ -646,6 +646,24 @@ describe("TerminalHibernationManager", () => {
         false
       );
     });
+
+    it("scopes the bypass to the queried id — backgrounding another panel doesn't leak", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - 1000;
+      managed.pendingWrites = 0;
+      // Only "t2" is backgrounded; "t1" must keep its silence window.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockImplementation(
+        (queriedId: string) => queriedId === "t2"
+      );
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)).toBe(
+        false
+      );
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t2", now)).toBe(
+        true
+      );
+    });
   });
 
   describe("scheduleHibernation() / cancelHibernation()", () => {
@@ -771,6 +789,35 @@ describe("TerminalHibernationManager", () => {
       manager.scheduleHibernation("t1", managed);
 
       // Backgrounded: re-check timer skipped, normal hibernation timer armed.
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.advanceTimersByTime(30_000);
+      expect(managed.isHibernated).toBe(true);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("cancel + reschedule swaps a pending eligibility timer for the normal timer once backgrounded", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0;
+
+      // Active agent inside the silence window → eligibility re-check armed.
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+      expect(managed.hibernationTimer).toBeUndefined();
+
+      // User backgrounds the panel — the onPanelBackgrounded path cancels the
+      // pending timer and reschedules. With the bypass now live, the normal
+      // hibernation timer is armed instead of waiting out the silence window.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      manager.cancelHibernation(managed);
+      manager.scheduleHibernation("t1", managed);
+
       expect(managed.hibernationEligibilityTimer).toBeUndefined();
       expect(managed.hibernationTimer).toBeDefined();
 

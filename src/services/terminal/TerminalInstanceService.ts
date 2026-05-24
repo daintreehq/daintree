@@ -2316,6 +2316,27 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Called when the user explicitly backgrounds a panel. A terminal that was
+   * already offscreen at BACKGROUND tier had its hibernation timer armed by
+   * the earlier tier drop — and for a still-active agent inside the silence
+   * window that means a one-shot eligibility re-check that waits out the full
+   * AGENT_IDLE_SILENCE_MS. That re-check predates the backgrounded bypass, so
+   * without this nudge the bypass wouldn't take effect until the window
+   * expired anyway. Cancel the pending timer and reschedule so the bypass
+   * (`getIsBackgrounded` is now true) arms the normal hibernation timer
+   * immediately. Visible panels are skipped — backgrounding unmounts them,
+   * and the resulting detach → setVisible(false) → onTierApplied path arms
+   * the timer with the bypass already in effect.
+   */
+  onPanelBackgrounded(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated || managed.isVisible) return;
+    if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) return;
+    this.cancelHibernation(managed);
+    this.scheduleHibernation(id, managed);
+  }
+
   destroy(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;

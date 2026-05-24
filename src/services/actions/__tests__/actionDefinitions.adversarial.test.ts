@@ -94,6 +94,7 @@ const mocks = vi.hoisted(() => {
     resetRenderer: vi.fn(),
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     resize: vi.fn(),
     prewarmTerminal: vi.fn(),
     sendPtyResize: vi.fn(),
