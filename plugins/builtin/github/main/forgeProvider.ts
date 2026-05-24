@@ -45,6 +45,17 @@ import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { fetchActivityProbe } from "./GitHubStats.js";
+import {
+  forgeIssueListCache,
+  forgePRListCache,
+  issueTooltipCache,
+  prRequiredStatusCache,
+  truncateBody,
+  writePRTooltip,
+  type PRRequiredStatusEntry,
+} from "./GitHubCaches.js";
+import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
+import type { IssueTooltipData, PRTooltipData } from "../../../../shared/types/github.js";
 
 const REPO_METADATA_QUERY = `
   query GetRepoMetadata($owner: String!, $repo: String!) {
@@ -259,7 +270,8 @@ async function dispatchQuery(
  */
 async function runQuery(
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  queryLabel: string
 ): Promise<GraphQlQueryResponseData> {
   const key = buildCacheKey(query, variables);
 
@@ -269,7 +281,7 @@ async function runQuery(
   const inflight = forgeQueryInflight.get(key);
   if (inflight !== undefined) return inflight;
 
-  const request = dispatchQuery(query, variables)
+  const request = dispatchQuery(query, variables, queryLabel)
     .then((response) => {
       forgeQueryCache.set(key, response);
       return response;
@@ -282,112 +294,311 @@ async function runQuery(
   return request;
 }
 
-async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
-  const limit = opts.perPage ?? 20;
-  const orderBy = buildOrderBy(opts);
+/**
+ * Single-flight coalescing maps for higher-level provider methods. These layer
+ * on top of `runQuery`'s GraphQL-level dedup to coalesce at the call-site
+ * boundary too — `listPRs`/`getCIStatus` etc. carry their own cache shape
+ * (Page<T>, CIStatus) and need to dedup on the same key the cache uses, not the
+ * underlying GraphQL key. Concurrent calls with the same key join the one
+ * in-flight request instead of each paying full query cost — the dominant load
+ * source is the worktree dashboard's fleet-wide PR/CI poll firing the same
+ * lookups from every view at once.
+ */
+const listIssuesInflight = new Map<string, Promise<Page<Issue>>>();
+const listPRsInflight = new Map<string, Promise<Page<PR>>>();
+const getIssueInflight = new Map<string, Promise<Issue | null>>();
+const getPRInflight = new Map<string, Promise<PR | null>>();
+const getCIStatusInflight = new Map<string, Promise<CIStatus | null>>();
+const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>>>();
 
-  const response = await runQuery(
-    LIST_ISSUES_QUERY,
-    {
-      owner: repo.owner,
-      repo: repo.repo,
-      states: mapIssueGraphQLStates(opts.state),
-      cursor: opts.cursor ?? null,
-      limit,
-      orderBy,
-    },
-    "LIST_ISSUES_QUERY"
+/**
+ * Join an in-flight request for `key` when one exists, else start `fn` and
+ * register it. `bypass` forces a fresh request (skips the join) and installs
+ * itself as the new shared promise so callers arriving mid-flight get the fresh
+ * result, not the stale one. Cleanup removes the entry only if it's still the
+ * active promise, so a bypass replacement isn't deleted by the request it
+ * superseded. Failures evict immediately so a transient error doesn't pin a
+ * rejected promise for later callers.
+ */
+function dedupe<T>(
+  inflight: Map<string, Promise<T>>,
+  key: string,
+  bypass: boolean,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!bypass) {
+    const pending = inflight.get(key);
+    if (pending) return pending;
+  }
+  const promise = fn();
+  inflight.set(key, promise);
+  const cleanup = () => {
+    if (inflight.get(key) === promise) inflight.delete(key);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
+
+function listCacheState(opts: ListOptions): "open" | "closed" | "all" {
+  return opts.state ?? "open";
+}
+
+function issueToTooltipData(issue: Issue): IssueTooltipData {
+  return {
+    number: issue.number,
+    title: issue.title,
+    bodyExcerpt: truncateBody(issue.body),
+    state: issue.state === "closed" ? "CLOSED" : "OPEN",
+    createdAt: new Date(issue.createdAt).toISOString(),
+    author: { login: issue.author?.login ?? "unknown", avatarUrl: issue.author?.avatarUrl ?? "" },
+    assignees: issue.assignees.map((a) => ({ login: a.login, avatarUrl: a.avatarUrl ?? "" })),
+    labels: issue.labels.map((l) => ({ name: l.name, color: l.color ?? "" })),
+  };
+}
+
+/**
+ * Build a {@link PRTooltipData} from a normalized forge {@link PR}. Assignees
+ * and labels aren't on the forge `PR` shape, so they're read from `rawData`
+ * (present when the source query selected them — `GET_PR_QUERY` and
+ * `buildBatchBranchPRQuery` both do). Returns `null` when `createdAt` is
+ * missing (0), since the tooltip renders a real creation date.
+ */
+function prToTooltipData(pr: PR): PRTooltipData | null {
+  if (!pr.createdAt) return null;
+  const raw = (pr.rawData ?? {}) as Record<string, unknown>;
+  const assigneeNodes =
+    (raw.assignees as { nodes?: Array<{ login?: string; avatarUrl?: string }> } | undefined)
+      ?.nodes ?? [];
+  const labelNodes =
+    (raw.labels as { nodes?: Array<{ name?: string; color?: string }> } | undefined)?.nodes ?? [];
+  const state: "OPEN" | "CLOSED" | "MERGED" =
+    pr.merged || pr.state === "merged"
+      ? "MERGED"
+      : pr.state === "closed" || pr.state === "declined"
+        ? "CLOSED"
+        : "OPEN";
+  return {
+    number: pr.number,
+    title: pr.title,
+    bodyExcerpt: truncateBody(pr.body),
+    state,
+    isDraft: pr.isDraft,
+    createdAt: new Date(pr.createdAt).toISOString(),
+    author: { login: pr.author?.login ?? "unknown", avatarUrl: pr.author?.avatarUrl ?? "" },
+    assignees: assigneeNodes
+      .filter(Boolean)
+      .map((a) => ({ login: a.login ?? "unknown", avatarUrl: a.avatarUrl ?? "" })),
+    labels: labelNodes.filter(Boolean).map((l) => ({ name: l.name ?? "", color: l.color ?? "" })),
+  };
+}
+
+function buildCIStatus(entry: PRRequiredStatusEntry, rawData: unknown): CIStatus {
+  let state: CIStatus["state"] = "unknown";
+  const effective = entry.ciStatus;
+  if (effective === "SUCCESS") state = "success";
+  else if (effective === "FAILURE" || effective === "ERROR") state = "failure";
+  else if (effective === "PENDING" || effective === "EXPECTED") state = "pending";
+  else if (effective === undefined && (entry.ciSummary?.requiredTotal ?? 0) === 0)
+    state = "neutral";
+
+  const total = entry.ciSummary?.requiredTotal ?? 0;
+  const failed = entry.ciSummary?.requiredFailing ?? 0;
+  const pending = entry.ciSummary?.requiredPending ?? 0;
+  const passed = Math.max(0, total - failed - pending);
+  const requiredChecksPassing =
+    entry.ciSummary !== undefined
+      ? entry.ciSummary.requiredTotal > 0 &&
+        entry.ciSummary.requiredFailing === 0 &&
+        entry.ciSummary.requiredPending === 0
+      : undefined;
+
+  return {
+    state,
+    total,
+    passed,
+    failed,
+    pending,
+    ...(requiredChecksPassing !== undefined ? { requiredChecksPassing } : {}),
+    rawData,
+  };
+}
+
+async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
+  const state = listCacheState(opts);
+  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const bypass = opts.bypassCache === true;
+  const cacheKey = buildListCacheKey(
+    "issue",
+    repo.owner,
+    repo.repo,
+    state,
+    opts.search ?? "",
+    sortOrder,
+    opts.cursor ?? ""
   );
 
-  const issues = (response?.repository as Record<string, unknown> | undefined)?.issues as
-    | {
-        nodes?: unknown[];
-        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-        totalCount?: number;
-      }
-    | undefined;
-  const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
-  return {
-    items: nodes.filter(Boolean).map(toForgeIssue),
-    nextCursor: issues?.pageInfo?.endCursor ?? null,
-    hasMore: issues?.pageInfo?.hasNextPage ?? false,
-    ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
-  };
+  if (!bypass) {
+    const cached = forgeIssueListCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
+  return dedupe(listIssuesInflight, cacheKey, bypass, async () => {
+    const limit = opts.perPage ?? 20;
+    const orderBy = buildOrderBy(opts);
+
+    const response = await runQuery(
+      LIST_ISSUES_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        states: mapIssueGraphQLStates(opts.state),
+        cursor: opts.cursor ?? null,
+        limit,
+        orderBy,
+      },
+      "LIST_ISSUES_QUERY"
+    );
+
+    const issues = (response?.repository as Record<string, unknown> | undefined)?.issues as
+      | {
+          nodes?: unknown[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          totalCount?: number;
+        }
+      | undefined;
+    const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
+    const page: Page<Issue> = {
+      items: nodes.filter(Boolean).map(toForgeIssue),
+      nextCursor: issues?.pageInfo?.endCursor ?? null,
+      hasMore: issues?.pageInfo?.hasNextPage ?? false,
+      ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
+    };
+
+    forgeIssueListCache.set(cacheKey, page);
+    if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
+    }
+    return page;
+  });
 }
 
 async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
-  const limit = opts.perPage ?? 20;
-  const orderBy = buildOrderBy(opts);
-
-  const response = await runQuery(
-    LIST_PRS_QUERY,
-    {
-      owner: repo.owner,
-      repo: repo.repo,
-      states: mapPRGraphQLStates(opts.state),
-      cursor: opts.cursor ?? null,
-      limit,
-      orderBy,
-    },
-    "LIST_PRS_QUERY"
+  const state = listCacheState(opts);
+  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const bypass = opts.bypassCache === true;
+  const cacheKey = buildListCacheKey(
+    "pr",
+    repo.owner,
+    repo.repo,
+    state,
+    opts.search ?? "",
+    sortOrder,
+    opts.cursor ?? ""
   );
 
-  const prs = (response?.repository as Record<string, unknown> | undefined)?.pullRequests as
-    | {
-        nodes?: unknown[];
-        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-        totalCount?: number;
-      }
-    | undefined;
-  const nodes = (prs?.nodes ?? []) as Array<Record<string, unknown>>;
-  return {
-    items: nodes.filter(Boolean).map(toForgePR),
-    nextCursor: prs?.pageInfo?.endCursor ?? null,
-    hasMore: prs?.pageInfo?.hasNextPage ?? false,
-    ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
-  };
+  if (!bypass) {
+    const cached = forgePRListCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
+  return dedupe(listPRsInflight, cacheKey, bypass, async () => {
+    const limit = opts.perPage ?? 20;
+    const orderBy = buildOrderBy(opts);
+
+    const response = await runQuery(
+      LIST_PRS_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        states: mapPRGraphQLStates(opts.state),
+        cursor: opts.cursor ?? null,
+        limit,
+        orderBy,
+      },
+      "LIST_PRS_QUERY"
+    );
+
+    const prs = (response?.repository as Record<string, unknown> | undefined)?.pullRequests as
+      | {
+          nodes?: unknown[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          totalCount?: number;
+        }
+      | undefined;
+    const nodes = (prs?.nodes ?? []) as Array<Record<string, unknown>>;
+    const page: Page<PR> = {
+      items: nodes.filter(Boolean).map(toForgePR),
+      nextCursor: prs?.pageInfo?.endCursor ?? null,
+      hasMore: prs?.pageInfo?.hasNextPage ?? false,
+      ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
+    };
+
+    forgePRListCache.set(cacheKey, page);
+    if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
+      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
+    }
+    return page;
+  });
 }
 
 async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
-  const response = await runQuery(
-    GET_ISSUE_QUERY,
-    {
-      owner: repo.owner,
-      repo: repo.repo,
-      number,
-    },
-    "GET_ISSUE_QUERY"
-  );
-  const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
-    | Record<string, unknown>
-    | null
-    | undefined;
-  return issue ? toForgeIssue(issue) : null;
+  const key = `${repo.owner}/${repo.repo}:${number}`;
+  return dedupe(getIssueInflight, key, false, async () => {
+    const response = await runQuery(
+      GET_ISSUE_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        number,
+      },
+      "GET_ISSUE_QUERY"
+    );
+    const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    if (!issue) return null;
+    const forgeIssue = toForgeIssue(issue);
+    // Warm the hover-tooltip cache as a side effect so a subsequent hover skips
+    // a redundant fetch. The detail fetch can't *read* this cache — it holds
+    // the narrower tooltip shape, not a full Issue.
+    issueTooltipCache.set(key, issueToTooltipData(forgeIssue));
+    return forgeIssue;
+  });
 }
 
 async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
-  const response = await runQuery(
-    GET_PR_QUERY,
-    {
-      owner: repo.owner,
-      repo: repo.repo,
-      number,
-    },
-    "GET_PR_QUERY"
-  );
-  const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-    | Record<string, unknown>
-    | null
-    | undefined;
-  return pr ? toForgePR(pr) : null;
+  const key = `${repo.owner}/${repo.repo}:${number}`;
+  return dedupe(getPRInflight, key, false, async () => {
+    const requestedAt = Date.now();
+    const response = await runQuery(
+      GET_PR_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        number,
+      },
+      "GET_PR_QUERY"
+    );
+    const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    if (!pr) return null;
+    const forgePR = toForgePR(pr);
+    // Side-effect tooltip pre-warm (write-through only); guarded by the
+    // ownership-token timestamp so a slow response can't clobber a fresher one.
+    const tooltip = prToTooltipData(forgePR);
+    if (tooltip) writePRTooltip(repo.owner, repo.repo, number, tooltip, requestedAt);
+    return forgePR;
+  });
 }
 
 async function findPRsByBranchesImpl(
   repo: RepoRef,
   branches: string[]
 ): Promise<Map<string, PR | null>> {
-  const result = new Map<string, PR | null>();
-  if (branches.length === 0) return result;
+  if (branches.length === 0) return new Map<string, PR | null>();
 
   // Deduplicate while preserving order. Duplicates in the input still land
   // in the result via the same key, but each unique value is queried once.
@@ -400,40 +611,63 @@ async function findPRsByBranchesImpl(
     }
   }
 
-  // Chunks run sequentially (parallel would spike GraphQL points during a
-  // fleet-wide refresh). Per-chunk failures are caught so a single transient
-  // chunk error doesn't blank every branch — the caller falls back per-branch
-  // for any branch the result Map omits.
-  for (let start = 0; start < unique.length; start += BATCH_BRANCH_CHUNK_SIZE) {
-    const chunk = unique.slice(start, start + BATCH_BRANCH_CHUNK_SIZE);
-    const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
-    let response: Record<string, unknown>;
-    try {
-      response = (await runQuery(query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
-    } catch {
-      // Omit this chunk's branches from the result — caller's missing-key
-      // fallback path handles them.
-      continue;
+  // Coalesce concurrent fleet-wide sweeps requesting the same branch set
+  // (order-independent) into one round-trip. The result Map preserves each
+  // caller's branch keys regardless of the sorted key used for coalescing.
+  const inflightKey = `${repo.owner}/${repo.repo}:${[...unique].sort().join(",")}`;
+  return dedupe(findPRsByBranchesInflight, inflightKey, false, async () => {
+    const result = new Map<string, PR | null>();
+
+    // Skip the network entirely while rate-limited — the caller's missing-key
+    // fallback handles every omitted branch. Mirrors `batchCheckLinkedPRs`.
+    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    if (block.blocked) return result;
+
+    const requestedAt = Date.now();
+    // Chunks run sequentially (parallel would spike GraphQL points during a
+    // fleet-wide refresh). Per-chunk failures are caught so a single transient
+    // chunk error doesn't blank every branch — the caller falls back per-branch
+    // for any branch the result Map omits.
+    for (let start = 0; start < unique.length; start += BATCH_BRANCH_CHUNK_SIZE) {
+      const chunk = unique.slice(start, start + BATCH_BRANCH_CHUNK_SIZE);
+      const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
+      let response: Record<string, unknown>;
+      try {
+        response = (await runQuery(query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
+      } catch {
+        // Omit this chunk's branches from the result — caller's missing-key
+        // fallback path handles them.
+        continue;
+      }
+
+      for (let i = 0; i < chunk.length; i++) {
+        const branch = chunk[i];
+        // A missing alias key (vs. a present key with empty nodes) indicates a
+        // partial GraphQL response. Omit so the caller routes to fallback rather
+        // than silently recording "no PR found".
+        if (!(`b${i}` in response)) continue;
+        const aliasNode = response[`b${i}`] as
+          | { pullRequests?: { nodes?: unknown[] } }
+          | null
+          | undefined;
+        if (aliasNode == null) continue;
+        const nodes = (aliasNode.pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
+        const first = nodes.find(Boolean);
+        const forgePR = first ? toForgePR(first) : null;
+        result.set(branch, forgePR);
+
+        // Pre-warm the PR tooltip cache so a hover right after a fleet refresh
+        // is instant. The batch-branch query carries assignees/labels, so the
+        // warmed entry is complete (not a partial that a later hover refetches).
+        if (forgePR) {
+          const tooltip = prToTooltipData(forgePR);
+          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+        }
+      }
     }
 
-    for (let i = 0; i < chunk.length; i++) {
-      const branch = chunk[i];
-      // A missing alias key (vs. a present key with empty nodes) indicates a
-      // partial GraphQL response. Omit so the caller routes to fallback rather
-      // than silently recording "no PR found".
-      if (!(`b${i}` in response)) continue;
-      const aliasNode = response[`b${i}`] as
-        | { pullRequests?: { nodes?: unknown[] } }
-        | null
-        | undefined;
-      if (aliasNode == null) continue;
-      const nodes = (aliasNode.pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
-      const first = nodes.find(Boolean);
-      result.set(branch, first ? toForgePR(first) : null);
-    }
-  }
-
-  return result;
+    return result;
+  });
 }
 
 async function findPRByBranchImpl(repo: RepoRef, branchName: string): Promise<PR | null> {
@@ -460,64 +694,52 @@ async function findPRByBranchImpl(repo: RepoRef, branchName: string): Promise<PR
 }
 
 async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatus | null> {
-  const response = await runQuery(
-    PR_CI_STATUS_QUERY,
-    {
-      owner: repo.owner,
-      repo: repo.repo,
-      number: prNumber,
-    },
-    "PR_CI_STATUS_QUERY"
-  );
+  // Shares the 60s required-status cache with the legacy enrich path (same key
+  // and {@link PRRequiredStatusEntry} value). This is the hottest forge path —
+  // the worktree dashboard polls CI per open PR across every view — so the
+  // cache + single-flight collapse the fan-out to one request per PR per 60s.
+  const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  const cached = prRequiredStatusCache.get(cacheKey);
+  if (cached) return buildCIStatus(cached, null);
 
-  const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-    | Record<string, unknown>
-    | null
-    | undefined;
-  if (!pr) return null;
+  return dedupe(getCIStatusInflight, cacheKey, false, async () => {
+    const response = await runQuery(
+      PR_CI_STATUS_QUERY,
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        number: prNumber,
+      },
+      "PR_CI_STATUS_QUERY"
+    );
 
-  const commits = pr.commits as
-    | { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> }
-    | undefined;
-  const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
-    | {
-        state?: string;
-        contexts?: { nodes?: RollupContextNode[]; pageInfo?: { hasNextPage?: boolean } };
-      }
-    | undefined;
+    const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    if (!pr) return null;
 
-  const contextNodes = rollup?.contexts?.nodes ?? null;
-  const hasNextPage = rollup?.contexts?.pageInfo?.hasNextPage === true;
-  const derived = deriveRequiredCIStatus(contextNodes, hasNextPage, rollup?.state ?? null);
+    const commits = pr.commits as
+      | { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> }
+      | undefined;
+    const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
+      | {
+          state?: string;
+          contexts?: { nodes?: RollupContextNode[]; pageInfo?: { hasNextPage?: boolean } };
+        }
+      | undefined;
 
-  let state: CIStatus["state"] = "unknown";
-  const effective = derived.ciStatus;
-  if (effective === "SUCCESS") state = "success";
-  else if (effective === "FAILURE" || effective === "ERROR") state = "failure";
-  else if (effective === "PENDING" || effective === "EXPECTED") state = "pending";
-  else if (effective === undefined && (derived.ciSummary?.requiredTotal ?? 0) === 0)
-    state = "neutral";
+    const contextNodes = rollup?.contexts?.nodes ?? null;
+    const hasNextPage = rollup?.contexts?.pageInfo?.hasNextPage === true;
+    const derived = deriveRequiredCIStatus(contextNodes, hasNextPage, rollup?.state ?? null);
 
-  const total = derived.ciSummary?.requiredTotal ?? 0;
-  const failed = derived.ciSummary?.requiredFailing ?? 0;
-  const pending = derived.ciSummary?.requiredPending ?? 0;
-  const passed = Math.max(0, total - failed - pending);
-  const requiredChecksPassing =
-    derived.ciSummary !== undefined
-      ? derived.ciSummary.requiredTotal > 0 &&
-        derived.ciSummary.requiredFailing === 0 &&
-        derived.ciSummary.requiredPending === 0
-      : undefined;
-
-  return {
-    state,
-    total,
-    passed,
-    failed,
-    pending,
-    ...(requiredChecksPassing !== undefined ? { requiredChecksPassing } : {}),
-    rawData: rollup ?? null,
-  };
+    const entry: PRRequiredStatusEntry = {
+      ciStatus: derived.ciStatus,
+      ciSummary: derived.ciSummary,
+    };
+    prRequiredStatusCache.set(cacheKey, entry);
+    return buildCIStatus(entry, rollup ?? null);
+  });
 }
 
 async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {

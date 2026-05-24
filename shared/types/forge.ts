@@ -154,6 +154,14 @@ export interface ListOptions {
   assignee?: string;
   sort?: string;
   direction?: "asc" | "desc";
+  /** Free-text search query. Advisory — providers ignore it if unsupported. */
+  search?: string;
+  /**
+   * Skip the provider's in-memory list cache and any in-flight coalescing, and
+   * fetch fresh data. The result still populates the cache for later reads.
+   * Providers that don't cache ignore this. Advisory only.
+   */
+  bypassCache?: boolean;
   /**
    * Opaque freshness token from a prior {@link Page.freshnessToken} response.
    * Advisory: providers that support conditional listing skip the fetch and

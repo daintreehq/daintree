@@ -734,6 +734,8 @@ export const BATCH_BRANCH_CHUNK_SIZE = 20;
  * Field shape matches the per-branch `SEARCH_QUERY` PR fragment subset that
  * `toForgePR` reads: number, title, bodyText, url, state, isDraft, merged,
  * baseRefName, headRefName, createdAt, updatedAt, closedAt, mergedAt, author.
+ * Also carries `assignees`/`labels` so `findPRsByBranches` can pre-warm the PR
+ * tooltip cache with complete hover data (parity with `buildBatchPRQuery`).
  */
 export function buildBatchBranchPRQuery(owner: string, repo: string, branches: string[]): string {
   if (branches.length === 0) return "";
@@ -760,6 +762,8 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
             closedAt
             mergedAt
             author { login avatarUrl }
+            assignees(first: 10) { nodes { login avatarUrl } }
+            labels(first: 10) { nodes { name color } }
           }
         }
       }
