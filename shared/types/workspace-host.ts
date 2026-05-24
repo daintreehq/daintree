@@ -464,9 +464,11 @@ export type ForgeRpcMethod =
   | "resolveProvider"
   | "findPRByBranch"
   | "findPRsByBranches"
+  | "findPRsByNumbers"
   | "getPR"
   | "getIssue"
   | "getCIStatus"
+  | "getCIStatuses"
   | "getRateLimit";
 
 /** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */

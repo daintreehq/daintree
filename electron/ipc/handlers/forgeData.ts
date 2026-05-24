@@ -29,8 +29,63 @@ function requireCwd(value: unknown): string {
   return value;
 }
 
+// Brief in-flight collapse window after a read resolves. These handlers are
+// point lookups that can't be batched but get hammered by concurrent renderer
+// callers (e.g. several panels mounting against the same cwd). 150ms mirrors
+// the WorkspaceClient singleflight TTL (#4832): long enough to collapse a
+// mount burst, short enough never to serve stale read data.
+const SINGLE_FLIGHT_TTL_MS = 150;
+
+/**
+ * Closure-scoped single-flight coalescer. Concurrent callers with the same key
+ * share one in-flight promise; a key keeps collapsing for {@link
+ * SINGLE_FLIGHT_TTL_MS} after it resolves, and is evicted immediately on
+ * rejection so the next caller retries. The map is per-`registerForgeDataHandlers`
+ * call so it never leaks across project teardown.
+ */
+function createSingleFlight() {
+  const inflight = new Map<string, Promise<unknown>>();
+  return function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const existing = inflight.get(key);
+    if (existing) return existing as Promise<T>;
+
+    const promise = run();
+    inflight.set(key, promise);
+    promise.then(
+      () => {
+        setTimeout(() => {
+          if (inflight.get(key) === promise) inflight.delete(key);
+        }, SINGLE_FLIGHT_TTL_MS);
+      },
+      () => {
+        if (inflight.get(key) === promise) inflight.delete(key);
+      }
+    );
+    return promise;
+  };
+}
+
+/**
+ * Deterministic key for a {@link ListOptions} value. Built from explicit fields
+ * in a fixed order rather than `JSON.stringify`, whose output depends on
+ * property insertion order and would split otherwise-identical queries into
+ * separate in-flight slots.
+ */
+function listOptionsKey(opts: ListOptions): string {
+  return [
+    opts.state ?? "",
+    opts.cursor ?? "",
+    opts.perPage ?? "",
+    (opts.labels ?? []).join(","),
+    opts.assignee ?? "",
+    opts.sort ?? "",
+    opts.direction ?? "",
+  ].join("|");
+}
+
 export function registerForgeDataHandlers(): () => void {
   const cleanups: Array<() => void> = [];
+  const coalesce = createSingleFlight();
 
   cleanups.push(
     typedHandle(
@@ -40,8 +95,11 @@ export function registerForgeDataHandlers(): () => void {
           throw new Error("Invalid payload");
         }
         const cwd = requireCwd(payload.cwd);
-        const { impl, repoRef } = await resolveForCwd(cwd);
-        return impl.listIssues(repoRef, payload.opts ?? {});
+        const opts = payload.opts ?? {};
+        return coalesce(`${cwd}::listIssues::${listOptionsKey(opts)}`, async () => {
+          const { impl, repoRef } = await resolveForCwd(cwd);
+          return impl.listIssues(repoRef, opts);
+        });
       }
     )
   );
@@ -52,8 +110,11 @@ export function registerForgeDataHandlers(): () => void {
         throw new Error("Invalid payload");
       }
       const cwd = requireCwd(payload.cwd);
-      const { impl, repoRef } = await resolveForCwd(cwd);
-      return impl.listPRs(repoRef, payload.opts ?? {});
+      const opts = payload.opts ?? {};
+      return coalesce(`${cwd}::listPRs::${listOptionsKey(opts)}`, async () => {
+        const { impl, repoRef } = await resolveForCwd(cwd);
+        return impl.listPRs(repoRef, opts);
+      });
     })
   );
 
@@ -64,8 +125,10 @@ export function registerForgeDataHandlers(): () => void {
       }
       const cwd = requireCwd(payload.cwd);
       const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
-      const { impl, repoRef } = await resolveForCwd(cwd);
-      return impl.getIssue(repoRef, issueNumber);
+      return coalesce(`${cwd}::getIssue::${issueNumber}`, async () => {
+        const { impl, repoRef } = await resolveForCwd(cwd);
+        return impl.getIssue(repoRef, issueNumber);
+      });
     })
   );
 
@@ -76,8 +139,10 @@ export function registerForgeDataHandlers(): () => void {
       }
       const cwd = requireCwd(payload.cwd);
       const prNumber = requirePositiveInt(payload.prNumber, "PR number");
-      const { impl, repoRef } = await resolveForCwd(cwd);
-      return impl.getPR(repoRef, prNumber);
+      return coalesce(`${cwd}::getPR::${prNumber}`, async () => {
+        const { impl, repoRef } = await resolveForCwd(cwd);
+        return impl.getPR(repoRef, prNumber);
+      });
     })
   );
 

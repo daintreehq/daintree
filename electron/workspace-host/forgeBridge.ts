@@ -69,6 +69,25 @@ export class ForgeBridge {
     ]);
   }
 
+  /**
+   * Optional batch variant of {@link getPR}. Returns `null` when the provider
+   * does not implement `batchLookups.findPRsByNumbers`; the host-side
+   * `BatchLoader` then falls back to per-number {@link getPR} calls. A returned
+   * `Map` is keyed by PR number — an omitted key means the provider could not
+   * resolve that number in the batch (transient), distinct from an explicit
+   * `null` value (confirmed not found).
+   */
+  findPRsByNumbers(
+    namespacedId: string,
+    repo: RepoRef,
+    prNumbers: number[]
+  ): Promise<Map<number, PR | null> | null> {
+    return this.invoke<Map<number, PR | null> | null>("findPRsByNumbers", namespacedId, [
+      repo,
+      prNumbers,
+    ]);
+  }
+
   getPR(namespacedId: string, repo: RepoRef, prNumber: number): Promise<PR | null> {
     return this.invoke<PR | null>("getPR", namespacedId, [repo, prNumber]);
   }
@@ -79,6 +98,23 @@ export class ForgeBridge {
 
   getCIStatus(namespacedId: string, repo: RepoRef, prNumber: number): Promise<CIStatus | null> {
     return this.invoke<CIStatus | null>("getCIStatus", namespacedId, [repo, prNumber]);
+  }
+
+  /**
+   * Optional batch variant of {@link getCIStatus}. Returns `null` when the
+   * provider does not implement `batchLookups.getCIStatuses`; the host-side
+   * `BatchLoader` then falls back to per-number {@link getCIStatus} calls. A
+   * returned `Map` is keyed by PR number.
+   */
+  getCIStatuses(
+    namespacedId: string,
+    repo: RepoRef,
+    prNumbers: number[]
+  ): Promise<Map<number, CIStatus | null> | null> {
+    return this.invoke<Map<number, CIStatus | null> | null>("getCIStatuses", namespacedId, [
+      repo,
+      prNumbers,
+    ]);
   }
 
   /**
