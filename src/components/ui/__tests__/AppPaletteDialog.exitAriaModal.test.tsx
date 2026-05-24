@@ -92,6 +92,6 @@ describe("AppPaletteDialog aria-modal during exit window", () => {
     // But only one declares itself the active modal.
     const activeModals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
     expect(activeModals).toHaveLength(1);
-    expect(activeModals[0].getAttribute("aria-label")).toBe("Incoming palette");
+    expect(activeModals[0]?.getAttribute("aria-label")).toBe("Incoming palette");
   });
 });
