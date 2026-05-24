@@ -11,7 +11,7 @@
 // - The CLI compares these against a checked-in baseline and emits GitHub
 //   workflow annotations. No PR-blocking gate.
 
-export const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx)$/;
+export const TEST_FILE_RE = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 const FIX_TITLE_RE = /^fix[(:]/i;
 const RELEASE_TITLE_RE = /^chore\(release\):/;
@@ -70,6 +70,17 @@ export function classifyPR(pr) {
     isSkipped: skipped,
     skipReason: skipped ? "release/version bump" : undefined,
   };
+}
+
+/**
+ * Per-PR reminder policy for the pull_request arm: true when a PR looks like a
+ * fix but didn't touch any test files. Skipped PRs (release/version bumps) and
+ * non-fix PRs never trigger the reminder.
+ * @param {ClassifiedPR} classified — output of classifyPR
+ * @returns {boolean}
+ */
+export function shouldRemindAboutTests(classified) {
+  return classified.isFix && !classified.touchesTests && !classified.isSkipped;
 }
 
 /**

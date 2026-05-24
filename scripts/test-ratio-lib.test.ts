@@ -5,6 +5,7 @@ import {
   isReleaseOrVersionBump,
   isEligiblePR,
   classifyPR,
+  shouldRemindAboutTests,
   computeTestRatioReport,
   validateBaseline,
   compareToBaseline,
@@ -112,6 +113,11 @@ describe("TEST_FILE_RE", () => {
     expect(TEST_FILE_RE.test("scripts/helpers.spec.js")).toBe(true);
   });
 
+  it("matches .test.mjs and .spec.cjs files", () => {
+    expect(TEST_FILE_RE.test("scripts/lint-ratchet.test.mjs")).toBe(true);
+    expect(TEST_FILE_RE.test("scripts/helpers.spec.cjs")).toBe(true);
+  });
+
   it("rejects non-test files", () => {
     expect(TEST_FILE_RE.test("src/utils/test-utils.ts")).toBe(false);
     expect(TEST_FILE_RE.test("src/components/TestButton.tsx")).toBe(false);
@@ -187,6 +193,49 @@ describe("classifyPR", () => {
   it("handles files passed as null (unrequested field)", () => {
     const r = classifyPR(pr({ files: null }));
     expect(r.touchesTests).toBe(false);
+  });
+});
+
+// ── shouldRemindAboutTests ───────────────────────────────────────────────
+
+describe("shouldRemindAboutTests", () => {
+  it("reminds when a fix PR touches no tests", () => {
+    const r = classifyPR(
+      pr({ title: "fix: typo in error message", files: { nodes: [{ path: "src/lib/errors.ts" }] } })
+    );
+    expect(shouldRemindAboutTests(r)).toBe(true);
+  });
+
+  it("stays quiet when a fix PR touches tests", () => {
+    const r = classifyPR(
+      pr({
+        title: "fix(auth): token refresh",
+        files: { nodes: [{ path: "src/auth/auth.test.ts" }] },
+      })
+    );
+    expect(shouldRemindAboutTests(r)).toBe(false);
+  });
+
+  it("stays quiet for non-fix PRs without tests", () => {
+    const r = classifyPR(
+      pr({ title: "feat: add dark mode", files: { nodes: [{ path: "src/theme/dark.ts" }] } })
+    );
+    expect(shouldRemindAboutTests(r)).toBe(false);
+  });
+
+  it("stays quiet for skipped release PRs without tests", () => {
+    const r = classifyPR(
+      pr({ title: "chore(release): v0.7.2", files: { nodes: [{ path: "package.json" }] } })
+    );
+    expect(shouldRemindAboutTests(r)).toBe(false);
+  });
+
+  it("respects the isSkipped guard for an otherwise-reminding shape", () => {
+    // Exercises the `!isSkipped` clause directly — a real release PR is also
+    // isFix:false, so this synthetic shape is the only way to isolate it.
+    expect(shouldRemindAboutTests({ isFix: true, touchesTests: false, isSkipped: true })).toBe(
+      false
+    );
   });
 });
 
