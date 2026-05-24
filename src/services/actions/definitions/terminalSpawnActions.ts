@@ -5,7 +5,7 @@ import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { TerminalSpawnSource } from "@shared/types/panel";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
@@ -22,7 +22,7 @@ export function registerTerminalSpawnActions(
     argsSchema: z
       .object({
         spawnedBy: TerminalSpawnSourceSchema.optional(),
-        focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       })
       .optional(),
     run: async (args) => {
@@ -53,7 +53,7 @@ export function registerTerminalSpawnActions(
       .object({
         terminalId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
-        focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       })
       .optional(),
     run: async (args: unknown) => {

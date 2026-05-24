@@ -4,7 +4,11 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { TerminalSpawnSourceSchema, RecipeSummarySchema } from "./schemas";
+import {
+  TerminalSpawnSourceSchema,
+  RecipeSummarySchema,
+  AddPanelFocusPolicySchema,
+} from "./schemas";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () =>
@@ -58,7 +62,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         recipeId: z.string(),
         worktreeId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
-        focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),
       run: async ({ recipeId, worktreeId, spawnedBy, focusPolicy }, ctx: ActionContext) => {
         const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;

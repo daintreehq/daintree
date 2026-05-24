@@ -535,7 +535,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const indicesToSpawn = options?.terminalIndices ?? recipe.terminals.map((_, i) => i);
     const spawnedBy = options?.spawnedBy;
-    const focusPolicy = options?.focusPolicy ?? "preserve";
+    // Pass focusPolicy through as-is (potentially undefined). panelStore.addPanel
+    // resolves undefined to "auto" — which suppresses focus only when the assistant
+    // owns input — or to "preserve" when an MCP dispatch is on the stack
+    // (isMcpSpawnFocusSuppressed). Defaulting to "preserve" here would silently
+    // strip focus from user-initiated recipe runs (dock menu, NewWorktreeDialog,
+    // WorktreeCard); MCP-initiated runs already get "preserve" via panelStore.
+    const focusPolicy = options?.focusPolicy;
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;

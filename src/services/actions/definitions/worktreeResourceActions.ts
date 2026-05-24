@@ -6,7 +6,7 @@ import { worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 
 function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
   const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
@@ -232,7 +232,7 @@ export function registerWorktreeResourceActions(
         .object({
           worktreeId: z.string().optional(),
           spawnedBy: TerminalSpawnSourceSchema.optional(),
-          focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+          focusPolicy: AddPanelFocusPolicySchema.optional(),
         })
         .optional(),
       isEnabled: (ctx: ActionContext) => {

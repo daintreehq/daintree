@@ -1,5 +1,10 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { AgentIdSchema, LaunchLocationSchema, TerminalSpawnSourceSchema } from "./schemas";
+import {
+  AgentIdSchema,
+  LaunchLocationSchema,
+  TerminalSpawnSourceSchema,
+  AddPanelFocusPolicySchema,
+} from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -33,7 +38,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ephemeral: z.boolean().optional(),
       agentLaunchFlags: z.array(z.string()).optional(),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
-      focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+      focusPolicy: AddPanelFocusPolicySchema.optional(),
       requestedId: z.string().optional(),
       force: z.boolean().optional(),
     }),
@@ -122,7 +127,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .object({
       location: LaunchLocationSchema.optional(),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
-      focusPolicy: z.enum(["auto", "preserve", "take"]).optional(),
+      focusPolicy: AddPanelFocusPolicySchema.optional(),
     })
     .optional();
 
