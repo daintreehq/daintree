@@ -9,6 +9,8 @@ import {
   velocityCache,
   repoActivityProbeCache,
   repoStatsAndPageSnapshotCache,
+  MAX_REVIEW_THREAD_PAGES,
+  REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
 
 describe("GitHubCaches ETag caches", () => {
@@ -146,5 +148,15 @@ describe("polling-optimization caches (issue #8757)", () => {
       120: 2,
       180: 3,
     });
+  });
+});
+
+describe("review thread pagination constants", () => {
+  it("MAX_REVIEW_THREAD_PAGES is 5", () => {
+    expect(MAX_REVIEW_THREAD_PAGES).toBe(5);
+  });
+
+  it("REVIEW_THREADS_PER_PAGE is 100", () => {
+    expect(REVIEW_THREADS_PER_PAGE).toBe(100);
   });
 });

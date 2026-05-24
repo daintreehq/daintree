@@ -1,5 +1,211 @@
-import { describe, expect, it } from "vitest";
-import { parsePRNode } from "../GitHubPRs.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockGraphQLClient = vi.fn();
+
+vi.mock("../GitHubAuth.js", () => ({
+  GitHubAuth: {
+    createClient: vi.fn(() => mockGraphQLClient),
+  },
+  GITHUB_API_TIMEOUT_MS: 5000,
+}));
+
+vi.mock("../GitHubRateLimitService.js", () => ({
+  gitHubRateLimitService: {
+    updateFromGraphQL: vi.fn(),
+  },
+}));
+
+vi.mock("../GitHubRepoContext.js", () => ({
+  withRepoContextRetry: async <T>(
+    _cwd: string,
+    fn: (ctx: { owner: string; repo: string }) => Promise<T>
+  ) => fn({ owner: "owner", repo: "repo" }),
+}));
+
+const mockCache = new Map<string, Record<string, number>>();
+vi.mock("../GitHubCaches.js", async () => {
+  const actual = await vi.importActual("../GitHubCaches.js");
+  return {
+    ...actual,
+    reviewThreadsCache: {
+      get: (key: string) => mockCache.get(key),
+      set: (key: string, val: Record<string, number>) => {
+        mockCache.set(key, val);
+      },
+      clear: () => {
+        mockCache.clear();
+      },
+    },
+  };
+});
+
+import { getPRReviewThreads, parsePRNode } from "../GitHubPRs.js";
+import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
+
+function makeThreadNode(path: string, isResolved = false, isOutdated = false) {
+  return { path, isResolved, isOutdated };
+}
+
+function makePageResponse(
+  nodes: Array<ReturnType<typeof makeThreadNode>>,
+  hasNextPage: boolean,
+  endCursor: string | null = hasNextPage ? "cursor-next" : null
+) {
+  return {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes,
+          pageInfo: { hasNextPage, endCursor },
+        },
+      },
+    },
+  };
+}
+
+describe("getPRReviewThreads", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+    mockCache.clear();
+  });
+
+  it("returns an empty object when client is not available", async () => {
+    const { GitHubAuth } = await import("../GitHubAuth.js");
+    (GitHubAuth.createClient as ReturnType<typeof vi.fn>).mockReturnValueOnce(null);
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({});
+  });
+
+  it("returns cached result without issuing a request", async () => {
+    mockCache.set("owner/repo:1", { "src/foo.ts": 3 });
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({ "src/foo.ts": 3 });
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+  });
+
+  it("returns empty object for a PR with zero review threads", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([], false, null));
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({});
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts unresolved threads per file across a single page", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse(
+        [
+          makeThreadNode("src/a.ts", false, false),
+          makeThreadNode("src/a.ts", false, false),
+          makeThreadNode("src/b.ts", false, false),
+          makeThreadNode("src/a.ts", true, false), // resolved → skip
+          makeThreadNode("src/c.ts", false, true), // outdated → skip
+        ],
+        false,
+        null
+      )
+    );
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({ "src/a.ts": 2, "src/b.ts": 1 });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("paginates across multiple pages and returns merged counts", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        makePageResponse([makeThreadNode("src/a.ts", false, false)], true, "cursor-2")
+      )
+      .mockResolvedValueOnce(
+        makePageResponse([makeThreadNode("src/b.ts", false, false)], false, null)
+      );
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({ "src/a.ts": 1, "src/b.ts": 1 });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after MAX_REVIEW_THREAD_PAGES and sets __clampedAt sentinel", async () => {
+    // Simulate more pages than the cap: each page has 100 nodes, hasNextPage always true
+    for (let i = 0; i < MAX_REVIEW_THREAD_PAGES + 3; i++) {
+      const nodes = Array.from({ length: 100 }, (_, j) =>
+        makeThreadNode(`src/file${i * 100 + j}.ts`, false, false)
+      );
+      mockGraphQLClient.mockResolvedValueOnce(makePageResponse(nodes, true, `cursor-${i + 1}`));
+    }
+
+    const result = await getPRReviewThreads("/fake", 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
+    expect(result.__clampedAt).toBe(MAX_REVIEW_THREAD_PAGES * 100);
+    // Should have counts from all 5 pages (500 nodes)
+    const countSum = Object.entries(result)
+      .filter(([k]) => k !== "__clampedAt")
+      .reduce((sum, [, c]) => sum + c, 0);
+    expect(countSum).toBe(500);
+  });
+
+  it("sets __clampedAt only when hasNextPage is still true after the last fetched page", async () => {
+    // Exactly MAX_REVIEW_THREAD_PAGES pages available, hasNextPage: false on the last
+    for (let i = 0; i < MAX_REVIEW_THREAD_PAGES - 1; i++) {
+      mockGraphQLClient.mockResolvedValueOnce(
+        makePageResponse([makeThreadNode(`src/file${i}.ts`, false, false)], true, `cursor-${i + 1}`)
+      );
+    }
+    // Last page: hasNextPage is false
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeThreadNode("src/last.ts", false, false)], false, null)
+    );
+
+    const result = await getPRReviewThreads("/fake", 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
+    expect(result.__clampedAt).toBeUndefined();
+  });
+
+  it("skips nodes without a path property", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              { path: "src/a.ts", isResolved: false, isOutdated: false },
+              { isResolved: false, isOutdated: false }, // no path
+              { path: "src/b.ts", isResolved: false, isOutdated: false },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    });
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({ "src/a.ts": 1, "src/b.ts": 1 });
+  });
+
+  it("caches the result including the sentinel for subsequent calls", async () => {
+    // 6 pages available → clamps at 5
+    for (let i = 0; i < 6; i++) {
+      mockGraphQLClient.mockResolvedValueOnce(
+        makePageResponse([makeThreadNode("src/a.ts", false, false)], true, `cursor-${i + 1}`)
+      );
+    }
+
+    const result1 = await getPRReviewThreads("/fake", 1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
+    expect(result1.__clampedAt).toBe(MAX_REVIEW_THREAD_PAGES * 100);
+
+    // Second call should return cached result (no additional GraphQL calls)
+    const result2 = await getPRReviewThreads("/fake", 1);
+    expect(result2).toEqual(result1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES); // no new calls
+  });
+
+  it("returns empty object on error and warns", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockGraphQLClient.mockRejectedValueOnce(new Error("Network error"));
+    const result = await getPRReviewThreads("/fake", 1);
+    expect(result).toEqual({});
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});
 
 function makeBaseNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

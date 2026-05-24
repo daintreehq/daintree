@@ -20,6 +20,8 @@ import {
   reviewThreadsCache,
   prRequiredStatusCache,
   truncateBody,
+  MAX_REVIEW_THREAD_PAGES,
+  REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
@@ -581,6 +583,7 @@ export async function getPRReviewThreads(
       const allThreads: Array<{ path: string; isResolved: boolean; isOutdated: boolean }> = [];
       let cursor: string | null = null;
       let hasNextPage = true;
+      let pageCount = 0;
 
       while (hasNextPage) {
         const response = (await client(GET_PR_REVIEW_THREADS_QUERY, {
@@ -610,8 +613,13 @@ export async function getPRReviewThreads(
           }
         }
 
+        pageCount++;
         hasNextPage = threads?.pageInfo?.hasNextPage ?? false;
         cursor = threads?.pageInfo?.endCursor ?? null;
+
+        if (pageCount >= MAX_REVIEW_THREAD_PAGES) {
+          break;
+        }
       }
 
       const counts: Record<string, number> = {};
@@ -619,6 +627,10 @@ export async function getPRReviewThreads(
         if (!thread.isResolved && !thread.isOutdated) {
           counts[thread.path] = (counts[thread.path] ?? 0) + 1;
         }
+      }
+
+      if (pageCount >= MAX_REVIEW_THREAD_PAGES && hasNextPage) {
+        counts.__clampedAt = MAX_REVIEW_THREAD_PAGES * REVIEW_THREADS_PER_PAGE;
       }
 
       reviewThreadsCache.set(cacheKey, counts);

@@ -27,13 +27,18 @@ export function createReviewDecorationProvider(host: PluginHostApi): FileDecorat
       if (typeof prNumber !== "number") return {};
 
       const counts = await getPRReviewThreads(worktreePath, prNumber);
+      const { __clampedAt: _clamped, ...pathCounts } = counts as Record<string, number> & {
+        __clampedAt?: number;
+      };
+      const isClamped = typeof _clamped === "number";
       const wanted = new Set(paths);
       const out: Record<string, FileDecoration> = {};
-      for (const [path, count] of Object.entries(counts)) {
+      for (const [path, count] of Object.entries(pathCounts)) {
         if (count > 0 && wanted.has(path)) {
+          const base = `${count} unresolved review comment${count !== 1 ? "s" : ""}`;
           out[path] = {
             badge: String(count),
-            tooltip: `${count} unresolved review comment${count !== 1 ? "s" : ""}`,
+            tooltip: isClamped ? `${base} (partial count)` : base,
             color: "text-status-warning",
           };
         }
