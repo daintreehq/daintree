@@ -58,6 +58,7 @@ export function HelpLaunchingState({ phase, isLoading, onCancel }: HelpLaunching
 
       <SkeletonHint
         className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
+        message={label}
         onCancel={onCancel}
       />
     </div>

@@ -9,7 +9,17 @@ interface DevPreviewLoadingStateProps {
   className?: string;
 }
 
-function FullSkeleton({ phaseLabel }: { phaseLabel: string }) {
+function FullSkeleton({
+  phaseLabel,
+  isLoading,
+  onCancel,
+}: {
+  phaseLabel: string;
+  isLoading: boolean;
+  onCancel?: () => void;
+}) {
+  const showPhaseLabel = useDohertyGate(isLoading);
+
   return (
     <div className="relative flex flex-col items-center justify-center h-full bg-daintree-bg px-6">
       <div
@@ -33,14 +43,21 @@ function FullSkeleton({ phaseLabel }: { phaseLabel: string }) {
             <SkeletonBone className="h-2.5 w-3/5" />
           </div>
         </div>
+
+        {/* Visible caption only — the role=status wrapper above owns the AT
+            announcement, and an aria-live here would be silenced by its
+            aria-busy="true" anyway. The phase also flows through the hint. */}
+        {showPhaseLabel && (
+          <p aria-hidden="true" className="mt-6 text-xs text-daintree-text/60">
+            {phaseLabel}
+          </p>
+        )}
       </div>
 
-      {/* The phase label flows through the hint's message rather than a separate
-          live region — the wrapper's aria-busy="true" would silence an inner
-          aria-live anyway. The role=status wrapper still announces it on mount. */}
       <SkeletonHint
         className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto"
         message={phaseLabel}
+        onCancel={onCancel}
       />
     </div>
   );
@@ -61,8 +78,19 @@ function OverlaySkeleton({
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg">
-      <div role="status" aria-busy="true" aria-label={phaseLabel}>
+      <div
+        className="flex flex-col items-center gap-3"
+        role="status"
+        aria-busy="true"
+        aria-label={phaseLabel}
+      >
         <span className="sr-only">{phaseLabel}</span>
+
+        {/* Visible caption only (aria-hidden) — the wrapper owns the AT
+            announcement; the phase also flows through the hint. */}
+        <p aria-hidden="true" className="text-xs text-daintree-text/60">
+          {phaseLabel}
+        </p>
       </div>
 
       <SkeletonHint
@@ -87,7 +115,7 @@ export function DevPreviewLoadingState({
 
   return (
     <div className={className}>
-      <FullSkeleton phaseLabel={phaseLabel} />
+      <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />
     </div>
   );
 }

@@ -576,6 +576,32 @@ describe("SkeletonHint", () => {
     expect(screen.getAllByText("Fetching 7 of 12 files…").length).toBeGreaterThan(0);
     expect(screen.queryByText("Fetching 1 of 12 files…")).toBeNull();
   });
+
+  it("renders the copy in the visible (aria-hidden) row, not only the live region", () => {
+    const { container } = render(<SkeletonHint message="Fetching 3 of 12 files…" />);
+    advance(8_000);
+    const visible = container.querySelector('.animate-hint-fade-in > span[aria-hidden="true"]');
+    expect(visible?.textContent).toBe("Fetching 3 of 12 files…");
+  });
+
+  it("withholds Retry one tick before the action threshold and shows it exactly at it", () => {
+    render(<SkeletonHint onRetry={() => {}} />);
+    advance(19_999);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    advance(1);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("drops Cancel and its announcement when the handler is removed while visible", () => {
+    const { container, rerender } = render(<SkeletonHint onCancel={() => {}} />);
+    const live = container.querySelector('[aria-live="polite"]')!;
+    advance(8_000);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(live.textContent).toBe("Still working… Cancel option available.");
+    rerender(<SkeletonHint />);
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(live.textContent).toBe("Still working…");
+  });
 });
 
 describe("animate-hint-fade-in CSS contract", () => {

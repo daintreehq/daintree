@@ -188,8 +188,12 @@ function safeThreshold(value: number | undefined, fallback: number): number {
 // generic "Taking longer than usual…" — past the stall threshold that signal is
 // accurate regardless of where the operation's own progress string sits.
 function hintCopy(phase: HintPhase, message?: string): string {
-  if (phase === "first") return message || FIRST_HINT_COPY;
-  if (phase === "second") return message || SECOND_HINT_COPY;
+  // Use the caller copy only when it carries non-whitespace content; a blank or
+  // whitespace-only string falls back to the generic copy rather than rendering
+  // an empty hint.
+  const custom = message?.trim() ? message : undefined;
+  if (phase === "first") return custom ?? FIRST_HINT_COPY;
+  if (phase === "second") return custom ?? SECOND_HINT_COPY;
   if (phase === "action") return SECOND_HINT_COPY;
   return "";
 }
