@@ -989,7 +989,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0 }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "PENDING" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
@@ -1003,7 +1003,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10 }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "PENDING" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
       pullRequestService.destroy();
@@ -1017,13 +1017,13 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20 }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "PENDING" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(120_000);
       pullRequestService.destroy();
     });
 
-    it("getBoostRevalidationIntervalMs: picks max across all PRs", async () => {
+    it("getBoostRevalidationIntervalMs: picks max across PENDING PRs only", async () => {
       vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
@@ -1031,10 +1031,32 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 1, stagnantPollCount: 3 }));
-      svc.detectedPRs.set("wt-2", makeDetectedPR({ number: 2, stagnantPollCount: 12 }));
+      // SUCCESS PR with high count — should be ignored
+      svc.detectedPRs.set(
+        "wt-1",
+        makeDetectedPR({ number: 1, stagnantPollCount: 20, ciStatus: "SUCCESS" })
+      );
+      // PENDING PR with lower count — this one counts
+      svc.detectedPRs.set(
+        "wt-2",
+        makeDetectedPR({ number: 2, stagnantPollCount: 12, ciStatus: "PENDING" })
+      );
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
+      pullRequestService.destroy();
+    });
+
+    it("getBoostRevalidationIntervalMs: ignores non-PENDING PRs", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved();
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      pullRequestService.initialize("/repo");
+
+      const svc = pullRequestService as any;
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "SUCCESS" }));
+
+      expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
     });
 

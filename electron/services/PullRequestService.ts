@@ -758,7 +758,9 @@ class PullRequestService {
   private getBoostRevalidationIntervalMs(): number {
     const maxStagnant = Math.max(
       0,
-      ...Array.from(this.detectedPRs.values(), (pr) => pr.stagnantPollCount)
+      ...Array.from(this.detectedPRs.values(), (pr) =>
+        pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED" ? pr.stagnantPollCount : 0
+      )
     );
     if (maxStagnant >= STAGNANT_POLL_DECAY_AT_20) {
       return RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS;
@@ -913,6 +915,8 @@ class PullRequestService {
         }
       });
 
+      const enrichedPRNumbers = new Set<number>();
+
       for (const { prNumber, pr, error } of results) {
         // Skip transient errors — a single flaky API call must not wipe PR state.
         if (error) continue;
@@ -974,8 +978,14 @@ class PullRequestService {
             });
           }
 
-          // Revalidate CI status (best-effort, non-blocking)
-          this.enrichPRWithCIStatus(detectedPR, repo, providerId);
+          // Revalidate CI status once per unique PR number. Multiple
+          // worktrees on the same branch share the same detectedPR object
+          // reference — deduplicating avoids double-counting stagnant polls
+          // and redundant API calls.
+          if (!enrichedPRNumbers.has(prNumber)) {
+            enrichedPRNumbers.add(prNumber);
+            this.enrichPRWithCIStatus(detectedPR, repo, providerId);
+          }
         }
       }
 
