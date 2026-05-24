@@ -292,6 +292,11 @@ describe("forgeProviderRegistry — listMatchingProviders", () => {
     expect(listMatchingProviders("https://secondary.example.com/x")).toHaveLength(1);
     expect(listMatchingProviders("https://other.example.com/x")).toHaveLength(0);
   });
+
+  it("does not treat a glob-like pattern as a wildcard", () => {
+    registerForgeProviders("acme.glob", [makeContribution("glob", ["*.example.com"])]);
+    expect(listMatchingProviders("https://sub.example.com/org/repo.git")).toEqual([]);
+  });
 });
 
 describe("forgeProviderRegistry — getActiveProvider", () => {
