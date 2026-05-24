@@ -3680,5 +3680,31 @@ describe("ReviewHub", () => {
         expect(screen.getByRole("status", { name: /loading changes vs main/i })).toBeTruthy()
       );
     });
+
+    it("does not deadlock the base-branch skeleton after closing mid-load and reopening", async () => {
+      // compareWorktrees never resolves, so closing while it's in flight would
+      // strand baseBranchLoading=true unless the close branch resets it.
+      compareWorktreesMock.mockReturnValue(
+        new Promise<{ branch1: string; branch2: string; files: never[] }>(() => {})
+      );
+
+      const { rerender } = render(
+        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
+
+      // Close mid-load, then reopen.
+      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      // Switching to base-branch again must trigger a fresh fetch, proving
+      // baseBranchLoading was cleared on close (no stuck skeleton).
+      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(2));
+    });
   });
 });
