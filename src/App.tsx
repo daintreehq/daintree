@@ -299,6 +299,10 @@ const LazyCloudSyncBanner = lazy(() =>
   preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
 );
 
+// DEV-only spike host for #8992 (native [popover] + CSS Anchor Positioning).
+// Gated by import.meta.env.DEV at the render site so it never ships.
+const LazyNativePopoverSpike = lazy(() => import("./components/spikes/NativePopoverSpike"));
+
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -1376,6 +1380,11 @@ function AppInner() {
                 </Suspense>
               )}
             </ErrorBoundary>
+            {import.meta.env.DEV && (
+              <Suspense fallback={null}>
+                <LazyNativePopoverSpike />
+              </Suspense>
+            )}
           </TooltipProvider>
         </ErrorBoundary>
       </MotionConfig>
