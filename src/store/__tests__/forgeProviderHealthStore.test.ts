@@ -33,6 +33,7 @@ describe("forgeProviderHealthStore", () => {
       rateLimitBlocked: true,
       rateLimitKind: "primary",
       rateLimitResetAt: resetAt,
+      rateLimitMultiplier: 1,
       tokenUnhealthy: false,
     });
   });
@@ -59,12 +60,14 @@ describe("forgeProviderHealthStore", () => {
       rateLimitBlocked: true,
       rateLimitKind: "primary",
       rateLimitResetAt: 1_700_000_000_000,
+      rateLimitMultiplier: 1,
       tokenUnhealthy: false,
     });
     expect(fake).toEqual({
       rateLimitBlocked: true,
       rateLimitKind: "secondary",
       rateLimitResetAt: 1_700_000_500_000,
+      rateLimitMultiplier: 1,
       tokenUnhealthy: true,
     });
   });
@@ -139,5 +142,45 @@ describe("forgeProviderHealthStore", () => {
       .applyRateLimit(FAKE, { blocked: true, kind: "primary", resetAt: 1 });
     const after = useForgeProviderHealthStore.getState().providers;
     expect(after).not.toBe(before);
+  });
+
+  it("stores rateLimitMultiplier even when not blocked", () => {
+    useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 5,
+    });
+
+    const gh = selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
+      useForgeProviderHealthStore.getState()
+    );
+    expect(gh.rateLimitBlocked).toBe(false);
+    expect(gh.rateLimitMultiplier).toBe(5);
+  });
+
+  it("clamps non-finite throttleMultiplier to 1", () => {
+    useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
+      blocked: false,
+      kind: null,
+      throttleMultiplier: Infinity,
+    });
+
+    const gh = selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
+      useForgeProviderHealthStore.getState()
+    );
+    expect(gh.rateLimitMultiplier).toBe(1);
+  });
+
+  it("clamps throttleMultiplier below 1 to 1", () => {
+    useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 0.5,
+    });
+
+    const gh = selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
+      useForgeProviderHealthStore.getState()
+    );
+    expect(gh.rateLimitMultiplier).toBe(1);
   });
 });

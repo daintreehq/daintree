@@ -67,6 +67,14 @@ export interface RateLimitInfo {
   /** Epoch milliseconds. */
   resetAt: number | null;
   secondaryThrottled?: boolean;
+  /**
+   * Background-poll cadence multiplier derived from the remaining rate-limit
+   * budget. `1` at full speed; values above `1` stretch background fetch
+   * intervals so multiple instances drawing on the same token budget back off
+   * in step. Only the idle (background) branch is scaled; the active/focused
+   * poll cadence is unaffected.
+   */
+  throttleMultiplier?: number;
 }
 
 /** Boolean-ish CI roll-up. The host renders a summary; it does not graph checks. */

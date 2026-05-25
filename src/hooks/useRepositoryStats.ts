@@ -8,6 +8,7 @@ import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
+import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
 
 function isValidPagePayload(page: unknown): page is {
   items: unknown[];
@@ -268,7 +269,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         return resetAt - Date.now() + RATE_LIMIT_RESUME_BUFFER_MS;
       }
       if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
-      return isVisible ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+      if (isVisible) return ACTIVE_POLL_INTERVAL;
+      const multiplier = useGitHubRateLimitStore.getState().throttleMultiplier ?? 1;
+      return IDLE_POLL_INTERVAL * multiplier;
     },
     onProjectSwitch: () => {
       if (!mountedRef.current) return;

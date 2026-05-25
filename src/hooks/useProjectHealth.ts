@@ -5,6 +5,7 @@ import { githubClient, projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
+import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
@@ -107,7 +108,9 @@ export function useProjectHealth(): UseProjectHealthReturn {
     },
     calculateNextInterval: ({ isVisible }) => {
       if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
-      return isVisible ? ACTIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+      if (isVisible) return ACTIVE_POLL_INTERVAL;
+      const multiplier = useGitHubRateLimitStore.getState().throttleMultiplier ?? 1;
+      return IDLE_POLL_INTERVAL * multiplier;
     },
     onProjectSwitch: () => {
       if (!mountedRef.current) return;
