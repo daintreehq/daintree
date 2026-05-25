@@ -289,8 +289,11 @@ function PanelHeaderComponent({
   const isInputLocked = terminalPty?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 
-  // Whether the overflow "..." menu has any items to show
-  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
+  // Whether the overflow "..." menu has any items to show.
+  // Dock rendering is PTY-only (`ContentDock` / `DockPanelOffscreenContainer`
+  // filter via `isPtyPanel`); offering the move-to-dock affordance for
+  // browser/dev-preview/review panels would silently strand them.
+  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock" && hasPty;
   const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect

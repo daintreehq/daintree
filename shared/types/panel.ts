@@ -624,6 +624,14 @@ export interface TerminalInstance {
    * when its registration is gone.
    */
   pluginId?: string;
+  /** Legacy persisted creation timestamp (milliseconds since epoch). */
+  createdAt?: number;
+  /**
+   * Timestamp (ms) of the last user-initiated focus on this panel. Used by
+   * panel restore to promote the most-recently-active panel per worktree to
+   * the priority restore tier.
+   */
+  lastActiveAt?: number;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

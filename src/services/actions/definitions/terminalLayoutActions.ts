@@ -5,6 +5,7 @@ import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -26,6 +27,12 @@ export function registerTerminalLayoutActions(
       if (targetId) {
         const terminal = state.panelsById[targetId];
         if (!terminal) {
+          return;
+        }
+        // Dock rendering is PTY-only (see ContentDock + DockPanelOffscreenContainer).
+        // Reject browser / dev-preview / review panels so they don't silently
+        // disappear into a dock slot that won't render them.
+        if (!panelKindHasPty(terminal.kind)) {
           return;
         }
 
