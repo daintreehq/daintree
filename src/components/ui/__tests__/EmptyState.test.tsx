@@ -236,6 +236,14 @@ describe("EmptyState", () => {
       );
       expect(element).toBeTruthy();
     });
+
+    it("rejects popover scale on user-cleared", () => {
+      const element = (
+        // @ts-expect-error user-cleared does not allow popover scale
+        <EmptyState variant="user-cleared" scale="popover" title="You're all caught up" />
+      );
+      expect(element).toBeTruthy();
+    });
   });
 
   describe("accessibility", () => {

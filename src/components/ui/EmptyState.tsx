@@ -53,7 +53,7 @@ export type EmptyStateProps =
    */
   | (EmptyStateCommonProps & {
       variant: "user-cleared";
-      scale: "popover" | "sidebar" | "canvas";
+      scale: "sidebar" | "canvas";
       icon?: ReactNode;
       description?: never;
       action?: never;
