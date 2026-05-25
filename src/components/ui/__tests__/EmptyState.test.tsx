@@ -244,6 +244,13 @@ describe("EmptyState", () => {
       );
       expect(element).toBeTruthy();
     });
+
+    it("accepts sidebar scale on user-cleared", () => {
+      const element = (
+        <EmptyState variant="user-cleared" scale="sidebar" title="You're all caught up" />
+      );
+      expect(element).toBeTruthy();
+    });
   });
 
   describe("accessibility", () => {
