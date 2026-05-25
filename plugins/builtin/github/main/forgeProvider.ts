@@ -32,7 +32,10 @@ import {
   GET_PR_QUERY,
   GET_PR_REVIEW_THREADS_QUERY,
   BATCH_BRANCH_CHUNK_SIZE,
+  GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
+  buildBatchPRsQuery,
+  buildBatchRequiredChecksQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
@@ -55,7 +58,11 @@ import {
   writePRTooltip,
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
-import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
+import {
+  buildListCacheKey,
+  parseBatchRequiredChecksResponse,
+  updateRepoStatsCount,
+} from "./GitHubPRs.js";
 import type { IssueTooltipData, PRTooltipData } from "../../../../shared/types/github.js";
 
 const REPO_METADATA_QUERY = `
@@ -314,6 +321,8 @@ const getIssueInflight = new Map<string, Promise<Issue | null>>();
 const getPRInflight = new Map<string, Promise<PR | null>>();
 const getCIStatusInflight = new Map<string, Promise<CIStatus | null>>();
 const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>>>();
+const findPRsByNumbersInflight = new Map<string, Promise<Map<number, PR | null>>>();
+const getCIStatusesInflight = new Map<string, Promise<Map<number, CIStatus | null>>>();
 
 /**
  * Join an in-flight request for `key` when one exists, else start `fn` and
@@ -434,6 +443,21 @@ function buildCIStatus(entry: PRRequiredStatusEntry, rawData: unknown): CIStatus
     ...(requiredChecksPassing !== undefined ? { requiredChecksPassing } : {}),
     rawData,
   };
+}
+
+function uniquePositiveIntegers(values: number[]): number[] {
+  const unique: number[] = [];
+  const seen = new Set<number>();
+  for (const value of values) {
+    if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
+}
+
+function buildNumberBatchInflightKey(repo: RepoRef, numbers: number[]): string {
+  return `${repo.owner}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
 }
 
 async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
@@ -720,6 +744,118 @@ async function findPRByBranchImpl(repo: RepoRef, branchName: string): Promise<PR
   return first ? toForgePR(first) : null;
 }
 
+async function findPRsByNumbersImpl(
+  repo: RepoRef,
+  prNumbers: number[]
+): Promise<Map<number, PR | null>> {
+  const unique = uniquePositiveIntegers(prNumbers);
+  if (unique.length === 0) return new Map<number, PR | null>();
+
+  const inflightKey = buildNumberBatchInflightKey(repo, unique);
+  return dedupe(findPRsByNumbersInflight, inflightKey, false, async () => {
+    const result = new Map<number, PR | null>();
+
+    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    if (block.blocked) return result;
+
+    const requestedAt = Date.now();
+    for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
+      const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
+      const query = buildBatchPRsQuery(repo.owner, repo.repo, chunk);
+      if (!query) continue;
+
+      let response: GraphQlQueryResponseData;
+      try {
+        response = await runQuery(query, {}, "BATCH_PRS_QUERY");
+      } catch {
+        // Omit this chunk so callers treat it as transient and keep stale data.
+        continue;
+      }
+
+      const repository = response?.repository as Record<string, unknown> | undefined;
+      if (!repository) continue;
+
+      for (const prNumber of chunk) {
+        const alias = `p${prNumber}`;
+        if (!(alias in repository)) continue;
+        const node = repository[alias] as Record<string, unknown> | null | undefined;
+        const forgePR = node ? toForgePR(node) : null;
+        result.set(prNumber, forgePR);
+
+        if (forgePR) {
+          const tooltip = prToTooltipData(forgePR);
+          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+        }
+      }
+    }
+
+    return result;
+  });
+}
+
+async function getCIStatusesImpl(
+  repo: RepoRef,
+  prNumbers: number[]
+): Promise<Map<number, CIStatus | null>> {
+  const unique = uniquePositiveIntegers(prNumbers);
+  if (unique.length === 0) return new Map<number, CIStatus | null>();
+
+  const inflightKey = buildNumberBatchInflightKey(repo, unique);
+  return dedupe(getCIStatusesInflight, inflightKey, false, async () => {
+    const result = new Map<number, CIStatus | null>();
+    const missing: number[] = [];
+
+    for (const prNumber of unique) {
+      const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+      const cached = prRequiredStatusCache.get(cacheKey);
+      if (cached) {
+        result.set(prNumber, buildCIStatus(cached, null));
+      } else {
+        missing.push(prNumber);
+      }
+    }
+
+    if (missing.length === 0) return result;
+
+    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    if (block.blocked) return result;
+
+    for (let start = 0; start < missing.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
+      const chunk = missing.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
+      const query = buildBatchRequiredChecksQuery(repo.owner, repo.repo, chunk);
+      if (!query) continue;
+
+      let response: GraphQlQueryResponseData;
+      try {
+        response = await runQuery(query, {}, "BATCH_REQUIRED_CHECKS_QUERY");
+      } catch {
+        // Omit this chunk so callers treat it as transient and retry later.
+        continue;
+      }
+
+      const responseRecord = response as Record<string, unknown>;
+      const fetched = parseBatchRequiredChecksResponse(responseRecord, chunk);
+      for (const prNumber of chunk) {
+        const alias = `pr_${prNumber}`;
+        if (!(alias in responseRecord)) continue;
+        const repoNode = responseRecord[alias] as { pullRequest?: unknown } | null | undefined;
+        if (repoNode == null || repoNode.pullRequest == null) {
+          result.set(prNumber, null);
+          continue;
+        }
+        const entry = fetched.get(prNumber) ?? {
+          ciStatus: undefined,
+          ciSummary: undefined,
+        };
+        prRequiredStatusCache.set(`${repo.owner}/${repo.repo}:${prNumber}`, entry);
+        result.set(prNumber, buildCIStatus(entry, null));
+      }
+    }
+
+    return result;
+  });
+}
+
 async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<CIStatus | null> {
   // Shares the 60s required-status cache with the legacy enrich path (same key
   // and {@link PRRequiredStatusEntry} value). This is the hottest forge path —
@@ -926,6 +1062,10 @@ export const githubForgeProvider: ForgeProviderImpl = {
   findPRByBranch: findPRByBranchImpl,
   findPRsByBranches: findPRsByBranchesImpl,
   getCIStatus: getCIStatusImpl,
+  batchLookups: {
+    findPRsByNumbers: findPRsByNumbersImpl,
+    getCIStatuses: getCIStatusesImpl,
+  },
   getRepoMetadata: getRepoMetadataImpl,
 
   buildIssueUrl(repo: RepoRef, number: number): string {

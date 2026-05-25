@@ -40,7 +40,7 @@ vi.mock("../GitHubRepoContext.js", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { assignIssue } from "../GitHubIssues.js";
+import { assignIssue, extractLinkedPR } from "../GitHubIssues.js";
 
 describe("assignIssue error handling", () => {
   beforeEach(() => {
@@ -176,6 +176,65 @@ describe("assignIssue error handling", () => {
     });
 
     await expect(assignIssue("/test", 1, "someuser")).rejects.toThrow("HTTP 429");
+  });
+});
+
+describe("extractLinkedPR", () => {
+  it("chooses the latest linked PR by updatedAt instead of keeping an older open PR", () => {
+    const linked = extractLinkedPR({
+      nodes: [
+        {
+          source: {
+            number: 10,
+            state: "OPEN",
+            merged: false,
+            url: "https://github.com/test/repo/pull/10",
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+        },
+        {
+          source: {
+            number: 20,
+            state: "CLOSED",
+            merged: true,
+            url: "https://github.com/test/repo/pull/20",
+            updatedAt: "2026-02-01T00:00:00Z",
+          },
+        },
+      ],
+    });
+
+    expect(linked).toEqual({
+      number: 20,
+      state: "MERGED",
+      url: "https://github.com/test/repo/pull/20",
+      updatedAt: "2026-02-01T00:00:00Z",
+    });
+  });
+
+  it("falls back to the highest PR number when timeline entries lack updatedAt", () => {
+    const linked = extractLinkedPR({
+      nodes: [
+        {
+          source: {
+            number: 10,
+            state: "OPEN",
+            merged: false,
+            url: "https://github.com/test/repo/pull/10",
+          },
+        },
+        {
+          subject: {
+            number: 20,
+            state: "CLOSED",
+            merged: false,
+            url: "https://github.com/test/repo/pull/20",
+          },
+        },
+      ],
+    });
+
+    expect(linked?.number).toBe(20);
   });
 });
 

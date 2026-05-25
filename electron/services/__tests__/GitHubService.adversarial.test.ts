@@ -691,6 +691,61 @@ describe("GitHubService adversarial", () => {
     expect(result.results.get("wt-1")?.pr?.number).toBe(200);
   });
 
+  it("BATCHCHECK_ISSUE_TIMELINE_SELECTS_LATEST_LINKED_PR_WITH_CI", async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      createETagResponse(200, 'W/"repo-with-issue-links"')
+    );
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_issue: {
+        issue: {
+          title: "Issue 12",
+          timelineItems: {
+            nodes: [
+              {
+                source: {
+                  number: 100,
+                  title: "Older open PR",
+                  url: "https://github.com/owner/repo/pull/100",
+                  state: "OPEN",
+                  merged: false,
+                  isDraft: false,
+                  updatedAt: "2026-01-01T00:00:00Z",
+                  commits: {
+                    nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }],
+                  },
+                },
+              },
+              {
+                source: {
+                  number: 200,
+                  title: "Latest linked PR",
+                  url: "https://github.com/owner/repo/pull/200",
+                  state: "CLOSED",
+                  merged: true,
+                  isDraft: false,
+                  updatedAt: "2026-02-01T00:00:00Z",
+                  commits: {
+                    nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", issueNumber: 12 },
+    ]);
+
+    expect(result.results.size).toBe(1);
+    expect(result.results.get("wt-1")?.issueTitle).toBe("Issue 12");
+    expect(result.results.get("wt-1")?.pr?.number).toBe(200);
+    expect(result.results.get("wt-1")?.pr?.state).toBe("merged");
+    expect(result.results.get("wt-1")?.pr?.ciStatus).toBe("PENDING");
+  });
+
   it("BATCHCHECK_DISCOVERY_BRANCH_PROBE_SENDS_IF_NONE_MATCH", async () => {
     // Cycle 1: repo-level probe (fetch #1) proceeds, then the branch probe
     // (fetch #2) seeds the branch-list ETag.
