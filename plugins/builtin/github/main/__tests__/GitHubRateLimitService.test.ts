@@ -631,7 +631,7 @@ describe("GitHubRateLimitService", () => {
 
     describe("per-query cost logging (DAINTREE_DEBUG_GITHUB_GRAPHQL)", () => {
       const label = "TEST_QUERY";
-      const debugDir = "/mock/user/data/debug";
+      const debugDir = join("/mock/user/data", "debug");
       const logPath = join(debugDir, "github-graphql-costs.log");
 
       function setDebugEnv(value: string) {
@@ -694,7 +694,7 @@ describe("GitHubRateLimitService", () => {
       it("creates the debug directory if it does not exist", () => {
         setDebugEnv("1");
         mockedAppendFileSync.mockClear();
-        mockedExistsSync.mockReturnValue(false);
+        mockedExistsSync.mockImplementation((p) => p !== debugDir);
         gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000), label);
 
         expect(mockedMkdirSync).toHaveBeenCalledWith(debugDir, { recursive: true });
