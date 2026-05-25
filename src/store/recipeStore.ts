@@ -1,6 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { usePanelStore, type TerminalInstance } from "./panelStore";
+import { usePanelStore } from "./panelStore";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
@@ -74,13 +75,12 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
   };
 }
 
-function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
+function terminalToRecipeTerminal(terminal: PtyPanelData): RecipeTerminal {
   // Map kind to RecipeTerminalType.
   // Launch-intent only: recipes encode what the terminal was launched as, not
   // what runtime detection observed. Persisting `detectedAgentId` would corrupt
   // a recipe by baking ephemeral session state into a reusable template.
-  const type: RecipeTerminalType =
-    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.launchAgentId ?? "terminal");
+  const type: RecipeTerminalType = terminal.launchAgentId ?? "terminal";
 
   const isAgent = isAgentRecipeType(type);
 
@@ -88,7 +88,7 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
     type,
     title: terminal.title || undefined,
     command: terminal.command || undefined,
-    devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
+    devCommand: undefined,
     env: {},
     exitBehavior: terminal.exitBehavior,
     agentModelId: isAgent ? terminal.agentModelId : undefined,
@@ -838,7 +838,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 
-    return terminalsToCapture.map(terminalToRecipeTerminal);
+    return terminalsToCapture.filter(isPtyPanel).map(terminalToRecipeTerminal);
   },
 
   reset: () =>

@@ -1,19 +1,23 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type { TerminalInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { initBuiltInPanelKinds } from "../registry";
 
 beforeAll(() => {
   initBuiltInPanelKinds();
 });
 
-function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makePanel(overrides: Partial<PanelInstance> & Record<string, unknown> = {}): PanelInstance {
   return {
     id: "t1",
     title: "Test",
     location: "grid",
+    kind: "terminal",
+    cwd: "",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  };
+  } as PanelInstance;
 }
 
 describe("panelKindRegistry serialize hooks (co-located)", () => {

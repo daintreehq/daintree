@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { TerminalInstance } from "@shared/types";
+import type { PanelInstance } from "@shared/types/panel";
 import { _resetSelectorCacheForTests, getNarrowPanel, getNarrowPanels } from "../selectors";
 
 // Adapter selectors that narrow the legacy `TerminalInstance` carrier to the
 // `PanelInstance` union via the kind type guards (#8957). A missing `kind`
 // defaults to "terminal", matching the guard convention.
 
-function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function panel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
     id,
     kind: "terminal",
@@ -16,7 +16,7 @@ function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalI
     rows: 24,
     location: "grid",
     ...overrides,
-  } as TerminalInstance;
+  } as PanelInstance;
 }
 
 beforeEach(() => {
@@ -48,7 +48,7 @@ describe("getNarrowPanel", () => {
   });
 
   it("returns undefined for an extension/unknown kind", () => {
-    const ext = panel("x", { kind: "acme.tool" as TerminalInstance["kind"] });
+    const ext = panel("x", { kind: "acme.tool" as unknown as PanelInstance["kind"] });
     expect(getNarrowPanel({ x: ext }, "x")).toBeUndefined();
   });
 
@@ -83,7 +83,7 @@ describe("getNarrowPanels", () => {
   it("drops extension/unknown-kind panels from the result", () => {
     const byId = {
       a: panel("a"),
-      x: panel("x", { kind: "acme.tool" as TerminalInstance["kind"] }),
+      x: panel("x", { kind: "acme.tool" as unknown as PanelInstance["kind"] }),
     };
     const result = getNarrowPanels(byId, ["a", "x"]);
     expect(result.map((p) => p.id)).toEqual(["a"]);

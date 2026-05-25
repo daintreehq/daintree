@@ -218,12 +218,6 @@ const browserHistoryFixture: BrowserHistory = {
   future: [],
 };
 
-function baseFields(
-  kind: PanelInstance["kind"]
-): Pick<TerminalInstance, "id" | "title" | "location" | "kind"> {
-  return { id: `panel-${kind}`, title: "Panel", location: "grid", kind };
-}
-
 function assertCovers(
   label: string,
   output: Record<string, unknown>,
@@ -256,11 +250,16 @@ function assertCovers(
 // non-empty, non-null value so every conditional spread in the serializers
 // emits its key.
 
-const terminalFixture: TerminalInstance = {
-  ...baseFields("terminal"),
+const terminalFixture: PtySerializeInput = {
+  id: "panel-terminal",
+  title: "Panel",
+  location: "grid",
+  kind: "terminal",
   launchAgentId: "claude",
   titleMode: "default",
   cwd: "/home/project",
+  cols: 80,
+  rows: 24,
   command: "npm start",
   exitBehavior: "keep" satisfies PanelExitBehavior,
   agentSessionId: "session-abc",
@@ -277,8 +276,11 @@ const terminalFixture: TerminalInstance = {
   lastActiveAt: 1_700_000_000_001,
 };
 
-const browserFixture: TerminalInstance = {
-  ...baseFields("browser"),
+const browserFixture: BrowserPanelData = {
+  id: "panel-browser",
+  title: "Panel",
+  location: "grid",
+  kind: "browser",
   browserUrl: "https://example.com",
   browserHistory: browserHistoryFixture,
   browserZoom: 1.5,
@@ -287,8 +289,11 @@ const browserFixture: TerminalInstance = {
   browserConsoleOpen: false,
 };
 
-const devPreviewFixture: TerminalInstance = {
-  ...baseFields("dev-preview"),
+const devPreviewFixture: DevPreviewSerializeInput = {
+  id: "panel-dev-preview",
+  title: "Panel",
+  location: "grid",
+  kind: "dev-preview",
   cwd: "/home/project",
   devCommand: "npm run dev",
   browserUrl: "http://localhost:3000",

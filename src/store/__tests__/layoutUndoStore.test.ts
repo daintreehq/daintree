@@ -46,27 +46,27 @@ vi.mock("@/clients/appClient", () => ({
 import { useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 let terminalCounter = 0;
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: `t-${++terminalCounter}`,
     title: "test",
     location: "grid",
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function setTerminals(terminals: TerminalInstance[]) {
+function setTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),
   });
 }
 
-function seedTerminals(terminals: TerminalInstance[]) {
+function seedTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),

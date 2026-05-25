@@ -5,12 +5,9 @@ import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  usePanelStore,
-  useProjectStore,
-  useWorktreeSelectionStore,
-  type TerminalInstance,
-} from "@/store";
+import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
@@ -108,17 +105,22 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     helpTerminalId,
   ]);
 
-  const dockTerminals = useMemo(() => {
-    return storeTerminalIds
-      .map((id) => panelsById[id])
-      .filter(
-        (terminal): terminal is TerminalInstance =>
-          terminal !== undefined &&
-          terminal.location === "dock" &&
-          !trashedTerminals.has(terminal.id) &&
-          terminal.id !== helpTerminalId &&
-          (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
-      );
+  const dockTerminals = useMemo<PtyPanelData[]>(() => {
+    const result: PtyPanelData[] = [];
+    for (const id of storeTerminalIds) {
+      const terminal = getNarrowPanel(panelsById, id);
+      if (
+        terminal &&
+        isPtyPanel(terminal) &&
+        terminal.location === "dock" &&
+        !trashedTerminals.has(terminal.id) &&
+        terminal.id !== helpTerminalId &&
+        (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
+      ) {
+        result.push(terminal);
+      }
+    }
+    return result;
   }, [storeTerminalIds, panelsById, trashedTerminals, helpTerminalId, activeWorktreeId]);
 
   const { worktrees } = useWorktrees();
@@ -287,18 +289,18 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
-      terminal: panelsById[trashed.id],
+      terminal: panelsById[trashed.id] as PanelInstance | undefined,
       trashedInfo: trashed,
     }))
     .filter(
-      (item): item is { terminal: TerminalInstance; trashedInfo: TrashedTerminal } =>
+      (item): item is { terminal: PanelInstance; trashedInfo: TrashedTerminal } =>
         item.terminal !== undefined
     );
 
   const dockItems = useMemo<DockRenderItem[]>(() => {
     return buildDockRenderItems(
       tabGroups,
-      (groupId) => getTabGroupPanels(groupId, "dock"),
+      (groupId) => getTabGroupPanels(groupId, "dock").filter(isPtyPanel),
       helpTerminalId,
       dockTerminals
     );

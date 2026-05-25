@@ -6,7 +6,7 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const broadcastMock = vi.hoisted(() => vi.fn<(ids: string[], data: string) => void>());
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
@@ -32,21 +32,24 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-function makeTerminal(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PtyPanelData[]): void {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const terminal of terminals) {
     panelsById[terminal.id] = terminal;

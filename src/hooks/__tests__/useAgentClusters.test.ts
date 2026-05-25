@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { deriveHighestPriorityCluster } from "../useAgentClusters";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const NOW = 1_700_000_000_000;
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
@@ -16,11 +16,11 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function build(terminals: TerminalInstance[]) {
-  const panelsById: Record<string, TerminalInstance> = {};
+function build(terminals: PtyPanelData[]) {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -32,7 +32,7 @@ function build(terminals: TerminalInstance[]) {
 const noTrash = () => false;
 const EMPTY_WORKTREE_IDS = new Set<string>();
 
-function derive(terminals: TerminalInstance[], now: number = NOW) {
+function derive(terminals: PtyPanelData[], now: number = NOW) {
   const { panelsById, panelIds } = build(terminals);
   return deriveHighestPriorityCluster({
     panelIds,

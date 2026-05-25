@@ -1,5 +1,12 @@
-import type { TerminalInstance } from "@/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { systemClient } from "@/clients/systemClient";
+
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name. Lets external callers that still hand
+// out raw carrier entries pass through until the rest of the renderer
+// migrates to `getNarrowPanel` (#8957).
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { getAgentConfig } from "@/config/agents";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -16,7 +23,7 @@ export interface ValidationResult {
 }
 
 export async function validateTerminalConfig(
-  terminal: TerminalInstance
+  terminal: CarrierPanel
 ): Promise<ValidationResult> {
   const errors: ValidationError[] = [];
 
@@ -77,7 +84,7 @@ export async function validateTerminalConfig(
 }
 
 export async function validateTerminals(
-  terminals: TerminalInstance[]
+  terminals: CarrierPanel[]
 ): Promise<Map<string, ValidationResult>> {
   const results = new Map<string, ValidationResult>();
 

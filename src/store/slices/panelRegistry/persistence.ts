@@ -1,22 +1,26 @@
 import { panelPersistence } from "../../persistence/panelPersistence";
-import type { TerminalInstance } from "./types";
+import { type PanelInstance } from "@shared/types/panel";
+import { getNarrowPanel } from "./selectors";
 import type { TabGroup } from "@/types";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export function flushPanelPersistence(): void {
   panelPersistence.flush();
 }
 
-export function savePanels(terminals: TerminalInstance[]): void {
-  panelPersistence.save(terminals);
+export function savePanels(panels: PanelInstance[]): void {
+  panelPersistence.save(panels);
 }
 
 export function saveNormalized(
-  panelsById: Record<string, TerminalInstance>,
+  panelsById: Record<string, CarrierPanel>,
   panelIds: string[]
 ): void {
-  panelPersistence.save(
-    panelIds.map((id) => panelsById[id]).filter((t): t is TerminalInstance => Boolean(t))
-  );
+  const panels = panelIds
+    .map((id) => panelsById[id])
+    .filter((t): t is NonNullable<typeof t> => Boolean(t));
+  panelPersistence.save(panels);
 }
 
 export function saveTabGroups(tabGroups: Map<string, TabGroup>): void {

@@ -1,9 +1,9 @@
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 
 interface MaximizedGroupFocusArgs {
   focusedId: string | null;
   groupId: string;
-  groupPanels: TerminalInstance[];
+  groupPanels: PanelInstance[];
   getActiveTabId: (groupId: string) => string | null;
 }
 

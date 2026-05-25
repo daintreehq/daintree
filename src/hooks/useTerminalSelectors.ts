@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 export { isTerminalOrphaned, isTerminalVisible };
@@ -59,16 +61,15 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
       let waitingCount = 0;
 
-      for (const id of state.panelIds) {
-        const terminal = state.panelsById[id];
-        if (!terminal) continue;
-        if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
+      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (!isPtyPanel(panel)) continue;
+        if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
 
-        if (terminal.agentState !== "waiting") continue;
+        if (panel.agentState !== "waiting") continue;
 
         if (blurTime !== undefined) {
-          if (terminal.lastStateChange == null) continue;
-          if (terminal.lastStateChange <= blurTime) continue;
+          if (panel.lastStateChange == null) continue;
+          if (panel.lastStateChange <= blurTime) continue;
         }
 
         waitingCount += 1;
@@ -79,18 +80,17 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   );
 }
 
-export function useWaitingTerminals(): TerminalInstance[] {
+export function useWaitingTerminals(): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
 
   return usePanelStore(
     useShallow((state) => {
-      const out: TerminalInstance[] = [];
-      for (const id of state.panelIds) {
-        const t = state.panelsById[id];
-        if (!t) continue;
-        if (t.agentState !== "waiting") continue;
-        if (!isTerminalVisible(t, state.isInTrash, worktreeIds)) continue;
-        out.push(t);
+      const out: PtyPanelData[] = [];
+      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (!isPtyPanel(panel)) continue;
+        if (panel.agentState !== "waiting") continue;
+        if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
+        out.push(panel);
       }
       return out;
     })
@@ -102,42 +102,40 @@ export function useWaitingTerminalIds(): string[] {
   return useMemo(() => waiting.map((t) => t.id), [waiting]);
 }
 
-export function useErrorTerminals(): TerminalInstance[] {
+export function useErrorTerminals(): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
 
   return usePanelStore(
     useShallow((state) => {
-      const out: TerminalInstance[] = [];
-      for (const id of state.panelIds) {
-        const t = state.panelsById[id];
-        if (!t) continue;
-        if (t.agentState !== "exited") continue;
-        if (typeof t.exitCode !== "number" || t.exitCode === 0) continue;
+      const out: PtyPanelData[] = [];
+      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (!isPtyPanel(panel)) continue;
+        if (panel.agentState !== "exited") continue;
+        if (typeof panel.exitCode !== "number" || panel.exitCode === 0) continue;
         // isTerminalVisible rejects trash/background/ephemeral/orphaned;
         // isTerminalErrorClusterEligible adds the dock-location exclusion.
         // Without the orphan gate, clicking an entry from a deleted worktree
         // would call selectWorktree() on a stale ID and persist it.
-        if (!isTerminalVisible(t, state.isInTrash, worktreeIds)) continue;
-        if (!isTerminalErrorClusterEligible(t)) continue;
-        out.push(t);
+        if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
+        if (!isTerminalErrorClusterEligible(panel)) continue;
+        out.push(panel);
       }
       return out;
     })
   );
 }
 
-export function useBackgroundedTerminals(): TerminalInstance[] {
+export function useBackgroundedTerminals(): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
 
   return usePanelStore(
     useShallow((state) => {
-      const out: TerminalInstance[] = [];
-      for (const id of state.panelIds) {
-        const t = state.panelsById[id];
-        if (!t) continue;
-        if (t.location !== "background") continue;
-        if (isTerminalOrphaned(t, worktreeIds)) continue;
-        out.push(t);
+      const out: PtyPanelData[] = [];
+      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (!isPtyPanel(panel)) continue;
+        if (panel.location !== "background") continue;
+        if (isTerminalOrphaned(panel, worktreeIds)) continue;
+        out.push(panel);
       }
       return out;
     })
@@ -169,12 +167,10 @@ export function useBackgroundPanelStats(excludeId: string): {
     useShallow((state) => {
       let active = 0;
       let working = 0;
-      for (const id of state.panelIds) {
-        const t = state.panelsById[id];
-        if (!t) continue;
-        if (t.id !== excludeId && (t.location === "grid" || t.location === undefined)) {
+      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+        if (panel.id !== excludeId && (panel.location === "grid" || panel.location === undefined)) {
           active++;
-          if (t.agentState === "working") working++;
+          if (isPtyPanel(panel) && panel.agentState === "working") working++;
         }
       }
       return { activeCount: active, workingCount: working };

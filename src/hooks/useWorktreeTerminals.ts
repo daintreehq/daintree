@@ -1,9 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 
 export interface WorktreeTerminalCounts {
@@ -12,10 +13,14 @@ export interface WorktreeTerminalCounts {
 }
 
 export interface UseWorktreeTerminalsResult {
-  terminals: TerminalInstance[];
+  terminals: PtyPanelData[];
   counts: WorktreeTerminalCounts;
   dominantAgentState: AgentState | null;
 }
+
+/** Minimum shape consumed by `aggregateAgentStates`; satisfied by both
+ *  `PtyPanelData` (production) and legacy `TerminalInstance` fixtures (tests). */
+type AggregateInput = TerminalChromeInput & { agentState?: AgentState };
 
 /**
  * Pure aggregator over a worktree's terminal list, exposed for unit tests.
@@ -25,7 +30,7 @@ export interface UseWorktreeTerminalsResult {
  * completed states count as waiting, and exited or plain-shell terminals count
  * as idle so stale states don't bleed into badges.
  */
-export function aggregateAgentStates(terminals: TerminalInstance[]): {
+export function aggregateAgentStates(terminals: AggregateInput[]): {
   byState: Record<AgentState, number>;
   agentStates: (AgentState | undefined)[];
 } {
@@ -85,12 +90,15 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     useShallow((state) => {
       const ids = state.panelIdsByWorktreeId[worktreeId];
       if (!ids || ids.length === 0) return [];
-      return ids
-        .map((id) => state.panelsById[id])
-        .filter(
-          (t): t is TerminalInstance =>
-            t !== undefined && t.location !== "trash" && t.ephemeral !== true
-        );
+      const out: PtyPanelData[] = [];
+      for (const id of ids) {
+        const raw = state.panelsById[id];
+        if (!raw) continue;
+        if (raw.location === "trash" || raw.ephemeral === true) continue;
+        if (!isPtyPanel(raw)) continue;
+        out.push(raw);
+      }
+      return out;
     })
   );
 

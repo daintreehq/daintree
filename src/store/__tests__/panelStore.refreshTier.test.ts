@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { getTerminalRefreshTier } from "../panelStore";
 import { TerminalRefreshTier } from "@shared/types/panel";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 // Pure unit tests for the refresh-tier gate that decides which panels are
 // eligible to hibernate. Uses durable agent affinity so a toolbar-launched or
 // restored agent terminal stays active until a strong exit signal arrives.
 
-function makeTerminal(overrides: Partial<TerminalInstance>): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData>): PtyPanelData {
   return {
     id: overrides.id ?? "t-1",
     title: "test",
@@ -17,7 +17,7 @@ function makeTerminal(overrides: Partial<TerminalInstance>): TerminalInstance {
     cols: 80,
     rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("getTerminalRefreshTier - runtime agent identity", () => {

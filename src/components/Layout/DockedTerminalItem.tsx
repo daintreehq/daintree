@@ -6,8 +6,8 @@ import {
   useTerminalInputStore,
   usePanelStore,
   useFocusStore,
-  type TerminalInstance,
 } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -31,7 +31,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
 interface DockedTerminalItemProps {
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {

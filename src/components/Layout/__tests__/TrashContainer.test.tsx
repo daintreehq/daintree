@@ -5,7 +5,7 @@ import { TrashContainer } from "../TrashContainer";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
 
 let emptyTrashSpy: (...args: unknown[]) => unknown;
@@ -135,11 +135,11 @@ function makeTrashedItem(
   id: string,
   expiresAt: number = Date.now() + 10_000
 ): {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
 } {
   return {
-    terminal: { id, title: `Terminal ${id}` } as TerminalInstance,
+    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,
@@ -152,9 +152,9 @@ function makeGroupAnchor(
   id: string,
   groupRestoreId: string,
   expiresAt: number
-): { terminal: TerminalInstance; trashedInfo: TrashedTerminal } {
+): { terminal: PanelInstance; trashedInfo: TrashedTerminal } {
   return {
-    terminal: { id, title: `Terminal ${id}` } as TerminalInstance,
+    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,
@@ -174,9 +174,9 @@ function makeGroupMember(
   id: string,
   groupRestoreId: string,
   expiresAt: number
-): { terminal: TerminalInstance; trashedInfo: TrashedTerminal } {
+): { terminal: PanelInstance; trashedInfo: TrashedTerminal } {
   return {
-    terminal: { id, title: `Terminal ${id}` } as TerminalInstance,
+    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,

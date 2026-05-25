@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { computeWorkingGridAgentCount } from "../helpers";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 // Selector-based fleet workload counter (issue #8596). Derived rather than
 // maintained at write-time so listeners that bypass `updateAgentState`
 // (identity reducers, raw setState, restart catch blocks) can't desync it.
 
-function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function panel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     kind: "terminal",
@@ -17,7 +17,7 @@ function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalI
     location: "grid",
     isVisible: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("computeWorkingGridAgentCount (#8596)", () => {

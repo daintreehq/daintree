@@ -1,5 +1,8 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import type { TrashExpiryHelpers } from "./trash";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -74,7 +77,7 @@ export const createTrashActions = (
     set((state) => {
       const existing = state.panelsById[id];
       if (!existing) return state;
-      const newById: Record<string, TerminalInstance> = {
+      const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
         [id]: { ...existing, location: "trash" as const },
       };
@@ -170,7 +173,7 @@ export const createTrashActions = (
     }
 
     set((state) => {
-      const newById: Record<string, TerminalInstance> = { ...state.panelsById };
+      const newById: Record<string, CarrierPanel> = { ...state.panelsById };
       for (const tid of trashPanelIds) {
         const current = newById[tid];
         if (current) {
@@ -405,7 +408,7 @@ export const createTrashActions = (
           saveNormalized(state.panelsById, state.panelIds);
           return { trashedTerminals: newTrashed };
         }
-        const newById: Record<string, TerminalInstance> = {
+        const newById: Record<string, CarrierPanel> = {
           ...state.panelsById,
           [id]: { ...existing, location: "trash" as const },
         };

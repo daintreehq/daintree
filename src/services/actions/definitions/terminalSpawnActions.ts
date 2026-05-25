@@ -5,8 +5,9 @@ import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -79,9 +80,12 @@ export function registerTerminalSpawnActions(
         const terminal = state.panelsById[targetId];
         if (!terminal) return;
 
+        const narrowedTerminal = getNarrowPanel(state.panelsById, targetId);
+        if (!narrowedTerminal) return;
+
         const location =
           terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
-        const options = await buildPanelDuplicateOptions(terminal, location);
+        const options = await buildPanelDuplicateOptions(narrowedTerminal, location);
         if (options.title) {
           const defaultTitle = getDefaultTitle(terminal.kind, terminal);
           if (options.title !== defaultTitle) {
@@ -102,11 +106,14 @@ export function registerTerminalSpawnActions(
             ? await buildPanelDuplicateOptions(
                 {
                   id: "last-closed",
+                  kind: "terminal",
+                  cols: 80,
+                  rows: 24,
                   title: lastClosed.title ?? "Terminal",
                   cwd: lastClosed.cwd ?? callbacks.getDefaultCwd(),
                   location: "grid",
                   ...lastClosed,
-                },
+                } as PtyPanelData,
                 "grid"
               )
             : lastClosed;

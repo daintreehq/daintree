@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
 import { RotateCcw, X, Layers, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -18,7 +19,7 @@ interface TrashGroupItemProps {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: Array<{
-    terminal: TerminalInstance;
+    terminal: PanelInstance;
     trashedInfo: TrashedTerminal;
   }>;
   worktreeName?: string;
@@ -72,12 +73,14 @@ export function TrashGroupItem({
   const resolvedActiveTitle = (() => {
     if (!activeEntry) return null;
     const { terminal } = activeEntry;
-    const observed = terminal.lastObservedTitle;
-    if (observed && !isUselessTitle(observed)) return observed;
-    if (terminal.launchAgentId) {
-      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
-      return agentConfig?.name ?? terminal.launchAgentId;
+    if (isPtyPanel(terminal)) {
+      const observed = terminal.lastObservedTitle;
+      if (observed && !isUselessTitle(observed)) return observed;
+      if (terminal.launchAgentId) {
+        if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+        const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
+        return agentConfig?.name ?? terminal.launchAgentId;
+      }
     }
     if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
     return null;

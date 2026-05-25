@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import type { PanelKind } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -13,7 +14,7 @@ export interface SendToAgentItem {
   id: string;
   title: string;
   subtitle?: string;
-  terminalKind?: TerminalInstance["kind"];
+  terminalKind?: PanelKind;
   chrome: TerminalChromeDescriptor;
   isInputLocked?: boolean;
 }

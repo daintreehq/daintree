@@ -87,7 +87,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
   useFleetArmingStore.setState({
@@ -106,8 +106,8 @@ function resetStores() {
   resetEscapeStack();
 }
 
-function seed(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seed(terminals: PtyPanelData[]): void {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -118,19 +118,22 @@ function seed(terminals: TerminalInstance[]): void {
 
 function makeAgent(
   id: string,
-  agentState: TerminalInstance["agentState"] = "idle"
-): TerminalInstance {
+  agentState: PtyPanelData["agentState"] = "idle"
+): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",
     agentState,
     hasPty: true,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("FleetArmingRibbon", () => {
@@ -193,8 +196,8 @@ describe("FleetArmingRibbon", () => {
 
   it("surfaces the cross-worktree count in the chip's visible label", () => {
     seed([
-      { ...makeAgent("t1"), worktreeId: "wt-a" } as TerminalInstance,
-      { ...makeAgent("t2"), worktreeId: "wt-b" } as TerminalInstance,
+      { ...makeAgent("t1"), worktreeId: "wt-a" } as PtyPanelData,
+      { ...makeAgent("t2"), worktreeId: "wt-b" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     render(<FleetArmingRibbon />);
@@ -231,12 +234,12 @@ describe("FleetArmingRibbon", () => {
 
   it("renders per-row health badges for working/waiting/exited and skips idle/completed/directing", () => {
     seed([
-      { ...makeAgent("t1", "working"), title: "alpha" } as TerminalInstance,
-      { ...makeAgent("t2", "waiting"), title: "beta" } as TerminalInstance,
-      { ...makeAgent("t3", "exited"), title: "gamma" } as TerminalInstance,
-      { ...makeAgent("t4", "idle"), title: "delta" } as TerminalInstance,
-      { ...makeAgent("t5", "completed"), title: "epsilon" } as TerminalInstance,
-      { ...makeAgent("t6", "directing"), title: "zeta" } as TerminalInstance,
+      { ...makeAgent("t1", "working"), title: "alpha" } as PtyPanelData,
+      { ...makeAgent("t2", "waiting"), title: "beta" } as PtyPanelData,
+      { ...makeAgent("t3", "exited"), title: "gamma" } as PtyPanelData,
+      { ...makeAgent("t4", "idle"), title: "delta" } as PtyPanelData,
+      { ...makeAgent("t5", "completed"), title: "epsilon" } as PtyPanelData,
+      { ...makeAgent("t6", "directing"), title: "zeta" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4", "t5", "t6"]);
     render(<FleetArmingRibbon />);
@@ -252,8 +255,8 @@ describe("FleetArmingRibbon", () => {
 
   it("renders one badge per pane when multiple panes share the same state", () => {
     seed([
-      { ...makeAgent("t1", "exited"), title: "alpha" } as TerminalInstance,
-      { ...makeAgent("t2", "exited"), title: "beta" } as TerminalInstance,
+      { ...makeAgent("t1", "exited"), title: "alpha" } as PtyPanelData,
+      { ...makeAgent("t2", "exited"), title: "beta" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     render(<FleetArmingRibbon />);
@@ -285,8 +288,8 @@ describe("FleetArmingRibbon", () => {
 
   it("count chip opens a popover listing armed terminal titles", () => {
     seed([
-      { ...makeAgent("t1"), title: "frontend·main" } as TerminalInstance,
-      { ...makeAgent("t2"), title: "backend·main" } as TerminalInstance,
+      { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,
+      { ...makeAgent("t2"), title: "backend·main" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     render(<FleetArmingRibbon />);
@@ -298,8 +301,8 @@ describe("FleetArmingRibbon", () => {
 
   it("per-row disarm button in the popover calls disarmId", () => {
     seed([
-      { ...makeAgent("t1"), title: "frontend·main" } as TerminalInstance,
-      { ...makeAgent("t2"), title: "backend·main" } as TerminalInstance,
+      { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,
+      { ...makeAgent("t2"), title: "backend·main" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     render(<FleetArmingRibbon />);
@@ -315,8 +318,8 @@ describe("FleetArmingRibbon", () => {
     // targets: it closes the armed-list popover when open, but never
     // disarms the fleet. Exit requires ⌘Esc or the visible ✕ chip.
     seed([
-      { ...makeAgent("t1"), title: "frontend·main" } as TerminalInstance,
-      { ...makeAgent("t2"), title: "backend·main" } as TerminalInstance,
+      { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,
+      { ...makeAgent("t2"), title: "backend·main" } as PtyPanelData,
     ]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     render(<FleetArmingRibbon />);
@@ -717,7 +720,7 @@ describe("FleetArmingRibbon", () => {
       seed([
         makeAgent("t1", "working"),
         makeAgent("t2", "waiting"),
-        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as PtyPanelData,
       ]);
       useFleetArmingStore.getState().armIds(["t1", "t3"]);
       render(<FleetArmingRibbon />);
@@ -730,7 +733,7 @@ describe("FleetArmingRibbon", () => {
       seed([
         makeAgent("t1", "working"),
         makeAgent("t2", "waiting"),
-        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as PtyPanelData,
       ]);
       useFleetArmingStore.getState().armIds(["t1", "t2"]);
       render(<FleetArmingRibbon />);
@@ -753,7 +756,7 @@ describe("FleetArmingRibbon", () => {
         makeAgent("t1", "working"),
         makeAgent("t2", "waiting"),
         makeAgent("t3", "completed"),
-        { ...makeAgent("t4", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+        { ...makeAgent("t4", "waiting"), worktreeId: "wt-2" } as PtyPanelData,
       ]);
       useFleetArmingStore.getState().armIds(["t1", "t4"]);
       render(<FleetArmingRibbon />);

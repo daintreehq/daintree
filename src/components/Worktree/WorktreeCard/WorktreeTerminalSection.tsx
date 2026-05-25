@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { TerminalInstance } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
@@ -41,8 +41,8 @@ interface MarqueeBox {
 }
 
 interface TerminalRowProps {
-  term: TerminalInstance;
-  onClick: (term: TerminalInstance) => void;
+  term: PtyPanelData;
+  onClick: (term: PtyPanelData) => void;
 }
 
 function TerminalRow({ term, onClick }: TerminalRowProps) {
@@ -172,9 +172,9 @@ export interface WorktreeTerminalSectionProps {
   worktreeId: string;
   isExpanded: boolean;
   counts: WorktreeTerminalCounts;
-  terminals: TerminalInstance[];
+  terminals: PtyPanelData[];
   onToggle: (e: React.MouseEvent) => void;
-  onTerminalSelect: (terminal: TerminalInstance) => void;
+  onTerminalSelect: (terminal: PtyPanelData) => void;
 }
 
 const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
@@ -231,7 +231,7 @@ export function WorktreeTerminalSection({
   );
 
   const handleTerminalClick = useCallback(
-    (term: TerminalInstance) => {
+    (term: PtyPanelData) => {
       if (!isFleetArmEligible(term)) {
         onTerminalSelect(term);
         return;

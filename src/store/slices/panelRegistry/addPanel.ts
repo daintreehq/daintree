@@ -1,5 +1,9 @@
 import type { TerminalRuntimeStatus } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import { type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient, projectClient, globalEnvClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -169,7 +173,8 @@ export const createAddPanelActions = (
       // of an unregistered kind) wins over a live registry lookup only when the
       // registry has no matching entry.
       const pluginId = kindConfig?.extensionId ?? options.pluginId;
-      const terminal: TerminalInstance = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- panel shape is guaranteed by the registered createDefaults factory
+      const terminal = {
         id,
         kind: requestedKind,
         title,
@@ -181,7 +186,7 @@ export const createAddPanelActions = (
         pluginId,
         ephemeral: options.ephemeral,
         ...kindFields,
-      };
+      } as PanelInstance;
 
       if (isHydrationBatchActive()) {
         // Batched path: commit `panelsById` immediately (event listeners can find
@@ -321,7 +326,8 @@ export const createAddPanelActions = (
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
     const spawnStatus: "spawning" | "ready" = isReconnect ? "ready" : "spawning";
-    const terminal: TerminalInstance = {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- panel shape is guaranteed by the registered createDefaults factory
+    const terminal = {
       id,
       kind,
       launchAgentId,
@@ -369,35 +375,40 @@ export const createAddPanelActions = (
       ephemeral: options.ephemeral,
       startedAt: Date.now(),
       spawnStatus,
-    };
+    } as PanelInstance;
 
     // Commit the panel to `panelsById` BEFORE any async IPC (#5789 optimistic
     // placeholder) so the user sees the panel immediately and IPC event
     // listeners (onAgentStateChanged, onExit, onAgentDetected, activity flushes,
     // etc.) that look panels up by id always find the entry.
+    // PTY-specific field access within the closures below requires the narrow view.
+    // `terminal` is `PanelInstance` (cast above); the PTY path always produces a
+    // PtyPanelData shape at runtime so the re-assertion is safe here.
+    const ptyTerminal = terminal as PtyPanelData;
+
     if (isHydrationBatchActive()) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
       set((state) => {
         const existing = state.panelsById[id];
-        const preservedTerminal =
+        const preservedTerminal: CarrierPanel =
           existing && isReconnect
             ? {
-                ...terminal,
-                agentState: terminal.agentState ?? existing.agentState,
-                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
-                extensionState: terminal.extensionState ?? existing.extensionState,
+                ...ptyTerminal,
+                agentState: ptyTerminal.agentState ?? existing.agentState,
+                lastStateChange: ptyTerminal.lastStateChange ?? existing.lastStateChange,
+                exitBehavior: ptyTerminal.exitBehavior ?? existing.exitBehavior,
+                extensionState: ptyTerminal.extensionState ?? existing.extensionState,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
-                everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                everDetectedAgent: ptyTerminal.everDetectedAgent || existing.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
-                detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
-                detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
-                runtimeIdentity: terminal.runtimeIdentity ?? existing.runtimeIdentity,
+                detectedAgentId: ptyTerminal.detectedAgentId ?? existing.detectedAgentId,
+                detectedProcessId: ptyTerminal.detectedProcessId ?? existing.detectedProcessId,
+                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existing.runtimeIdentity,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
               }
-            : terminal;
+            : ptyTerminal;
         return {
           panelsById: { ...state.panelsById, [id]: preservedTerminal },
           panelIdsByWorktreeId: existing
@@ -428,24 +439,24 @@ export const createAddPanelActions = (
           // Update existing terminal in place (reconnection case or double hydration)
           logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
           // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
-          const preservedTerminal = isReconnect
+          const preservedTerminal: CarrierPanel = isReconnect
             ? {
-                ...terminal,
-                agentState: terminal.agentState ?? existing.agentState,
-                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
-                extensionState: terminal.extensionState ?? existing.extensionState,
+                ...ptyTerminal,
+                agentState: ptyTerminal.agentState ?? existing.agentState,
+                lastStateChange: ptyTerminal.lastStateChange ?? existing.lastStateChange,
+                exitBehavior: ptyTerminal.exitBehavior ?? existing.exitBehavior,
+                extensionState: ptyTerminal.extensionState ?? existing.extensionState,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
-                everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                everDetectedAgent: ptyTerminal.everDetectedAgent || existing.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
-                detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
-                detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
-                runtimeIdentity: terminal.runtimeIdentity ?? existing.runtimeIdentity,
+                detectedAgentId: ptyTerminal.detectedAgentId ?? existing.detectedAgentId,
+                detectedProcessId: ptyTerminal.detectedProcessId ?? existing.detectedProcessId,
+                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existing.runtimeIdentity,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
               }
-            : terminal;
+            : ptyTerminal;
           const newById = { ...state.panelsById, [id]: preservedTerminal };
           const newIndex = transferBetweenWorktreeIndex(
             state.panelIdsByWorktreeId,

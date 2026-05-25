@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import { usePanelStore, type AddPanelOptions, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -520,13 +521,15 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             cachedLaunchCliDetail ?? (await getCurrentLaunchCliDetail(agentId));
           if (launchCliDetail && !isAgentLaunchable(launchCliDetail.state)) {
             const gateId = `terminal-${crypto.randomUUID()}`;
-            const gatePanel: TerminalInstance = {
+            const gatePanel: PtyPanelData = {
               id: gateId,
               kind: "terminal",
               launchAgentId: agentId,
               title: presetTitle,
               worktreeId: targetWorktreeId || undefined,
               cwd,
+              cols: 80,
+              rows: 24,
               location: launchOptions?.location === "dock" ? "dock" : "grid",
               command: command as string | undefined,
               agentLaunchFlags: launchFlags,

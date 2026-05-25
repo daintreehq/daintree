@@ -1,6 +1,5 @@
 import type { StoreApi } from "zustand";
 import type {
-  TerminalInstance as TerminalInstanceType,
   AgentState,
   AgentStateChangeTrigger,
   PersistableFlowStatus,
@@ -13,6 +12,8 @@ import type {
   BrowserHistory,
   AddPanelOptions,
 } from "@/types";
+// eslint-disable-next-line no-restricted-imports -- local alias for the carrier shape; flips to PanelInstance in #8957 step 5
+import type { TerminalInstance as TerminalInstanceType } from "@/types";
 
 export type TerminalInstance = TerminalInstanceType;
 export type { AddPanelOptions };

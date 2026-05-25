@@ -1,14 +1,17 @@
 import PQueue from "p-queue";
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./panelRegistrySlice";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { isRuntimeAgentTerminal } from "../../utils/terminalType";
 import { validateTerminals, type ValidationResult } from "@/utils/terminalValidation";
 import { logError } from "@/utils/logger";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export interface BulkRestartValidation {
-  valid: TerminalInstance[];
-  invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }>;
+  valid: PtyPanelData[];
+  invalid: Array<{ terminal: PtyPanelData; errors: ValidationResult }>;
 }
 
 export interface TerminalBulkActionsSlice {
@@ -37,7 +40,7 @@ export interface TerminalBulkActionsSlice {
 }
 
 export const createTerminalBulkActionsSlice = (
-  getTerminals: () => TerminalInstance[],
+  getTerminals: () => CarrierPanel[],
   removePanel: (id: string) => void,
   restartTerminal: (id: string) => Promise<void>,
   trashPanel: (id: string) => void,
@@ -49,7 +52,7 @@ export const createTerminalBulkActionsSlice = (
 ): StateCreator<TerminalBulkActionsSlice, [], [], TerminalBulkActionsSlice> => {
   const restartQueue = new PQueue({ concurrency: 4, timeout: 30_000 });
 
-  const restartTerminals = async (terminalsToRestart: TerminalInstance[]) => {
+  const restartTerminals = async (terminalsToRestart: PtyPanelData[]) => {
     const ids = Array.from(new Set(terminalsToRestart.map((t) => t.id)));
     await restartQueue.addAll(
       ids.map((id) => async () => {
@@ -66,14 +69,17 @@ export const createTerminalBulkActionsSlice = (
     bulkCloseByState: (states) => {
       const stateArray = Array.isArray(states) ? states : [states];
       const terminals = getTerminals();
-      const toRemove = terminals.filter((t) => t.agentState && stateArray.includes(t.agentState));
+      const toRemove = terminals.filter(
+        (t) => isPtyPanel(t) && t.agentState != null && stateArray.includes(t.agentState)
+      );
       toRemove.forEach((t) => removePanel(t.id));
     },
 
     bulkCloseByWorktree: (worktreeId, state) => {
       const terminals = getTerminals();
       const toRemove = terminals.filter(
-        (t) => t.worktreeId === worktreeId && (!state || t.agentState === state)
+        (t) =>
+          t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
       );
       toRemove.forEach((t) => removePanel(t.id));
     },
@@ -107,7 +113,9 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartAll: async () => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t) => t.location !== "trash");
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && t.location !== "trash"
+      );
       await restartTerminals(activeTerminals);
     },
 
@@ -115,7 +123,9 @@ export const createTerminalBulkActionsSlice = (
       const idSet = ids instanceof Set ? ids : new Set(ids);
       if (idSet.size === 0) return;
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
+      );
       if (activeTerminals.length === 0) return;
       try {
         const validationResults = await validateTerminals(activeTerminals);
@@ -129,12 +139,14 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartPreflightCheck: async () => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t) => t.location !== "trash");
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && t.location !== "trash"
+      );
 
       const validationResults = await validateTerminals(activeTerminals);
 
-      const valid: TerminalInstance[] = [];
-      const invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }> = [];
+      const valid: PtyPanelData[] = [];
+      const invalid: Array<{ terminal: PtyPanelData; errors: ValidationResult }> = [];
 
       for (const terminal of activeTerminals) {
         const result = validationResults.get(terminal.id);
@@ -151,12 +163,14 @@ export const createTerminalBulkActionsSlice = (
     bulkRestartPreflightCheckSet: async (ids) => {
       const idSet = ids instanceof Set ? ids : new Set(ids);
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
+      );
 
       const validationResults = await validateTerminals(activeTerminals);
 
-      const valid: TerminalInstance[] = [];
-      const invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }> = [];
+      const valid: PtyPanelData[] = [];
+      const invalid: Array<{ terminal: PtyPanelData; errors: ValidationResult }> = [];
 
       for (const terminal of activeTerminals) {
         const result = validationResults.get(terminal.id);
@@ -214,14 +228,14 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartPreflightCheckByWorktree: async (worktreeId) => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktreeId && t.location !== "trash"
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
       );
 
       const validationResults = await validateTerminals(activeTerminals);
 
-      const valid: TerminalInstance[] = [];
-      const invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }> = [];
+      const valid: PtyPanelData[] = [];
+      const invalid: Array<{ terminal: PtyPanelData; errors: ValidationResult }> = [];
 
       for (const terminal of activeTerminals) {
         const result = validationResults.get(terminal.id);
@@ -237,8 +251,8 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartByWorktree: async (worktreeId) => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktreeId && t.location !== "trash"
+      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
+        isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
       );
       if (activeTerminals.length === 0) return;
 
@@ -296,20 +310,22 @@ export const createTerminalBulkActionsSlice = (
       // (a plain shell where `claude` is currently the foreground process),
       // not just spawn-sealed agent terminals.
       const idleAgents = terminals.filter(
-        (t) => t.agentState === "idle" && isRuntimeAgentTerminal(t)
+        (t): t is PtyPanelData =>
+          isPtyPanel(t) && t.agentState === "idle" && isRuntimeAgentTerminal(t)
       );
       await restartTerminals(idleAgents);
     },
 
     getCountByState: (state) => {
       const terminals = getTerminals();
-      return terminals.filter((t) => t.agentState === state).length;
+      return terminals.filter((t) => isPtyPanel(t) && t.agentState === state).length;
     },
 
     getCountByWorktree: (worktreeId, state) => {
       const terminals = getTerminals();
       return terminals.filter(
-        (t) => t.worktreeId === worktreeId && (!state || t.agentState === state)
+        (t) =>
+          t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
       ).length;
     },
 

@@ -1,6 +1,10 @@
 import type { TabGroup, TabGroupLocation } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import { type PanelInstance } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
@@ -11,7 +15,7 @@ import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
-function getPanelTabGroupLocation(panel: TerminalInstance | undefined): TabGroupLocation | null {
+function getPanelTabGroupLocation(panel: PanelInstance | CarrierPanel | undefined): TabGroupLocation | null {
   if (!panel || panel.location === "trash" || panel.location === "background") return null;
   return panel.location === "dock" ? "dock" : "grid";
 }
@@ -203,7 +207,7 @@ export const createTabGroupActions = (
       return group.panelIds
         .map((id) => state.panelsById[id])
         .filter(
-          (t): t is TerminalInstance =>
+          (t): t is CarrierPanel =>
             t !== undefined &&
             getPanelTabGroupLocation(t) !== null &&
             (location === undefined || getPanelTabGroupLocation(t) === location) &&
@@ -212,7 +216,7 @@ export const createTabGroupActions = (
     }
 
     // Not an explicit group - check if it's a single ungrouped panel
-    const panel = state.panelsById[groupId];
+    const panel: CarrierPanel | undefined = state.panelsById[groupId];
     if (
       panel &&
       getPanelTabGroupLocation(panel) !== null &&
@@ -266,7 +270,7 @@ export const createTabGroupActions = (
     }
 
     // Find ungrouped panels
-    const ungroupedPanels: TerminalInstance[] = [];
+    const ungroupedPanels: CarrierPanel[] = [];
     for (const tid of state.panelIds) {
       const t = state.panelsById[tid];
       if (!t) continue;
@@ -429,7 +433,7 @@ export const createTabGroupActions = (
       reorderedGroups.splice(toGroupIndex, 0, movedGroup);
 
       // Build new panelIds with the reordered groups
-      const matchesLocation = (t: TerminalInstance) =>
+      const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";

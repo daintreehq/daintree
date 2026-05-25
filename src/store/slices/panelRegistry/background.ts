@@ -1,5 +1,8 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -55,7 +58,7 @@ export const createBackgroundActions = (
     set((state) => {
       const existing = state.panelsById[id];
       if (!existing) return state;
-      const newById: Record<string, TerminalInstance> = {
+      const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
         [id]: { ...existing, location: "background" as const },
       };

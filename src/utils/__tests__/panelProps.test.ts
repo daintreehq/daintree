@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { buildPanelProps } from "../panelProps";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 
 const noop = () => {};
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t-1",
     title: "Terminal 1",
@@ -27,10 +27,10 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     detectedProcessId: undefined,
     browserUrl: undefined,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function build(terminal: TerminalInstance) {
+function build(terminal: PtyPanelData) {
   return buildPanelProps({
     terminal,
     isFocused: false,

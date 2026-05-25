@@ -1,8 +1,15 @@
-import type { TerminalInstance } from "@/store";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { PanelComponentProps } from "@/registry";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { clampZoom } from "@/components/Browser/browserUtils";
+
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name. Lets external callers that still hand
+// out raw carrier entries pass through until the rest of the renderer
+// migrates to `getNarrowPanel` (#8957).
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 const activityCache = new Map<string, ActivityState>();
 
@@ -40,7 +47,7 @@ function getStableActivity(
 }
 
 export interface BuildPanelPropsConfig {
-  terminal: TerminalInstance;
+  terminal: CarrierPanel;
   isFocused: boolean;
   overrides: Partial<PanelComponentProps>;
 }

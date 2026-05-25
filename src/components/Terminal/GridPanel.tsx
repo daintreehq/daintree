@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinition,
@@ -44,7 +46,7 @@ export interface GridPanelProps {
   // Panel-aware add-tab callback. Receives the subscribed terminal. Pass a
   // stable handler (e.g., `ctx.handleAddTabForPanel`) — GridPanel composes
   // the no-arg shape internally and skips it in fleet scope.
-  onAddTabForPanel?: (terminal: TerminalInstance) => void | Promise<void>;
+  onAddTabForPanel?: (terminal: PanelInstance) => void | Promise<void>;
   onTabReorder?: (newOrder: string[]) => void;
 }
 
@@ -126,7 +128,11 @@ export const GridPanel = React.memo(function GridPanel({
     if (onAddTab) return onAddTab;
     if (onAddTabForPanel && terminal) {
       return () => {
-        void onAddTabForPanel(terminal);
+        const narrowed = getNarrowPanel(
+          usePanelStore.getState().panelsById,
+          terminal.id
+        );
+        if (narrowed) void onAddTabForPanel(narrowed);
       };
     }
     return undefined;

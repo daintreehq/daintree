@@ -20,8 +20,8 @@ import {
   useWorktreeSelectionStore,
   usePreferencesStore,
   useTwoPaneSplitStore,
-  type TerminalInstance,
 } from "@/store";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -34,7 +34,7 @@ import {
   getClosingIdsSnapshot,
 } from "@/services/terminal/optimisticPanelClose";
 import { TerminalRefreshTier } from "@shared/types/panel";
-import type { TabGroup, TabGroupLocation } from "@shared/types/panel";
+import type { PanelInstance, TabGroup, TabGroupLocation } from "@shared/types/panel";
 import {
   computeGridColumns,
   computeScrollRowHeight,
@@ -70,7 +70,7 @@ import { actionService } from "@/services/ActionService";
 // spurious re-render emitting a new `[]` each call). Module-local; never
 // mutated.
 const EMPTY_PANEL_IDS: string[] = [];
-const EMPTY_TERMINALS: TerminalInstance[] = [];
+const EMPTY_TERMINALS: PanelInstance[] = [];
 const EMPTY_TAB_GROUPS: TabGroup[] = [];
 
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
@@ -90,13 +90,13 @@ export interface ContentGridContext {
   defaultCwd?: string;
   agentAvailability?: CliAvailability;
   emptyContent?: React.ReactNode;
-  gridTerminals: TerminalInstance[];
+  gridTerminals: PanelInstance[];
   tabGroups: TabGroup[];
   focusedId: string | null;
   maximizedId: string | null;
   maximizeTarget: ReturnType<typeof usePanelStore.getState>["maximizeTarget"];
   maximizedGroup: TabGroup | undefined;
-  maximizedGroupPanels: TerminalInstance[];
+  maximizedGroupPanels: PanelInstance[];
   maximizedGroupFocusTarget: string | null;
   gridCols: number;
   fleetGridCols: number;
@@ -109,7 +109,7 @@ export interface ContentGridContext {
   layoutConfig: ReturnType<typeof useLayoutConfigStore.getState>["layoutConfig"];
   gridWidth: number | null;
   isFleetScopeRender: boolean;
-  fleetPanels: TerminalInstance[];
+  fleetPanels: PanelInstance[];
   fleetNeedsWorktreePrefix: boolean;
   isOver: boolean;
   isDragging: boolean;
@@ -131,10 +131,10 @@ export interface ContentGridContext {
   isProjectSwitching: boolean;
   panelIds: string[];
   gridItemCount: number;
-  twoPaneTerminals: [TerminalInstance, TerminalInstance] | null;
+  twoPaneTerminals: [PanelInstance, PanelInstance] | null;
   gridAgentMenuItems: { id: string; name: string; canLaunch: boolean }[];
   gridContextMenuContent: React.ReactNode;
-  handleAddTabForPanel: (panel: TerminalInstance) => Promise<void>;
+  handleAddTabForPanel: (panel: PanelInstance) => Promise<void>;
   handleGridLaunch: (agentId: string) => void;
   handleGridLayoutChange: (strategy: "automatic" | "fixed-columns" | "fixed-rows") => void;
   handleGridRegionKeyDown: (e: React.KeyboardEvent) => void;
@@ -152,7 +152,7 @@ export interface ContentGridContext {
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
   isInTrash: (id: string) => boolean;
   isWorktreeInitialized: boolean;
-  getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => TerminalInstance[];
+  getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => PanelInstance[];
   getPanelGroup: (panelId: string) => TabGroup | undefined;
   getActiveTabId: (groupId: string) => string | null;
   storeTerminalIds: string[];
@@ -281,11 +281,11 @@ export function useContentGridContext({
   const gridTerminals = useMemo(() => {
     if (gridPanelIds.length === 0) return EMPTY_TERMINALS;
     const byId = panelStoreApi.getState().panelsById;
-    const result: TerminalInstance[] = [];
+    const result: PanelInstance[] = [];
     for (const id of gridPanelIds) {
       if (closingIds.has(id)) continue;
-      const t = byId[id];
-      if (t) result.push(t);
+      const narrowed = getNarrowPanel(byId, id);
+      if (narrowed) result.push(narrowed);
     }
     return result.length === 0 ? EMPTY_TERMINALS : result;
   }, [gridPanelIds, closingIds]);
@@ -334,7 +334,7 @@ export function useContentGridContext({
   }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals, closingIds]);
 
   const handleAddTabForPanel = useCallback(
-    async (panel: TerminalInstance) => {
+    async (panel: PanelInstance) => {
       let groupId: string;
       let createdNewGroup = false;
 
@@ -689,11 +689,11 @@ export function useContentGridContext({
   const fleetPanels = useMemo(() => {
     if (fleetPanelIds.length === 0) return EMPTY_TERMINALS;
     const byId = panelStoreApi.getState().panelsById;
-    const result: TerminalInstance[] = [];
+    const result: PanelInstance[] = [];
     for (const id of fleetPanelIds) {
       if (closingIds.has(id)) continue;
-      const t = byId[id];
-      if (t) result.push(t);
+      const narrowed = getNarrowPanel(byId, id);
+      if (narrowed) result.push(narrowed);
     }
     return result.length === 0 ? EMPTY_TERMINALS : result;
   }, [fleetPanelIds, closingIds]);
@@ -855,14 +855,18 @@ export function useContentGridContext({
     !maximizedId &&
     !showPlaceholder;
 
-  const twoPaneTerminals = useMemo((): [TerminalInstance, TerminalInstance] | null => {
+  const twoPaneTerminals = useMemo((): [PanelInstance, PanelInstance] | null => {
     if (!useTwoPaneSplitMode) return null;
+    const byId = panelStoreApi.getState().panelsById;
     const panels = tabGroups
       .slice(0, 2)
-      .map((g) => getTabGroupPanels(g.id, "grid")[0])
-      .filter((t): t is TerminalInstance => t !== undefined);
+      .map((g) => {
+        const raw = getTabGroupPanels(g.id, "grid")[0];
+        return raw ? getNarrowPanel(byId, raw.id) : undefined;
+      })
+      .filter((p): p is PanelInstance => p !== undefined);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return panels.length === 2 ? (panels as [TerminalInstance, TerminalInstance]) : null;
+    return panels.length === 2 ? (panels as [PanelInstance, PanelInstance]) : null;
   }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
 
   const prevModeRef = useRef<boolean>(useTwoPaneSplitMode);
@@ -913,10 +917,13 @@ export function useContentGridContext({
     maximizedId && maximizeTarget?.type === "group"
       ? tabGroups.find((group) => group.id === maximizeTarget.id)
       : undefined;
-  const maximizedGroupPanels = useMemo(
-    () => (maximizedGroup ? getTabGroupPanels(maximizedGroup.id, "grid") : []),
-    [getTabGroupPanels, maximizedGroup]
-  );
+  const maximizedGroupPanels = useMemo((): PanelInstance[] => {
+    if (!maximizedGroup) return [];
+    const byId = panelStoreApi.getState().panelsById;
+    return getTabGroupPanels(maximizedGroup.id, "grid")
+      .map((raw) => getNarrowPanel(byId, raw.id))
+      .filter((p): p is PanelInstance => p !== undefined);
+  }, [getTabGroupPanels, maximizedGroup]);
   const maximizedGroupFocusTarget = useMemo(
     () =>
       maximizedGroup
@@ -1020,6 +1027,19 @@ export function useContentGridContext({
     </ContextMenuContent>
   );
 
+  // Wrap the store's getTabGroupPanels (returns carrier shape) so the
+  // context surface exposes PanelInstance[] — narrowed via getNarrowPanel at
+  // call time so callers never touch the carrier shape.
+  const getTabGroupPanelsMapped = useCallback(
+    (groupId: string, location?: TabGroupLocation): PanelInstance[] => {
+      const byId = panelStoreApi.getState().panelsById;
+      return getTabGroupPanels(groupId, location)
+        .map((raw) => getNarrowPanel(byId, raw.id))
+        .filter((p): p is PanelInstance => p !== undefined);
+    },
+    [getTabGroupPanels]
+  );
+
   const isEmpty = gridTerminals.length === 0;
 
   const ctx: ContentGridContext = {
@@ -1080,7 +1100,7 @@ export function useContentGridContext({
     worktreeMap,
     isInTrash,
     isWorktreeInitialized,
-    getTabGroupPanels,
+    getTabGroupPanels: getTabGroupPanelsMapped,
     getPanelGroup,
     getActiveTabId,
     storeTerminalIds,

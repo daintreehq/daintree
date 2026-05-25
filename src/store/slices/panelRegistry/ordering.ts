@@ -1,11 +1,15 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { type PanelInstance } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
 import { buildWorktreeIndex } from "./worktreeIndex";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -23,9 +27,9 @@ export const createOrderingActions = (
     set((state) => {
       const hasWorktreeFilter = worktreeId !== undefined;
       const targetWorktreeId = worktreeId ?? null;
-      const matchesWorktree = (t: TerminalInstance) =>
+      const matchesWorktree = (t: CarrierPanel) =>
         !hasWorktreeFilter || (t.worktreeId ?? null) === targetWorktreeId;
-      const matchesLocation = (t: TerminalInstance) =>
+      const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";
@@ -81,9 +85,9 @@ export const createOrderingActions = (
       const targetWorktreeId =
         worktreeId !== undefined ? worktreeId : (terminal.worktreeId ?? null);
       const hasWorktreeFilter = worktreeId !== undefined;
-      const matchesWorktree = (t: TerminalInstance) =>
+      const matchesWorktree = (t: CarrierPanel) =>
         !hasWorktreeFilter || (t.worktreeId ?? null) === (targetWorktreeId ?? null);
-      const matchesLocation = (t: TerminalInstance) =>
+      const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";
@@ -113,12 +117,13 @@ export const createOrderingActions = (
               : scopedIndices[clampedIndex]!;
 
       const isVisible = location === "grid";
-      const updatedTerminal: TerminalInstance = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
+      const updatedTerminal = {
         ...terminal,
         location,
         isVisible,
         runtimeStatus: deriveRuntimeStatus(isVisible, terminal.flowStatus, terminal.runtimeStatus),
-      };
+      } as PanelInstance;
 
       // Insert at the right position
       const newIds = [...filteredIds];

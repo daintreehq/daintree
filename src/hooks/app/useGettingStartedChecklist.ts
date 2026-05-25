@@ -8,13 +8,17 @@ import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
-import type { TerminalInstance } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
-function countActiveAgentPanels(panelsById: Record<string, TerminalInstance>): number {
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+
+function countActiveAgentPanels(panelsById: Record<string, CarrierPanel>): number {
   let count = 0;
-  for (const panel of Object.values(panelsById)) {
-    if (!panel?.detectedAgentId && !panel?.launchAgentId) continue;
-    const state = panel.agentState;
+  for (const raw of Object.values(panelsById)) {
+    if (!raw || !isPtyPanel(raw)) continue;
+    if (!raw.detectedAgentId && !raw.launchAgentId) continue;
+    const state = raw.agentState;
     if (state && ACTIVE_AGENT_STATES.has(state)) count += 1;
     if (count >= 2) return count;
   }

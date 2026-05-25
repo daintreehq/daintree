@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { TerminalInstance } from "../../panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -38,7 +38,7 @@ vi.mock("../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../panelStore");
 
-function setTerminals(terminals: TerminalInstance[]) {
+function setTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),
@@ -49,7 +49,7 @@ function createMockTerminal(
   id: string,
   worktreeId: string,
   location: "grid" | "dock" | "trash" = "grid"
-): TerminalInstance {
+): PtyPanelData {
   return {
     id,
     type: "terminal",
@@ -59,7 +59,7 @@ function createMockTerminal(
     rows: 24,
     worktreeId,
     location,
-  } as unknown as TerminalInstance;
+  } as unknown as PtyPanelData;
 }
 
 describe("Worktree-scoped bulk actions", () => {

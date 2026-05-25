@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { SortableWorktreeTerminal } from "../SortableWorktreeTerminal";
 import { useDragHandle } from "../DragHandleContext";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 
 let mockIsDragging = false;
 const mockSetActivatorNodeRef = vi.fn();
@@ -28,8 +28,9 @@ vi.mock("@dnd-kit/utilities", () => ({
   },
 }));
 
-const terminal: TerminalInstance = {
+const terminal: PanelInstance = {
   id: "t3",
+  kind: "terminal",
   title: "Worktree Terminal",
   cwd: "/test",
   cols: 80,
@@ -37,7 +38,7 @@ const terminal: TerminalInstance = {
   worktreeId: "wt1",
   location: "grid",
   isVisible: true,
-};
+} as PanelInstance;
 
 describe("SortableWorktreeTerminal", () => {
   it("renders children when given a ReactNode", () => {

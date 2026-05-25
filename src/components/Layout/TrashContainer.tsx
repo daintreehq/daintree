@@ -15,7 +15,8 @@ import {
   TRASH_DROPPABLE_ID,
 } from "@/components/DragDrop";
 import { DURATION_200, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
 import { TrashGroupItem } from "./TrashGroupItem";
@@ -24,7 +25,7 @@ const MOVED_HINT_MAX_SHOWS = 3;
 
 interface TrashContainerProps {
   trashedTerminals: Array<{
-    terminal: TerminalInstance;
+    terminal: PanelInstance;
     trashedInfo: TrashedTerminal;
   }>;
   compact?: boolean;
@@ -32,7 +33,7 @@ interface TrashContainerProps {
 
 interface GroupedTrashItem {
   type: "single";
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
   sortKey: number;
 }
@@ -42,7 +43,7 @@ interface GroupedTrashGroup {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: Array<{
-    terminal: TerminalInstance;
+    terminal: PanelInstance;
     trashedInfo: TrashedTerminal;
   }>;
   earliestExpiry: number;
@@ -113,12 +114,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       string,
       {
         metadata: TrashedTerminalGroupMetadata | undefined;
-        terminals: Array<{ terminal: TerminalInstance; trashedInfo: TrashedTerminal }>;
+        terminals: Array<{ terminal: PanelInstance; trashedInfo: TrashedTerminal }>;
         earliestExpiry: number;
         latestExpiry: number;
       }
     >();
-    const singles: Array<{ terminal: TerminalInstance; trashedInfo: TrashedTerminal }> = [];
+    const singles: Array<{ terminal: PanelInstance; trashedInfo: TrashedTerminal }> = [];
 
     for (const item of trashedTerminals) {
       const { trashedInfo } = item;
@@ -192,7 +193,8 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
     const titles: string[] = [];
     for (const item of trashedTerminals) {
       const panel = item.terminal;
-      const title = panel.title || panel.lastObservedTitle;
+      const lastObservedTitle = isPtyPanel(panel) ? panel.lastObservedTitle : undefined;
+      const title = panel.title || lastObservedTitle;
       titles.push(title || "Untitled");
     }
     return titles;

@@ -7,15 +7,15 @@ import {
   resolveGroupPlacementIndex,
   findGroupIndex,
 } from "../dropResolution";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
 function makeTerminal(
   id: string,
   location: "grid" | "dock",
   worktreeId?: string
-): TerminalInstance {
-  return { id, location, worktreeId, title: `Terminal ${id}` } as TerminalInstance;
+): PanelInstance {
+  return { id, kind: "terminal", location, worktreeId, title: `Terminal ${id}`, cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance;
 }
 
 function makeTabGroup(

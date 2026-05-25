@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -269,7 +270,7 @@ describe("hydration batch (#5196)", () => {
           lastStateChange: 1234,
           exitBehavior: "restart",
           extensionState: { foo: "bar" },
-        } as import("../types").TerminalInstance,
+        } as unknown as PtyPanelData,
       },
       panelIds: [...state.panelIds, "term-1"],
     }));

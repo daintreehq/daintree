@@ -1,10 +1,13 @@
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./panelRegistrySlice";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
 
@@ -15,13 +18,13 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
 // "next" lands on the next match after that position rather than resetting to
 // index 0 — and stays robust when an agent's state changes between presses.
 function cycleToMatch(
-  terminals: TerminalInstance[],
+  terminals: CarrierPanel[],
   focusedId: string | null,
   isInTrash: (id: string) => boolean,
   validWorktreeIds: Set<string>,
-  predicate: (t: TerminalInstance) => boolean,
+  predicate: (t: CarrierPanel) => boolean,
   direction: "next" | "prev"
-): TerminalInstance | undefined {
+): CarrierPanel | undefined {
   const visibleList = terminals.filter((t) => isTerminalVisible(t, isInTrash, validWorktreeIds));
   const len = visibleList.length;
   if (len === 0) return undefined;
@@ -40,8 +43,8 @@ function cycleToMatch(
 }
 
 function isOpenableDockTerminal(
-  terminal: TerminalInstance | undefined
-): terminal is TerminalInstance {
+  terminal: CarrierPanel | undefined
+): terminal is CarrierPanel {
   if (!terminal) return false;
   if (terminal.location !== "dock") return false;
   return true;
@@ -103,7 +106,7 @@ export interface TerminalFocusSlice {
   /** Validate and cleanup maximize state if target is invalid */
   validateMaximizeTarget: (
     getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined,
-    getTerminal: (id: string) => TerminalInstance | undefined
+    getTerminal: (id: string) => CarrierPanel | undefined
   ) => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
@@ -143,14 +146,14 @@ export interface TerminalFocusSlice {
 
   handleTerminalRemoved: (
     removedId: string,
-    terminals: TerminalInstance[],
+    terminals: CarrierPanel[],
     removedIndex: number
   ) => void;
 }
 
 export const createTerminalFocusSlice =
   (
-    getTerminals: () => TerminalInstance[],
+    getTerminals: () => CarrierPanel[],
     getActiveWorktreeId: () => string | null,
     stampLastActive: (id: string) => void
   ): StateCreator<TerminalFocusSlice, [], [], TerminalFocusSlice> =>
@@ -338,7 +341,7 @@ export const createTerminalFocusSlice =
       focusNext: () => {
         const terminals = getTerminals();
         const activeWorktreeId = getActiveWorktreeId();
-        const worktreeMatch = (t: TerminalInstance) =>
+        const worktreeMatch = (t: CarrierPanel) =>
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
         const gridTerminals = terminals.filter(
@@ -357,7 +360,7 @@ export const createTerminalFocusSlice =
       focusPrevious: () => {
         const terminals = getTerminals();
         const activeWorktreeId = getActiveWorktreeId();
-        const worktreeMatch = (t: TerminalInstance) =>
+        const worktreeMatch = (t: CarrierPanel) =>
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
         const gridTerminals = terminals.filter(
@@ -414,10 +417,10 @@ export const createTerminalFocusSlice =
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
-        if (terminal?.agentState === "waiting") {
+        if (isPtyPanel(terminal) && terminal.agentState === "waiting") {
           window.electron?.notification?.acknowledgeWaiting(id);
         }
-        if (terminal?.agentState === "working") {
+        if (isPtyPanel(terminal) && terminal.agentState === "working") {
           window.electron?.notification?.acknowledgeWorkingPulse(id);
         }
         const previousFocusedId = get().focusedId;
@@ -451,10 +454,10 @@ export const createTerminalFocusSlice =
         const focusActuallyChanged = id !== previousFocusedId;
 
         if (terminal.location === "dock") {
-          if (terminal.agentState === "waiting") {
+          if (isPtyPanel(terminal) && terminal.agentState === "waiting") {
             window.electron?.notification?.acknowledgeWaiting(id);
           }
-          if (terminal.agentState === "working") {
+          if (isPtyPanel(terminal) && terminal.agentState === "working") {
             window.electron?.notification?.acknowledgeWorkingPulse(id);
           }
           set({
@@ -492,7 +495,7 @@ export const createTerminalFocusSlice =
           focusedId,
           isInTrash,
           validWorktreeIds,
-          (t) => t.agentState === "waiting",
+          (t) => isPtyPanel(t) && t.agentState === "waiting",
           "next"
         );
         if (!next) return;
@@ -507,7 +510,7 @@ export const createTerminalFocusSlice =
           focusedId,
           isInTrash,
           validWorktreeIds,
-          (t) => t.agentState === "working",
+          (t) => isPtyPanel(t) && t.agentState === "working",
           "next"
         );
         if (!next) return;
@@ -524,7 +527,7 @@ export const createTerminalFocusSlice =
           focusedId,
           isInTrash,
           validWorktreeIds,
-          isRuntimeAgentTerminal,
+          (t) => isRuntimeAgentTerminal(t),
           "next"
         );
         if (!next) return;
@@ -541,7 +544,7 @@ export const createTerminalFocusSlice =
           focusedId,
           isInTrash,
           validWorktreeIds,
-          isRuntimeAgentTerminal,
+          (t) => isRuntimeAgentTerminal(t),
           "prev"
         );
         if (!prev) return;
@@ -557,10 +560,11 @@ export const createTerminalFocusSlice =
           .setActiveTab;
 
         const dockTerminals = terminals.filter(
-          (t) =>
+          (t): t is PanelInstance =>
             t.location === "dock" &&
-            t.ephemeral !== true &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
+            isPtyPanel(t) &&
+            t.ephemeral !== true &&
             t.agentState === "waiting"
         );
 

@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports -- panelToSnapshot is the persistence Tolerant Reader; PanelSnapshot is the on-disk wire format and intentionally keeps the wide TerminalInstance read shape (#8957)
 import type { TerminalInstance, PanelSnapshot, TabGroup } from "@/types";
 import { projectClient } from "@/clients";
 import { debounce } from "@/utils/debounce";

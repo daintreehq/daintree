@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { TerminalInstance } from "../../panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -41,7 +41,7 @@ vi.mock("../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../panelStore");
 
-function makeTerminal(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     type: "terminal",
@@ -50,10 +50,10 @@ function makeTerminal(id: string, overrides: Partial<TerminalInstance> = {}): Te
     worktreeId: "wt-1",
     location: "grid",
     ...overrides,
-  } as unknown as TerminalInstance;
+  } as unknown as PtyPanelData;
 }
 
-function setTerminals(terminals: TerminalInstance[]) {
+function setTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),

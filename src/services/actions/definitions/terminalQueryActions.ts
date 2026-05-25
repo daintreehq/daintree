@@ -4,7 +4,10 @@ import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
@@ -43,7 +46,7 @@ export function registerTerminalQueryActions(
       // process during bulk operations.
       let terminals = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t): t is TerminalInstance => t !== undefined && t.ephemeral !== true);
+        .filter((t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true));
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -66,9 +69,9 @@ export function registerTerminalQueryActions(
         worktreeId: t.worktreeId ?? null,
         title: t.title ?? null,
         location: t.location ?? "grid",
-        agentId: t.detectedAgentId ?? t.launchAgentId ?? null,
-        agentState: t.agentState ?? null,
-        isInputLocked: t.isInputLocked ?? false,
+        agentId: isPtyPanel(t) ? (t.detectedAgentId ?? t.launchAgentId ?? null) : null,
+        agentState: isPtyPanel(t) ? (t.agentState ?? null) : null,
+        isInputLocked: isPtyPanel(t) ? (t.isInputLocked ?? false) : false,
         isFocused: t.id === state.focusedId,
       }));
 
@@ -233,24 +236,24 @@ export function registerTerminalQueryActions(
       type StatusEntry = {
         terminalId: string;
         agentId: string | null;
-        agentState: TerminalInstance["agentState"] | null;
-        waitingReason?: TerminalInstance["waitingReason"];
+        agentState: AgentState | null;
+        waitingReason?: WaitingReason;
         lastTransitionAt?: number;
         recentOutput?: string | null;
         error?: string;
       };
 
-      const resolved: Array<{ id: string; terminal: TerminalInstance | undefined }> = [];
+      const resolved: Array<{ id: string; terminal: PanelInstance | undefined }> = [];
 
       // An explicitly passed `terminalIds` (even empty) selects the targeted
       // path — never silently fall back to the fleet path, which would surprise
       // a caller asking for a specific subset.
       if (terminalIds !== undefined) {
         for (const id of terminalIds) {
-          const t = panelsById[id];
+          const t = getNarrowPanel(panelsById, id);
           // Treat ephemeral panels as not found — they're tooling-internal and
           // must never expose state to MCP callers (mirrors terminal.list).
-          if (!t || t.ephemeral === true) {
+          if (!t || (isPtyPanel(t) && t.ephemeral === true)) {
             resolved.push({ id, terminal: undefined });
           } else {
             resolved.push({ id, terminal: t });
@@ -259,7 +262,7 @@ export function registerTerminalQueryActions(
       } else {
         let terminals = state.panelIds
           .map((id) => panelsById[id])
-          .filter((t): t is TerminalInstance => t !== undefined && t.ephemeral !== true);
+          .filter((t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true));
 
         if (worktreeId) {
           terminals = terminals.filter((t) => t.worktreeId === worktreeId);
@@ -310,12 +313,18 @@ export function registerTerminalQueryActions(
 
         const entry: StatusEntry = {
           terminalId: terminal.id,
-          agentId: terminal.detectedAgentId ?? terminal.launchAgentId ?? null,
-          agentState: terminal.agentState ?? null,
-          lastTransitionAt: terminal.lastStateChange,
+          agentId: isPtyPanel(terminal)
+            ? (terminal.detectedAgentId ?? terminal.launchAgentId ?? null)
+            : null,
+          agentState: isPtyPanel(terminal) ? (terminal.agentState ?? null) : null,
+          lastTransitionAt: isPtyPanel(terminal) ? terminal.lastStateChange : undefined,
         };
 
-        if (terminal.agentState === "waiting" && terminal.waitingReason !== undefined) {
+        if (
+          isPtyPanel(terminal) &&
+          terminal.agentState === "waiting" &&
+          terminal.waitingReason !== undefined
+        ) {
           entry.waitingReason = terminal.waitingReason;
         }
 
@@ -424,7 +433,7 @@ export function registerTerminalQueryActions(
       }
 
       // Check if terminal has PTY capability
-      if (terminal.hasPty === false) {
+      if (isPtyPanel(terminal) && terminal.hasPty === false) {
         throw new Error("Terminal does not have PTY capability");
       }
 
