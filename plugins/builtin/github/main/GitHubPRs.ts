@@ -318,7 +318,7 @@ async function enrichPRsWithRequiredStatus(
   });
 }
 
-function parseBatchRequiredChecksResponse(
+export function parseBatchRequiredChecksResponse(
   data: Record<string, unknown>,
   prNumbers: number[]
 ): Map<number, PRRequiredStatusEntry> {

@@ -30,6 +30,7 @@ interface BatchPRRawNode extends BatchPRTooltipFields {
   state?: string;
   isDraft?: boolean;
   merged?: boolean;
+  updatedAt?: string;
   commits?: {
     nodes?: Array<{
       commit?: {
@@ -37,6 +38,19 @@ interface BatchPRRawNode extends BatchPRTooltipFields {
       } | null;
     }>;
   } | null;
+}
+
+function compareLinkedPRFreshness(
+  a: { pr: LinkedPR; raw: BatchPRRawNode },
+  b: { pr: LinkedPR; raw: BatchPRRawNode }
+): number {
+  const aUpdatedAt = typeof a.raw.updatedAt === "string" ? Date.parse(a.raw.updatedAt) : 0;
+  const bUpdatedAt = typeof b.raw.updatedAt === "string" ? Date.parse(b.raw.updatedAt) : 0;
+  const aTime = Number.isFinite(aUpdatedAt) ? aUpdatedAt : 0;
+  const bTime = Number.isFinite(bUpdatedAt) ? bUpdatedAt : 0;
+  if (aTime !== bTime) return bTime - aTime;
+
+  return (b.pr.number ?? 0) - (a.pr.number ?? 0);
 }
 
 const CI_STATUS_VALUES = new Set<GitHubPRCIStatus>([
@@ -137,18 +151,7 @@ function parseBatchPRResponse(
         }
       }
 
-      const openPRs = prs.filter((entry) => entry.pr.state === "open");
-      const mergedPRs = prs.filter((entry) => entry.pr.state === "merged");
-      const closedPRs = prs.filter((entry) => entry.pr.state === "closed");
-
-      let chosen: { pr: LinkedPR; raw: BatchPRRawNode } | undefined;
-      if (openPRs.length > 0) {
-        chosen = openPRs[openPRs.length - 1];
-      } else if (mergedPRs.length > 0) {
-        chosen = mergedPRs[mergedPRs.length - 1];
-      } else if (closedPRs.length > 0) {
-        chosen = closedPRs[closedPRs.length - 1];
-      }
+      const chosen = prs.sort(compareLinkedPRFreshness)[0];
       if (chosen) {
         foundPR = chosen.pr;
         foundTooltip = buildTooltipDataFromBatchNode(chosen.raw);

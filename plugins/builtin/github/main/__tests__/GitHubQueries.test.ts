@@ -272,6 +272,11 @@ describe("buildBatchPRQuery — statusCheckRollup", () => {
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("requests updatedAt on issue-timeline PR fragments for latest-linked-PR selection", () => {
+    const query = buildBatchPRQuery("owner", "repo", [{ worktreeId: "wt-1", issueNumber: 42 }]);
+    expect(query).toContain("updatedAt");
+  });
 });
 
 describe("buildBatchPRQuery", () => {
@@ -660,11 +665,15 @@ describe("buildBatchPRsQuery", () => {
     expect(query).toContain("baseRepository");
     expect(query).toContain("author {");
     expect(query).toContain("assignees(first: 10)");
-    expect(query).toContain("reviews(first: 1)");
     expect(query).toContain("comments {");
     expect(query).toContain("labels(first: 10)");
     expect(query).toContain("commits(last: 1)");
     expect(query).toContain("statusCheckRollup");
+  });
+
+  it("does not include unused review-count fields", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).not.toContain("reviews(first: 1)");
   });
 
   it("includes rateLimit at operation root", () => {

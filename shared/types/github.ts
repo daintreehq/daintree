@@ -26,6 +26,12 @@ export interface LinkedPRInfo {
   state: "OPEN" | "CLOSED" | "MERGED";
   /** PR URL */
   url: string;
+  /** Last updated timestamp, when selected by a query that includes it */
+  updatedAt?: string;
+  /** CI status rollup from the latest commit, when selected by the linked-PR query */
+  ciStatus?: GitHubPRCIStatus;
+  /** Required-check summary, when selected by a hydrated linked-PR query */
+  ciSummary?: GitHubPRCISummary;
 }
 
 /** GitHub issue representation */

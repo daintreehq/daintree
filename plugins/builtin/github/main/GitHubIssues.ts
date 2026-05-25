@@ -33,15 +33,27 @@ export function extractLinkedPR(
   timelineItems:
     | {
         nodes?: Array<{
-          source?: { number?: number; state?: string; merged?: boolean; url?: string };
-          subject?: { number?: number; state?: string; merged?: boolean; url?: string };
+          source?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
+          subject?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
         }>;
       }
     | undefined
 ): LinkedPRInfo | undefined {
   if (!timelineItems?.nodes) return undefined;
 
-  const prs: Array<{ number: number; state: "OPEN" | "CLOSED" | "MERGED"; url: string }> = [];
+  const prs: LinkedPRInfo[] = [];
   const seenPRNumbers = new Set<number>();
 
   for (const node of timelineItems.nodes) {
@@ -51,21 +63,29 @@ export function extractLinkedPR(
       const state: "OPEN" | "CLOSED" | "MERGED" = prData.merged
         ? "MERGED"
         : (prData.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
-      prs.push({ number: prData.number, state, url: prData.url });
+      prs.push({
+        number: prData.number,
+        state,
+        url: prData.url,
+        ...(typeof prData.updatedAt === "string" ? { updatedAt: prData.updatedAt } : {}),
+      });
     }
   }
 
   if (prs.length === 0) return undefined;
 
-  const openPRs = prs.filter((pr) => pr.state === "OPEN");
-  const mergedPRs = prs.filter((pr) => pr.state === "MERGED");
-  const closedPRs = prs.filter((pr) => pr.state === "CLOSED");
+  prs.sort(compareLinkedPRFreshness);
+  return prs[0];
+}
 
-  if (openPRs.length > 0) return openPRs[openPRs.length - 1];
-  if (mergedPRs.length > 0) return mergedPRs[mergedPRs.length - 1];
-  if (closedPRs.length > 0) return closedPRs[closedPRs.length - 1];
+function compareLinkedPRFreshness(a: LinkedPRInfo, b: LinkedPRInfo): number {
+  const aUpdatedAt = typeof a.updatedAt === "string" ? Date.parse(a.updatedAt) : 0;
+  const bUpdatedAt = typeof b.updatedAt === "string" ? Date.parse(b.updatedAt) : 0;
+  const aTime = Number.isFinite(aUpdatedAt) ? aUpdatedAt : 0;
+  const bTime = Number.isFinite(bUpdatedAt) ? bUpdatedAt : 0;
+  if (aTime !== bTime) return bTime - aTime;
 
-  return undefined;
+  return b.number - a.number;
 }
 
 export function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
@@ -76,7 +96,20 @@ export function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
   const timelineItems = node.timelineItems as
     | {
         nodes?: Array<{
-          source?: { number?: number; state?: string; merged?: boolean; url?: string };
+          source?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
+          subject?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
         }>;
       }
     | undefined;

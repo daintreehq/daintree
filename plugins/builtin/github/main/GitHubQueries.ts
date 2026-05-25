@@ -42,10 +42,10 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
             nodes {
               ... on CrossReferencedEvent {
-                source { ... on PullRequest { number state merged url } }
+                source { ... on PullRequest { number state merged url updatedAt } }
               }
               ... on ConnectedEvent {
-                subject { ... on PullRequest { number state merged url } }
+                subject { ... on PullRequest { number state merged url updatedAt } }
               }
             }
           }
@@ -206,6 +206,7 @@ export const LIST_ISSUES_QUERY = `
                     state
                     merged
                     url
+                    updatedAt
                   }
                 }
               }
@@ -216,6 +217,7 @@ export const LIST_ISSUES_QUERY = `
                     state
                     merged
                     url
+                    updatedAt
                   }
                 }
               }
@@ -455,6 +457,7 @@ export const GET_ISSUE_QUERY = `
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -465,6 +468,7 @@ export const GET_ISSUE_QUERY = `
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -644,6 +648,7 @@ export function buildBatchPRQuery(
                       merged
                       bodyText
                       createdAt
+                      updatedAt
                       author { login avatarUrl }
                       assignees(first: 10) { nodes { login avatarUrl } }
                       labels(first: 10) { nodes { name color } }
@@ -662,6 +667,7 @@ export function buildBatchPRQuery(
                       merged
                       bodyText
                       createdAt
+                      updatedAt
                       author { login avatarUrl }
                       assignees(first: 10) { nodes { login avatarUrl } }
                       labels(first: 10) { nodes { name color } }
@@ -692,6 +698,7 @@ export function buildBatchPRQuery(
               merged
               bodyText
               createdAt
+              updatedAt
               author { login avatarUrl }
               assignees(first: 10) { nodes { login avatarUrl } }
               labels(first: 10) { nodes { name color } }
@@ -843,6 +850,7 @@ export function buildBatchIssuesQuery(owner: string, repo: string, numbers: numb
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -853,6 +861,7 @@ export function buildBatchIssuesQuery(owner: string, repo: string, numbers: numb
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -918,9 +927,6 @@ export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[
             login
             avatarUrl
           }
-        }
-        reviews(first: 1) {
-          totalCount
         }
         comments {
           totalCount

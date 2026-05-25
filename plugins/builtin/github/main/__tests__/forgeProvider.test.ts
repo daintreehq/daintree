@@ -589,6 +589,222 @@ describe("getPR tooltip pre-warm", () => {
   });
 });
 
+describe("batchLookups.findPRsByNumbers", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("chunks PR-number lookups and maps aliases back to PR numbers", async () => {
+    const numbers = Array.from({ length: 21 }, (_, i) => i + 1);
+    const firstResponse: Record<string, unknown> = {
+      repository: {},
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    };
+    const firstRepo = firstResponse.repository as Record<string, unknown>;
+    for (let i = 1; i <= 20; i++) {
+      firstRepo[`p${i}`] = makePRNode(i, `feature/${i}`);
+    }
+    const secondResponse = {
+      repository: { p21: makePRNode(21, "feature/21") },
+      rateLimit: { cost: 1, remaining: 4998, resetAt: "" },
+    };
+    mockGraphQLClient.mockResolvedValueOnce(firstResponse).mockResolvedValueOnce(secondResponse);
+
+    const result = await githubForgeProvider.batchLookups!.findPRsByNumbers!(repo, [...numbers, 1]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(result.size).toBe(21);
+    expect(result.get(1)?.headRef).toBe("feature/1");
+    expect(result.get(20)?.number).toBe(20);
+    expect(result.get(21)?.number).toBe(21);
+  });
+
+  it("distinguishes explicit null from omitted aliases", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        p1: makePRNode(1, "feature/one"),
+        p2: null,
+        // p3 intentionally omitted: transient partial response, not confirmed missing.
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const result = await githubForgeProvider.batchLookups!.findPRsByNumbers!(repo, [1, 2, 3]);
+
+    expect(result.get(1)?.number).toBe(1);
+    expect(result.has(2)).toBe(true);
+    expect(result.get(2)).toBeNull();
+    expect(result.has(3)).toBe(false);
+  });
+
+  it("pre-warms PR tooltip cache for batched PR-number hits", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        p7: {
+          ...makePRNode(7, "feature/x"),
+          assignees: { nodes: [{ login: "alice", avatarUrl: "a.png" }] },
+          labels: { nodes: [{ name: "bug", color: "ff0000" }] },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    await githubForgeProvider.batchLookups!.findPRsByNumbers!(repo, [7]);
+
+    const tooltip = prTooltipCache.get("owner/repo:7");
+    expect(tooltip?.assignees[0]?.login).toBe("alice");
+    expect(tooltip?.labels[0]?.name).toBe("bug");
+  });
+
+  it("skips the network when the GraphQL budget gate is closed", async () => {
+    mockShouldBlockRequest.mockReturnValue({
+      blocked: true,
+      reason: "primary",
+      resumeAt: Date.now() + 1000,
+    } as ShouldBlockResult);
+
+    const result = await githubForgeProvider.batchLookups!.findPRsByNumbers!(repo, [1, 2]);
+
+    expect(result.size).toBe(0);
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+  });
+});
+
+function requiredChecksBatchResponse(
+  entries: Record<number, { state: string; contexts: Array<Record<string, unknown>> } | null>
+) {
+  const response: Record<string, unknown> = {
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+  for (const [rawNumber, entry] of Object.entries(entries)) {
+    const number = Number(rawNumber);
+    response[`pr_${number}`] =
+      entry === null
+        ? { pullRequest: null }
+        : {
+            pullRequest: {
+              number,
+              commits: {
+                nodes: [
+                  {
+                    commit: {
+                      statusCheckRollup: {
+                        state: entry.state,
+                        contexts: {
+                          nodes: entry.contexts,
+                          pageInfo: { hasNextPage: false },
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          };
+  }
+  return response;
+}
+
+describe("batchLookups.getCIStatuses", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("chunks required-check lookups and returns normalized CI statuses", async () => {
+    const firstChunkEntries: Record<
+      number,
+      { state: string; contexts: Array<Record<string, unknown>> }
+    > = {};
+    for (let i = 1; i <= 20; i++) {
+      firstChunkEntries[i] = {
+        state: "SUCCESS",
+        contexts: [
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "COMPLETED",
+            isRequired: true,
+          },
+        ],
+      };
+    }
+    firstChunkEntries[2] = {
+      state: "FAILURE",
+      contexts: [
+        {
+          __typename: "StatusContext",
+          state: "FAILURE",
+          isRequired: true,
+        },
+      ],
+    };
+    const secondChunk = requiredChecksBatchResponse({
+      21: {
+        state: "PENDING",
+        contexts: [
+          {
+            __typename: "CheckRun",
+            conclusion: null,
+            status: "IN_PROGRESS",
+            isRequired: true,
+          },
+        ],
+      },
+    });
+    mockGraphQLClient
+      .mockResolvedValueOnce(requiredChecksBatchResponse(firstChunkEntries))
+      .mockResolvedValueOnce(secondChunk);
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(
+      repo,
+      Array.from({ length: 21 }, (_, i) => i + 1)
+    );
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(result.get(1)?.state).toBe("success");
+    expect(result.get(1)?.total).toBe(1);
+    expect(result.get(2)?.state).toBe("failure");
+    expect(result.get(21)?.state).toBe("pending");
+    expect(prRequiredStatusCache.get("owner/repo:21")).toBeDefined();
+  });
+
+  it("serves cached required-check statuses without a GraphQL call", async () => {
+    prRequiredStatusCache.set("owner/repo:5", {
+      ciStatus: "SUCCESS",
+      ciSummary: { requiredTotal: 1, requiredFailing: 0, requiredPending: 0 },
+    });
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [5]);
+
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+    expect(result.get(5)?.state).toBe("success");
+  });
+
+  it("distinguishes confirmed missing PRs from omitted aliases", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(requiredChecksBatchResponse({ 1: null }));
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [1, 2]);
+
+    expect(result.has(1)).toBe(true);
+    expect(result.get(1)).toBeNull();
+    expect(result.has(2)).toBe(false);
+  });
+
+  it("returns cached hits and omits misses while rate-limited", async () => {
+    prRequiredStatusCache.set("owner/repo:5", {
+      ciStatus: "SUCCESS",
+      ciSummary: { requiredTotal: 1, requiredFailing: 0, requiredPending: 0 },
+    });
+    mockShouldBlockRequest.mockReturnValue({
+      blocked: true,
+      reason: "secondary",
+      resumeAt: Date.now() + 1000,
+    } as ShouldBlockResult);
+
+    const result = await githubForgeProvider.batchLookups!.getCIStatuses!(repo, [5, 6]);
+
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+    expect(result.get(5)?.state).toBe("success");
+    expect(result.has(6)).toBe(false);
+  });
+});
+
 describe("getCIStatus caching", () => {
   beforeEach(() => mockGraphQLClient.mockReset());
 
