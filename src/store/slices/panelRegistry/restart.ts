@@ -663,7 +663,11 @@ export const createRestartActions = (
           worktreeId,
           location: newLocation,
           isVisible: newLocation === "grid" ? true : false,
-          runtimeStatus: deriveRuntimeStatus(newLocation === "grid", ptyT?.flowStatus, ptyT?.runtimeStatus),
+          runtimeStatus: deriveRuntimeStatus(
+            newLocation === "grid",
+            ptyT?.flowStatus,
+            ptyT?.runtimeStatus
+          ),
         } as typeof t,
       };
       const newIndex = transferBetweenWorktreeIndex(

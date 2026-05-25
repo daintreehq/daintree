@@ -73,7 +73,10 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    expect((usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)?.agentState).toBe("waiting");
+    expect(
+      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
+        ?.agentState
+    ).toBe("waiting");
   });
 
   it("allows working to overwrite directing", () => {
@@ -84,7 +87,10 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "working");
 
-    expect((usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)?.agentState).toBe("working");
+    expect(
+      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
+        ?.agentState
+    ).toBe("working");
   });
 
   it("allows idle to overwrite directing", () => {
@@ -95,7 +101,10 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "idle");
 
-    expect((usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)?.agentState).toBe("idle");
+    expect(
+      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
+        ?.agentState
+    ).toBe("idle");
   });
 
   it("allows waiting when current state is not directing", () => {
@@ -107,7 +116,10 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    expect((usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)?.agentState).toBe("waiting");
+    expect(
+      (usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined)
+        ?.agentState
+    ).toBe("waiting");
   });
 
   it("returns unchanged state for nonexistent terminal", () => {
@@ -233,7 +245,9 @@ describe("updateAgentState store action (#3217)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect((after[seededTerminal.id] as PtyPanelData | undefined)?.stateChangeTrigger).toBe("input");
+    expect((after[seededTerminal.id] as PtyPanelData | undefined)?.stateChangeTrigger).toBe(
+      "input"
+    );
     expect((after[seededTerminal.id] as PtyPanelData | undefined)?.lastStateChange).toBe(1500);
   });
 
@@ -296,7 +310,9 @@ describe("setupTerminalStoreListeners directing guard (#3217)", () => {
       panelIds: [baseTerminal.id],
     });
 
-    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined;
+    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
+      | PtyPanelData
+      | undefined;
     expect(shouldSuppressBackendState(terminal?.agentState, "waiting")).toBe(true);
   });
 
@@ -306,7 +322,9 @@ describe("setupTerminalStoreListeners directing guard (#3217)", () => {
       panelIds: [baseTerminal.id],
     });
 
-    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as PtyPanelData | undefined;
+    const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
+      | PtyPanelData
+      | undefined;
     expect(shouldSuppressBackendState(terminal?.agentState, "working")).toBe(false);
   });
 });

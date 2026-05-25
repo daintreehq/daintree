@@ -47,10 +47,7 @@ type MockTerminal = Partial<PtyPanelData> & { id: string };
 
 function setTerminals(terminals: MockTerminal[]) {
   usePanelStore.setState({
-    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
-      string,
-      PtyPanelData
-    >,
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<string, PtyPanelData>,
     panelIds: terminals.map((t) => t.id),
   });
 }

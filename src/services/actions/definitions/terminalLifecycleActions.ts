@@ -584,11 +584,7 @@ export function registerTerminalLifecycleActions(
       } else {
         const terminal = state.panelsById[targetId];
         const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
-        if (
-          agentState === "completed" ||
-          agentState === "waiting" ||
-          agentState === "exited"
-        ) {
+        if (agentState === "completed" || agentState === "waiting" || agentState === "exited") {
           fireWatchNotification(targetId, terminal?.title ?? targetId, agentState);
         } else {
           state.watchPanel(targetId);

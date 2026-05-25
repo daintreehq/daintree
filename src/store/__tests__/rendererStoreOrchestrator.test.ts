@@ -544,7 +544,7 @@ describe("rendererStoreOrchestrator", () => {
         [panelId]: {
           id: panelId,
           title: "T1",
-                    kind: "terminal" as const,
+          kind: "terminal" as const,
           cwd: "/test",
           cols: 80,
           rows: 24,
@@ -671,7 +671,7 @@ describe("rendererStoreOrchestrator", () => {
           "t-1": {
             id: "t-1",
             title: "T1",
-                        kind: "terminal" as const,
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -681,7 +681,7 @@ describe("rendererStoreOrchestrator", () => {
           "t-2": {
             id: "t-2",
             title: "T2",
-                        kind: "terminal" as const,
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -691,7 +691,7 @@ describe("rendererStoreOrchestrator", () => {
           "t-3": {
             id: "t-3",
             title: "T3",
-                        kind: "terminal" as const,
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -725,7 +725,7 @@ describe("rendererStoreOrchestrator", () => {
           "t-1": {
             id: "t-1",
             title: "T1",
-                        kind: "terminal" as const,
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -760,7 +760,7 @@ describe("rendererStoreOrchestrator", () => {
           "t-1": {
             id: "t-1",
             title: "T1",
-                        kind: "terminal" as const,
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,

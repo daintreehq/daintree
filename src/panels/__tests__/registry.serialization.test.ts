@@ -7,7 +7,9 @@ beforeAll(() => {
   initBuiltInPanelKinds();
 });
 
-function makePanel(overrides: Partial<PanelInstance> & Record<string, unknown> = {}): PanelInstance {
+function makePanel(
+  overrides: Partial<PanelInstance> & Record<string, unknown> = {}
+): PanelInstance {
   return {
     id: "t1",
     title: "Test",

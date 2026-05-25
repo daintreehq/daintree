@@ -116,10 +116,7 @@ function seed(terminals: PtyPanelData[]): void {
   usePanelStore.setState({ panelsById, panelIds });
 }
 
-function makeAgent(
-  id: string,
-  agentState: PtyPanelData["agentState"] = "idle"
-): PtyPanelData {
+function makeAgent(id: string, agentState: PtyPanelData["agentState"] = "idle"): PtyPanelData {
   return {
     id,
     title: id,

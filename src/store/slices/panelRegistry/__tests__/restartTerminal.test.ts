@@ -245,7 +245,9 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
       SHARED: "preset",
       PRESET_ONLY: "preset",
     });
-    expect(( usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined)?.agentPresetColor).toBe("#3366ff");
+    expect(
+      (usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined)?.agentPresetColor
+    ).toBe("#3366ff");
   });
 
   it("reapplies runtime settings env on demoted shell restart without relaunching the agent", async () => {

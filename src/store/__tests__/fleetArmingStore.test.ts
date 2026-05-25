@@ -27,10 +27,7 @@ function resetStore() {
   });
 }
 
-function makeAgentTerminal(
-  id: string,
-  overrides: Record<string, unknown> = {}
-): PanelInstance {
+function makeAgentTerminal(id: string, overrides: Record<string, unknown> = {}): PanelInstance {
   return {
     id,
     title: id,
@@ -738,8 +735,12 @@ describe("fleetArmingStore", () => {
       });
       expect(resolveFleetAgentCapabilityId(exAgent)).toBeUndefined();
       expect(isAgentFleetActionEligible(exAgent)).toBe(false);
-      expect(isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" } as PanelInstance)).toBe(false);
-      expect(isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" } as PanelInstance)).toBe(false);
+      expect(
+        isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" } as PanelInstance)
+      ).toBe(false);
+      expect(
+        isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" } as PanelInstance)
+      ).toBe(false);
       expect(isFleetRestartAgentEligible(exAgent)).toBe(false);
     });
 

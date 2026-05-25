@@ -52,9 +52,7 @@ export function ContentGridEmptyState({
     state.panelIds.some((id) => {
       const p = state.panelsById[id];
       if (!p || !isPtyPanel(p)) return false;
-      return (
-        Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
-      );
+      return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
     })
   );
   // Suppress RecipeRunner until the recipe store has settled for the current

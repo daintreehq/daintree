@@ -128,10 +128,7 @@ export const GridPanel = React.memo(function GridPanel({
     if (onAddTab) return onAddTab;
     if (onAddTabForPanel && terminal) {
       return () => {
-        const narrowed = getNarrowPanel(
-          usePanelStore.getState().panelsById,
-          terminal.id
-        );
+        const narrowed = getNarrowPanel(usePanelStore.getState().panelsById, terminal.id);
         if (narrowed) void onAddTabForPanel(narrowed);
       };
     }

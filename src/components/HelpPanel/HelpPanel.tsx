@@ -166,9 +166,7 @@ export function HelpPanel({
     s.panelIds.some((id) => {
       const p = s.panelsById[id];
       if (!p || !isPtyPanel(p)) return false;
-      return (
-        Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
-      );
+      return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
     })
   );
   const cliDetail = useCliAvailabilityStore((s) => (agentId ? s.details[agentId] : undefined));
@@ -341,7 +339,8 @@ export function HelpPanel({
     if (prevPreferredAgentIdRef.current === preferredAgentId) return;
     prevPreferredAgentIdRef.current = preferredAgentId;
     const shouldConfirm =
-      (terminalPty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
+      (terminalPty?.agentState !== undefined &&
+        CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
       conversationTouched;
     if (shouldConfirm) {
       // The dialog title and confirm action both read live `preferredAgentId`,
@@ -514,7 +513,8 @@ export function HelpPanel({
   // Confirm only when there's something to lose — a working agent or a
   // conversation the user has actually engaged with.
   const shouldConfirmNewSession =
-    (terminalPty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
+    (terminalPty?.agentState !== undefined &&
+      CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
     conversationTouched;
 
   const handleNewSession = useCallback(() => {

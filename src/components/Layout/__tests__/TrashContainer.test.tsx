@@ -139,7 +139,15 @@ function makeTrashedItem(
   trashedInfo: TrashedTerminal;
 } {
   return {
-    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
+    terminal: {
+      id,
+      kind: "terminal",
+      title: `Terminal ${id}`,
+      location: "grid",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,
@@ -154,7 +162,15 @@ function makeGroupAnchor(
   expiresAt: number
 ): { terminal: PanelInstance; trashedInfo: TrashedTerminal } {
   return {
-    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
+    terminal: {
+      id,
+      kind: "terminal",
+      title: `Terminal ${id}`,
+      location: "grid",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,
@@ -176,7 +192,15 @@ function makeGroupMember(
   expiresAt: number
 ): { terminal: PanelInstance; trashedInfo: TrashedTerminal } {
   return {
-    terminal: { id, kind: "terminal", title: `Terminal ${id}`, location: "grid", cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance,
+    terminal: {
+      id,
+      kind: "terminal",
+      title: `Terminal ${id}`,
+      location: "grid",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+    } as PanelInstance,
     trashedInfo: {
       id,
       expiresAt,

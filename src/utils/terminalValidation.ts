@@ -23,9 +23,7 @@ export interface ValidationResult {
   errors: ValidationError[];
 }
 
-export async function validateTerminalConfig(
-  terminal: CarrierPanel
-): Promise<ValidationResult> {
+export async function validateTerminalConfig(terminal: CarrierPanel): Promise<ValidationResult> {
   const errors: ValidationError[] = [];
 
   const pty = isPtyPanel(terminal) ? terminal : undefined;

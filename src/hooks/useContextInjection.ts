@@ -255,7 +255,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             // Immediately re-check if agent became ready between initial check and pending setup
             const currentTerminal = usePanelStore.getState().panelsById[activeTerminal];
             const currentAgentState =
-              currentTerminal && isPtyPanel(currentTerminal) ? currentTerminal.agentState : undefined;
+              currentTerminal && isPtyPanel(currentTerminal)
+                ? currentTerminal.agentState
+                : undefined;
             if (currentTerminal && isAgentReady(currentAgentState)) {
               resolve();
               globalInjectionState.pendingInjection = null;
@@ -281,7 +283,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Verify agent is still ready (could have changed during race)
-        const updatedAgentState = isPtyPanel(updatedTerminal) ? updatedTerminal.agentState : undefined;
+        const updatedAgentState = isPtyPanel(updatedTerminal)
+          ? updatedTerminal.agentState
+          : undefined;
         if (isAgentTerminal(updatedTerminal) && !isAgentReady(updatedAgentState)) {
           logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
             agentState: updatedAgentState,

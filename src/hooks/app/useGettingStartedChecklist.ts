@@ -51,9 +51,7 @@ function reconcileCurrentState(
     usePanelStore.getState().panelIds.some((id) => {
       const p = usePanelStore.getState().panelsById[id];
       if (!p || !isPtyPanel(p)) return false;
-      return (
-        Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
-      );
+      return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
     })
   ) {
     markItem("launchedAgent");
@@ -201,9 +199,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
             const p = state.panelsById[id];
             if (!p || !isPtyPanel(p)) return false;
             return (
-              Boolean(p.launchAgentId) ||
-              Boolean(p.detectedAgentId) ||
-              p.everDetectedAgent === true
+              Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
             );
           })
         ) {

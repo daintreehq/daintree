@@ -21,9 +21,7 @@ type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
  * and their bulk siblings: bare PTY terminals stay D0 (no confirm), agent
  * terminals only confirm while truly mid-work.
  */
-export function terminalHasRunningAgentSession(
-  terminal: CarrierPanel | undefined | null
-): boolean {
+export function terminalHasRunningAgentSession(terminal: CarrierPanel | undefined | null): boolean {
   if (!terminal) return false;
   if (!isAgentTerminal(terminal)) return false;
   const state = coerceAgentState(isPtyPanel(terminal) ? terminal.agentState : undefined);

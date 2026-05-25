@@ -123,7 +123,11 @@ export const createOrderingActions = (
         ...terminal,
         location,
         isVisible,
-        runtimeStatus: deriveRuntimeStatus(isVisible, ptyTerminal?.flowStatus, ptyTerminal?.runtimeStatus),
+        runtimeStatus: deriveRuntimeStatus(
+          isVisible,
+          ptyTerminal?.flowStatus,
+          ptyTerminal?.runtimeStatus
+        ),
       } as PanelInstance;
 
       // Insert at the right position

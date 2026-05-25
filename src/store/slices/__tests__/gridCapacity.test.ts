@@ -115,7 +115,9 @@ describe("Grid Capacity Enforcement", () => {
         devServerTerminalId: "dev-preview-pty-1",
       });
 
-      const panel = usePanelStore.getState().getTerminal("dev-preview-1") as DevPreviewPanelData | undefined;
+      const panel = usePanelStore.getState().getTerminal("dev-preview-1") as
+        | DevPreviewPanelData
+        | undefined;
 
       expect(panel?.kind).toBe("dev-preview");
       expect(panel?.devServerStatus).toBe("running");

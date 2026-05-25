@@ -13,10 +13,7 @@ export function savePanels(panels: PanelInstance[]): void {
   panelPersistence.save(panels);
 }
 
-export function saveNormalized(
-  panelsById: Record<string, CarrierPanel>,
-  panelIds: string[]
-): void {
+export function saveNormalized(panelsById: Record<string, CarrierPanel>, panelIds: string[]): void {
   const panels = panelIds
     .map((id) => panelsById[id])
     .filter((t): t is NonNullable<typeof t> => Boolean(t));

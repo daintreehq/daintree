@@ -121,7 +121,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.activityHeadline).toBe("Tests passed");
+    expect((after[baseTerminal.id] as PtyPanelData)!.activityHeadline).toBe("Tests passed");
   });
 
   it("replaces array reference when status changes", () => {
@@ -145,7 +145,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.activityStatus).toBe("success");
+    expect((after[baseTerminal.id] as PtyPanelData)!.activityStatus).toBe("success");
   });
 
   it("replaces array reference when timestamp changes", () => {
@@ -169,7 +169,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.activityTimestamp).toBe(2000);
+    expect((after[baseTerminal.id] as PtyPanelData)!.activityTimestamp).toBe(2000);
   });
 
   it("replaces array reference when activityType changes", () => {
@@ -193,7 +193,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.activityType).toBe("interactive");
+    expect((after[baseTerminal.id] as PtyPanelData)!.activityType).toBe("interactive");
   });
 
   it("replaces array reference when lastCommand changes", () => {
@@ -217,7 +217,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.lastCommand).toBe("npm run build");
+    expect((after[baseTerminal.id] as PtyPanelData)!.lastCommand).toBe("npm run build");
   });
 
   it("preserves array reference for unchanged terminal when sibling terminal differs", () => {
@@ -269,7 +269,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
-    expect(( after[baseTerminal.id] as PtyPanelData)!.activityHeadline).toBe("Updated headline");
+    expect((after[baseTerminal.id] as PtyPanelData)!.activityHeadline).toBe("Updated headline");
     expect(after[sibling.id]).toBe(siblingBefore);
   });
 

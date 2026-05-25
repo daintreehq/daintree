@@ -1,10 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type {
-  BrowserPanelData,
-  BuiltInPanelKind,
-  PanelExitBehavior,
-} from "@shared/types/panel";
+import type { BrowserPanelData, BuiltInPanelKind, PanelExitBehavior } from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";

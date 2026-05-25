@@ -221,7 +221,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
         [panelId]: {
           id: panelId,
           title: "Shell",
-                    kind: "terminal" as const,
+          kind: "terminal" as const,
           cwd: "/test",
           cols: 80,
           rows: 24,

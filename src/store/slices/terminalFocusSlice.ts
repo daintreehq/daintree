@@ -42,9 +42,7 @@ function cycleToMatch(
   return undefined;
 }
 
-function isOpenableDockTerminal(
-  terminal: CarrierPanel | undefined
-): terminal is CarrierPanel {
+function isOpenableDockTerminal(terminal: CarrierPanel | undefined): terminal is CarrierPanel {
   if (!terminal) return false;
   if (terminal.location !== "dock") return false;
   return true;

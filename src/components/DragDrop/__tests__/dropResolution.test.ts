@@ -10,12 +10,17 @@ import {
 import type { PanelInstance } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
-function makeTerminal(
-  id: string,
-  location: "grid" | "dock",
-  worktreeId?: string
-): PanelInstance {
-  return { id, kind: "terminal", location, worktreeId, title: `Terminal ${id}`, cwd: "/tmp", cols: 80, rows: 24 } as PanelInstance;
+function makeTerminal(id: string, location: "grid" | "dock", worktreeId?: string): PanelInstance {
+  return {
+    id,
+    kind: "terminal",
+    location,
+    worktreeId,
+    title: `Terminal ${id}`,
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
+  } as PanelInstance;
 }
 
 function makeTabGroup(

@@ -1,8 +1,4 @@
-import type {
-  PanelRegistryStoreApi,
-  PanelRegistrySlice,
-  PanelRegistryMiddleware,
-} from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice, PanelRegistryMiddleware } from "./types";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelInstance } from "@shared/types/panel";
 import { terminalClient } from "@/clients";

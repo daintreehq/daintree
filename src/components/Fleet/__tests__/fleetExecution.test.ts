@@ -580,7 +580,12 @@ describe("buildFleetTargetPreviews", () => {
     // cast which silently coerced any shape into the eligible branch.
     seedPanels([
       makeAgent("terminal-1"),
-      { id: "browser-1", kind: "browser", title: "Browser pane", location: "grid" } as PanelInstance,
+      {
+        id: "browser-1",
+        kind: "browser",
+        title: "Browser pane",
+        location: "grid",
+      } as PanelInstance,
     ]);
     useFleetArmingStore.getState().armIds(["terminal-1", "browser-1"]);
     const previews = buildFleetTargetPreviews("hi");

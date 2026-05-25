@@ -15,7 +15,9 @@ import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
-function getPanelTabGroupLocation(panel: PanelInstance | CarrierPanel | undefined): TabGroupLocation | null {
+function getPanelTabGroupLocation(
+  panel: PanelInstance | CarrierPanel | undefined
+): TabGroupLocation | null {
   if (!panel || panel.location === "trash" || panel.location === "background") return null;
   return panel.location === "dock" ? "dock" : "grid";
 }
@@ -330,7 +332,11 @@ export const createTabGroupActions = (
           ...t,
           location,
           isVisible: location === "grid",
-          runtimeStatus: deriveRuntimeStatus(location === "grid", ptyT?.flowStatus, ptyT?.runtimeStatus),
+          runtimeStatus: deriveRuntimeStatus(
+            location === "grid",
+            ptyT?.flowStatus,
+            ptyT?.runtimeStatus
+          ),
         } as PanelInstance;
       }
 

@@ -46,7 +46,9 @@ export function registerTerminalQueryActions(
       // process during bulk operations.
       let terminals = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true));
+        .filter(
+          (t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true)
+        );
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -262,7 +264,9 @@ export function registerTerminalQueryActions(
       } else {
         let terminals = state.panelIds
           .map((id) => panelsById[id])
-          .filter((t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true));
+          .filter(
+            (t): t is PanelInstance => t !== undefined && (!isPtyPanel(t) || t.ephemeral !== true)
+          );
 
         if (worktreeId) {
           terminals = terminals.filter((t) => t.worktreeId === worktreeId);

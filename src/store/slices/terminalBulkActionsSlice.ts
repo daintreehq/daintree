@@ -78,8 +78,7 @@ export const createTerminalBulkActionsSlice = (
     bulkCloseByWorktree: (worktreeId, state) => {
       const terminals = getTerminals();
       const toRemove = terminals.filter(
-        (t) =>
-          t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
+        (t) => t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
       );
       toRemove.forEach((t) => removePanel(t.id));
     },
@@ -113,8 +112,8 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartAll: async () => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData => isPtyPanel(t) && t.location !== "trash"
       );
       await restartTerminals(activeTerminals);
     },
@@ -123,8 +122,8 @@ export const createTerminalBulkActionsSlice = (
       const idSet = ids instanceof Set ? ids : new Set(ids);
       if (idSet.size === 0) return;
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData => isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
       );
       if (activeTerminals.length === 0) return;
       try {
@@ -139,8 +138,8 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartPreflightCheck: async () => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData => isPtyPanel(t) && t.location !== "trash"
       );
 
       const validationResults = await validateTerminals(activeTerminals);
@@ -163,8 +162,8 @@ export const createTerminalBulkActionsSlice = (
     bulkRestartPreflightCheckSet: async (ids) => {
       const idSet = ids instanceof Set ? ids : new Set(ids);
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData => isPtyPanel(t) && idSet.has(t.id) && t.location !== "trash"
       );
 
       const validationResults = await validateTerminals(activeTerminals);
@@ -228,8 +227,9 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartPreflightCheckByWorktree: async (worktreeId) => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData =>
+          isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
       );
 
       const validationResults = await validateTerminals(activeTerminals);
@@ -251,8 +251,9 @@ export const createTerminalBulkActionsSlice = (
 
     bulkRestartByWorktree: async (worktreeId) => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t): t is PtyPanelData =>
-        isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
+      const activeTerminals = terminals.filter(
+        (t): t is PtyPanelData =>
+          isPtyPanel(t) && t.worktreeId === worktreeId && t.location !== "trash"
       );
       if (activeTerminals.length === 0) return;
 
@@ -324,8 +325,7 @@ export const createTerminalBulkActionsSlice = (
     getCountByWorktree: (worktreeId, state) => {
       const terminals = getTerminals();
       return terminals.filter(
-        (t) =>
-          t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
+        (t) => t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
       ).length;
     },
 

@@ -521,9 +521,10 @@ export function useDevPreviewLoadLifecycle({
       }
 
       const currentPanel = usePanelStore.getState().getTerminal(id);
-      const saved = currentPanel && isDevPreviewPanel(currentPanel)
-        ? currentPanel.devPreviewScrollPosition
-        : undefined;
+      const saved =
+        currentPanel && isDevPreviewPanel(currentPanel)
+          ? currentPanel.devPreviewScrollPosition
+          : undefined;
       if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
         try {
           const loadedUrl = webview.getURL();
@@ -557,9 +558,10 @@ export function useDevPreviewLoadLifecycle({
         // restore here so the position survives tab switches and other
         // re-renders that don't trigger another dom-ready.
         const currentPanel = usePanelStore.getState().getTerminal(id);
-        const saved = currentPanel && isDevPreviewPanel(currentPanel)
-          ? currentPanel.devPreviewScrollPosition
-          : undefined;
+        const saved =
+          currentPanel && isDevPreviewPanel(currentPanel)
+            ? currentPanel.devPreviewScrollPosition
+            : undefined;
         if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
           if (existingUrl === saved.url) {
             webview

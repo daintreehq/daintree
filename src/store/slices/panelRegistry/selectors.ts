@@ -19,9 +19,7 @@ export function selectOrderedTerminals(
   }
   _prevById = panelsById;
   _prevIds = panelIds;
-  _prevResult = panelIds
-    .map((id) => panelsById[id])
-    .filter((t): t is PanelInstance => Boolean(t));
+  _prevResult = panelIds.map((id) => panelsById[id]).filter((t): t is PanelInstance => Boolean(t));
   return _prevResult;
 }
 
