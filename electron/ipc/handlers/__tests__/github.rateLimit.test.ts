@@ -28,6 +28,8 @@ const gitHubServiceMock = vi.hoisted(() => ({
   getIssueUrl: vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/1"),
   getIssueByNumber: vi.fn().mockResolvedValue(null),
   getPRByNumber: vi.fn().mockResolvedValue(null),
+  getIssuesByNumbers: vi.fn().mockResolvedValue([]),
+  getPRsByNumbers: vi.fn().mockResolvedValue([]),
   getRepoStats: vi.fn().mockResolvedValue({ stats: null, error: undefined }),
   getRepoStatsAndPage: vi
     .fn()
@@ -113,6 +115,8 @@ vi.mock("../../../services/github/index.js", () => ({
   getPRTooltip: gitHubServiceMock.getPRTooltip,
   getIssueByNumber: gitHubServiceMock.getIssueByNumber,
   getPRByNumber: gitHubServiceMock.getPRByNumber,
+  getIssuesByNumbers: gitHubServiceMock.getIssuesByNumbers,
+  getPRsByNumbers: gitHubServiceMock.getPRsByNumbers,
   hasGitHubToken: gitHubServiceMock.hasGitHubToken,
   getGitHubConfigAsync: gitHubServiceMock.getGitHubConfigAsync,
   getProjectHealth: gitHubServiceMock.getProjectHealth,
@@ -310,6 +314,17 @@ describe("github handlers — rate limiting", () => {
         maxCalls: 25,
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
       },
+      // batched by-numbers: 20/10s (each call replaces up to 20 individual round-trips)
+      {
+        channel: CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, numbers: [1, 2] }),
+      },
+      {
+        channel: CHANNELS.GITHUB_GET_PRS_BY_NUMBERS,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, numbers: [1, 2] }),
+      },
       // open family: 20/10s
       { channel: CHANNELS.GITHUB_OPEN_ISSUES, maxCalls: 20, invoke: (h) => h({}, cwd) },
       { channel: CHANNELS.GITHUB_OPEN_PRS, maxCalls: 20, invoke: (h) => h({}, cwd) },
@@ -348,8 +363,8 @@ describe("github handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all 23 github channels", () => {
-      expect(specs).toHaveLength(23);
+    it("registers all 25 github channels", () => {
+      expect(specs).toHaveLength(25);
     });
 
     it.each(specs)(

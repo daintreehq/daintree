@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   BATCH_BRANCH_CHUNK_SIZE,
+  GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
   buildBatchPRQuery,
   buildBatchRequiredChecksQuery,
+  buildBatchIssuesQuery,
+  buildBatchPRsQuery,
   REPO_STATS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
@@ -540,5 +543,158 @@ describe("buildBatchBranchPRQuery", () => {
 
   it("exports BATCH_BRANCH_CHUNK_SIZE as 20 (per-chunk cap)", () => {
     expect(BATCH_BRANCH_CHUNK_SIZE).toBe(20);
+  });
+});
+
+describe("GRAPHQL_BATCH_CHUNK_SIZE", () => {
+  it("equals BATCH_BRANCH_CHUNK_SIZE", () => {
+    expect(GRAPHQL_BATCH_CHUNK_SIZE).toBe(BATCH_BRANCH_CHUNK_SIZE);
+  });
+});
+
+describe("buildBatchIssuesQuery", () => {
+  it("returns empty string for empty array", () => {
+    expect(buildBatchIssuesQuery("owner", "repo", [])).toBe("");
+  });
+
+  it("returns empty string when all numbers are invalid", () => {
+    expect(buildBatchIssuesQuery("owner", "repo", [-1, 0, 1.5])).toBe("");
+  });
+
+  it("filters out negative, zero, and non-integer numbers", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [-1, 0, 1.5, 5]);
+    expect(query).toContain("i5: issue(number: 5)");
+    expect(query).not.toContain("i-1");
+    expect(query).not.toContain("i0");
+    expect(query).not.toContain("i1.5");
+  });
+
+  it("uses a single repository block with field-level aliases", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1, 2, 3]);
+    // Exactly one "repository(owner:" block
+    const repoMatches = query.match(/repository\(owner:/g);
+    expect(repoMatches?.length).toBe(1);
+    expect(query).toContain("i1: issue");
+    expect(query).toContain("i2: issue");
+    expect(query).toContain("i3: issue");
+  });
+
+  it("aliases use i{num} prefix", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [42]);
+    expect(query).toContain("i42: issue(number: 42)");
+  });
+
+  it("includes the full field set from GET_ISSUE_QUERY", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1]);
+    expect(query).toContain("number");
+    expect(query).toContain("title");
+    expect(query).toContain("bodyText");
+    expect(query).toContain("url");
+    expect(query).toContain("state");
+    expect(query).toContain("createdAt");
+    expect(query).toContain("updatedAt");
+    expect(query).toContain("closedAt");
+    expect(query).toContain("author {");
+    expect(query).toContain("assignees(first: 10)");
+    expect(query).toContain("comments {");
+    expect(query).toContain("labels(first: 10)");
+    expect(query).toContain("timelineItems");
+    expect(query).toContain("CROSS_REFERENCED_EVENT");
+    expect(query).toContain("CONNECTED_EVENT");
+  });
+
+  it("includes rateLimit at operation root", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1]);
+    expect(query).toContain("rateLimit {");
+    expect(query).toContain("cost");
+    expect(query).toContain("remaining");
+    expect(query).toContain("resetAt");
+  });
+
+  it("escapes owner and repo with special characters", () => {
+    const query = buildBatchIssuesQuery('my"owner', "repo\\name", [1]);
+    expect(query).toContain('owner: "my\\"owner"');
+    expect(query).toContain('name: "repo\\\\name"');
+  });
+
+  it("does not declare $query variable", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1, 2]);
+    expect(query).not.toContain("$query");
+  });
+});
+
+describe("buildBatchPRsQuery", () => {
+  it("returns empty string for empty array", () => {
+    expect(buildBatchPRsQuery("owner", "repo", [])).toBe("");
+  });
+
+  it("returns empty string when all numbers are invalid", () => {
+    expect(buildBatchPRsQuery("owner", "repo", [-1, 0, 1.5])).toBe("");
+  });
+
+  it("filters out negative, zero, and non-integer numbers", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [-1, 0, 1.5, 10]);
+    expect(query).toContain("p10: pullRequest(number: 10)");
+    expect(query).not.toContain("p-1");
+    expect(query).not.toContain("p0");
+    expect(query).not.toContain("p1.5");
+  });
+
+  it("uses a single repository block with field-level aliases", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [10, 11]);
+    const repoMatches = query.match(/repository\(owner:/g);
+    expect(repoMatches?.length).toBe(1);
+    expect(query).toContain("p10: pullRequest");
+    expect(query).toContain("p11: pullRequest");
+  });
+
+  it("aliases use p{num} prefix", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [99]);
+    expect(query).toContain("p99: pullRequest(number: 99)");
+  });
+
+  it("includes the full field set from GET_PR_QUERY", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).toContain("number");
+    expect(query).toContain("title");
+    expect(query).toContain("bodyText");
+    expect(query).toContain("url");
+    expect(query).toContain("state");
+    expect(query).toContain("isDraft");
+    expect(query).toContain("merged");
+    expect(query).toContain("createdAt");
+    expect(query).toContain("updatedAt");
+    expect(query).toContain("closedAt");
+    expect(query).toContain("mergedAt");
+    expect(query).toContain("baseRefName");
+    expect(query).toContain("headRefName");
+    expect(query).toContain("headRepository");
+    expect(query).toContain("baseRepository");
+    expect(query).toContain("author {");
+    expect(query).toContain("assignees(first: 10)");
+    expect(query).toContain("reviews(first: 1)");
+    expect(query).toContain("comments {");
+    expect(query).toContain("labels(first: 10)");
+    expect(query).toContain("commits(last: 1)");
+    expect(query).toContain("statusCheckRollup");
+  });
+
+  it("includes rateLimit at operation root", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).toContain("rateLimit {");
+    expect(query).toContain("cost");
+    expect(query).toContain("remaining");
+    expect(query).toContain("resetAt");
+  });
+
+  it("escapes owner and repo with special characters", () => {
+    const query = buildBatchPRsQuery('my"owner', "repo\\name", [1]);
+    expect(query).toContain('owner: "my\\"owner"');
+    expect(query).toContain('name: "repo\\\\name"');
+  });
+
+  it("does not declare $query variable", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1, 2]);
+    expect(query).not.toContain("$query");
   });
 });

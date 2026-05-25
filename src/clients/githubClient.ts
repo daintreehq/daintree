@@ -168,6 +168,20 @@ export const githubClient = {
     return window.electron.github.getPRByNumber(cwd, prNumber);
   },
 
+  getIssuesByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<Array<import("@shared/types/github").GitHubIssue | null>> => {
+    return window.electron.github.getIssuesByNumbers(cwd, numbers);
+  },
+
+  getPRsByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<Array<import("@shared/types/github").GitHubPR | null>> => {
+    return window.electron.github.getPRsByNumbers(cwd, numbers);
+  },
+
   getPRReviewThreads: (cwd: string, prNumber: number): Promise<Record<string, number>> => {
     return window.electron.github.getPRReviewThreads(cwd, prNumber);
   },

@@ -6,6 +6,8 @@ import {
   GET_PR_QUERY,
   GET_PR_REVIEW_THREADS_QUERY,
   buildBatchRequiredChecksQuery,
+  buildBatchPRsQuery,
+  GRAPHQL_BATCH_CHUNK_SIZE,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
@@ -505,6 +507,55 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
     }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}
+
+export async function getPRsByNumbers(
+  cwd: string,
+  numbers: number[]
+): Promise<Array<GitHubPR | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  try {
+    return await withRepoContextRetry(cwd, async (context) => {
+      const results: Array<GitHubPR | null> = [];
+
+      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+        const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
+        if (!query) continue;
+
+        const response = (await client(query, {
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
+
+        gitHubRateLimitService.updateFromGraphQL(response);
+
+        const repo = response?.repository as Record<string, unknown> | undefined;
+        for (const num of chunk) {
+          const alias = `p${num}`;
+          const node = repo?.[alias] as Record<string, unknown> | null;
+          results.push(node ? parsePRNode(node) : null);
+        }
+      }
+
+      return results;
+    });
+  } catch (error) {
+    const message = (error as Error).message || "";
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return [];
     }
     throw new Error(parseGitHubError(error));
   }

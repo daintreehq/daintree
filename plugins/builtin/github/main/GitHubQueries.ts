@@ -776,6 +776,179 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
  * as an integer literal per alias — GraphQL variables are global to an operation and
  * cannot differ per-alias.
  */
+/**
+ * Per-chunk cap for aliased GraphQL batch queries. Reuses the empirically
+ * safe ceiling from {@link BATCH_BRANCH_CHUNK_SIZE} — 20 aliases per request
+ * stays well under GitHub's node-limit ceiling.
+ */
+export const GRAPHQL_BATCH_CHUNK_SIZE = BATCH_BRANCH_CHUNK_SIZE;
+
+/**
+ * Build a batched GraphQL query that fetches multiple issues by number in a
+ * single round-trip. Uses a single `repository` block with field-level
+ * `i{num}: issue(number: {num})` aliases so the GraphQL engine resolves the
+ * repository object once instead of N times.
+ *
+ * Returns an empty string when `numbers` contains no valid positive integers
+ * so the caller can skip the request entirely.
+ *
+ * Field shape matches {@link GET_ISSUE_QUERY} so {@link parseIssueNode} works
+ * unchanged on each per-alias result node.
+ */
+export function buildBatchIssuesQuery(owner: string, repo: string, numbers: number[]): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
+  const validNumbers = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (validNumbers.length === 0) return "";
+
+  const parts = validNumbers.map(
+    (num) => `
+      i${num}: issue(number: ${num}) {
+        number
+        title
+        bodyText
+        url
+        state
+        createdAt
+        updatedAt
+        closedAt
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        comments {
+          totalCount
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+        timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
+          nodes {
+            ... on CrossReferencedEvent {
+              source {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                }
+              }
+            }
+            ... on ConnectedEvent {
+              subject {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                }
+              }
+            }
+          }
+        }
+      }
+    `
+  );
+
+  return `query {
+  repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+    ${parts.join("\n    ")}
+  }
+  rateLimit { cost remaining resetAt limit }
+}`;
+}
+
+/**
+ * Build a batched GraphQL query that fetches multiple PRs by number in a
+ * single round-trip. Uses a single `repository` block with field-level
+ * `p{num}: pullRequest(number: {num})` aliases.
+ *
+ * Returns an empty string when `numbers` contains no valid positive integers
+ * so the caller can skip the request entirely.
+ *
+ * Field shape matches {@link GET_PR_QUERY} so {@link parsePRNode} works
+ * unchanged on each per-alias result node.
+ */
+export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[]): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
+  const validNumbers = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (validNumbers.length === 0) return "";
+
+  const parts = validNumbers.map(
+    (num) => `
+      p${num}: pullRequest(number: ${num}) {
+        number
+        title
+        bodyText
+        url
+        state
+        isDraft
+        merged
+        createdAt
+        updatedAt
+        closedAt
+        mergedAt
+        baseRefName
+        headRefName
+        headRepository {
+          nameWithOwner
+        }
+        baseRepository {
+          nameWithOwner
+        }
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        reviews(first: 1) {
+          totalCount
+        }
+        comments {
+          totalCount
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+              }
+            }
+          }
+        }
+      }
+    `
+  );
+
+  return `query {
+  repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+    ${parts.join("\n    ")}
+  }
+  rateLimit { cost remaining resetAt limit }
+}`;
+}
+
 export function buildBatchRequiredChecksQuery(
   owner: string,
   repo: string,

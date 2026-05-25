@@ -62,6 +62,9 @@ export {
   GET_PR_REVIEW_THREADS_QUERY,
   buildBatchPRQuery,
   buildBatchRequiredChecksQuery,
+  buildBatchIssuesQuery,
+  buildBatchPRsQuery,
+  GRAPHQL_BATCH_CHUNK_SIZE,
   buildGitHubSearchQuery,
 } from "./GitHubQueries.js";
 
@@ -127,10 +130,22 @@ export { batchCheckLinkedPRs } from "./GitHubPRDiscovery.js";
 export { parseGitHubError } from "./GitHubErrors.js";
 
 // PRs
-export { listPullRequests, getPRByNumber, getPRTooltip, getPRReviewThreads } from "./GitHubPRs.js";
+export {
+  listPullRequests,
+  getPRByNumber,
+  getPRsByNumbers,
+  getPRTooltip,
+  getPRReviewThreads,
+} from "./GitHubPRs.js";
 
 // Issues
-export { listIssues, getIssueByNumber, getIssueTooltip, assignIssue } from "./GitHubIssues.js";
+export {
+  listIssues,
+  getIssueByNumber,
+  getIssuesByNumbers,
+  getIssueTooltip,
+  assignIssue,
+} from "./GitHubIssues.js";
 export type { AssignIssueResult } from "./GitHubIssues.js";
 
 // Rate limit API
