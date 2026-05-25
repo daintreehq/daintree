@@ -107,8 +107,6 @@ export interface GitHubPR {
    *  was truncated, or when the repository has no required checks configured (in which case
    *  ciStatus reflects the raw rollup). */
   ciSummary?: GitHubPRCISummary;
-  /** Review decision from the PR (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or absent) */
-  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
   /** Merge state status from the PR. UNKNOWN on freshly-opened PRs that GitHub hasn't backgrounded yet. */
   mergeStateStatus?:
     | "BEHIND"

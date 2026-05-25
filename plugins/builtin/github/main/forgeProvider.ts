@@ -35,11 +35,7 @@ import {
   buildBatchBranchPRQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
-import {
-  forgeQueryCache,
-  forgeQueryInflight,
-  repoEventsETagCache,
-} from "./GitHubCaches.js";
+import { forgeQueryCache, forgeQueryInflight, repoEventsETagCache } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
@@ -271,15 +267,18 @@ async function dispatchQuery(
 async function runQuery(
   query: string,
   variables: Record<string, unknown>,
-  queryLabel: string
+  queryLabel: string,
+  bypass = false
 ): Promise<GraphQlQueryResponseData> {
   const key = buildCacheKey(query, variables);
 
-  const cached = forgeQueryCache.get(key);
-  if (cached !== undefined) return cached;
+  if (!bypass) {
+    const cached = forgeQueryCache.get(key);
+    if (cached !== undefined) return cached;
 
-  const inflight = forgeQueryInflight.get(key);
-  if (inflight !== undefined) return inflight;
+    const inflight = forgeQueryInflight.get(key);
+    if (inflight !== undefined) return inflight;
+  }
 
   const request = dispatchQuery(query, variables, queryLabel)
     .then((response) => {
@@ -287,7 +286,7 @@ async function runQuery(
       return response;
     })
     .finally(() => {
-      forgeQueryInflight.delete(key);
+      if (forgeQueryInflight.get(key) === request) forgeQueryInflight.delete(key);
     });
 
   forgeQueryInflight.set(key, request);
@@ -469,7 +468,8 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
         limit,
         orderBy,
       },
-      "LIST_ISSUES_QUERY"
+      "LIST_ISSUES_QUERY",
+      bypass
     );
 
     const issues = (response?.repository as Record<string, unknown> | undefined)?.issues as
@@ -534,7 +534,8 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
         limit,
         orderBy,
       },
-      "LIST_PRS_QUERY"
+      "LIST_PRS_QUERY",
+      bypass
     );
 
     const prs = (response?.repository as Record<string, unknown> | undefined)?.pullRequests as
