@@ -1,7 +1,14 @@
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
-import type { TerminalInstance } from "@shared/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
+
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name. Lets external callers that still hand
+// out raw carrier entries pass through these predicates while the rest of
+// the renderer migrates to `getNarrowPanel` (#8957).
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 /**
  * Fleet membership/broadcast predicate: the terminal has a writable PTY and is
@@ -10,7 +17,7 @@ import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
  * state that warns a user their keystrokes are being broadcast.
  */
 export function isTerminalFleetEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   if (!t) return false;
   if (!isPtyPanel(t)) return false;
@@ -31,7 +38,7 @@ export function isTerminalFleetEligible(
  * gate because their downstream actions assume a live PTY.
  */
 export function isTerminalErrorClusterEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   if (!t) return false;
   if (!isPtyPanel(t)) return false;
@@ -47,26 +54,26 @@ export function isTerminalErrorClusterEligible(
  * still require an agent identity because those actions depend on agent state.
  */
 export function resolveFleetAgentCapabilityId(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): BuiltInAgentId | undefined {
   if (!t || !isPtyPanel(t)) return undefined;
   return getBuiltInRuntimeAgentId(t);
 }
 
 export function isAgentFleetActionEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return isTerminalFleetEligible(t) && resolveFleetAgentCapabilityId(t) !== undefined;
 }
 
 export function isFleetWaitingAgentEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return isAgentFleetActionEligible(t) && t.agentState === "waiting";
 }
 
 export function isFleetInterruptAgentEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return (
     isAgentFleetActionEligible(t) && (t.agentState === "working" || t.agentState === "waiting")
@@ -74,7 +81,7 @@ export function isFleetInterruptAgentEligible(
 }
 
 export function isFleetRestartAgentEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return isAgentFleetActionEligible(t);
 }
