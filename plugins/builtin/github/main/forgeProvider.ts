@@ -37,6 +37,7 @@ import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
+import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 
 const REPO_METADATA_QUERY = `
@@ -552,6 +553,7 @@ async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
 async function getReviewThreadsImpl(repo: RepoRef, prNumber: number): Promise<ReviewThread[]> {
   const threads: ReviewThread[] = [];
   let cursor: string | null = null;
+  let pageCount = 0;
   while (true) {
     const response = await runQuery(
       GET_PR_REVIEW_THREADS_QUERY,
@@ -578,6 +580,10 @@ async function getReviewThreadsImpl(repo: RepoRef, prNumber: number): Promise<Re
       if (!n) continue;
       const id = `${repo.owner}/${repo.repo}#${prNumber}:${threads.length}`;
       threads.push({ id, rawData: n });
+    }
+    pageCount++;
+    if (pageCount >= MAX_REVIEW_THREAD_PAGES) {
+      break;
     }
     if (reviewThreads?.pageInfo?.hasNextPage && reviewThreads.pageInfo.endCursor) {
       cursor = reviewThreads.pageInfo.endCursor;

@@ -101,6 +101,9 @@ export interface PRRequiredStatusEntry {
   ciStatus: GitHubPRCIStatus | undefined;
   ciSummary: GitHubPRCISummary | undefined;
 }
+export const MAX_REVIEW_THREAD_PAGES = 5;
+export const REVIEW_THREADS_PER_PAGE = 100;
+
 export const reviewThreadsCache = new Cache<string, Record<string, number>>({
   defaultTTL: 300000,
 });

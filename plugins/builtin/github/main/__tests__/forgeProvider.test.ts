@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
+import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 
 const mockGraphQLClient = vi.fn();
 
@@ -320,5 +321,84 @@ describe("classifyPushError", () => {
       githubForgeProvider.classifyPushError!("fatal: Authentication failed for 'https://...'")
     ).toBeNull();
     expect(githubForgeProvider.classifyPushError!("")).toBeNull();
+  });
+});
+
+describe("getReviewThreads", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function makeThreadNode(id: number) {
+    return { path: `src/file${id}.ts`, isResolved: false, isOutdated: false };
+  }
+
+  function makePageResponse(
+    nodes: Array<ReturnType<typeof makeThreadNode>>,
+    hasNextPage: boolean,
+    endCursor: string | null = hasNextPage ? "cursor-next" : null
+  ) {
+    return {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes,
+            pageInfo: { hasNextPage, endCursor },
+          },
+        },
+      },
+    };
+  }
+
+  it("returns empty array for a PR with zero review threads", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([], false, null));
+    const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
+    expect(result).toEqual([]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns all threads from a single page", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeThreadNode(1), makeThreadNode(2)], false, null)
+    );
+    const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toContain("owner/repo#1");
+    expect(result[0].rawData).toEqual(makeThreadNode(1));
+  });
+
+  it("paginates across multiple pages", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(makePageResponse([makeThreadNode(1)], true, "cursor-2"))
+      .mockResolvedValueOnce(makePageResponse([makeThreadNode(2)], false, null));
+    const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
+    expect(result).toHaveLength(2);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after MAX_REVIEW_THREAD_PAGES", async () => {
+    // Return more pages than the cap
+    for (let i = 0; i < MAX_REVIEW_THREAD_PAGES + 3; i++) {
+      const nodes = Array.from({ length: 100 }, (_, j) => makeThreadNode(i * 100 + j));
+      mockGraphQLClient.mockResolvedValueOnce(makePageResponse(nodes, true, `cursor-${i + 1}`));
+    }
+
+    const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
+    expect(result).toHaveLength(MAX_REVIEW_THREAD_PAGES * 100);
+  });
+
+  it("returns all threads when exactly at cap with no more pages", async () => {
+    for (let i = 0; i < MAX_REVIEW_THREAD_PAGES; i++) {
+      const hasNext = i < MAX_REVIEW_THREAD_PAGES - 1;
+      mockGraphQLClient.mockResolvedValueOnce(
+        makePageResponse([makeThreadNode(i)], hasNext, hasNext ? `cursor-${i + 1}` : null)
+      );
+    }
+
+    const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
+    expect(result).toHaveLength(MAX_REVIEW_THREAD_PAGES);
   });
 });
