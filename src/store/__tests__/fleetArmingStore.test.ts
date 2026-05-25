@@ -206,6 +206,25 @@ describe("fleetArmingStore", () => {
       expect(s.lastArmedId).toBe("t1");
     });
 
+    it("is a no-op when every id in the batch is a non-PTY kind (#8957 batch B)", () => {
+      // Locks the no-op + lastArmedId-preservation contract for non-PTY input.
+      // addToFleet calls isFleetArmEligible(getNarrowPanel(...)) — the
+      // isPtyPanel guard rejects browser/dev-preview/review, so the batch
+      // should leave the prior fleet (and lastArmedId) untouched.
+      seedPanels([
+        makeAgentTerminal("t1"),
+        makeAgentTerminal("b1", { kind: "browser", hasPty: undefined }),
+        makeAgentTerminal("d1", { kind: "dev-preview", hasPty: undefined }),
+        makeAgentTerminal("r1", { kind: "review", hasPty: undefined }),
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      const before = useFleetArmingStore.getState().lastArmedId;
+      useFleetArmingStore.getState().addToFleet(["b1", "d1", "r1"]);
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["t1"]);
+      expect(s.lastArmedId).toBe(before);
+    });
+
     it("seeds an empty fleet when armedIds is initially empty", () => {
       useFleetArmingStore.getState().addToFleet(["t2", "t3"]);
       const s = useFleetArmingStore.getState();
@@ -367,6 +386,20 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armAll("current");
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["runtime-a1"]);
+    });
+
+    it("skips non-PTY panel kinds via collectEligibleIds (#8957 batch B)", () => {
+      // collectEligibleIds → getNarrowPanel → isFleetArmEligible — the
+      // isPtyPanel guard must drop browser/dev-preview/review even when the
+      // panel reports a matching worktree.
+      seedPanels([
+        makeAgentTerminal("a1"),
+        makeAgentTerminal("b1", { kind: "browser", hasPty: undefined }),
+        makeAgentTerminal("d1", { kind: "dev-preview", hasPty: undefined }),
+        makeAgentTerminal("r1", { kind: "review", hasPty: undefined }),
+      ]);
+      useFleetArmingStore.getState().armAll("all");
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
   });
 
