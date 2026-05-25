@@ -283,6 +283,23 @@ export interface MilestoneCapability {
 }
 
 /**
+ * Optional multi-key batch lookups. The host's host-side `BatchLoader`
+ * coalesces same-tick `getCIStatus`/`getPR` fan-out into one of these calls
+ * when the provider implements them, collapsing N round-trips into ceil(N/100)
+ * requests. Each method returns a `Map` keyed by the input number; an explicit
+ * `null` value means the lookup confirmed "not found", while a key *omitted*
+ * from the map means the implementation could not resolve it in this batch
+ * (transient error) and the caller should retry it — mirroring the
+ * {@link ForgeProviderImpl.findPRsByBranches} omission convention. Providers
+ * that don't batch simply omit the capability; the host falls back to per-key
+ * calls transparently.
+ */
+export interface BatchLookupCapability {
+  getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
+  findPRsByNumbers?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, PR | null>>;
+}
+
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -353,6 +370,7 @@ export interface ForgeProviderImpl {
   releases?: ReleaseCapability;
   projectBoards?: ProjectBoardCapability;
   milestones?: MilestoneCapability;
+  batchLookups?: BatchLookupCapability;
 }
 
 /**

@@ -207,6 +207,87 @@ describe("registerForgeDataHandlers", () => {
     ).rejects.toThrow("Invalid PR number");
   });
 
+  it("coalesces concurrent identical getPR calls into one provider call", async () => {
+    let resolveGetPR!: (pr: PR) => void;
+    fakeImpl.getPR.mockReturnValue(new Promise<PR>((resolve) => (resolveGetPR = resolve)));
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:get-pr");
+
+    const p1 = handler(null, { cwd: "/repo", prNumber: 5 });
+    const p2 = handler(null, { cwd: "/repo", prNumber: 5 });
+    resolveGetPR(makePR(5));
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(fakeImpl.getPR).toHaveBeenCalledTimes(1);
+    expect(r1).toMatchObject({ number: 5 });
+    expect(r2).toMatchObject({ number: 5 });
+  });
+
+  it("does not coalesce calls that differ by PR number or cwd", async () => {
+    fakeImpl.getPR.mockImplementation((_repo: RepoRef, n: number) => Promise.resolve(makePR(n)));
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:get-pr");
+
+    await Promise.all([
+      handler(null, { cwd: "/repo", prNumber: 5 }),
+      handler(null, { cwd: "/repo", prNumber: 6 }),
+      handler(null, { cwd: "/other", prNumber: 5 }),
+    ]);
+
+    // Distinct (cwd, prNumber) keys → three independent provider calls; the
+    // cwd dimension keeps separate projects from sharing a slot (#4832).
+    expect(fakeImpl.getPR).toHaveBeenCalledTimes(3);
+  });
+
+  it("evicts a failed lookup immediately so the next caller retries", async () => {
+    fakeImpl.getIssue
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(makeIssue(42));
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:get-issue");
+
+    await expect(handler(null, { cwd: "/repo", issueNumber: 42 })).rejects.toThrow("transient");
+    // Immediate eviction on rejection: the retry runs the provider again
+    // rather than returning the cached failed promise.
+    const result = await handler(null, { cwd: "/repo", issueNumber: 42 });
+    expect(result).toMatchObject({ number: 42 });
+    expect(fakeImpl.getIssue).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats list queries with embedded-comma labels as distinct (no false coalescing)", async () => {
+    fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:list-issues");
+
+    await Promise.all([
+      handler(null, { cwd: "/repo", opts: { labels: ["a,b"] } }),
+      handler(null, { cwd: "/repo", opts: { labels: ["a", "b"] } }),
+    ]);
+
+    // `["a,b"]` and `["a","b"]` are different queries — the JSON-tuple key keeps
+    // them in separate in-flight slots instead of collapsing to one call.
+    expect(fakeImpl.listIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it("collapses repeat lookups within the TTL then re-runs after it elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      fakeImpl.getPR.mockResolvedValue(makePR(5));
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-pr");
+
+      await handler(null, { cwd: "/repo", prNumber: 5 });
+      await handler(null, { cwd: "/repo", prNumber: 5 }); // within TTL → cached
+      expect(fakeImpl.getPR).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(151); // TTL eviction fires
+      await handler(null, { cwd: "/repo", prNumber: 5 }); // after TTL → re-run
+      expect(fakeImpl.getPR).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates provider resolution failures (e.g. provider not activated)", async () => {
     resolveForCwdMock.mockRejectedValue(
       new Error("No forge provider registered for this repository")

@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type { DaintreeEventMap } from "../events.js";
-import type { ForgeProviderImpl, RepoRef, PR as ForgePR } from "../../../shared/types/forge.js";
+import type {
+  ForgeProviderImpl,
+  RepoRef,
+  PR as ForgePR,
+  CIStatus,
+} from "../../../shared/types/forge.js";
 import type { ForgeResolveProviderResult } from "../../../shared/types/workspace-host.js";
 
 function makeWorktreeSnapshot(
@@ -69,6 +74,10 @@ function makeMockBridge(impl: ForgeProviderImpl) {
       if (!impl.findPRsByBranches) return null;
       return impl.findPRsByBranches(repo, branches);
     }),
+    findPRsByNumbers: vi.fn(async (_id: string, repo: RepoRef, prNumbers: number[]) => {
+      if (!impl.batchLookups?.findPRsByNumbers) return null;
+      return impl.batchLookups.findPRsByNumbers(repo, prNumbers);
+    }),
     getPR: vi.fn((_id: string, repo: RepoRef, prNumber: number) => impl.getPR(repo, prNumber)),
     getIssue: vi.fn((_id: string, repo: RepoRef, issueNumber: number) =>
       impl.getIssue(repo, issueNumber)
@@ -76,6 +85,10 @@ function makeMockBridge(impl: ForgeProviderImpl) {
     getCIStatus: vi.fn((_id: string, repo: RepoRef, prNumber: number) =>
       impl.getCIStatus(repo, prNumber)
     ),
+    getCIStatuses: vi.fn(async (_id: string, repo: RepoRef, prNumbers: number[]) => {
+      if (!impl.batchLookups?.getCIStatuses) return null;
+      return impl.batchLookups.getCIStatuses(repo, prNumbers);
+    }),
     getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
     handleResult: vi.fn(),
     dispose: vi.fn(),
@@ -155,6 +168,20 @@ function mockForgeProviderUnresolved(opts?: {
   vi.doMock("../../utils/hardenedGit.js", () => ({
     createHardenedGit: vi.fn().mockReturnValue({ getConfig }),
   }));
+}
+
+function makeMockCIStatus(): CIStatus {
+  return { state: "success", total: 1, passed: 1, failed: 0, pending: 0, rawData: null };
+}
+
+// Drain microtasks + process.nextTick so the host-side BatchLoader's
+// fire-and-forget CI enrichment dispatches under fake timers (which fake
+// setTimeout but not nextTick/microtasks).
+async function flushLoaders(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+    await new Promise<void>((resolve) => process.nextTick(resolve));
+  }
 }
 
 function makeMockEmptyImpl(): ForgeProviderImpl {
@@ -588,6 +615,211 @@ describe("PullRequestService", () => {
     expect(detected.every((d) => d.prNumber === 99)).toBe(true);
 
     unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("coalesces CI-status enrichment into one getCIStatuses batch when the capability is present", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, CIStatus | null>();
+      for (const n of prNumbers) map.set(n, makeMockCIStatus());
+      return map;
+    });
+    // The bridge stub reads `batchLookups` lazily at call time, so attaching it
+    // after the resolved-provider setup is enough to advertise the capability.
+    mockImpl.batchLookups = { getCIStatuses };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    // Two PRs detected in one cycle → a single coalesced batch call, never the
+    // per-PR path.
+    expect(getCIStatuses).toHaveBeenCalledTimes(1);
+    expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), expect.arrayContaining([1, 2]));
+    expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+
+    // The batched CI result is applied: each worktree gets a re-emit carrying
+    // its enriched status, proving the coalesced data flows back through.
+    const ciByWorktree = new Map(
+      detected.filter((d) => d.prCiStatus).map((d) => [d.worktreeId, d.prCiStatus])
+    );
+    expect(ciByWorktree.get("wt-1")).toBe("SUCCESS");
+    expect(ciByWorktree.get("wt-2")).toBe("SUCCESS");
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("does not bump consecutiveErrors when the provider is invalidated mid-check", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    let releaseBatch: (() => void) | undefined;
+    const batchSpy = vi.fn(
+      (_repo: RepoRef, branches: string[]) =>
+        new Promise<Map<string, ForgePR | null>>((resolve) => {
+          releaseBatch = () => {
+            const map = new Map<string, ForgePR | null>();
+            for (const branch of branches)
+              map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+            resolve(map);
+          };
+        })
+    );
+    mockForgeProviderResolved(undefined, batchSpy);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    const svc = pullRequestService as unknown as {
+      checkForPRs: () => Promise<void>;
+      resolveProvider: () => Promise<void>;
+      invalidateProvider: () => void;
+      consecutiveErrors: number;
+      lastCheckAt: number;
+    };
+
+    await svc.resolveProvider();
+    svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+
+    // Start a check that blocks inside the branch loader's batch function.
+    const checkPromise = svc.checkForPRs();
+    await flushLoaders();
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+
+    // Swap the provider mid-flight (refresh()/setForgeSettings() do this): the
+    // loader is disposed, rejecting the in-flight load. The cycle must be
+    // discarded by the stale-provider guard, NOT counted as an error.
+    svc.invalidateProvider();
+    releaseBatch?.(); // late batch result must be dropped silently
+    await checkPromise;
+    await flushLoaders();
+
+    expect(svc.consecutiveErrors).toBe(0);
+
+    pullRequestService.destroy();
+  });
+
+  it("falls back to per-PR getCIStatus when the batch CI capability is absent", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+    mockImpl.getCIStatus = vi.fn().mockResolvedValue(makeMockCIStatus());
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    // No batch capability → loader falls back to one getCIStatus per PR.
+    expect(mockImpl.getCIStatus).toHaveBeenCalledTimes(2);
+
+    pullRequestService.destroy();
+  });
+
+  it("coalesces revalidation getPR fan-out into one findPRsByNumbers batch when present", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    mockImpl.batchLookups = { findPRsByNumbers };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+
+    // Both resolved PRs revalidate through one batch call, not per-number getPR.
+    expect(findPRsByNumbers).toHaveBeenCalledTimes(1);
+    expect(findPRsByNumbers).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining([1, 2])
+    );
+    expect(mockImpl.getPR).not.toHaveBeenCalled();
+
     pullRequestService.destroy();
   });
 

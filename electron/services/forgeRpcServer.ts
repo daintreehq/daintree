@@ -92,12 +92,16 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
       return invokeFindPRByBranch(impl, req.args);
     case "findPRsByBranches":
       return invokeFindPRsByBranches(impl, req.args);
+    case "findPRsByNumbers":
+      return invokeFindPRsByNumbers(impl, req.args);
     case "getPR":
       return invokeGetPR(impl, req.args);
     case "getIssue":
       return invokeGetIssue(impl, req.args);
     case "getCIStatus":
       return invokeGetCIStatus(impl, req.args);
+    case "getCIStatuses":
+      return invokeGetCIStatuses(impl, req.args);
     case "getRateLimit":
       return invokeGetRateLimit(impl);
     default: {
@@ -148,6 +152,15 @@ async function invokeFindPRsByBranches(
   return impl.findPRsByBranches(repo, branches);
 }
 
+async function invokeFindPRsByNumbers(
+  impl: ForgeProviderImpl,
+  args: unknown[]
+): Promise<Map<number, PR | null> | null> {
+  const [repo, prNumbers] = args as [RepoRef, number[]];
+  if (!impl.batchLookups?.findPRsByNumbers) return null;
+  return impl.batchLookups.findPRsByNumbers(repo, prNumbers);
+}
+
 function invokeGetPR(impl: ForgeProviderImpl, args: unknown[]): Promise<PR | null> {
   const [repo, prNumber] = args as [RepoRef, number];
   return impl.getPR(repo, prNumber);
@@ -161,6 +174,15 @@ function invokeGetIssue(impl: ForgeProviderImpl, args: unknown[]): Promise<Issue
 function invokeGetCIStatus(impl: ForgeProviderImpl, args: unknown[]): Promise<CIStatus | null> {
   const [repo, prNumber] = args as [RepoRef, number];
   return impl.getCIStatus(repo, prNumber);
+}
+
+async function invokeGetCIStatuses(
+  impl: ForgeProviderImpl,
+  args: unknown[]
+): Promise<Map<number, CIStatus | null> | null> {
+  const [repo, prNumbers] = args as [RepoRef, number[]];
+  if (!impl.batchLookups?.getCIStatuses) return null;
+  return impl.batchLookups.getCIStatuses(repo, prNumbers);
 }
 
 async function invokeGetRateLimit(impl: ForgeProviderImpl): Promise<RateLimitInfo | null> {
