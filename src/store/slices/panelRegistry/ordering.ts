@@ -1,6 +1,6 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
@@ -117,12 +117,13 @@ export const createOrderingActions = (
               : scopedIndices[clampedIndex]!;
 
       const isVisible = location === "grid";
+      const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
       const updatedTerminal = {
         ...terminal,
         location,
         isVisible,
-        runtimeStatus: deriveRuntimeStatus(isVisible, terminal.flowStatus, terminal.runtimeStatus),
+        runtimeStatus: deriveRuntimeStatus(isVisible, ptyTerminal?.flowStatus, ptyTerminal?.runtimeStatus),
       } as PanelInstance;
 
       // Insert at the right position

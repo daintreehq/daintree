@@ -17,6 +17,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -278,6 +279,7 @@ export function WorktreeOverviewModal({
           continue;
         terminalCount++;
         if (!isAgentTerminal(t)) continue;
+        if (!isPtyPanel(t)) continue;
         if (t.agentState === "working") hasWorkingAgent = true;
         if (t.agentState === "waiting") {
           hasWaitingAgent = true;

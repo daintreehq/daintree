@@ -8,6 +8,7 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { usePanelStore } from "@/store/panelStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -68,7 +69,7 @@ export function registerTerminalInputActions(
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
       const terminal = state.panelsById[targetId];
-      if (terminal?.isInputLocked) return;
+      if (terminal && isPtyPanel(terminal) && terminal.isInputLocked) return;
       const managed = terminalInstanceService.get(targetId);
       if (!managed || managed.isInputLocked) return;
       try {

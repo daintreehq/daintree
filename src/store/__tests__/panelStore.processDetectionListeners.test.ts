@@ -226,6 +226,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 const { usePanelStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =
   await import("../panelStore");
+import type { PtyPanelData } from "@shared/types/panel";
+
+function getPtyPanel(id: string): PtyPanelData | undefined {
+  return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
+}
 
 describe("terminalStore process detection listeners", () => {
   beforeEach(() => {
@@ -281,7 +286,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedProcessId).toBe("npm");
+    expect(getPtyPanel("term-1")?.detectedProcessId).toBe("npm");
 
     detected?.({
       terminalId: "term-1",
@@ -290,7 +295,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedProcessId).toBe("npm");
+    expect(getPtyPanel("term-1")?.detectedProcessId).toBe("npm");
     cleanup();
   });
 
@@ -305,13 +310,13 @@ describe("terminalStore process detection listeners", () => {
       processName: "claude",
       timestamp: Date.now(),
     });
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedProcessId).toBe("claude");
+    expect(getPtyPanel("term-1")?.detectedProcessId).toBe("claude");
 
     exited?.({
       terminalId: "term-1",
       timestamp: Date.now(),
     });
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedProcessId).toBeUndefined();
+    expect(getPtyPanel("term-1")?.detectedProcessId).toBeUndefined();
     cleanup();
   });
 
@@ -330,7 +335,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+    expect(getPtyPanel("term-1")?.everDetectedAgent).toBe(true);
     cleanup();
   });
 
@@ -345,7 +350,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBeUndefined();
+    expect(getPtyPanel("term-1")?.everDetectedAgent).toBeUndefined();
     cleanup();
   });
 
@@ -362,7 +367,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp,
     });
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     expect(panel?.detectedAgentId).toBe("claude");
     expect(panel?.runtimeIdentity).toMatchObject({
       kind: "agent",
@@ -406,7 +411,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     expect(panel?.detectedAgentId).toBe("claude");
     expect(panel?.detectedProcessId).toBe("claude");
     expect(panel?.runtimeIdentity).toMatchObject({
@@ -432,7 +437,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    expect(getPtyPanel("term-1")?.detectedAgentId).toBeUndefined();
     cleanup();
   });
 
@@ -447,7 +452,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    expect(getPtyPanel("term-1")?.detectedAgentId).toBeUndefined();
     cleanup();
   });
 
@@ -463,10 +468,10 @@ describe("terminalStore process detection listeners", () => {
       processName: "gemini",
       timestamp: Date.now(),
     });
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBe("gemini");
+    expect(getPtyPanel("term-1")?.detectedAgentId).toBe("gemini");
 
     exited?.({ terminalId: "term-1", timestamp: Date.now() });
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    expect(getPtyPanel("term-1")?.detectedAgentId).toBeUndefined();
     cleanup();
   });
 
@@ -567,7 +572,7 @@ describe("terminalStore process detection listeners", () => {
 
     exited?.({ terminalId: "term-1", agentType: "claude", timestamp: Date.now() });
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     expect(panel?.launchAgentId).toBe("claude");
     expect(panel?.detectedAgentId).toBeUndefined();
     cleanup();
@@ -589,7 +594,7 @@ describe("terminalStore process detection listeners", () => {
 
     exited?.({ terminalId: "term-1", timestamp: Date.now() });
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     expect(panel?.launchAgentId).toBeUndefined();
     expect(panel?.detectedProcessId).toBeUndefined();
     cleanup();
@@ -607,10 +612,10 @@ describe("terminalStore process detection listeners", () => {
       processName: "claude",
       timestamp: Date.now(),
     });
-    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+    expect(getPtyPanel("term-1")?.everDetectedAgent).toBe(true);
 
     exited?.({ terminalId: "term-1", timestamp: Date.now() });
-    expect(usePanelStore.getState().panelsById["term-1"]?.everDetectedAgent).toBe(true);
+    expect(getPtyPanel("term-1")?.everDetectedAgent).toBe(true);
     cleanup();
   });
 
@@ -631,7 +636,7 @@ describe("terminalStore process detection listeners", () => {
 
     exit?.("term-1", 0);
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     expect(panel).toBeDefined();
     expect(panel?.location).not.toBe("trash");
     expect(panel?.everDetectedAgent).toBe(true);
@@ -644,7 +649,7 @@ describe("terminalStore process detection listeners", () => {
 
     exit?.("term-1", 0);
 
-    const panel = usePanelStore.getState().panelsById["term-1"];
+    const panel = getPtyPanel("term-1");
     // Either moved to trash (location === "trash") or removed entirely.
     expect(panel === undefined || panel.location === "trash").toBe(true);
     cleanup();

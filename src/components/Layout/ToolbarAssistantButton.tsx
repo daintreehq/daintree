@@ -9,6 +9,7 @@ import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
+import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import type { McpRuntimeSnapshot } from "@shared/types";
@@ -86,9 +87,11 @@ export function ToolbarAssistantButton({
   // assistant terminal id changes, then when its agentState transitions.
   // Returning a primitive avoids needing useShallow.
   const assistantTerminalId = useHelpPanelStore((s) => s.terminalId);
-  const agentState = usePanelStore((s) =>
-    assistantTerminalId ? (s.panelsById[assistantTerminalId]?.agentState ?? null) : null
-  );
+  const agentState = usePanelStore((s) => {
+    if (!assistantTerminalId) return null;
+    const p = s.panelsById[assistantTerminalId];
+    return p && isPtyPanel(p) ? (p.agentState ?? null) : null;
+  });
   const mcp = useMcpReadiness();
   const shortcut = useKeybindingDisplay("help.togglePanel");
   const ariaShortcut = useAriaKeyshortcuts("help.togglePanel");

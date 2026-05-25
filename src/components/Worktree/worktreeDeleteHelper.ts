@@ -1,4 +1,5 @@
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
 const WORKTREE_DELETE_TERMINAL_CLOSE_POLL_MS = 100;
@@ -12,7 +13,9 @@ export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
   return state.panelIds.filter((id) => {
     const panel = state.panelsById[id];
     return (
-      panel?.worktreeId === worktreeId && panel.location !== "trash" && panel.ephemeral !== true
+      panel?.worktreeId === worktreeId &&
+      panel.location !== "trash" &&
+      (!isPtyPanel(panel) || panel.ephemeral !== true)
     );
   });
 }

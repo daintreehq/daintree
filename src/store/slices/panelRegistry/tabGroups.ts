@@ -1,6 +1,6 @@
 import type { TabGroup, TabGroupLocation } from "@/types";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { type PanelInstance } from "@shared/types/panel";
+import { type PanelInstance, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "./selectors";
 
@@ -325,12 +325,13 @@ export const createTabGroupActions = (
         const t = newById[pid];
         if (!t) continue;
         if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        const ptyT = isPtyPanel(t) ? t : undefined;
         newById[pid] = {
           ...t,
           location,
           isVisible: location === "grid",
-          runtimeStatus: deriveRuntimeStatus(location === "grid", t.flowStatus, t.runtimeStatus),
-        };
+          runtimeStatus: deriveRuntimeStatus(location === "grid", ptyT?.flowStatus, ptyT?.runtimeStatus),
+        } as PanelInstance;
       }
 
       saveNormalized(newById, state.panelIds);
@@ -378,6 +379,7 @@ export const createTabGroupActions = (
         const t = newById[pid];
         if (!t) continue;
         if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        const ptyT2 = isPtyPanel(t) ? t : undefined;
         newById[pid] = {
           ...t,
           worktreeId,
@@ -385,10 +387,10 @@ export const createTabGroupActions = (
           isVisible: targetLocation === "grid",
           runtimeStatus: deriveRuntimeStatus(
             targetLocation === "grid",
-            t.flowStatus,
-            t.runtimeStatus
+            ptyT2?.flowStatus,
+            ptyT2?.runtimeStatus
           ),
-        };
+        } as PanelInstance;
         newIndex = transferBetweenWorktreeIndex(newIndex, t.worktreeId, worktreeId, pid);
       }
 
@@ -636,6 +638,7 @@ export const createTabGroupActions = (
                   tid
                 );
               }
+              const ptyT3 = isPtyPanel(t) ? t : undefined;
               newById[tid] = {
                 ...t,
                 location: effectiveLocation,
@@ -643,10 +646,10 @@ export const createTabGroupActions = (
                 isVisible: effectiveLocation === "grid",
                 runtimeStatus: deriveRuntimeStatus(
                   effectiveLocation === "grid",
-                  t.flowStatus,
-                  t.runtimeStatus
+                  ptyT3?.flowStatus,
+                  ptyT3?.runtimeStatus
                 ),
-              };
+              } as PanelInstance;
             }
             break;
           }

@@ -83,6 +83,7 @@ vi.mock("@/store/terminalInputStore", () => ({
 import { usePanelStore } from "../panelStore";
 import { useMacroFocusStore } from "../macroFocusStore";
 import { runWithMcpSpawnFocusSuppressed } from "../mcpSpawnFocusGuard";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function resetState() {
   usePanelStore.setState((s) => ({
@@ -185,8 +186,8 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     const state = usePanelStore.getState();
     expect(state.focusedId).toBe("incumbent-1");
     expect(state.previousFocusedId).toBeNull();
-    expect(state.panelsById[newId!]?.spawnedBy).toBe("mcp");
-    expect(state.panelsById[newId!]?.focusPolicy).toBe("preserve");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.spawnedBy).toBe("mcp");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
   });
 
   it("does not advance focusedId while an MCP dispatch is active even without explicit focusPolicy", async () => {
@@ -202,7 +203,7 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     const state = usePanelStore.getState();
     expect(state.focusedId).toBe("incumbent-1");
     expect(state.previousFocusedId).toBeNull();
-    expect(state.panelsById[newId!]?.focusPolicy).toBe("preserve");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
   });
 
   it("still advances focusedId for a normal user-initiated grid spawn", async () => {
@@ -267,7 +268,7 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
       expect(state.activeDockTerminalId).toBeNull();
       expect(state.focusedId).toBe("incumbent-1");
       expect(state.previousFocusedId).toBeNull();
-      expect(state.panelsById[newId!]?.focusPolicy).toBe("preserve");
+      expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
       expect(state.panelsById[newId!]?.location).toBe("dock");
     });
 

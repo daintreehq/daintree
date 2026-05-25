@@ -50,8 +50,9 @@ function reconcileCurrentState(
     !cl.items.launchedAgent &&
     usePanelStore.getState().panelIds.some((id) => {
       const p = usePanelStore.getState().panelsById[id];
+      if (!p || !isPtyPanel(p)) return false;
       return (
-        Boolean(p?.launchAgentId) || Boolean(p?.detectedAgentId) || p?.everDetectedAgent === true
+        Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
       );
     })
   ) {
@@ -198,10 +199,11 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           !cl.items.launchedAgent &&
           state.panelIds.some((id) => {
             const p = state.panelsById[id];
+            if (!p || !isPtyPanel(p)) return false;
             return (
-              Boolean(p?.launchAgentId) ||
-              Boolean(p?.detectedAgentId) ||
-              p?.everDetectedAgent === true
+              Boolean(p.launchAgentId) ||
+              Boolean(p.detectedAgentId) ||
+              p.everDetectedAgent === true
             );
           })
         ) {

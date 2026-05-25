@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { BANNER_ENTER_DURATION } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
@@ -19,10 +20,11 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       let completed = 0;
       for (const id of state.panelIds) {
         const t = state.panelsById[id];
-        if (t && t.location !== "trash" && t.ephemeral !== true) {
-          active++;
-          if (t.agentState === "completed" || t.agentState === "exited") completed++;
-        }
+        if (!t || t.location === "trash") continue;
+        const pty = isPtyPanel(t) ? t : undefined;
+        if (pty?.ephemeral === true) continue;
+        active++;
+        if (pty?.agentState === "completed" || pty?.agentState === "exited") completed++;
       }
       return { activeCount: active, completedCount: completed };
     })
@@ -83,12 +85,10 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       const idsToClose: string[] = [];
       for (const id of panelIds) {
         const t = panelsById[id];
-        if (
-          t &&
-          (t.agentState === "completed" || t.agentState === "exited") &&
-          t.location !== "trash" &&
-          t.ephemeral !== true
-        ) {
+        if (!t || t.location === "trash") continue;
+        const pty = isPtyPanel(t) ? t : undefined;
+        if (pty?.ephemeral === true) continue;
+        if (pty?.agentState === "completed" || pty?.agentState === "exited") {
           idsToClose.push(t.id);
         }
       }

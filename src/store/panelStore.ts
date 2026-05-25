@@ -157,8 +157,10 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.BACKGROUND;
   }
 
+  const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
+
   // Working agents that ARE visible get max refresh to prevent render jitter.
-  if (terminal.agentState === "working") {
+  if (ptyTerminal?.agentState === "working") {
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
@@ -167,12 +169,12 @@ export function getTerminalRefreshTier(
   // promptly instead of being parked in the background tier.
   if (
     options.isFleetArmed &&
-    terminal.hasPty !== false &&
+    ptyTerminal?.hasPty !== false &&
     terminal.location !== "trash" &&
     terminal.location !== "background" &&
     terminal.location !== "dock" &&
-    terminal.runtimeStatus !== "exited" &&
-    terminal.runtimeStatus !== "error"
+    ptyTerminal?.runtimeStatus !== "exited" &&
+    ptyTerminal?.runtimeStatus !== "error"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
@@ -182,8 +184,8 @@ export function getTerminalRefreshTier(
   // Uses runtime-detected identity so panels that have left agent mode can hibernate.
   if (
     isRuntimeAgentTerminal(terminal) &&
-    terminal.agentState !== "completed" &&
-    terminal.agentState !== "exited"
+    ptyTerminal?.agentState !== "completed" &&
+    ptyTerminal?.agentState !== "exited"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }

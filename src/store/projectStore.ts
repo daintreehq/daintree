@@ -22,6 +22,7 @@ import {
 } from "./storeAccessors";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isPtyPanel } from "@shared/types/panel";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -30,7 +31,7 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
     t.location !== "trash" &&
     t.location !== "background" &&
     t.kind !== "assistant" &&
-    t.ephemeral !== true &&
+    !(isPtyPanel(t) && t.ephemeral === true) &&
     !isSmokeTestTerminalId(t.id)
   );
 }

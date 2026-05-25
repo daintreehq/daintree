@@ -1,5 +1,6 @@
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { systemClient } from "@/clients/systemClient";
+import { isPtyPanel } from "@shared/types/panel";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
 // `getNarrowPanel`'s parameter so this file doesn't import the deprecated
@@ -27,14 +28,16 @@ export async function validateTerminalConfig(
 ): Promise<ValidationResult> {
   const errors: ValidationError[] = [];
 
+  const pty = isPtyPanel(terminal) ? terminal : undefined;
+
   // Only validate cwd for PTY panels that have it
-  if (terminal.cwd) {
+  if (pty?.cwd) {
     try {
-      const cwdExists = await systemClient.checkDirectory(terminal.cwd);
+      const cwdExists = await systemClient.checkDirectory(pty.cwd);
       if (!cwdExists) {
         errors.push({
           type: "cwd",
-          message: `Working directory does not exist: ${terminal.cwd}`,
+          message: `Working directory does not exist: ${pty.cwd}`,
           code: "ENOENT",
           recoverable: true,
         });
@@ -43,7 +46,7 @@ export async function validateTerminalConfig(
       const message = formatErrorMessage(error, "Failed to check directory");
       errors.push({
         type: "config",
-        message: `Failed to validate working directory "${terminal.cwd}": ${message}`,
+        message: `Failed to validate working directory "${pty.cwd}": ${message}`,
         recoverable: true,
       });
     }
@@ -54,7 +57,7 @@ export async function validateTerminalConfig(
   // the user asked for is on PATH. `detectedAgentId` doesn't exist yet at that
   // point, and using it later would validate the wrong binary for runtime-morphed
   // sessions (e.g., a plain shell that started a different agent).
-  const agentId = terminal.launchAgentId;
+  const agentId = pty?.launchAgentId;
   if (agentId && agentId !== "terminal") {
     try {
       const agentConfig = getAgentConfig(agentId);

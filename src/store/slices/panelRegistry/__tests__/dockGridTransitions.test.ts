@@ -110,7 +110,7 @@ describe("dock ↔ grid transitions", () => {
 
       usePanelStore.getState().moveTerminalToDock("t1");
 
-      const updated = usePanelStore.getState().panelsById["t1"];
+      const updated = usePanelStore.getState().panelsById["t1"] as PtyPanelData | undefined;
       expect(updated!.location).toBe("dock");
       expect(updated!.isVisible).toBe(false);
       expect(updated!.runtimeStatus).toBe("background");
@@ -247,7 +247,7 @@ describe("dock ↔ grid transitions", () => {
 
       usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
 
-      const updated = usePanelStore.getState().panelsById["t1"];
+      const updated = usePanelStore.getState().panelsById["t1"] as PtyPanelData | undefined;
       expect(updated!.location).toBe("grid");
       expect(updated!.isVisible).toBe(true);
       expect(updated!.runtimeStatus).toBe("running");

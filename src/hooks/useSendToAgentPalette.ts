@@ -1,9 +1,8 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { usePanelStore } from "@/store";
-import type { PanelKind } from "@shared/types/panel";
+import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
@@ -31,7 +30,7 @@ function hasSendTargets(sourceTerminalId: string | null): boolean {
       t.id !== sourceTerminalId &&
       t.location !== "trash" &&
       t.location !== "background" &&
-      (t.kind ? panelKindHasPty(t.kind) : true) &&
+      isPtyPanel(t) &&
       t.hasPty !== false
     );
   });
@@ -112,7 +111,7 @@ export function useSendToAgentPalette() {
       if (!t) continue;
       if (sourceId && t.id === sourceId) continue;
       if (t.location === "trash" || t.location === "background") continue;
-      if (t.kind && !panelKindHasPty(t.kind)) continue;
+      if (!isPtyPanel(t)) continue;
       if (t.hasPty === false) continue;
 
       const chrome = deriveTerminalChrome(t);

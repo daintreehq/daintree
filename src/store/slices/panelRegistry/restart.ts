@@ -23,6 +23,7 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -173,6 +174,8 @@ export const createRestartActions = (
       return;
     }
 
+    if (!isPtyPanel(terminal)) return;
+
     // Guard against concurrent restart attempts
     if (terminal.isRestarting) {
       logWarn("[TerminalStore] Terminal is already restarting, ignoring", { id });
@@ -247,9 +250,16 @@ export const createRestartActions = (
     }
 
     // Re-read terminal from state in case it was modified during async validation
-    const currentTerminal = get().panelsById[id];
+    const _currentTerminalRaw = get().panelsById[id];
+    if (!_currentTerminalRaw || !isPtyPanel(_currentTerminalRaw)) {
+      unmarkTerminalRestarting(id);
+      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
+      return;
+    }
+    const currentTerminal = _currentTerminalRaw;
 
-    if (!currentTerminal || currentTerminal.location === "trash") {
+    if (currentTerminal.location === "trash") {
       // Terminal was removed or trashed while we were validating
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
@@ -455,7 +465,7 @@ export const createRestartActions = (
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
         const t = state.panelsById[id];
-        if (!t) return state;
+        if (!t || !isPtyPanel(t)) return state;
         const updated = {
           ...t,
           location: targetLocation,
@@ -645,6 +655,7 @@ export const createRestartActions = (
 
       const t = state.panelsById[id];
       if (!t) return state;
+      const ptyT = isPtyPanel(t) ? t : undefined;
       const newById = {
         ...state.panelsById,
         [id]: {
@@ -652,8 +663,8 @@ export const createRestartActions = (
           worktreeId,
           location: newLocation,
           isVisible: newLocation === "grid" ? true : false,
-          runtimeStatus: deriveRuntimeStatus(newLocation === "grid", t.flowStatus, t.runtimeStatus),
-        },
+          runtimeStatus: deriveRuntimeStatus(newLocation === "grid", ptyT?.flowStatus, ptyT?.runtimeStatus),
+        } as typeof t,
       };
       const newIndex = transferBetweenWorktreeIndex(
         state.panelIdsByWorktreeId,
@@ -678,6 +689,7 @@ export const createRestartActions = (
   moveToNewWorktreeAndTransfer: (id) => {
     const terminal = get().panelsById[id];
     if (!terminal || terminal.location === "trash") return;
+    if (!isPtyPanel(terminal)) return;
     if (terminal.isRestarting) return;
 
     // Determine if this is an agent terminal before any async work
@@ -728,7 +740,8 @@ export const createRestartActions = (
 
               // After restart, inject captured history as a first prompt for agent terminals
               const restarted = get().panelsById[id];
-              if (isAgent && capturedHistory.trim().length > 0 && !restarted?.restartError) {
+              const restartedPty = restarted && isPtyPanel(restarted) ? restarted : undefined;
+              if (isAgent && capturedHistory.trim().length > 0 && !restartedPty?.restartError) {
                 scheduleHistoryInjection(id, capturedHistory, newCwd ?? "");
               }
             } catch (err) {
@@ -761,6 +774,7 @@ export const createRestartActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
+      if (!isPtyPanel(terminal)) return state;
 
       const prevTs = terminal.flowStatusTimestamp;
       if (prevTs !== undefined && timestamp < prevTs) return state;
@@ -784,6 +798,7 @@ export const createRestartActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
+      if (!isPtyPanel(terminal)) return state;
       if (terminal.runtimeStatus === status) return state;
 
       return {
@@ -799,6 +814,7 @@ export const createRestartActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
+      if (!isPtyPanel(terminal)) return state;
       if (terminal.isInputLocked === locked) return state;
 
       const newById = {
@@ -817,6 +833,7 @@ export const createRestartActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
+      if (!isPtyPanel(terminal)) return state;
 
       const locked = !terminal.isInputLocked;
       const newById = {
@@ -835,6 +852,9 @@ export const createRestartActions = (
     const terminal = get().panelsById[id];
     if (!terminal) {
       return { success: false, error: "terminal not found" };
+    }
+    if (!isPtyPanel(terminal)) {
+      return { success: false, error: "panel is not a PTY panel" };
     }
     if (terminal.isRestarting) {
       return { success: false, error: "already restarting" };
@@ -932,7 +952,7 @@ export const createRestartActions = (
 
       set((state) => {
         const t = state.panelsById[id];
-        if (!t) return state;
+        if (!t || !isPtyPanel(t)) return state;
         const updated = {
           ...t,
           restartKey: (t.restartKey ?? 0) + 1,

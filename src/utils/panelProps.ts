@@ -3,6 +3,7 @@ import type { PanelComponentProps } from "@/registry";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { clampZoom } from "@/components/Browser/browserUtils";
+import { isPtyPanel, isBrowserPanel } from "@shared/types/panel";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
 // `getNarrowPanel`'s parameter so this file doesn't import the deprecated
@@ -57,6 +58,9 @@ export function buildPanelProps({
   isFocused,
   overrides,
 }: BuildPanelPropsConfig): PanelComponentProps {
+  const pty = isPtyPanel(terminal) ? terminal : undefined;
+  const browser = isBrowserPanel(terminal) ? terminal : undefined;
+
   return {
     id: terminal.id,
     title: terminal.title,
@@ -70,49 +74,49 @@ export function buildPanelProps({
 
     // Terminal-specific
     type: undefined,
-    everDetectedAgent: terminal.everDetectedAgent,
-    agentId: terminal.launchAgentId,
-    detectedAgentId: terminal.detectedAgentId,
-    runtimeIdentity: terminal.runtimeIdentity,
+    everDetectedAgent: pty?.everDetectedAgent,
+    agentId: pty?.launchAgentId,
+    detectedAgentId: pty?.detectedAgentId,
+    runtimeIdentity: pty?.runtimeIdentity,
     chrome: deriveTerminalChrome({
       kind: terminal.kind,
-      launchAgentId: terminal.launchAgentId,
-      runtimeIdentity: terminal.runtimeIdentity,
-      detectedAgentId: terminal.detectedAgentId,
-      detectedProcessId: terminal.detectedProcessId,
-      agentState: terminal.agentState,
-      runtimeStatus: terminal.runtimeStatus,
-      exitCode: terminal.exitCode,
-      presetColor: terminal.agentPresetColor,
+      launchAgentId: pty?.launchAgentId,
+      runtimeIdentity: pty?.runtimeIdentity,
+      detectedAgentId: pty?.detectedAgentId,
+      detectedProcessId: pty?.detectedProcessId,
+      agentState: pty?.agentState,
+      runtimeStatus: pty?.runtimeStatus,
+      exitCode: pty?.exitCode,
+      presetColor: pty?.agentPresetColor,
     }),
-    agentPresetId: terminal.agentPresetId,
-    presetColor: terminal.agentPresetColor,
-    agentLaunchFlags: terminal.agentLaunchFlags,
-    cwd: terminal.cwd,
-    agentState: terminal.agentState,
+    agentPresetId: pty?.agentPresetId,
+    presetColor: pty?.agentPresetColor,
+    agentLaunchFlags: pty?.agentLaunchFlags,
+    cwd: pty?.cwd,
+    agentState: pty?.agentState,
     activity: getStableActivity(
       terminal.id,
-      terminal.activityHeadline,
-      terminal.activityStatus,
-      terminal.activityType
+      pty?.activityHeadline,
+      pty?.activityStatus,
+      pty?.activityType
     ),
-    activityStatus: terminal.activityStatus,
-    lastCommand: terminal.lastCommand,
-    flowStatus: terminal.flowStatus,
-    restartKey: terminal.restartKey,
-    restartError: terminal.restartError,
-    reconnectError: terminal.reconnectError,
-    spawnError: terminal.spawnError,
-    scrollbackRestoreError: terminal.scrollbackRestoreError,
-    detectedProcessId: terminal.detectedProcessId,
+    activityStatus: pty?.activityStatus,
+    lastCommand: pty?.lastCommand,
+    flowStatus: pty?.flowStatus,
+    restartKey: pty?.restartKey,
+    restartError: pty?.restartError,
+    reconnectError: pty?.reconnectError,
+    spawnError: pty?.spawnError,
+    scrollbackRestoreError: pty?.scrollbackRestoreError,
+    detectedProcessId: pty?.detectedProcessId,
 
     // Extension state
     extensionState: terminal.extensionState,
 
     // Browser-specific
-    initialUrl: terminal.browserUrl || "http://localhost:3000",
-    initialHistory: terminal.browserHistory,
-    initialZoom: clampZoom(terminal.browserZoom ?? 1.0),
+    initialUrl: browser?.browserUrl || "http://localhost:3000",
+    initialHistory: browser?.browserHistory,
+    initialZoom: clampZoom(browser?.browserZoom ?? 1.0),
 
     ...overrides,
   };

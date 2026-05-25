@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -76,6 +77,10 @@ beforeEach(() => {
 
 const { usePanelStore } = await import("../../../panelStore");
 
+function getPtyPanel(id: string): PtyPanelData | undefined {
+  return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
+}
+
 // Drain microtasks. The background spawn promise chains through Promise.all
 // (env fetch) → terminalClient.spawn → .then, which takes several ticks.
 async function drainMicrotasks(iterations = 100): Promise<void> {
@@ -125,7 +130,7 @@ describe("optimistic panel spawn (#5789)", () => {
     });
 
     expect(id).toBe("opt-1");
-    const panel = usePanelStore.getState().panelsById["opt-1"];
+    const panel = getPtyPanel("opt-1");
     expect(panel).toBeDefined();
     expect(panel?.spawnStatus).toBe("spawning");
     expect(panel?.runtimeIdentity).toMatchObject({
@@ -139,7 +144,7 @@ describe("optimistic panel spawn (#5789)", () => {
     // Drain microtasks so spawnStatus transitions to "ready".
     await drainMicrotasks();
 
-    const after = usePanelStore.getState().panelsById["opt-1"];
+    const after = getPtyPanel("opt-1");
     expect(after?.spawnStatus).toBe("ready");
   });
 
@@ -196,7 +201,7 @@ describe("optimistic panel spawn (#5789)", () => {
 
     const state = usePanelStore.getState();
     for (const id of ids) {
-      expect(state.panelsById[id]?.spawnStatus).toBe("spawning");
+      expect((state.panelsById[id] as PtyPanelData | undefined)?.spawnStatus).toBe("spawning");
       expect(state.panelIds).toContain(id);
     }
 
@@ -217,7 +222,7 @@ describe("optimistic panel spawn (#5789)", () => {
 
     const after = usePanelStore.getState();
     for (const id of ids) {
-      expect(after.panelsById[id]?.spawnStatus).toBe("ready");
+      expect((after.panelsById[id] as PtyPanelData | undefined)?.spawnStatus).toBe("ready");
     }
   });
 
@@ -266,7 +271,7 @@ describe("optimistic panel spawn (#5789)", () => {
     });
 
     expect(id).toBe("reconnect-1");
-    expect(usePanelStore.getState().panelsById["reconnect-1"]?.spawnStatus).toBe("ready");
+    expect(getPtyPanel("reconnect-1")?.spawnStatus).toBe("ready");
     expect(terminalClient.spawn).not.toHaveBeenCalled();
   });
 
@@ -312,13 +317,13 @@ describe("optimistic panel spawn (#5789)", () => {
       cwd: "/",
       bypassLimits: true,
     });
-    expect(usePanelStore.getState().panelsById["shared-id"]?.spawnStatus).toBe("ready");
+    expect(getPtyPanel("shared-id")?.spawnStatus).toBe("ready");
 
     // Now A's spawn finally rejects. The replacement must survive.
     rejectA(new Error("late failure"));
     await drainMicrotasks();
 
-    const after = usePanelStore.getState().panelsById["shared-id"];
+    const after = getPtyPanel("shared-id");
     expect(after).toBeDefined();
     expect(after?.spawnStatus).toBe("ready");
   });
@@ -401,13 +406,13 @@ describe("optimistic panel spawn (#5789)", () => {
     });
 
     expect(id).toBe("env-latent");
-    expect(usePanelStore.getState().panelsById["env-latent"]?.spawnStatus).toBe("spawning");
+    expect(getPtyPanel("env-latent")?.spawnStatus).toBe("spawning");
     expect(usePanelStore.getState().panelIds).toContain("env-latent");
 
     releaseEnv();
     releaseSettings();
     await drainMicrotasks();
-    expect(usePanelStore.getState().panelsById["env-latent"]?.spawnStatus).toBe("ready");
+    expect(getPtyPanel("env-latent")?.spawnStatus).toBe("ready");
   });
 
   it("propagates the pre-assigned id to terminalClient.spawn", async () => {

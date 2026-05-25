@@ -61,7 +61,7 @@ import {
   getEffectiveViewportSize,
   computeFitScale,
 } from "@/panels/dev-preview/viewportPresets";
-import type { ViewportPresetId } from "@shared/types/panel";
+import { isDevPreviewPanel, type ViewportPresetId } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { logError } from "@/utils/logger";
@@ -235,7 +235,10 @@ export function DevPreviewPane({
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
 
-  const terminal = usePanelStore((state) => state.getTerminal(id));
+  const terminal = usePanelStore((state) => {
+    const p = state.getTerminal(id);
+    return p && isDevPreviewPanel(p) ? p : undefined;
+  });
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
   const viewportPreset = terminal?.viewportPreset;

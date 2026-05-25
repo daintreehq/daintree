@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { TerminalRefreshTier } from "@shared/types/panel";
+import { TerminalRefreshTier, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import type { FleetScopeToken } from "@shared/types/worktree";
@@ -816,7 +816,7 @@ function applyWorktreeTerminalPolicy(
     terminalInstanceService.applyRendererPolicy(terminal.id, targetTier);
     if (
       targetTier !== TerminalRefreshTier.BACKGROUND &&
-      terminal.hasPty !== false &&
+      (!isPtyPanel(terminal) || terminal.hasPty !== false) &&
       panelKindHasPty(terminal.kind ?? "terminal")
     ) {
       try {

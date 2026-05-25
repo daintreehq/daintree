@@ -94,8 +94,9 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
       for (const id of ids) {
         const raw = state.panelsById[id];
         if (!raw) continue;
-        if (raw.location === "trash" || raw.ephemeral === true) continue;
+        if (raw.location === "trash") continue;
         if (!isPtyPanel(raw)) continue;
+        if (raw.ephemeral === true) continue;
         out.push(raw);
       }
       return out;

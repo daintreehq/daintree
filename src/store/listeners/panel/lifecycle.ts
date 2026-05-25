@@ -1,4 +1,5 @@
 import type { TerminalStatusPayload } from "@shared/types";
+import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -34,8 +35,9 @@ export async function handleFallbackTriggered(data: {
   const { terminalId, agentId, fromPresetId, reason } = data;
   if (fallbackInFlight.has(terminalId)) return;
 
-  const panel = usePanelStore.getState().panelsById[terminalId];
-  if (!panel) return;
+  const _panelRaw = usePanelStore.getState().panelsById[terminalId];
+  if (!_panelRaw || !isPtyPanel(_panelRaw)) return;
+  const panel = _panelRaw;
   if (panel.isRestarting) return;
 
   // Drop stale duplicate events: if the panel has already advanced past the
@@ -252,9 +254,10 @@ export function setupLifecycleListeners(): DisposableStore {
         }
 
         const state = usePanelStore.getState();
-        const terminal = state.panelsById[id];
+        const _terminalRaw = state.panelsById[id];
 
-        if (!terminal) return;
+        if (!_terminalRaw || !isPtyPanel(_terminalRaw)) return;
+        const terminal = _terminalRaw;
 
         // Also check store flag for safety (handles edge cases)
         if (terminal.isRestarting) {
@@ -317,11 +320,6 @@ export function setupLifecycleListeners(): DisposableStore {
         }
 
         // exitBehavior undefined - use default behavior based on terminal type
-        // Preserve dev-preview panels so users can inspect stopped/error states
-        if (terminal.kind === "dev-preview") {
-          return;
-        }
-
         // Preserve successfully completed agent terminals to enable reboot and output review.
         // Also preserve plain terminals that ran an agent mid-session (runtime detection);
         // everDetectedAgent is sticky in the PTY host so it survives past the inner agent exit.
@@ -372,8 +370,8 @@ export function setupLifecycleListeners(): DisposableStore {
           }
         } else {
           // Spawn succeeded - clear any previous spawn error
-          const terminal = usePanelStore.getState().panelsById[id];
-          if (terminal?.spawnError) {
+          const _spawnTerminal = usePanelStore.getState().panelsById[id];
+          if (_spawnTerminal && isPtyPanel(_spawnTerminal) && _spawnTerminal.spawnError) {
             usePanelStore.getState().clearSpawnError(id);
           }
         }

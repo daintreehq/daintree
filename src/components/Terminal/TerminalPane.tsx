@@ -80,6 +80,7 @@ import {
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { isPtyPanel } from "@shared/types/panel";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -350,8 +351,9 @@ function TerminalPaneComponent({
   };
 
   const handleRunAnyway = () => {
-    const panel = usePanelStore.getState().panelsById[id];
-    if (!panel || !agentId) return;
+    const _panel = usePanelStore.getState().panelsById[id];
+    if (!_panel || !agentId || !isPtyPanel(_panel)) return;
+    const panel = _panel;
 
     const presetEnv = panel.extensionState?.presetEnv as Record<string, string> | undefined;
 
@@ -391,13 +393,14 @@ function TerminalPaneComponent({
   const terminalState = usePanelStore(
     useShallow((state) => {
       const terminal = state.panelsById[id];
+      const pty = terminal && isPtyPanel(terminal) ? terminal : undefined;
       return {
-        isInputLocked: terminal?.isInputLocked ?? false,
-        stateChangeTrigger: terminal?.stateChangeTrigger,
-        isRestarting: terminal?.isRestarting ?? false,
-        exitBehavior: terminal?.exitBehavior,
+        isInputLocked: pty?.isInputLocked ?? false,
+        stateChangeTrigger: pty?.stateChangeTrigger,
+        isRestarting: pty?.isRestarting ?? false,
+        exitBehavior: pty?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
-        spawnStatus: terminal?.spawnStatus,
+        spawnStatus: pty?.spawnStatus,
       };
     })
   );
@@ -984,12 +987,16 @@ function TerminalPaneComponent({
   // and is idle/waiting — writing into a working or directing agent would
   // corrupt its input mid-stream.
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
-  const helpAgentState = usePanelStore((s) =>
-    helpTerminalId ? s.panelsById[helpTerminalId]?.agentState : undefined
-  );
-  const helpInputLocked = usePanelStore((s) =>
-    helpTerminalId ? s.panelsById[helpTerminalId]?.isInputLocked === true : false
-  );
+  const helpAgentState = usePanelStore((s) => {
+    if (!helpTerminalId) return undefined;
+    const p = s.panelsById[helpTerminalId];
+    return p && isPtyPanel(p) ? p.agentState : undefined;
+  });
+  const helpInputLocked = usePanelStore((s) => {
+    if (!helpTerminalId) return false;
+    const p = s.panelsById[helpTerminalId];
+    return p && isPtyPanel(p) ? p.isInputLocked === true : false;
+  });
   const assistantAvailable =
     !!helpTerminalId &&
     helpTerminalId !== id &&
@@ -1007,7 +1014,7 @@ function TerminalPaneComponent({
         t.location !== "trash" &&
         t.location !== "background" &&
         (t.kind ? panelKindHasPty(t.kind) : true) &&
-        t.hasPty !== false
+        (!isPtyPanel(t) || t.hasPty !== false)
       );
     })
   );
@@ -1018,7 +1025,8 @@ function TerminalPaneComponent({
     if (!helpTid || helpTid === id) return;
     const state = terminalInstanceService.getAgentState(helpTid);
     if (state !== "idle" && state !== "waiting") return;
-    if (usePanelStore.getState().panelsById[helpTid]?.isInputLocked === true) return;
+    const _helpPanel = usePanelStore.getState().panelsById[helpTid];
+    if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
     const text = terminalInstanceService.captureBufferText(id, 20000);
     if (!text) return;
 

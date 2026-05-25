@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "
 
 import { usePanelStore } from "@/store/panelStore";
 import { useErrorStore } from "@/store/errorStore";
+import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
@@ -171,11 +172,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       }
 
       // Only process if agent state changed to ready
-      if (
-        terminal &&
-        isAgentReady(terminal.agentState) &&
-        !isAgentReady(prevTerminal?.agentState)
-      ) {
+      const currAgentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
+      const prevAgentState =
+        prevTerminal && isPtyPanel(prevTerminal) ? prevTerminal.agentState : undefined;
+      if (terminal && isAgentReady(currAgentState) && !isAgentReady(prevAgentState)) {
         pending.resolve();
         globalInjectionState.pendingInjection = null;
         globalInjectionState.isPendingInjection = false;
@@ -217,9 +217,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       // Gate injection for live agent terminals that are not ready. Runtime
       // detection matters here: a plain shell that started Claude is an agent
       // target, while a demoted launch-agent panel is just a shell again.
-      if (isAgentTerminal(terminal) && !isAgentReady(terminal.agentState)) {
+      const terminalAgentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
+      if (isAgentTerminal(terminal) && !isAgentReady(terminalAgentState)) {
         logDebug("[useContextInjection] Agent not ready, waiting for idle", {
-          agentState: terminal.agentState,
+          agentState: terminalAgentState,
         });
 
         // Cancel any existing pending injection (regardless of terminal)
@@ -253,7 +254,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
             // Immediately re-check if agent became ready between initial check and pending setup
             const currentTerminal = usePanelStore.getState().panelsById[activeTerminal];
-            if (currentTerminal && isAgentReady(currentTerminal.agentState)) {
+            const currentAgentState =
+              currentTerminal && isPtyPanel(currentTerminal) ? currentTerminal.agentState : undefined;
+            if (currentTerminal && isAgentReady(currentAgentState)) {
               resolve();
               globalInjectionState.pendingInjection = null;
               globalInjectionState.isPendingInjection = false;
@@ -278,9 +281,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Verify agent is still ready (could have changed during race)
-        if (isAgentTerminal(updatedTerminal) && !isAgentReady(updatedTerminal.agentState)) {
+        const updatedAgentState = isPtyPanel(updatedTerminal) ? updatedTerminal.agentState : undefined;
+        if (isAgentTerminal(updatedTerminal) && !isAgentReady(updatedAgentState)) {
           logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
-            agentState: updatedTerminal.agentState,
+            agentState: updatedAgentState,
           });
           setError("Agent became busy again, injection aborted");
           // Clear stale progress on early abort

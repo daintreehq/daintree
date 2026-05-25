@@ -7,7 +7,7 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isDevPreviewPanel } from "@shared/types/panel";
+import { isDevPreviewPanel, isPtyPanel } from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -48,7 +48,7 @@ export const createTrashActions = (
     // Ephemeral panels (e.g. the help-panel assistant terminal) are bound to
     // a transient UI surface and must never linger in trash for the TTL window
     // — they bypass the trash flow and are removed outright.
-    if (terminal.ephemeral === true) {
+    if (isPtyPanel(terminal) && terminal.ephemeral === true) {
       get().removePanel(id);
       return;
     }

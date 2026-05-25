@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { MAX_GRID_TERMINALS } from "../panelRegistrySlice";
+import type { PtyPanelData, DevPreviewPanelData } from "@shared/types/panel";
 
 initBuiltInPanelKinds();
 
@@ -114,7 +115,7 @@ describe("Grid Capacity Enforcement", () => {
         devServerTerminalId: "dev-preview-pty-1",
       });
 
-      const panel = usePanelStore.getState().getTerminal("dev-preview-1");
+      const panel = usePanelStore.getState().getTerminal("dev-preview-1") as DevPreviewPanelData | undefined;
 
       expect(panel?.kind).toBe("dev-preview");
       expect(panel?.devServerStatus).toBe("running");
@@ -133,7 +134,7 @@ describe("Grid Capacity Enforcement", () => {
 
       const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const terminal = usePanelStore.getState().panelsById["docked-1"];
+      const terminal = usePanelStore.getState().panelsById["docked-1"] as PtyPanelData | undefined;
       expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
       expect(terminal?.isVisible).toBe(true);

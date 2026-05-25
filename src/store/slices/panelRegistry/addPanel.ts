@@ -1,6 +1,6 @@
 import type { TerminalRuntimeStatus } from "@/types";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -390,21 +390,22 @@ export const createAddPanelActions = (
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
       set((state) => {
         const existing = state.panelsById[id];
+        const existingPty = existing && isPtyPanel(existing) ? existing : undefined;
         const preservedTerminal: CarrierPanel =
           existing && isReconnect
             ? {
                 ...ptyTerminal,
-                agentState: ptyTerminal.agentState ?? existing.agentState,
-                lastStateChange: ptyTerminal.lastStateChange ?? existing.lastStateChange,
-                exitBehavior: ptyTerminal.exitBehavior ?? existing.exitBehavior,
+                agentState: ptyTerminal.agentState ?? existingPty?.agentState,
+                lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
+                exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
-                everDetectedAgent: ptyTerminal.everDetectedAgent || existing.everDetectedAgent,
+                everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
-                detectedAgentId: ptyTerminal.detectedAgentId ?? existing.detectedAgentId,
-                detectedProcessId: ptyTerminal.detectedProcessId ?? existing.detectedProcessId,
-                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existing.runtimeIdentity,
+                detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
+                detectedProcessId: ptyTerminal.detectedProcessId ?? existingPty?.detectedProcessId,
+                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existingPty?.runtimeIdentity,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
               }
@@ -439,20 +440,21 @@ export const createAddPanelActions = (
           // Update existing terminal in place (reconnection case or double hydration)
           logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
           // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
+          const existingPty2 = isPtyPanel(existing) ? existing : undefined;
           const preservedTerminal: CarrierPanel = isReconnect
             ? {
                 ...ptyTerminal,
-                agentState: ptyTerminal.agentState ?? existing.agentState,
-                lastStateChange: ptyTerminal.lastStateChange ?? existing.lastStateChange,
-                exitBehavior: ptyTerminal.exitBehavior ?? existing.exitBehavior,
+                agentState: ptyTerminal.agentState ?? existingPty2?.agentState,
+                lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
+                exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
-                everDetectedAgent: ptyTerminal.everDetectedAgent || existing.everDetectedAgent,
+                everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
-                detectedAgentId: ptyTerminal.detectedAgentId ?? existing.detectedAgentId,
-                detectedProcessId: ptyTerminal.detectedProcessId ?? existing.detectedProcessId,
-                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existing.runtimeIdentity,
+                detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,
+                detectedProcessId: ptyTerminal.detectedProcessId ?? existingPty2?.detectedProcessId,
+                runtimeIdentity: ptyTerminal.runtimeIdentity ?? existingPty2?.runtimeIdentity,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
               }
@@ -627,7 +629,8 @@ export const createAddPanelActions = (
     // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
     // lightweight chrome instead of mounting XtermAdapter.
     terminalStartupQueue.enqueue(async () => {
-      if (get().panelsById[id]?.spawnStatus !== "spawning") return;
+      const _p0 = get().panelsById[id];
+      if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
 
       try {
         let mergedEnv: Record<string, string> | undefined = options.env;
@@ -659,7 +662,8 @@ export const createAddPanelActions = (
           logWarn("[TerminalStore] Failed to fetch environment variables", { error });
         }
 
-        if (get().panelsById[id]?.spawnStatus !== "spawning") return;
+        const _p1 = get().panelsById[id];
+        if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
         const commandToExecute = options.skipCommandExecution ? undefined : options.command;
         await terminalClient.spawn({
@@ -695,7 +699,7 @@ export const createAddPanelActions = (
             orphaned = true;
             return state;
           }
-          if (current.spawnStatus !== "spawning") return state;
+          if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
           mountedPanel = true;
           return {
             panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
@@ -729,7 +733,7 @@ export const createAddPanelActions = (
         // the id up) or the panel was already removed, skip the cleanup —
         // otherwise we'd destroy someone else's panel.
         const current = get().panelsById[id];
-        if (current?.spawnStatus !== "spawning") return;
+        if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
         try {
           get().removePanel(id);
         } catch (removeError) {

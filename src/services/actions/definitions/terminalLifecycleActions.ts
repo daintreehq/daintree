@@ -6,6 +6,7 @@ import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionKind,
@@ -444,9 +445,10 @@ export function registerTerminalLifecycleActions(
       // shouldn't get swept up by a "close all" command.
       const idsToClose = state.panelIds.filter((id) => {
         const t = state.panelsById[id];
+        if (!t) return false;
+        const isEphemeral = isPtyPanel(t) && t.ephemeral === true;
         return (
-          t &&
-          t.ephemeral !== true &&
+          !isEphemeral &&
           t.location !== "trash" &&
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
@@ -481,7 +483,10 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targets = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t): t is NonNullable<typeof t> => t != null && t.ephemeral !== true);
+        .filter((t): t is NonNullable<typeof t> => {
+          if (t == null) return false;
+          return !(isPtyPanel(t) && t.ephemeral === true);
+        });
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
       if (!parseConfirmed(args) && runningAgents.length > 0) {
@@ -578,12 +583,13 @@ export function registerTerminalLifecycleActions(
         state.unwatchPanel(targetId);
       } else {
         const terminal = state.panelsById[targetId];
+        const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
         if (
-          terminal?.agentState === "completed" ||
-          terminal?.agentState === "waiting" ||
-          terminal?.agentState === "exited"
+          agentState === "completed" ||
+          agentState === "waiting" ||
+          agentState === "exited"
         ) {
-          fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
+          fireWatchNotification(targetId, terminal?.title ?? targetId, agentState);
         } else {
           state.watchPanel(targetId);
         }

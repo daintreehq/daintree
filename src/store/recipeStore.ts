@@ -1,7 +1,12 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { usePanelStore } from "./panelStore";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import {
+  isDevPreviewPanel,
+  isPtyPanel,
+  type DevPreviewPanelData,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
@@ -75,13 +80,25 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
   };
 }
 
-function terminalToRecipeTerminal(terminal: PtyPanelData): RecipeTerminal {
+function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData): RecipeTerminal {
   // Map kind to RecipeTerminalType.
   // Launch-intent only: recipes encode what the terminal was launched as, not
   // what runtime detection observed. Persisting `detectedAgentId` would corrupt
   // a recipe by baking ephemeral session state into a reusable template.
-  const type: RecipeTerminalType = terminal.launchAgentId ?? "terminal";
+  if (isDevPreviewPanel(terminal)) {
+    return {
+      type: "dev-preview",
+      title: terminal.title || undefined,
+      command: undefined,
+      devCommand: terminal.devCommand,
+      env: {},
+      exitBehavior: terminal.exitBehavior,
+      agentModelId: undefined,
+      agentLaunchFlags: undefined,
+    };
+  }
 
+  const type: RecipeTerminalType = terminal.launchAgentId ?? "terminal";
   const isAgent = isAgentRecipeType(type);
 
   return {
@@ -838,7 +855,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 
-    return terminalsToCapture.filter(isPtyPanel).map(terminalToRecipeTerminal);
+    return terminalsToCapture
+      .filter((t): t is PtyPanelData | DevPreviewPanelData => isPtyPanel(t) || isDevPreviewPanel(t))
+      .map(terminalToRecipeTerminal);
   },
 
   reset: () =>

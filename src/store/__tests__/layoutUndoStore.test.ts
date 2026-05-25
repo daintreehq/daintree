@@ -84,7 +84,7 @@ function getTerminals() {
 
 function firstTerminal() {
   const s = usePanelStore.getState();
-  return s.panelsById[s.panelIds[0]!]!;
+  return s.panelsById[s.panelIds[0]!]! as PtyPanelData;
 }
 
 describe("layoutUndoStore", () => {

@@ -1,6 +1,7 @@
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { CLOSE_CONFIRM_AGENT_STATES, coerceAgentState } from "@shared/types/agent";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { isPtyPanel } from "@shared/types/panel";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
 // `getNarrowPanel`'s parameter so this file doesn't import the deprecated
@@ -25,7 +26,7 @@ export function terminalHasRunningAgentSession(
 ): boolean {
   if (!terminal) return false;
   if (!isAgentTerminal(terminal)) return false;
-  const state = coerceAgentState(terminal.agentState);
+  const state = coerceAgentState(isPtyPanel(terminal) ? terminal.agentState : undefined);
   return state !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(state);
 }
 

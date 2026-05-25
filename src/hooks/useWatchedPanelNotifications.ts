@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import { isPtyPanel } from "@shared/types/panel";
 
 const NOTIFICATION_STAGGER_MS = 250;
 export const MAX_STAGGER_QUEUE_LENGTH = 50;
@@ -40,7 +41,7 @@ export function useWatchedPanelNotifications(): void {
     let prevAgentStates = new Map<string, string | undefined>(
       usePanelStore.getState().panelIds.map((id) => {
         const t = usePanelStore.getState().panelsById[id];
-        return [id, t?.agentState];
+        return [id, t && isPtyPanel(t) ? t.agentState : undefined];
       })
     );
     const staggerQueue: Array<() => void> = [];
@@ -72,7 +73,10 @@ export function useWatchedPanelNotifications(): void {
     const unsubscribe = usePanelStore.subscribe((state) => {
       const { watchedPanels, panelsById, panelIds } = state;
       const currentAgentStates = new Map<string, string | undefined>(
-        panelIds.map((id) => [id, panelsById[id]?.agentState])
+        panelIds.map((id) => {
+          const p = panelsById[id];
+          return [id, p && isPtyPanel(p) ? p.agentState : undefined];
+        })
       );
 
       for (const panelId of watchedPanels) {

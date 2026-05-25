@@ -45,6 +45,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
+import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -157,14 +158,16 @@ export function HelpPanel({
   } = useHelpPanelStore();
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
+  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   // Mirrors useGettingStartedChecklist.ts:45-55 — must stay in sync. Gates the
   // intro banner so it never reappears once the user has launched any assistant
   // (`everDetectedAgent` is persisted via panelStore so this survives restarts).
   const hasEverLaunchedAgent = usePanelStore((s) =>
     s.panelIds.some((id) => {
       const p = s.panelsById[id];
+      if (!p || !isPtyPanel(p)) return false;
       return (
-        Boolean(p?.launchAgentId) || Boolean(p?.detectedAgentId) || p?.everDetectedAgent === true
+        Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
       );
     })
   );
@@ -207,9 +210,11 @@ export function HelpPanel({
   // PTY can no longer receive dispatched commands), warning when the user has
   // since focused a different worktree than the one the session is bound to.
   // Danger wins — a dead target is the more urgent mismatch.
+  const pinnedTerminalPanelPty =
+    pinnedTerminalPanel && isPtyPanel(pinnedTerminalPanel) ? pinnedTerminalPanel : undefined;
   const isPinnedTerminalDead =
     pinnedContext?.terminalId != null &&
-    (!pinnedTerminalPanel || pinnedTerminalPanel.exitCode !== undefined);
+    (!pinnedTerminalPanel || pinnedTerminalPanelPty?.exitCode !== undefined);
   const isPinnedWorktreeDiverged =
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
@@ -302,13 +307,13 @@ export function HelpPanel({
   // idle so the close-confirm guard protects accumulated chat history
   // indefinitely.
   useEffect(() => {
-    if (terminalId && terminal?.agentState !== undefined && terminal.agentState !== "idle") {
+    if (terminalId && terminalPty?.agentState !== undefined && terminalPty.agentState !== "idle") {
       const store = useHelpPanelStore.getState();
       if (store.terminalId === terminalId) {
         markConversationStarted();
       }
     }
-  }, [terminalId, terminal?.agentState, markConversationStarted]);
+  }, [terminalId, terminalPty?.agentState, markConversationStarted]);
 
   // React to a Settings agent change while a session is already bound.
   // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice
@@ -336,7 +341,7 @@ export function HelpPanel({
     if (prevPreferredAgentIdRef.current === preferredAgentId) return;
     prevPreferredAgentIdRef.current = preferredAgentId;
     const shouldConfirm =
-      (terminal?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminal.agentState)) ||
+      (terminalPty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
       conversationTouched;
     if (shouldConfirm) {
       // The dialog title and confirm action both read live `preferredAgentId`,
@@ -351,7 +356,7 @@ export function HelpPanel({
     preferredAgentId,
     terminalId,
     agentId,
-    terminal?.agentState,
+    terminalPty?.agentState,
     conversationTouched,
     showAgentSwitchConfirm,
   ]);
@@ -408,7 +413,7 @@ export function HelpPanel({
         // trust the bar's internal rAF to take focus when its ref is present
         // — no xterm fallback in that branch, otherwise CodeMirror would
         // steal focus from xterm one frame later and produce a focus flicker.
-        if (terminalId && terminal && terminal.spawnStatus !== "missing-cli") {
+        if (terminalId && terminal && terminalPty?.spawnStatus !== "missing-cli") {
           if (showHybridInputBar && inputBarRef.current) {
             inputBarRef.current.focusWithCursorAtEnd();
             return;
@@ -509,7 +514,7 @@ export function HelpPanel({
   // Confirm only when there's something to lose — a working agent or a
   // conversation the user has actually engaged with.
   const shouldConfirmNewSession =
-    (terminal?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminal.agentState)) ||
+    (terminalPty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
     conversationTouched;
 
   const handleNewSession = useCallback(() => {
@@ -598,7 +603,7 @@ export function HelpPanel({
   }, [isOpen, terminal]);
 
   const showTerminal = terminalId && terminal;
-  const isMissingCli = showTerminal && terminal?.spawnStatus === "missing-cli";
+  const isMissingCli = showTerminal && terminalPty?.spawnStatus === "missing-cli";
 
   return (
     <aside
@@ -649,7 +654,7 @@ export function HelpPanel({
       />
 
       <HelpPanelHeader
-        agentState={terminal?.agentState}
+        agentState={terminalPty?.agentState}
         canStartNewSession={Boolean(terminalId && agentId)}
         onNewSession={handleNewSession}
         onOpenDocs={handleOpenAssistantDocs}
@@ -696,7 +701,7 @@ export function HelpPanel({
                     terminalId={terminalId}
                     launchAgentId={agentId ?? undefined}
                     getRefreshTier={getRefreshTier}
-                    cwd={terminal.cwd}
+                    cwd={terminalPty?.cwd}
                     hasBottomBar={showHybridInputBar}
                   />
                 </Suspense>
@@ -706,13 +711,13 @@ export function HelpPanel({
                   <LazyHybridInputBar
                     ref={inputBarRef}
                     terminalId={terminalId}
-                    cwd={terminal?.cwd ?? ""}
+                    cwd={terminalPty?.cwd ?? ""}
                     agentId={effectiveAgentId}
-                    agentHasLifecycleEvent={terminal?.stateChangeTrigger !== undefined}
-                    agentState={terminal?.agentState}
-                    disabled={terminal?.isInputLocked === true}
+                    agentHasLifecycleEvent={terminalPty?.stateChangeTrigger !== undefined}
+                    agentState={terminalPty?.agentState}
+                    disabled={terminalPty?.isInputLocked === true}
                     onSend={({ text }) => {
-                      if (terminal?.isInputLocked === true) return;
+                      if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
@@ -722,7 +727,7 @@ export function HelpPanel({
                       });
                     }}
                     onSendKey={(key) => {
-                      if (terminal?.isInputLocked === true) return;
+                      if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
                       terminalClient.sendKey(terminalId, key);
                     }}

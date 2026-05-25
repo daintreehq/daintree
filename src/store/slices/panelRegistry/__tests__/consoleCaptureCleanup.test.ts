@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { PanelInstance } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -91,7 +92,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
       },
       panelIds: [panelId],
     });
@@ -128,7 +129,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
       },
       panelIds: [panelId],
     });
@@ -166,7 +167,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
         "browser-b": {
           id: "browser-b",
           kind: "browser",
@@ -175,7 +176,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
       },
       panelIds: ["browser-a", "browser-b"],
     });
@@ -220,6 +221,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
         [panelId]: {
           id: panelId,
           title: "Shell",
+                    kind: "terminal" as const,
           cwd: "/test",
           cols: 80,
           rows: 24,

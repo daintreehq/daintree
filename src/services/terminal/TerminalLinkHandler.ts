@@ -4,6 +4,7 @@ import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browse
 import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 import { logError } from "@/utils/logger";
+import { isPtyPanel } from "@shared/types/panel";
 
 export class TerminalLinkHandler {
   openLink(url: string, terminalId: string, event?: MouseEvent): void {
@@ -35,7 +36,7 @@ export class TerminalLinkHandler {
           kind: "browser",
           browserUrl: normalized.url,
           worktreeId: targetWorktreeId ?? undefined,
-          cwd: currentTerminal?.cwd ?? "",
+          cwd: (isPtyPanel(currentTerminal) ? currentTerminal.cwd : undefined) ?? "",
         });
       }
     } else {

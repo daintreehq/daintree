@@ -89,7 +89,7 @@ describe("browserActions adversarial", () => {
   it("browser.openExternal explicit url wins over stale store browserUrl", async () => {
     setPanelState({
       focusedId: "b1",
-      panelsById: { b1: { browserUrl: "https://stale.example" } },
+      panelsById: { b1: { kind: "browser", browserUrl: "https://stale.example" } },
     });
     const run = setupActions();
     await run("browser.openExternal", { url: "https://fresh.example" });
@@ -100,7 +100,7 @@ describe("browserActions adversarial", () => {
   it("browser.openExternal falls back to stored browserUrl when no explicit url is given", async () => {
     setPanelState({
       focusedId: "b1",
-      panelsById: { b1: { browserUrl: "https://stored.example" } },
+      panelsById: { b1: { kind: "browser", browserUrl: "https://stored.example" } },
     });
     const run = setupActions();
     await run("browser.openExternal");
@@ -111,7 +111,7 @@ describe("browserActions adversarial", () => {
   it("browser.openExternal throws when neither explicit url nor stored browserUrl exists", async () => {
     setPanelState({
       focusedId: "b1",
-      panelsById: { b1: {} },
+      panelsById: { b1: { kind: "browser" } },
     });
     const run = setupActions();
 
@@ -130,7 +130,7 @@ describe("browserActions adversarial", () => {
   it("browser.copyUrl writes to clipboard when url is derivable", async () => {
     setPanelState({
       focusedId: "b1",
-      panelsById: { b1: { browserUrl: "https://copy.example" } },
+      panelsById: { b1: { kind: "browser", browserUrl: "https://copy.example" } },
     });
     const run = setupActions();
     await run("browser.copyUrl");

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const mockSubmit = vi.fn().mockResolvedValue(undefined);
 const mockGracefulKill = vi.fn().mockResolvedValue(null);
@@ -234,7 +235,7 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     }
 
     // Check that agentSessionId was cleared
-    const terminal = usePanelStore.getState().panelsById["test-1"];
+    const terminal = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(terminal?.agentSessionId).toBeUndefined();
   });
 

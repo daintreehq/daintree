@@ -33,13 +33,9 @@ describe("getNarrowPanel", () => {
     expect(p?.kind).toBe("terminal");
   });
 
-  it("backfills the terminal discriminant for a no-kind legacy record", () => {
-    const noKind = panel("t", { kind: undefined });
-    const p = getNarrowPanel({ t: noKind }, "t");
-    expect(p?.kind).toBe("terminal");
-    // A fresh object so the union's literal `kind: "terminal"` holds at runtime.
-    expect(p).not.toBe(noKind);
-  });
+  // No-kind legacy records are no longer representable on the carrier
+  // (#8957 step 5 flipped `panelsById` to `Record<string, PanelInstance>`,
+  // which requires a discriminant). The backfill branch was removed.
 
   it("preserves identity for a record that already carries kind: terminal", () => {
     const withKind = panel("t");

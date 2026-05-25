@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { usePanelStore } from "@/store";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import type { BrowserHistory } from "@shared/types/browser";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { pushBrowserHistory } from "../Browser/historyUtils";
@@ -101,7 +102,10 @@ export function useDevPreviewLoadLifecycle({
   // re-apply overrides after cross-origin navigation without the load-listener
   // effect depending on these values (which would tear down/rebuild load timers
   // on every change). Updated on each render from the terminal store selector.
-  const terminal = usePanelStore((s) => s.getTerminal(id));
+  const terminal = usePanelStore((s) => {
+    const p = s.getTerminal(id);
+    return p && isDevPreviewPanel(p) ? p : undefined;
+  });
   const viewportPresetRef = useRef(terminal?.viewportPreset);
   viewportPresetRef.current = terminal?.viewportPreset;
   const viewportRotatedRef = useRef(terminal?.viewportRotated ?? false);
@@ -516,7 +520,10 @@ export function useDevPreviewLoadLifecycle({
         loadTimeoutRef.current = null;
       }
 
-      const saved = usePanelStore.getState().getTerminal(id)?.devPreviewScrollPosition;
+      const currentPanel = usePanelStore.getState().getTerminal(id);
+      const saved = currentPanel && isDevPreviewPanel(currentPanel)
+        ? currentPanel.devPreviewScrollPosition
+        : undefined;
       if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
         try {
           const loadedUrl = webview.getURL();
@@ -549,7 +556,10 @@ export function useDevPreviewLoadLifecycle({
         // dom-ready already fired before this listener attached. Run scroll
         // restore here so the position survives tab switches and other
         // re-renders that don't trigger another dom-ready.
-        const saved = usePanelStore.getState().getTerminal(id)?.devPreviewScrollPosition;
+        const currentPanel = usePanelStore.getState().getTerminal(id);
+        const saved = currentPanel && isDevPreviewPanel(currentPanel)
+          ? currentPanel.devPreviewScrollPosition
+          : undefined;
         if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
           if (existingUrl === saved.url) {
             webview

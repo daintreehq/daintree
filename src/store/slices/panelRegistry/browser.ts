@@ -1,6 +1,7 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import type { TerminalReconnectError } from "@/types";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { saveNormalized } from "./persistence";
 import { debounce } from "@/utils/debounce";
 
@@ -302,7 +303,7 @@ export const createBrowserActions = (
   setScrollbackRestoreError: (id, error) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
+      if (!terminal || !isPtyPanel(terminal)) return state;
 
       return {
         panelsById: {
@@ -316,7 +317,7 @@ export const createBrowserActions = (
   clearScrollbackRestoreError: (id) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
+      if (!terminal || !isPtyPanel(terminal)) return state;
       if (terminal.scrollbackRestoreError === undefined) return state;
 
       return {

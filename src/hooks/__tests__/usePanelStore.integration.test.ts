@@ -408,7 +408,7 @@ describe("Terminal Store Integration", () => {
 
     it("should update agent state", () => {
       const state = usePanelStore.getState();
-      const terminal = state.panelsById["term-1"]!;
+      const terminal = state.panelsById["term-1"] as PtyPanelData;
 
       usePanelStore.setState({
         panelsById: {
@@ -417,7 +417,7 @@ describe("Terminal Store Integration", () => {
         },
       });
 
-      const updated = usePanelStore.getState().panelsById["term-1"];
+      const updated = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
       expect(updated?.agentState).toBe("working");
     });
 
@@ -431,7 +431,7 @@ describe("Terminal Store Integration", () => {
 
       states.forEach((agentState) => {
         const curState = usePanelStore.getState();
-        const terminal = curState.panelsById["term-1"]!;
+        const terminal = curState.panelsById["term-1"] as PtyPanelData;
         usePanelStore.setState({
           panelsById: {
             ...curState.panelsById,
@@ -440,13 +440,13 @@ describe("Terminal Store Integration", () => {
         });
       });
 
-      const final = usePanelStore.getState().panelsById["term-1"];
+      const final = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
       expect(final?.agentState).toBe("completed");
     });
 
     it("should handle completed state", () => {
       const state = usePanelStore.getState();
-      const terminal = state.panelsById["term-1"]!;
+      const terminal = state.panelsById["term-1"] as PtyPanelData;
 
       usePanelStore.setState({
         panelsById: {
@@ -455,7 +455,7 @@ describe("Terminal Store Integration", () => {
         },
       });
 
-      const updated = usePanelStore.getState().panelsById["term-1"];
+      const updated = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
       expect(updated?.agentState).toBe("completed");
     });
   });
@@ -523,7 +523,7 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = usePanelStore.getState().panelsById["term-1"]!;
+      const terminal = usePanelStore.getState().panelsById["term-1"] as PtyPanelData;
       expect(terminal.launchAgentId).toBe("claude");
       expect(terminal.title).toBe("Claude Agent");
       expect(terminal.worktreeId).toBe("worktree-1");
@@ -553,7 +553,7 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = usePanelStore.getState().panelsById["term-1"]!;
+      const terminal = usePanelStore.getState().panelsById["term-1"] as PtyPanelData;
       expect(terminal.title).toBe("Updated Title");
       expect(terminal.cols).toBe(100);
       expect(terminal.rows).toBe(30);
