@@ -1,3 +1,4 @@
+import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { Cache } from "../../../../electron/utils/cache.js";
 import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
@@ -96,6 +97,24 @@ export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({
   defaultTTL: 60000,
 });
 
+/**
+ * Response cache for raw forge GraphQL queries, keyed by query + serialized
+ * variables. Restores the 60s TTL the legacy GitHub service layer had before
+ * the CodeForge migration moved all queries through `forgeProvider.runQuery`.
+ * Lives here (not in `forgeProvider.ts`) so `clearGitHubCaches()` drops it
+ * atomically with the other caches on a token or settings change.
+ */
+export const forgeQueryCache = new Cache<string, GraphQlQueryResponseData>({
+  defaultTTL: 60000,
+});
+
+/**
+ * In-flight singleflight map for forge GraphQL queries. Concurrent callers with
+ * an identical key join the same pending promise instead of issuing duplicate
+ * network requests. Entries are evicted on settlement by `runQuery`.
+ */
+export const forgeQueryInflight = new Map<string, Promise<GraphQlQueryResponseData>>();
+
 export function clearGitHubCaches(): void {
   etagCacheVersion++;
   repoContextCache.clear();
@@ -113,8 +132,16 @@ export function clearGitHubCaches(): void {
   branchListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
+  forgeQueryCache.clear();
+  forgeQueryInflight.clear();
   GitHubFirstPageCache.getInstance().clear();
   GitHubStatsCache.getInstance().clear();
+}
+
+/** Test-only reset for the forge query cache + in-flight map. */
+export function _resetForgeQueryCachesForTests(): void {
+  forgeQueryCache.clear();
+  forgeQueryInflight.clear();
 }
 
 export function truncateBody(body: string | null | undefined, maxLength = 150): string {
@@ -139,4 +166,9 @@ export function clearPRCaches(): void {
   branchListETagCache.clear();
   reviewThreadsCache.clear();
   prRequiredStatusCache.clear();
+  // PR queries (GET_PR, LIST_PRS, PR CI status, batch-branch) all flow through
+  // forgeProvider.runQuery, so a manual PR refresh must drop their forge cache
+  // entries too or it would serve stale state for up to the 60s TTL.
+  forgeQueryCache.clear();
+  forgeQueryInflight.clear();
 }

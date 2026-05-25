@@ -1,4 +1,5 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
+import { configure } from "safe-stable-stringify";
 import type {
   AuthValidation,
   CIStatus,
@@ -33,6 +34,7 @@ import {
   buildBatchBranchPRQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
@@ -213,7 +215,17 @@ function buildOrderBy(opts: ListOptions): { field: string; direction: string } {
   return { field, direction };
 }
 
-async function runQuery(
+// Deterministic stringify so equivalent variables produce one cache key
+// regardless of property insertion order across call sites.
+const stringifyVariables = configure({ bigint: false });
+
+// `\0` can't appear in a GraphQL document, so it can't be forged by a query
+// string that happens to contain the serialized variables.
+function buildCacheKey(query: string, variables: Record<string, unknown>): string {
+  return `${query}\0${stringifyVariables(variables) ?? ""}`;
+}
+
+async function dispatchQuery(
   query: string,
   variables: Record<string, unknown>,
   queryLabel: string
@@ -229,6 +241,37 @@ async function runQuery(
   } catch (error) {
     throw new Error(parseGitHubError(error), { cause: error });
   }
+}
+
+/**
+ * Sole GraphQL entry point. Serves a 60s response cache and coalesces
+ * concurrent identical queries through an in-flight singleflight map (both in
+ * `GitHubCaches.ts` so a token change clears them atomically). Errors are never
+ * cached — a transient failure must not block retries for the full TTL.
+ */
+async function runQuery(
+  query: string,
+  variables: Record<string, unknown>
+): Promise<GraphQlQueryResponseData> {
+  const key = buildCacheKey(query, variables);
+
+  const cached = forgeQueryCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const inflight = forgeQueryInflight.get(key);
+  if (inflight !== undefined) return inflight;
+
+  const request = dispatchQuery(query, variables)
+    .then((response) => {
+      forgeQueryCache.set(key, response);
+      return response;
+    })
+    .finally(() => {
+      forgeQueryInflight.delete(key);
+    });
+
+  forgeQueryInflight.set(key, request);
+  return request;
 }
 
 async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
