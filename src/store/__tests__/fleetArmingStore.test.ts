@@ -660,6 +660,18 @@ describe("fleetArmingStore", () => {
         )
       ).toBe(false);
     });
+
+    it("rejects non-PTY panel kinds (browser, dev-preview, review)", () => {
+      // Documents the isPtyPanel guard added in #8957 — the carrier now
+      // surfaces non-PTY panels via the narrowed PanelInstance union, and
+      // fleet predicates must drop them before checking PTY-specific fields.
+      const browser = makeAgentTerminal("a", { kind: "browser", hasPty: undefined });
+      const devPreview = makeAgentTerminal("a", { kind: "dev-preview", hasPty: undefined });
+      const review = makeAgentTerminal("a", { kind: "review", hasPty: undefined });
+      expect(isFleetArmEligible(browser)).toBe(false);
+      expect(isFleetArmEligible(devPreview)).toBe(false);
+      expect(isFleetArmEligible(review)).toBe(false);
+    });
   });
 
   describe("agent Fleet action eligibility", () => {
