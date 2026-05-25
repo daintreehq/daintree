@@ -58,6 +58,7 @@ export function IssueBadge({
   const prevIssueNumber = useRef<number | undefined>(undefined);
   const isColdTitleGap = !issueTitle && issueNumber !== prevIssueNumber.current;
   const showColdFallback = useDohertyGate(isColdTitleGap);
+  const showTooltipLoading = useDohertyGate(loading);
   useEffect(() => {
     prevIssueNumber.current = issueNumber;
   }, [issueNumber]);
@@ -145,7 +146,7 @@ export function IssueBadge({
       <TooltipContent side="right" align="start" className="p-3">
         {missingToken ? (
           <TokenMissingTooltip type="issue" />
-        ) : loading ? (
+        ) : showTooltipLoading ? (
           <TooltipLoading />
         ) : data ? (
           <IssueTooltipContent data={data} />

@@ -170,6 +170,8 @@ export function mapPRStates(state?: string): string[] {
   return ["OPEN"];
 }
 
+const inFlightPRTooltips = new Map<string, Promise<PRTooltipData | null>>();
+
 export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
   const client = GitHubAuth.createClient();
   if (!client) {
@@ -184,61 +186,78 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         return cached;
       }
 
+      const inFlight = inFlightPRTooltips.get(cacheKey);
+      if (inFlight) return inFlight;
+
       const requestedAt = Date.now();
-      const response = (await client(GET_PR_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        number: prNumber,
-        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-      })) as GraphQlQueryResponseData;
+      const promise = (async () => {
+        const response = (await client(GET_PR_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          number: prNumber,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
 
-      const pr = response?.repository?.pullRequest;
-      if (!pr) {
-        return null;
-      }
+        const pr = response?.repository?.pullRequest;
+        if (!pr) {
+          return null;
+        }
 
-      const author = pr.author as { login?: string; avatarUrl?: string } | null;
-      const assigneesData = pr.assignees as {
-        nodes?: Array<{ login?: string; avatarUrl?: string }>;
-      };
-      const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
-      const merged = pr.merged as boolean;
-      const rawState = pr.state as string;
+        const author = pr.author as { login?: string; avatarUrl?: string } | null;
+        const assigneesData = pr.assignees as {
+          nodes?: Array<{ login?: string; avatarUrl?: string }>;
+        };
+        const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+        const merged = pr.merged as boolean;
+        const rawState = pr.state as string;
 
-      let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-      if (merged) {
-        state = "MERGED";
-      }
+        let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+        if (merged) {
+          state = "MERGED";
+        }
 
-      const tooltipData: PRTooltipData = {
-        number: pr.number as number,
-        title: pr.title as string,
-        bodyExcerpt: truncateBody(pr.bodyText as string | null),
-        state,
-        isDraft: (pr.isDraft as boolean) ?? false,
-        createdAt: pr.createdAt as string,
-        author: {
-          login: author?.login ?? "unknown",
-          avatarUrl: author?.avatarUrl ?? "",
+        const tooltipData: PRTooltipData = {
+          number: pr.number as number,
+          title: pr.title as string,
+          bodyExcerpt: truncateBody(pr.bodyText as string | null),
+          state,
+          isDraft: (pr.isDraft as boolean) ?? false,
+          createdAt: pr.createdAt as string,
+          author: {
+            login: author?.login ?? "unknown",
+            avatarUrl: author?.avatarUrl ?? "",
+          },
+          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+            login: a.login ?? "unknown",
+            avatarUrl: a.avatarUrl ?? "",
+          })),
+          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+            name: l.name ?? "",
+            color: l.color ?? "",
+          })),
+        };
+
+        const existing = prTooltipWrittenAt.get(cacheKey);
+        if (existing === undefined || requestedAt >= existing) {
+          prTooltipCache.set(cacheKey, tooltipData);
+          prTooltipWrittenAt.set(cacheKey, requestedAt);
+        }
+        return tooltipData;
+      })();
+
+      inFlightPRTooltips.set(cacheKey, promise);
+      promise.then(
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
         },
-        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-          login: a.login ?? "unknown",
-          avatarUrl: a.avatarUrl ?? "",
-        })),
-        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-          name: l.name ?? "",
-          color: l.color ?? "",
-        })),
-      };
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
+        }
+      );
 
-      const existing = prTooltipWrittenAt.get(cacheKey);
-      if (existing === undefined || requestedAt >= existing) {
-        prTooltipCache.set(cacheKey, tooltipData);
-        prTooltipWrittenAt.set(cacheKey, requestedAt);
-      }
-      return tooltipData;
+      return promise;
     });
   } catch {
     return null;
@@ -337,6 +356,51 @@ function parseBatchRequiredChecksResponse(
   return out;
 }
 
+function prewarmPRTooltips(
+  owner: string,
+  repo: string,
+  nodes: Array<Record<string, unknown>>
+): void {
+  const requestedAt = Date.now();
+  for (const node of nodes) {
+    const num = node.number as number;
+    if (!num) continue;
+    const cacheKey = `${owner}/${repo}:${num}`;
+    const existing = prTooltipWrittenAt.get(cacheKey);
+    if (existing !== undefined && requestedAt < existing) continue;
+    const author = node.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = node.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const merged = node.merged as boolean;
+    const rawState = node.state as string;
+    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+    if (merged) state = "MERGED";
+    prTooltipCache.set(cacheKey, {
+      number: num,
+      title: node.title as string,
+      bodyExcerpt: truncateBody(node.bodyText as string | null),
+      state,
+      isDraft: (node.isDraft as boolean) ?? false,
+      createdAt: node.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    });
+    prTooltipWrittenAt.set(cacheKey, requestedAt);
+  }
+}
+
 export async function listPullRequests(
   options: GitHubListOptions
 ): Promise<GitHubListResponse<GitHubPR>> {
@@ -393,8 +457,11 @@ export async function listPullRequests(
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+        const filteredNodes = nodes.filter(Boolean);
 
-        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+
+        const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
           context,
           parsedItems,
@@ -430,8 +497,11 @@ export async function listPullRequests(
         const pullRequests = response?.repository?.pullRequests;
         const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (pullRequests?.totalCount as number) ?? undefined;
+        const filteredNodes = nodes.filter(Boolean);
 
-        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+
+        const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
           context,
           parsedItems,
