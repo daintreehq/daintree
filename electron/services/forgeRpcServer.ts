@@ -201,6 +201,8 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
       return invokeGetCIStatuses(impl, req.args);
     case "getRateLimit":
       return invokeGetRateLimit(impl);
+    case "clearPullRequestCaches":
+      return invokeClearPullRequestCaches(impl);
     default: {
       const exhaustive: never = req.method;
       throw new Error(`Unhandled forge RPC method: ${String(exhaustive)}`);
@@ -285,4 +287,9 @@ async function invokeGetCIStatuses(
 async function invokeGetRateLimit(impl: ForgeProviderImpl): Promise<RateLimitInfo | null> {
   if (!impl.getRateLimit) return null;
   return impl.getRateLimit();
+}
+
+async function invokeClearPullRequestCaches(impl: ForgeProviderImpl): Promise<null> {
+  await impl.clearPullRequestCaches?.();
+  return null;
 }

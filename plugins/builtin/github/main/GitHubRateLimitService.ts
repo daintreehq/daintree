@@ -1,6 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import { app } from "electron";
 // eager-import-allow: sync-fs calls (appendFileSync, existsSync, mkdirSync)
 // are gated behind DAINTREE_DEBUG_GITHUB_GRAPHQL=1 — never executed at import
 // time. The imports resolve three symbols that are only dereferenced inside
@@ -9,7 +8,7 @@ import type {
   GitHubRateLimitKind,
   GitHubRateLimitPayload,
 } from "../../../../shared/types/ipc/github.js";
-import { logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
+import { getLogDirectory, logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 // Buffer applied to GitHub's `x-ratelimit-reset` to absorb clock skew between
@@ -373,7 +372,7 @@ class GitHubRateLimitServiceImpl {
   ): void {
     if (process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL !== "1") return;
     try {
-      const dir = join(app.getPath("userData"), "debug");
+      const dir = join(getLogDirectory(), "..", "debug");
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }

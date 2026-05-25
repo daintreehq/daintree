@@ -35,7 +35,12 @@ import {
   buildBatchBranchPRQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
-import { forgeQueryCache, forgeQueryInflight, repoEventsETagCache } from "./GitHubCaches.js";
+import {
+  clearPRCaches,
+  forgeQueryCache,
+  forgeQueryInflight,
+  repoEventsETagCache,
+} from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
@@ -1001,6 +1006,10 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   getRateLimit: getRateLimitImpl,
+
+  clearPullRequestCaches(): void {
+    clearPRCaches();
+  },
 
   async getRepoActivityProbe(repo: RepoRef): Promise<{ freshnessToken: string }> {
     const token = GitHubAuth.getToken();

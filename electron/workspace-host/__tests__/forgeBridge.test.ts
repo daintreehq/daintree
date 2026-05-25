@@ -101,6 +101,25 @@ describe("ForgeBridge in-flight dedup", () => {
     expect(events).toHaveLength(2);
   });
 
+  it("sends provider PR cache clear over forge RPC", async () => {
+    const request = bridge.clearPullRequestCaches("ns");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      method: "clearPullRequestCaches",
+      namespacedId: "ns",
+      args: [],
+    });
+
+    bridge.handleResult({
+      forgeRequestId: events[0].forgeRequestId,
+      ok: true,
+      value: null,
+    });
+
+    await expect(request).resolves.toBeUndefined();
+  });
+
   it("dispose rejects deduped concurrent callers", async () => {
     const a = bridge.getPR("ns", repo, 1);
     const b = bridge.getPR("ns", repo, 1);

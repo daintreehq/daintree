@@ -242,6 +242,25 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     expect(getPR).toHaveBeenCalledTimes(2);
   });
 
+  it("dispatches clearPullRequestCaches to the provider", async () => {
+    const clearPullRequestCaches = vi.fn();
+    registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ clearPullRequestCaches }));
+    const { send, sent } = captureSender();
+
+    await dispatchForgeRpc(
+      {
+        forgeRequestId: "clear-1",
+        method: "clearPullRequestCaches",
+        namespacedId: NAMESPACED_ID,
+        args: [],
+      },
+      send
+    );
+
+    expect(clearPullRequestCaches).toHaveBeenCalledTimes(1);
+    expect(sent[0]).toMatchObject({ forgeRequestId: "clear-1", ok: true, value: null });
+  });
+
   it("waiter whose sender returns false receives an explicit error envelope", async () => {
     const getPR = vi.fn(async () => makePR({ number: 1 }));
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ getPR }));

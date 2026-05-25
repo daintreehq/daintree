@@ -437,6 +437,9 @@ export interface ForgeProviderImpl {
   // Host-visible rate-limit state, parsed from the provider's own transport.
   getRateLimit?(): Promise<RateLimitInfo>;
 
+  // Optional provider-owned cache invalidation used by explicit user refreshes.
+  clearPullRequestCaches?(): void | Promise<void>;
+
   /**
    * Optional. Capture a cheap, opaque freshness token for the repo's overall
    * activity, so a caller can skip an expensive list/stats refresh when nothing

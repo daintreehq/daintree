@@ -633,12 +633,15 @@ describe("GitHubRateLimitService", () => {
       const label = "TEST_QUERY";
       const debugDir = join("/mock/user/data", "debug");
       const logPath = join(debugDir, "github-graphql-costs.log");
+      let previousUserData: string | undefined;
 
       function setDebugEnv(value: string) {
         process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL = value;
       }
 
       beforeEach(() => {
+        previousUserData = process.env.DAINTREE_USER_DATA;
+        process.env.DAINTREE_USER_DATA = "/mock/user/data";
         delete process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL;
         mockedAppendFileSync.mockReset();
         mockedExistsSync.mockReset();
@@ -648,6 +651,11 @@ describe("GitHubRateLimitService", () => {
 
       afterEach(() => {
         delete process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL;
+        if (previousUserData === undefined) {
+          delete process.env.DAINTREE_USER_DATA;
+        } else {
+          process.env.DAINTREE_USER_DATA = previousUserData;
+        }
       });
 
       it("does not write when env var is unset", () => {

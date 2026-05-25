@@ -32,7 +32,7 @@ import type { RateLimitInfo } from "../shared/types/forge.js";
 import type { GitHubRateLimitPayload } from "../shared/types/ipc/github.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
-import { gitHubRateLimitService } from "./services/github/index.js";
+import { gitHubRateLimitService } from "./services/github/GitHubRateLimitService.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";

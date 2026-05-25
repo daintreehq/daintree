@@ -1,5 +1,4 @@
 import { events } from "./events.js";
-import { clearPRCaches } from "./GitHubService.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -415,6 +414,19 @@ class PullRequestService {
     this.disposeLoaders();
   }
 
+  private async clearProviderPullRequestCaches(): Promise<void> {
+    const providerId = this.providerNamespacedId;
+    if (!providerId) return;
+    try {
+      await getForgeBridge().clearPullRequestCaches(providerId);
+    } catch (error) {
+      logDebug("PullRequestService provider cache clear failed", {
+        providerId,
+        error: formatErrorMessage(error, "Provider cache clear failed"),
+      });
+    }
+  }
+
   /**
    * Build the provider-scoped coalescers. Each loader's batch function prefers
    * the optional `batchLookups` capability (one round-trip for many keys) and
@@ -647,7 +659,6 @@ class PullRequestService {
     this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
     this.setDetectionState(false);
-    clearPRCaches();
     // Force a full re-detect cycle so already-resolved worktrees re-query
     // dynamic PR fields (state, CI status). Without this, checkForPRs() skips
     // resolved worktrees and only the 90s revalidation timer would refresh
@@ -662,6 +673,7 @@ class PullRequestService {
     // a wrong-repo PR to a worktree after refresh.
     this.invalidateProvider();
     await this.resolveProvider();
+    await this.clearProviderPullRequestCaches();
     // Manual refresh is an explicit "I want fresh data now" — bypass the 5s
     // floor by clearing the throttle clock before the direct checkForPRs().
     this.lastCheckAt = Number.NEGATIVE_INFINITY;

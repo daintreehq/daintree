@@ -90,6 +90,9 @@ function makeMockBridge(impl: ForgeProviderImpl) {
       return impl.batchLookups.getCIStatuses(repo, prNumbers);
     }),
     getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
+    clearPullRequestCaches: vi.fn(async (_id: string) => {
+      await impl.clearPullRequestCaches?.();
+    }),
     handleResult: vi.fn(),
     // Default to lease-granted so existing tests (single-window assumption)
     // behave exactly as they did before the cross-window lease landed.
@@ -268,6 +271,25 @@ describe("PullRequestService", () => {
     expect(detected[0].issueNumber).toBeUndefined();
 
     unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("clears provider PR caches through the forge bridge on manual refresh", async () => {
+    mockForgeProviderResolved();
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(lastMockBridge?.clearPullRequestCaches).toHaveBeenCalledWith("daintree.github.github");
+
     pullRequestService.destroy();
   });
 

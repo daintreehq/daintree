@@ -139,6 +139,10 @@ export class ForgeBridge {
     return this.invoke<RateLimitInfo | null>("getRateLimit", namespacedId, []);
   }
 
+  clearPullRequestCaches(namespacedId: string): Promise<void> {
+    return this.invoke<null>("clearPullRequestCaches", namespacedId, []).then(() => undefined);
+  }
+
   /**
    * Called by the workspace-host's port message handler whenever a
    * `forge:rpc-result` arrives. Resolves or rejects the pending promise

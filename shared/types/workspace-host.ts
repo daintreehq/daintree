@@ -478,7 +478,8 @@ export type ForgeRpcMethod =
   | "getIssue"
   | "getCIStatus"
   | "getCIStatuses"
-  | "getRateLimit";
+  | "getRateLimit"
+  | "clearPullRequestCaches";
 
 /** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */
 export interface ForgeResolveProviderResult {
