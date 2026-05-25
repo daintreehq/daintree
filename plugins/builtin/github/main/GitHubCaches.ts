@@ -12,6 +12,7 @@ import type {
   PRTooltipData,
 } from "../../../../shared/types/github.js";
 import type { RepoContext, RepoStats, RepoStatsAndPageSnapshot } from "./types.js";
+import type { Issue, PR, Page } from "../../../../shared/types/forge.js";
 
 export const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
 export const repoStatsCache = new Cache<string, RepoStats>({ defaultTTL: 60000 });
@@ -19,6 +20,18 @@ export const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>
   defaultTTL: 60000,
 });
 export const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
+
+/**
+ * Forge-shaped list caches. The forge provider returns `Page<Issue>` /
+ * `Page<PR>` (normalized), which is a different shape from the legacy
+ * `GitHubListResponse` held by {@link issueListCache} / {@link prListCache} —
+ * so the forge path needs its own 60s caches rather than sharing them. Cleared
+ * alongside the legacy list caches in {@link clearGitHubCaches} /
+ * {@link clearPRCaches}.
+ */
+export const forgeIssueListCache = new Cache<string, Page<Issue>>({ defaultTTL: 60000 });
+export const forgePRListCache = new Cache<string, Page<PR>>({ defaultTTL: 60000 });
+
 export const projectHealthCache = new Cache<string, unknown>({ defaultTTL: 60000 });
 export const issueTooltipWrittenAt = new Map<string, number>();
 export const issueTooltipCache = new Cache<string, IssueTooltipData>({
@@ -157,6 +170,28 @@ export const forgeQueryCache = new Cache<string, GraphQlQueryResponseData>({
  */
 export const forgeQueryInflight = new Map<string, Promise<GraphQlQueryResponseData>>();
 
+/**
+ * Write a PR tooltip entry behind the ownership-token guard. A later write only
+ * wins if its `requestedAt` is at least as recent as the last recorded write,
+ * so a slow in-flight response can't clobber a fresher one. Shared by every
+ * path that pre-warms the tooltip cache (`getPRTooltip`, the branch-PR batch in
+ * `GitHubPRDiscovery`, and the forge provider's `findPRsByBranches`).
+ */
+export function writePRTooltip(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  tooltipData: PRTooltipData,
+  requestedAt: number
+): void {
+  const cacheKey = `${owner}/${repo}:${prNumber}`;
+  const existing = prTooltipWrittenAt.get(cacheKey);
+  if (existing === undefined || requestedAt >= existing) {
+    prTooltipCache.set(cacheKey, tooltipData);
+    prTooltipWrittenAt.set(cacheKey, requestedAt);
+  }
+}
+
 export function clearGitHubCaches(): void {
   etagCacheVersion++;
   repoContextCache.clear();
@@ -170,6 +205,8 @@ export function clearGitHubCaches(): void {
   repoEventsLastProbeAt.clear();
   issueListCache.clear();
   prListCache.clear();
+  forgeIssueListCache.clear();
+  forgePRListCache.clear();
   issueTooltipCache.clear();
   issueTooltipWrittenAt.clear();
   prTooltipCache.clear();
@@ -201,6 +238,7 @@ export function truncateBody(body: string | null | undefined, maxLength = 150): 
 export function clearPRCaches(): void {
   etagCacheVersion++;
   prListCache.clear();
+  forgePRListCache.clear();
   // The snapshot embeds the first-page PR list and the probe gates whether it
   // is served — both can resurface a stale PR list after a refresh, so they
   // must drop with the PR caches. `velocityCache` is repo-level metadata on a

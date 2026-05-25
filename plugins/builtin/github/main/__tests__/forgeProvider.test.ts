@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
+import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
 
 const mockGraphQLClient = vi.fn();
 const mockFetchActivityProbe = vi.fn();
+const mockShouldBlockRequest = vi.fn(
+  (_resource?: string): ShouldBlockResult => ({ blocked: false, reason: null })
+);
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
@@ -21,6 +25,7 @@ vi.mock("../GitHubRateLimitService.js", () => ({
   gitHubRateLimitService: {
     updateFromGraphQL: vi.fn(),
     getState: vi.fn(() => ({ blocked: false })),
+    shouldBlockRequest: (resource?: string) => mockShouldBlockRequest(resource),
   },
 }));
 
@@ -33,7 +38,11 @@ import {
   _resetForgeQueryCachesForTests,
   clearGitHubCaches,
   clearPRCaches,
+  forgeIssueListCache,
+  forgePRListCache,
   forgeQueryCache,
+  prRequiredStatusCache,
+  prTooltipCache,
 } from "../GitHubCaches.js";
 import { GitHubAuth } from "../GitHubAuth.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
@@ -42,8 +51,12 @@ const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawDat
 
 // runQuery caches + coalesces across all provider methods, so every suite must
 // start from a clean cache or call-count assertions become order-dependent.
+// `clearGitHubCaches` covers every forge cache (forge query, list, tooltip,
+// required-status) atomically, so the per-suite reset just calls it.
 beforeEach(() => {
+  clearGitHubCaches();
   _resetForgeQueryCachesForTests();
+  mockShouldBlockRequest.mockReturnValue({ blocked: false, reason: null });
 });
 
 function makePRNode(
@@ -223,6 +236,19 @@ function makeIssueResponse(number: number) {
   };
 }
 
+function prListResponse(totalCount?: number) {
+  return {
+    repository: {
+      pullRequests: {
+        nodes: [makePRNode(1, "feature/a")],
+        pageInfo: { hasNextPage: false, endCursor: null },
+        ...(totalCount !== undefined ? { totalCount } : {}),
+      },
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
 describe("runQuery cache + in-flight dedup", () => {
   beforeEach(() => {
     mockGraphQLClient.mockReset();
@@ -357,6 +383,270 @@ describe("listPRs reviewDecision", () => {
 
     const page = await githubForgeProvider.listPRs(repo, {});
     expect(page.items[0].reviewDecision).toBeUndefined();
+  });
+});
+
+function issueListResponse(totalCount?: number) {
+  return {
+    repository: {
+      issues: {
+        nodes: [
+          {
+            number: 5,
+            title: "Issue 5",
+            bodyText: "body",
+            state: "OPEN",
+            url: "https://github.com/owner/repo/issues/5",
+            author: { login: "user", avatarUrl: "" },
+            assignees: { nodes: [] },
+            labels: { nodes: [] },
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: "2025-01-01T00:00:00Z",
+            closedAt: null,
+          },
+        ],
+        pageInfo: { hasNextPage: false, endCursor: null },
+        ...(totalCount !== undefined ? { totalCount } : {}),
+      },
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
+function ciResponse(state = "SUCCESS") {
+  return {
+    repository: {
+      pullRequest: {
+        commits: {
+          nodes: [
+            {
+              commit: {
+                statusCheckRollup: {
+                  state,
+                  contexts: { nodes: [], pageInfo: { hasNextPage: false } },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
+describe("listPRs caching", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("serves a warm cache entry without issuing a second query", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+
+    const first = await githubForgeProvider.listPRs(repo, { state: "open" });
+    const second = await githubForgeProvider.listPRs(repo, { state: "open" });
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(first.items[0]?.number).toBe(1);
+    expect(second.items[0]?.number).toBe(1);
+  });
+
+  it("coalesces concurrent identical calls into a single query", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listPRs(repo, { state: "open" }),
+      githubForgeProvider.listPRs(repo, { state: "open" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a.items[0]?.number).toBe(1);
+    expect(b.items[0]?.number).toBe(1);
+  });
+
+  it("bypassCache skips the warm cache and refetches, then repopulates it", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    await githubForgeProvider.listPRs(repo, { state: "open", bypassCache: true });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+
+    // The bypass result repopulated the cache, so a following plain read hits it.
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes the cache entry under the forge list cache key", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBeDefined();
+  });
+
+  it("a superseded slow fetch does not clobber a newer bypass result", async () => {
+    let resolveP1!: (v: unknown) => void;
+    const p1 = new Promise((r) => {
+      resolveP1 = r;
+    });
+    mockGraphQLClient
+      .mockReturnValueOnce(p1) // P1: normal call, left hanging
+      .mockResolvedValueOnce({
+        repository: {
+          pullRequests: {
+            nodes: [makePRNode(42, "feature/a")],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      });
+
+    const call1 = githubForgeProvider.listPRs(repo, { state: "open" });
+    // Let the deferred dedupe microtask register P1 as the in-flight entry.
+    await Promise.resolve();
+    const call2 = githubForgeProvider.listPRs(repo, { state: "open", bypassCache: true });
+    await call2; // P2 (bypass) resolves with #42 and writes the cache.
+
+    resolveP1({
+      repository: {
+        pullRequests: {
+          nodes: [makePRNode(17, "feature/a")],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await call1; // P1 resolves with stale #17 but is superseded → must not write.
+
+    const after = await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(after.items[0]?.number).toBe(42);
+  });
+
+  it("evicts a rejected in-flight promise so the next call retries", async () => {
+    mockGraphQLClient
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(prListResponse());
+
+    await expect(githubForgeProvider.listPRs(repo, { state: "open" })).rejects.toThrow();
+    const ok = await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(ok.items[0]?.number).toBe(1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates the repo stats count on a first-page open list with a totalCount", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse(42));
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    // updateRepoStatsCount wrote the open PR count into the stats cache.
+    // (Asserted indirectly: a cursored page must NOT update it.)
+    mockGraphQLClient.mockResolvedValue(prListResponse(99));
+    await githubForgeProvider.listPRs(repo, { state: "open", cursor: "next" });
+    // No throw and distinct cache keys — cursored result cached separately.
+    expect(forgePRListCache.get("pr:owner/repo:open::created:next")).toBeDefined();
+  });
+});
+
+describe("listIssues caching", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("serves a warm cache entry without a second query", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    const second = await githubForgeProvider.listIssues(repo, { state: "open" });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(second.items[0]?.number).toBe(5);
+    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeDefined();
+  });
+});
+
+describe("getPR tooltip pre-warm", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("writes a complete tooltip entry as a side effect of a detail fetch", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: {
+        pullRequest: {
+          ...makePRNode(7, "feature/x"),
+          assignees: { nodes: [{ login: "alice", avatarUrl: "a.png" }] },
+          labels: { nodes: [{ name: "bug", color: "ff0000" }] },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const pr = await githubForgeProvider.getPR(repo, 7);
+    expect(pr?.number).toBe(7);
+
+    const tooltip = prTooltipCache.get("owner/repo:7");
+    expect(tooltip).toBeDefined();
+    expect(tooltip?.assignees[0]?.login).toBe("alice");
+    expect(tooltip?.labels[0]?.name).toBe("bug");
+    expect(tooltip?.createdAt).toBe("2025-01-01T00:00:00.000Z");
+  });
+
+  it("coalesces concurrent identical detail fetches", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: { pullRequest: makePRNode(7, "feature/x") },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await Promise.all([githubForgeProvider.getPR(repo, 7), githubForgeProvider.getPR(repo, 7)]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getCIStatus caching", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("serves the second call from the required-status cache", async () => {
+    mockGraphQLClient.mockResolvedValue(ciResponse());
+    const first = await githubForgeProvider.getCIStatus(repo, 3);
+    const second = await githubForgeProvider.getCIStatus(repo, 3);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(prRequiredStatusCache.get("owner/repo:3")).toBeDefined();
+  });
+
+  it("coalesces concurrent identical CI lookups", async () => {
+    mockGraphQLClient.mockResolvedValue(ciResponse());
+    await Promise.all([
+      githubForgeProvider.getCIStatus(repo, 3),
+      githubForgeProvider.getCIStatus(repo, 3),
+    ]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("findPRsByBranches rate-limit gate + pre-warm", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("skips the network entirely when rate-limited and returns an empty Map", async () => {
+    mockShouldBlockRequest.mockReturnValue({
+      blocked: true,
+      reason: "secondary",
+      resumeAt: Date.now() + 1000,
+    } as ShouldBlockResult);
+    const result = await githubForgeProvider.findPRsByBranches!(repo, ["feature/a"]);
+    expect(result.size).toBe(0);
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+  });
+
+  it("pre-warms the PR tooltip cache for resolved branches", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      b0: {
+        pullRequests: {
+          nodes: [
+            {
+              ...makePRNode(11, "feature/a"),
+              assignees: { nodes: [{ login: "bob", avatarUrl: "" }] },
+              labels: { nodes: [{ name: "feat", color: "00ff00" }] },
+            },
+          ],
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    await githubForgeProvider.findPRsByBranches!(repo, ["feature/a"]);
+
+    const tooltip = prTooltipCache.get("owner/repo:11");
+    expect(tooltip?.assignees[0]?.login).toBe("bob");
+    expect(tooltip?.labels[0]?.name).toBe("feat");
   });
 });
 

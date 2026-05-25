@@ -8,10 +8,9 @@ import {
   prETagCache,
   branchListETagCache,
   repoPRListETagCache,
-  prTooltipCache,
-  prTooltipWrittenAt,
   truncateBody,
   getETagCacheVersion,
+  writePRTooltip,
 } from "./GitHubCaches.js";
 import type { GitHubPRCIStatus, PRTooltipData } from "../../../../shared/types/github.js";
 import type { PRCheckCandidate, PRCheckResult, BatchPRCheckResult, LinkedPR } from "./types.js";
@@ -414,12 +413,7 @@ function prewarmPRTooltipCache(
     const prNumber = result.pr?.number;
     const tooltipData = result.tooltipData;
     if (typeof prNumber !== "number" || !tooltipData) continue;
-    const cacheKey = `${owner}/${repo}:${prNumber}`;
-    const existing = prTooltipWrittenAt.get(cacheKey);
-    if (existing === undefined || requestedAt >= existing) {
-      prTooltipCache.set(cacheKey, tooltipData);
-      prTooltipWrittenAt.set(cacheKey, requestedAt);
-    }
+    writePRTooltip(owner, repo, prNumber, tooltipData, requestedAt);
   }
 }
 
