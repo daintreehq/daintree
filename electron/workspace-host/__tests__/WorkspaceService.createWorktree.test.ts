@@ -169,6 +169,7 @@ describe("WorkspaceService.createWorktree", () => {
 
   it("passes --no-track on issue-mode git add and emits success with the direct-built worktree id", async () => {
     const requestId = "test-request-123";
+    const expectedWorktreePath = path.resolve("/test/worktree");
     const options = {
       baseBranch: "main",
       newBranch: "feature/test",
@@ -190,7 +191,7 @@ describe("WorkspaceService.createWorktree", () => {
       "main",
     ]);
 
-    expect(waitForPathExists).toHaveBeenCalledWith("/test/worktree", {
+    expect(waitForPathExists).toHaveBeenCalledWith(expectedWorktreePath, {
       timeoutMs: 500,
       initialRetryDelayMs: 50,
       maxRetryDelayMs: 800,
@@ -205,7 +206,7 @@ describe("WorkspaceService.createWorktree", () => {
         type: "create-worktree-result",
         requestId: "test-request-123",
         success: true,
-        worktreeId: "/test/worktree",
+        worktreeId: expectedWorktreePath,
       })
     );
 
@@ -216,6 +217,7 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("coalesces concurrent duplicate create requests while the first git add is in flight", async () => {
+    const expectedWorktreePath = path.resolve("/test/worktree-duplicate");
     const options = {
       baseBranch: "main",
       newBranch: "feature/duplicate",
@@ -272,16 +274,16 @@ describe("WorkspaceService.createWorktree", () => {
         expect.objectContaining({
           requestId: "req-duplicate-a",
           success: true,
-          worktreeId: "/test/worktree-duplicate",
+          worktreeId: expectedWorktreePath,
         }),
         expect.objectContaining({
           requestId: "req-duplicate-b",
           success: true,
-          worktreeId: "/test/worktree-duplicate",
+          worktreeId: expectedWorktreePath,
         }),
       ])
     );
-    expect(service["monitors"].has("/test/worktree-duplicate")).toBe(true);
+    expect(service["monitors"].has(expectedWorktreePath)).toBe(true);
   });
 
   it("preserves issue-mode-only --no-track: useExistingBranch argv is unchanged", async () => {
@@ -303,7 +305,7 @@ describe("WorkspaceService.createWorktree", () => {
       "existing-branch",
     ]);
     expect(waitForPathExists).toHaveBeenCalledWith(
-      "/test/worktree2",
+      path.resolve("/test/worktree2"),
       expect.objectContaining({ timeoutMs: 500 })
     );
   });
@@ -330,7 +332,7 @@ describe("WorkspaceService.createWorktree", () => {
       "origin/main",
     ]);
     expect(waitForPathExists).toHaveBeenCalledWith(
-      "/test/worktree3",
+      path.resolve("/test/worktree3"),
       expect.objectContaining({ timeoutMs: 500 })
     );
   });
@@ -419,7 +421,7 @@ describe("WorkspaceService.createWorktree", () => {
     await flushAsyncTail();
 
     expect(mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
-    expect(service["monitors"].has("/test/worktree-fail")).toBe(false);
+    expect(service["monitors"].has(path.resolve("/test/worktree-fail"))).toBe(false);
     expect(invalidateSpy).not.toHaveBeenCalled();
     expect(listSpy).not.toHaveBeenCalled();
     expect(copySpy).not.toHaveBeenCalled();
@@ -520,7 +522,7 @@ describe("WorkspaceService.createWorktree", () => {
     await service.createWorktree(requestId, "/test/root", options);
 
     expect(monitorPresentAtEmission).toBe(true);
-    expect(service["monitors"].has("/test/worktree-sync")).toBe(true);
+    expect(service["monitors"].has(path.resolve("/test/worktree-sync"))).toBe(true);
   });
 
   it("reuses a stale local branch (no -b) when it exists locally and is not checked out in any worktree", async () => {
@@ -968,6 +970,7 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("creates the parent directory when it does not exist", async () => {
+    const expectedWorktreePath = path.resolve("/missing/parent/worktree");
     const fsModule = await import("fs");
     const fsPromisesModule = await import("fs/promises");
     vi.mocked(fsModule.existsSync).mockReturnValueOnce(false);
@@ -978,7 +981,9 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/missing/parent/worktree",
     });
 
-    expect(fsPromisesModule.mkdir).toHaveBeenCalledWith("/missing/parent", { recursive: true });
+    expect(fsPromisesModule.mkdir).toHaveBeenCalledWith(path.dirname(expectedWorktreePath), {
+      recursive: true,
+    });
     expect(mockSimpleGit.raw).toHaveBeenCalledWith([
       "worktree",
       "add",
@@ -994,7 +999,7 @@ describe("WorkspaceService.createWorktree", () => {
         type: "create-worktree-result",
         requestId: "req-no-parent",
         success: true,
-        worktreeId: "/missing/parent/worktree",
+        worktreeId: expectedWorktreePath,
       })
     );
   });
@@ -1065,6 +1070,42 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
+  it("normalizes absolute create paths before registering the new monitor", async () => {
+    const basePath = path.resolve("/test/root");
+    const rawPath = `${basePath}${path.sep}..${path.sep}worktree-normalized`;
+    const expectedPath = path.resolve(basePath, "..", "worktree-normalized");
+
+    await service.createWorktree("req-normalized-absolute", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/normalized",
+      path: rawPath,
+    });
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "worktree",
+      "add",
+      "-b",
+      "feature/normalized",
+      "--no-track",
+      "--end-of-options",
+      rawPath,
+      "main",
+    ]);
+    expect(waitForPathExists).toHaveBeenCalledWith(
+      expectedPath,
+      expect.objectContaining({ timeoutMs: 500 })
+    );
+    expect(service["monitors"].has(expectedPath)).toBe(true);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-normalized-absolute",
+        success: true,
+        worktreeId: expectedPath,
+      })
+    );
+  });
+
   it("emits a worktree-update before create-worktree-result so the renderer's store picks up the new worktree", async () => {
     // Regression guard for the bug where startWithoutGitStatus never emitted
     // an initial snapshot, leaving freshly-created worktrees invisible in the
@@ -1091,7 +1132,10 @@ describe("WorkspaceService.createWorktree", () => {
     // The emitted update must carry the correct worktree id.
     const updateCall = mockSendEvent.mock.calls[firstUpdateIndex][0];
     expect(updateCall.worktree).toEqual(
-      expect.objectContaining({ id: "/test/worktree-store", branch: "feature/store-sync" })
+      expect.objectContaining({
+        id: path.resolve("/test/worktree-store"),
+        branch: "feature/store-sync",
+      })
     );
   });
 });

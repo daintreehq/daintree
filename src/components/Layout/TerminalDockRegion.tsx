@@ -7,10 +7,11 @@ import { ContentDock } from "./ContentDock";
 import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
 export function TerminalDockRegion() {
-  const { shouldShowInLayout, isHydrated, hasDocked } = useDockRenderState();
+  const { shouldShowInLayout, isHydrated, hasDocked, hasStatus } = useDockRenderState();
   const dockRegionRef = useRef<HTMLElement>(null);
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "dock");
   const dockDensity = usePreferencesStore((state) => state.dockDensity);
+  const shouldInertDock = !hasDocked && !hasStatus;
 
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("dock", hasDocked);
@@ -35,7 +36,7 @@ export function TerminalDockRegion() {
       aria-label="Dock"
       // `inert` removes the empty dock from focus / a11y tree so screen
       // readers don't land on a dead-end landmark when nothing is docked.
-      inert={!hasDocked || undefined}
+      inert={shouldInertDock || undefined}
       data-macro-focus={isMacroFocused ? "true" : undefined}
       className="outline-hidden data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset"
     >

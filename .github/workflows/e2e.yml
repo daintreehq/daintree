@@ -87,8 +87,10 @@ jobs:
   # split their spec list across SHARD_TOTAL parallel runners via Playwright's
   # native `--shard`. A 39-minute serial Windows bucket becomes ~10min
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
-  # whole thing. core/online/nightly stay unsharded — online hits real APIs
-  # (3 specs), and nightly's leak heuristic depends on serialized launches
+  # whole thing. The heaviest Windows full-platform/full-worktree/full-panels buckets use
+  # extra slices so restart/persistence-heavy shards do not own enough serial
+  # tests to hit the job timeout. core/online/nightly stay unsharded —
+  # online hits real APIs (3 specs), and nightly's leak heuristic depends on serialized launches
   # (--workers=1); cross-runner sharding there would just add noise. A
   # single-file run (`test_file`) is one spec — no point sharding it.
   matrix-setup:
@@ -113,7 +115,25 @@ jobs:
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
           # the tuned starting point from #8053 (39min → ~10min on Windows).
+          # Windows full-platform contains restart/persistence-heavy tests
+          # that still form a >45m shard at 8 slices, so use 16 slices there.
+          # full-worktree/full-panels are lighter but still need more than the
+          # default 4.
           case "$SUITE" in
+            full-platform)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=16
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-worktree|full-panels)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=8
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
             full|full-*) SHARD_TOTAL=4 ;;
             *)           SHARD_TOTAL=1 ;;
           esac
@@ -142,13 +162,15 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: ${{ inputs.suite || 'core' }} (${{ matrix.name }}${{ matrix.shardTotal > 1 && format(' {0}/{1}', matrix.shard, matrix.shardTotal) || '' }})
-    # Sharding shrinks the per-runner unit of work, so a hung shard should
-    # fail fast and re-run cheaply rather than burn the old 180min ceiling
-    # (the "core (Windows) hung past 53min" failure mode from #8053). nightly
-    # is unsharded and its serialized leak suite legitimately runs long, so it
-    # keeps the generous ceiling; `full` (meta — all six buckets on one
-    # runner) gets a wider window than a single full-* shard.
-    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
+    # Sharding shrinks most full-* buckets, so a hung shard should fail fast
+    # and re-run cheaply rather than burn the old 180min ceiling (the "core
+    # (Windows) hung past 53min" failure mode from #8053). Windows
+    # full-terminal still contains a single serial recipes spec that Playwright
+    # cannot split across shards, so it keeps the standard 90min E2E window.
+    # nightly is unsharded and its serialized leak suite legitimately runs
+    # long, so it keeps the generous ceiling; `full` (meta — all six buckets on
+    # one runner) gets a wider window than a single full-* shard.
+    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || (inputs.suite == 'full-terminal' && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
 
     steps:
       - name: Harden Windows for Electron E2E
@@ -248,7 +270,7 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Build app
         run: npm run build

@@ -1628,7 +1628,7 @@ export class WorkspaceService {
       // Resolve before taking dirname so a relative `path` (rare, but allowed
       // through programmatic callers) is checked against the right parent
       // rather than against process.cwd.
-      const absoluteCreatePath = isAbsolute(path) ? path : pathResolve(rootPath, path);
+      const absoluteCreatePath = isAbsolute(path) ? pathResolve(path) : pathResolve(rootPath, path);
       const parentDir = dirname(absoluteCreatePath);
       if (!existsSync(parentDir)) {
         await mkdir(parentDir, { recursive: true });
@@ -1724,7 +1724,7 @@ export class WorkspaceService {
         ]);
       }
 
-      const absolutePath = isAbsolute(path) ? path : pathResolve(rootPath, path);
+      const absolutePath = isAbsolute(path) ? pathResolve(path) : pathResolve(rootPath, path);
       // 500ms is ample: git returns after the directory exists; the polling
       // loop gives 4-5 attempts (50/100/200/150ms) across the budget, which
       // covers APFS/NTFS/ext4 metadata flush latency without blocking the

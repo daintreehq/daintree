@@ -75,11 +75,12 @@ describe("ARIA page landmarks — issue #5416", () => {
       expect(source).not.toMatch(/aria-hidden="true"/);
     });
 
-    it("uses `inert` to hide the empty dock from focus / a11y tree", () => {
-      // When no panels are docked, the aside has no interactive descendants
-      // worth presenting as a landmark. `inert` removes it from the a11y
-      // tree and the focus chain without tripping `aria-hidden-focus`.
-      expect(source).toMatch(/inert=\{!hasDocked \|\| undefined\}/);
+    it("uses `inert` only when the dock has no interactive descendants", () => {
+      // When no panels are docked and no status affordances are visible, the
+      // aside is a dead-end landmark. Trash/waiting status controls must keep
+      // the dock interactive so pointer and keyboard users can restore panels.
+      expect(source).toMatch(/const shouldInertDock = !hasDocked && !hasStatus;/);
+      expect(source).toMatch(/inert=\{shouldInertDock \|\| undefined\}/);
     });
   });
 
