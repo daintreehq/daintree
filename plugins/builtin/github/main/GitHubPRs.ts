@@ -21,8 +21,12 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
-import { deriveRequiredCIStatus, normalizeRawState } from "./prRequiredCIStatus.js";
-import type { RollupContextNode } from "./prRequiredCIStatus.js";
+import {
+  deriveRequiredCIStatus,
+  deriveGlobalCIStatus,
+  normalizeRawState,
+} from "./prRequiredCIStatus.js";
+import type { RollupContextNode, GlobalCIDeriveInput } from "./prRequiredCIStatus.js";
 import type {
   GitHubPR,
   GitHubListOptions,
@@ -88,9 +92,49 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const isFork = headName && baseName ? headName !== baseName : undefined;
 
   const commitsData = node.commits as
-    | { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } | null } | null }> }
+    | {
+        nodes?: Array<{
+          commit?: {
+            statusCheckRollup?: { state?: string; contexts?: Record<string, unknown> } | null;
+          } | null;
+        }>;
+      }
     | undefined;
   const ciStatus = normalizeRawState(commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.state);
+
+  const reviewDecisionRaw = node.reviewDecision as string | null | undefined;
+  const reviewDecision =
+    reviewDecisionRaw === "APPROVED" ||
+    reviewDecisionRaw === "CHANGES_REQUESTED" ||
+    reviewDecisionRaw === "REVIEW_REQUIRED"
+      ? reviewDecisionRaw
+      : undefined;
+
+  const mergeStateStatusRaw = node.mergeStateStatus as string | null | undefined;
+  const validMergeStates = new Set([
+    "BEHIND",
+    "BLOCKED",
+    "CLEAN",
+    "DIRTY",
+    "HAS_HOOKS",
+    "UNKNOWN",
+    "UNSTABLE",
+  ]);
+  const mergeStateStatus =
+    mergeStateStatusRaw && validMergeStates.has(mergeStateStatusRaw.toUpperCase())
+      ? (mergeStateStatusRaw.toUpperCase() as GitHubPR["mergeStateStatus"])
+      : undefined;
+
+  const rollupContexts = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.contexts as
+    | GlobalCIDeriveInput
+    | undefined;
+  const globalDerived = deriveGlobalCIStatus({
+    checkRunCountsByState: rollupContexts?.checkRunCountsByState,
+    statusContextCountsByState: rollupContexts?.statusContextCountsByState,
+    checkRunCount: rollupContexts?.checkRunCount,
+    statusContextCount: rollupContexts?.statusContextCount,
+    mergeStateStatus,
+  });
 
   return {
     number: node.number as number,
@@ -108,6 +152,10 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
     ciStatus,
+    reviewDecision,
+    mergeStateStatus,
+    globalCIStatus: globalDerived.ciStatus,
+    globalCISummary: globalDerived.ciSummary,
     bodyText: (node.bodyText as string) || undefined,
   };
 }

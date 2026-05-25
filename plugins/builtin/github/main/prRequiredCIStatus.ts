@@ -1,4 +1,8 @@
-import type { GitHubPRCIStatus, GitHubPRCISummary } from "../../../../shared/types/github.js";
+import type {
+  GitHubPRCIStatus,
+  GitHubPRCISummary,
+  GitHubPRGlobalCISummary,
+} from "../../../../shared/types/github.js";
 
 // Failing CheckRun conclusions per GitHub schema. STALE is included because a stale required
 // run has not resolved to a passing state and must not be silently treated as success.
@@ -25,6 +29,12 @@ const PENDING_CHECK_STATUSES = new Set([
 
 // Pending StatusContext states
 const PENDING_STATUS_STATES = new Set(["PENDING", "EXPECTED"]);
+
+// Known non-failing, non-pending bucket states for check runs and status contexts.
+// Any state not in these sets or the failing/pending sets above is treated as
+// unclassifiable (conservative against future GitHub enum additions).
+const NON_FAILING_CHECK_STATES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"]);
+const NON_FAILING_STATUS_STATES = new Set(["SUCCESS"]);
 
 export interface RollupContextNode {
   __typename?: string;
@@ -140,4 +150,93 @@ export function deriveRequiredCIStatus(
   }
 
   return { ciStatus, ciSummary: summary };
+}
+
+export interface GlobalCIDeriveInput {
+  checkRunCountsByState?: Array<{ state?: string | null; count?: number | null }> | null;
+  statusContextCountsByState?: Array<{ state?: string | null; count?: number | null }> | null;
+  checkRunCount?: number | null;
+  statusContextCount?: number | null;
+  mergeStateStatus?: string | null;
+}
+
+/**
+ * Derive a global (non-required-filtered) CI status from the in-band aggregate
+ * scalars on {@code statusCheckRollup.contexts}. Returns {@code ciStatus: undefined}
+ * when the merge state is UNKNOWN (transient state on freshly-opened PRs).
+ */
+export function deriveGlobalCIStatus(input: GlobalCIDeriveInput): {
+  ciStatus: GitHubPRCIStatus | undefined;
+  ciSummary: GitHubPRGlobalCISummary | undefined;
+} {
+  if (input.mergeStateStatus === "UNKNOWN") {
+    return { ciStatus: undefined, ciSummary: undefined };
+  }
+
+  const checkRunCount = input.checkRunCount ?? 0;
+  const statusContextCount = input.statusContextCount ?? 0;
+
+  let failingCount = 0;
+  let pendingCount = 0;
+  let unknownCount = 0;
+
+  for (const bucket of input.checkRunCountsByState ?? []) {
+    const state = bucket?.state?.toUpperCase();
+    const count = bucket?.count ?? 0;
+    if (state && FAILING_CHECK_CONCLUSIONS.has(state)) {
+      failingCount += count;
+    } else if (state && PENDING_CHECK_STATUSES.has(state)) {
+      pendingCount += count;
+    } else if (state && !NON_FAILING_CHECK_STATES.has(state)) {
+      unknownCount += count;
+    }
+  }
+
+  for (const bucket of input.statusContextCountsByState ?? []) {
+    const state = bucket?.state?.toUpperCase();
+    const count = bucket?.count ?? 0;
+    if (state && FAILING_STATUS_STATES.has(state)) {
+      failingCount += count;
+    } else if (state && PENDING_STATUS_STATES.has(state)) {
+      pendingCount += count;
+    } else if (state && !NON_FAILING_STATUS_STATES.has(state)) {
+      unknownCount += count;
+    }
+  }
+
+  // BLOCKED is broader than CI — it can be triggered by required reviews,
+  // stale branches, or other branch-protection rules with zero CI failures.
+  // Treating it as FAILURE is a conservative signal that "something is wrong";
+  // consumers should inspect failingCount to distinguish CI blocks from
+  // non-CI blocks (failingCount === 0 means the block is not from CI).
+  if (input.mergeStateStatus === "BLOCKED") {
+    return {
+      ciStatus: "FAILURE",
+      ciSummary: { checkRunCount, statusContextCount, failingCount, pendingCount },
+    };
+  }
+
+  const hasCounts = checkRunCount + statusContextCount > 0;
+  const hasBuckets =
+    (input.checkRunCountsByState?.length ?? 0) > 0 ||
+    (input.statusContextCountsByState?.length ?? 0) > 0;
+
+  let ciStatus: GitHubPRCIStatus | undefined;
+  if (failingCount > 0) {
+    ciStatus = "FAILURE";
+  } else if (pendingCount > 0) {
+    ciStatus = "PENDING";
+  } else if (hasCounts && hasBuckets && unknownCount === 0) {
+    // Only declare SUCCESS when all buckets are classified — unknown
+    // bucket states from future GitHub enum additions must not produce
+    // a false-green. Counts without bucket breakdowns are also unclassifiable.
+    ciStatus = "SUCCESS";
+  }
+
+  const ciSummary: GitHubPRGlobalCISummary | undefined =
+    ciStatus !== undefined
+      ? { checkRunCount, statusContextCount, failingCount, pendingCount }
+      : undefined;
+
+  return { ciStatus, ciSummary };
 }
