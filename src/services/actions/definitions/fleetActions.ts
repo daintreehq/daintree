@@ -22,15 +22,17 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient, terminalClient } from "@/clients";
 import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { FleetSavedScope, TerminalInstance } from "@shared/types";
+import type { FleetSavedScope } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 interface ArmedSnapshot {
-  terminalTargets: TerminalInstance[];
-  waitingAgentTargets: TerminalInstance[];
-  interruptAgentTargets: TerminalInstance[];
-  restartAgentTargets: TerminalInstance[];
+  terminalTargets: PtyPanelData[];
+  waitingAgentTargets: PtyPanelData[];
+  interruptAgentTargets: PtyPanelData[];
+  restartAgentTargets: PtyPanelData[];
 }
 
 /**
@@ -42,16 +44,16 @@ interface ArmedSnapshot {
  */
 function snapshotArmed(): ArmedSnapshot {
   const armedIds = useFleetArmingStore.getState().armedIds;
-  const terminalTargets: TerminalInstance[] = [];
-  const waitingAgentTargets: TerminalInstance[] = [];
-  const interruptAgentTargets: TerminalInstance[] = [];
-  const restartAgentTargets: TerminalInstance[] = [];
+  const terminalTargets: PtyPanelData[] = [];
+  const waitingAgentTargets: PtyPanelData[] = [];
+  const interruptAgentTargets: PtyPanelData[] = [];
+  const restartAgentTargets: PtyPanelData[] = [];
   if (armedIds.size === 0) {
     return { terminalTargets, waitingAgentTargets, interruptAgentTargets, restartAgentTargets };
   }
   const { panelsById } = usePanelStore.getState();
   for (const id of armedIds) {
-    const t = panelsById[id];
+    const t = getNarrowPanel(panelsById, id);
     if (!isFleetArmEligible(t)) continue;
     terminalTargets.push(t);
     if (isFleetWaitingAgentEligible(t)) waitingAgentTargets.push(t);
@@ -69,11 +71,11 @@ function parseConfirmed(args: unknown): boolean {
   return confirmed === true;
 }
 
-function countSessionLoss(targets: TerminalInstance[]): number {
+function countSessionLoss(targets: PtyPanelData[]): number {
   return targets.filter((t) => Boolean(t.agentSessionId)).length;
 }
 
-function requestConfirmation(kind: FleetPendingActionKind, targets: TerminalInstance[]): void {
+function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData[]): void {
   useFleetPendingActionStore.getState().request({
     kind,
     targetCount: targets.length,
@@ -389,7 +391,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     run: async () => {
       const focusedId = usePanelStore.getState().focusedId;
       if (!focusedId) return;
-      const terminal = usePanelStore.getState().panelsById[focusedId];
+      const terminal = getNarrowPanel(usePanelStore.getState().panelsById, focusedId);
       if (!isFleetArmEligible(terminal)) return;
       useFleetArmingStore.getState().toggleId(focusedId);
     },
@@ -601,7 +603,7 @@ function applySavedScope(scope: FleetSavedScope): void {
     const validIds: string[] = [];
     const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
     for (const id of ids) {
-      if (isFleetArmEligible(panelsById[id])) validIds.push(id);
+      if (isFleetArmEligible(getNarrowPanel(panelsById, id))) validIds.push(id);
     }
     fleet.armIds(validIds);
     return;
@@ -629,7 +631,7 @@ export function computeSavedScopePaneCount(scope: FleetSavedScope): number {
     const ids = Array.isArray(scope.terminalIds) ? scope.terminalIds : [];
     let n = 0;
     for (const id of ids) {
-      if (isFleetArmEligible(panelsById[id])) n++;
+      if (isFleetArmEligible(getNarrowPanel(panelsById, id))) n++;
     }
     return n;
   }

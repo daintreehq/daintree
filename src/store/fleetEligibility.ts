@@ -1,4 +1,5 @@
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import type { TerminalInstance } from "@shared/types";
 import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 
@@ -8,8 +9,11 @@ import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
  * the collapsed dock surface has no room to render the armed/follower visual
  * state that warns a user their keystrokes are being broadcast.
  */
-export function isTerminalFleetEligible(t: TerminalInstance | undefined): t is TerminalInstance {
+export function isTerminalFleetEligible(
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   if (!t) return false;
+  if (!isPtyPanel(t)) return false;
   if (t.location === "trash" || t.location === "background" || t.location === "dock") return false;
   if (t.hasPty === false) return false;
   // `runtimeStatus` is the renderer's authoritative liveness signal. `hasPty`
@@ -27,9 +31,10 @@ export function isTerminalFleetEligible(t: TerminalInstance | undefined): t is T
  * gate because their downstream actions assume a live PTY.
  */
 export function isTerminalErrorClusterEligible(
-  t: TerminalInstance | undefined
-): t is TerminalInstance {
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   if (!t) return false;
+  if (!isPtyPanel(t)) return false;
   if (t.location === "trash" || t.location === "background" || t.location === "dock") return false;
   if (t.hasPty === false) return false;
   return true;
@@ -42,31 +47,34 @@ export function isTerminalErrorClusterEligible(
  * still require an agent identity because those actions depend on agent state.
  */
 export function resolveFleetAgentCapabilityId(
-  t: TerminalInstance | undefined
+  t: PanelInstance | TerminalInstance | undefined
 ): BuiltInAgentId | undefined {
+  if (!t || !isPtyPanel(t)) return undefined;
   return getBuiltInRuntimeAgentId(t);
 }
 
-export function isAgentFleetActionEligible(t: TerminalInstance | undefined): t is TerminalInstance {
+export function isAgentFleetActionEligible(
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   return isTerminalFleetEligible(t) && resolveFleetAgentCapabilityId(t) !== undefined;
 }
 
 export function isFleetWaitingAgentEligible(
-  t: TerminalInstance | undefined
-): t is TerminalInstance {
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   return isAgentFleetActionEligible(t) && t.agentState === "waiting";
 }
 
 export function isFleetInterruptAgentEligible(
-  t: TerminalInstance | undefined
-): t is TerminalInstance {
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   return (
     isAgentFleetActionEligible(t) && (t.agentState === "working" || t.agentState === "waiting")
   );
 }
 
 export function isFleetRestartAgentEligible(
-  t: TerminalInstance | undefined
-): t is TerminalInstance {
+  t: PanelInstance | TerminalInstance | undefined
+): t is PtyPanelData {
   return isAgentFleetActionEligible(t);
 }

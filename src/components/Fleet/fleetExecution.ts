@@ -4,8 +4,8 @@ import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressSt
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isTerminalFleetEligible } from "@/store/fleetEligibility";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
-import type { TerminalInstance } from "@shared/types";
 import {
   buildFleetBroadcastRecipeContext,
   classifyFleetRejectionReason,
@@ -60,8 +60,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
 
   for (const id of armOrder) {
     if (!armedIds.has(id)) continue;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const panel: any = panelsById[id];
+    const panel = getNarrowPanel(panelsById, id);
 
     if (isTerminalFleetEligible(panel)) {
       const ctx = buildFleetBroadcastRecipeContext(id) ?? {};
@@ -70,7 +69,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
 
       previews.push({
         terminalId: id,
-        title: (panel as TerminalInstance).title ?? "Agent",
+        title: panel.title ?? "Agent",
         resolvedPayload: resolved,
         unresolvedVars,
         excluded: false,
@@ -114,7 +113,7 @@ function detectUnresolved(text: string, ctx: RecipeContext): string[] {
  */
 export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
-  return ids.filter((id) => isTerminalFleetEligible(panelsById[id]));
+  return ids.filter((id) => isTerminalFleetEligible(getNarrowPanel(panelsById, id)));
 }
 
 function resolveVariable(name: string, ctx: RecipeContext): string {
