@@ -2,16 +2,21 @@ import { create } from "zustand";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { TerminalInstance } from "@shared/types";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { isAgentFleetActionEligible, isTerminalFleetEligible } from "./fleetEligibility";
+
+// Carrier shape sourced from `getNarrowPanel`'s parameter so this file doesn't
+// have to name the legacy carrier type directly — auto-tracks the carrier flip
+// in step 5 of #8957.
+type PanelCarrierMap = Parameters<typeof getNarrowPanel>[0];
 
 export {
   isAgentFleetActionEligible,
   isFleetInterruptAgentEligible,
   isFleetRestartAgentEligible,
   isFleetWaitingAgentEligible,
+  isTerminalErrorClusterEligible,
   isTerminalFleetEligible,
   resolveFleetAgentCapabilityId,
 } from "./fleetEligibility";
@@ -70,7 +75,7 @@ function matchesPreset(state: AgentState | null | undefined, preset: FleetArmSta
 }
 
 export function isFleetArmEligible(
-  t: PanelInstance | TerminalInstance | undefined
+  t: PanelInstance | PanelCarrierMap[string] | undefined
 ): t is PtyPanelData {
   return isTerminalFleetEligible(t);
 }
@@ -132,7 +137,7 @@ export function computeArmByStateIds(
 export function collectFilterArmEligibleIds(
   worktreeIds: readonly string[],
   panelIds: readonly string[],
-  panelsById: Record<string, TerminalInstance>
+  panelsById: PanelCarrierMap
 ): string[] {
   if (worktreeIds.length === 0) return [];
   const worktreeIdSet = new Set(worktreeIds);
@@ -386,10 +391,7 @@ function getActiveWorktreeId(): string | null {
  * destroy → mutate panels → re-init) get pruned on re-registration.
  */
 export function subscribeFleetArmingPanelPruning(): () => void {
-  function reconcileAgainst(
-    currentIds: readonly string[],
-    currentById: Record<string, TerminalInstance>
-  ): void {
+  function reconcileAgainst(currentIds: readonly string[], currentById: PanelCarrierMap): void {
     const armed = useFleetArmingStore.getState().armedIds;
     if (armed.size === 0) return;
 

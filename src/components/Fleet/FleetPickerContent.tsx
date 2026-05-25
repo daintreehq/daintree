@@ -15,7 +15,7 @@ import {
   type PickerWorktreeGroup,
   type UseFleetPickerResult,
 } from "@/hooks/useFleetPicker";
-import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
+import type { AgentState, SemanticSearchMatch } from "@shared/types";
 
 export interface FleetPickerContentProps {
   /** Result of `useFleetPicker` — owned and called by the consumer. */
@@ -450,7 +450,7 @@ function SnippetLine({
   );
 }
 
-function renderStateBadge(agentState: TerminalInstance["agentState"]): ReactElement | null {
+function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
   const label = agentState === "waiting" ? "Waiting" : "Working";
   return (

@@ -4,6 +4,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { usePanelStore } from "@/store/panelStore";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { logWarn } from "@/utils/logger";
 import type { BroadcastWriteResultPayload } from "@shared/types";
 import { PERMANENT_FAILURE_CODES } from "./fleetBroadcast";
@@ -16,8 +17,7 @@ function resolveLiveFleetTargetIds(): string[] {
   const targets: string[] = [];
   for (const id of armOrder) {
     if (!armedIds.has(id)) continue;
-    const panel = panelsById[id];
-    if (isFleetArmEligible(panel)) targets.push(id);
+    if (isFleetArmEligible(getNarrowPanel(panelsById, id))) targets.push(id);
   }
   return targets;
 }
