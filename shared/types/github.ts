@@ -90,8 +90,6 @@ export interface GitHubPR {
   updatedAt: string;
   /** PR author */
   author: GitHubUser;
-  /** Number of reviews */
-  reviewCount?: number;
   /** Head branch name (short ref, e.g. "feature/my-branch") */
   headRefName?: string;
   /** Whether this PR originates from a fork repository */

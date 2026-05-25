@@ -68,7 +68,6 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           headRepository { nameWithOwner }
           baseRepository { nameWithOwner }
           author { login avatarUrl }
-          reviews(first: 1) { totalCount }
           comments { totalCount }
           commits(last: 1) {
             nodes {
@@ -296,9 +295,6 @@ export const LIST_PRS_QUERY = `
             login
             avatarUrl
           }
-          reviews(first: 1) {
-            totalCount
-          }
           comments {
             totalCount
           }
@@ -396,9 +392,6 @@ export const SEARCH_QUERY = `
           author {
             login
             avatarUrl
-          }
-          reviews(first: 1) {
-            totalCount
           }
           comments {
             totalCount
@@ -554,9 +547,6 @@ export const GET_PR_QUERY = `
             name
             color
           }
-        }
-        reviews(first: 1) {
-          totalCount
         }
         comments {
           totalCount
