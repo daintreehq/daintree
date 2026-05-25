@@ -202,7 +202,7 @@ function eventsProbeDelayMs(cacheKey: string): number {
   return Math.round(floor * factor);
 }
 
-interface ActivityProbeResult {
+export interface ActivityProbeResult {
   status: "changed" | "unchanged" | "unknown";
   /**
    * The new events-feed ETag observed on a `200` (or `null` when GitHub omitted
@@ -235,7 +235,7 @@ interface ActivityProbeResult {
  * check (which would trip on `"graphql"` state) since the `"core"` check above
  * is the correct gate for this request.
  */
-async function fetchActivityProbe(
+export async function fetchActivityProbe(
   token: string,
   owner: string,
   repo: string

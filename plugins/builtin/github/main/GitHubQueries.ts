@@ -366,6 +366,7 @@ export const SEARCH_QUERY = `
           closedAt
           mergedAt
           merged
+          reviewDecision
           baseRefName
           headRefName
           headRepository {
@@ -517,6 +518,7 @@ export const GET_PR_QUERY = `
         state
         isDraft
         merged
+        reviewDecision
         createdAt
         updatedAt
         closedAt

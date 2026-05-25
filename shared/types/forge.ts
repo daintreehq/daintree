@@ -56,6 +56,18 @@ export type NormalizedPRState = "open" | "merged" | "closed" | "declined";
 export type NormalizedIssueState = "open" | "closed";
 
 /**
+ * Normalized review-decision roll-up for a PR — the aggregate approval state a
+ * row badge needs without an N+1 per-PR review fetch. Provider enums diverge
+ * (GitHub `reviewDecision`: `APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED`;
+ * GitLab `approvalState`; Bitbucket "approved-by" lists); the host normalizes
+ * to this closed set. `null` means the provider does not gate on reviews (no
+ * required reviewers configured), distinct from `undefined` which means the
+ * provider did not report a decision. Provider-specific states belong in
+ * `rawData`, never here.
+ */
+export type NormalizedReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+
+/**
  * Uniform rate-limit projection. Plugins parse their own transport (e.g. the
  * GitHub GraphQL `rateLimit` node) and populate this shape; the host renders
  * the rate-limit indicator from it. `null` means the provider does not report
@@ -88,6 +100,10 @@ export interface CIStatus {
   pending: number;
   /** Whether required-checks gating is currently satisfied, if the provider gates. */
   requiredChecksPassing?: boolean;
+  /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
+  freshnessToken?: string;
+  /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
+  notModified?: boolean;
   rawData: unknown;
 }
 
@@ -119,6 +135,10 @@ export interface RepoMetadata {
   description?: string | null;
   license?: string | null;
   topics?: string[];
+  /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
+  freshnessToken?: string;
+  /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
+  notModified?: boolean;
   rawData: unknown;
 }
 
@@ -134,6 +154,35 @@ export interface ListOptions {
   assignee?: string;
   sort?: string;
   direction?: "asc" | "desc";
+  /**
+   * Opaque freshness token from a prior {@link Page.freshnessToken} response.
+   * Advisory: providers that support conditional listing skip the fetch and
+   * return `notModified: true` when nothing changed; providers for which
+   * probing costs the same as fetching may ignore it. See {@link FetchOptions}.
+   */
+  ifNotChangedSince?: string;
+}
+
+/**
+ * Conditional-fetch options for the single-resource methods ({@link
+ * ForgeProviderImpl.getIssue}, {@link ForgeProviderImpl.getPR}, {@link
+ * ForgeProviderImpl.getCIStatus}, {@link ForgeProviderImpl.getRepoMetadata}).
+ *
+ * Freshness pass-through, end to end: the host stores the `freshnessToken` a
+ * provider returns on a response shape and hands it back here as
+ * `ifNotChangedSince` on the next call. The token is OPAQUE — REST providers
+ * pack an ETag (`If-None-Match`), GraphQL providers pack a timestamp tuple; the
+ * host only byte-compares two tokens for equality and never interprets one.
+ *
+ * `ifNotChangedSince` is advisory: a provider may ignore it whenever probing
+ * for change costs the same as a full fetch. When a provider honors it and the
+ * resource is unchanged, it sets `notModified: true` on the returned shape and
+ * the host keeps its own cached copy. A `null` return still means "no such
+ * resource" definitively — it is never a 304-equivalent.
+ */
+export interface FetchOptions {
+  /** Opaque freshness token from a prior response; advisory (see above). */
+  ifNotChangedSince?: string;
 }
 
 /**
@@ -146,6 +195,18 @@ export interface Page<T> {
   nextCursor: string | null;
   hasMore: boolean;
   totalCount?: number;
+  /**
+   * Opaque token capturing this page's freshness — the host stores it and
+   * passes it back as {@link ListOptions.ifNotChangedSince} on the next call.
+   * The host never interprets it (see {@link FetchOptions}).
+   */
+  freshnessToken?: string;
+  /**
+   * `true` when the provider honored `ifNotChangedSince` and nothing changed —
+   * the host keeps its cached page. Only meaningful alongside `freshnessToken`;
+   * `items` may be empty in this case.
+   */
+  notModified?: boolean;
 }
 
 /** Minimal actor projection. */
@@ -177,6 +238,10 @@ export interface Issue {
   updatedAt: number;
   /** Epoch milliseconds, or `null` while open. */
   closedAt?: number | null;
+  /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
+  freshnessToken?: string;
+  /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
+  notModified?: boolean;
   rawData: unknown;
 }
 
@@ -195,6 +260,12 @@ export interface PR {
   headRef: string;
   /** `null` when the provider has not computed mergeability yet. */
   mergeable?: boolean | null;
+  /**
+   * Normalized aggregate review decision, for row badges without an N+1
+   * per-PR review fetch. `null` when the provider doesn't gate on reviews,
+   * `undefined` when not reported. See {@link NormalizedReviewDecision}.
+   */
+  reviewDecision?: NormalizedReviewDecision;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -203,6 +274,10 @@ export interface PR {
   closedAt?: number | null;
   /** Epoch milliseconds, or `null` when not merged. */
   mergedAt?: number | null;
+  /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
+  freshnessToken?: string;
+  /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
+  notModified?: boolean;
   rawData: unknown;
 }
 
@@ -323,8 +398,8 @@ export interface ForgeProviderImpl {
   // Core CRUD — every provider implements these.
   listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>>;
   listPRs(repo: RepoRef, opts: ListOptions): Promise<Page<PR>>;
-  getIssue(repo: RepoRef, number: number): Promise<Issue | null>;
-  getPR(repo: RepoRef, number: number): Promise<PR | null>;
+  getIssue(repo: RepoRef, number: number, options?: FetchOptions): Promise<Issue | null>;
+  getPR(repo: RepoRef, number: number, options?: FetchOptions): Promise<PR | null>;
   findPRByBranch(repo: RepoRef, branchName: string): Promise<PR | null>;
   /**
    * Optional batch variant of {@link findPRByBranch}. When present, callers
@@ -337,8 +412,8 @@ export interface ForgeProviderImpl {
    * fallback path's responsibility.
    */
   findPRsByBranches?(repo: RepoRef, branches: string[]): Promise<Map<string, PR | null>>;
-  getCIStatus(repo: RepoRef, prNumber: number): Promise<CIStatus | null>;
-  getRepoMetadata(repo: RepoRef): Promise<RepoMetadata>;
+  getCIStatus(repo: RepoRef, prNumber: number, options?: FetchOptions): Promise<CIStatus | null>;
+  getRepoMetadata(repo: RepoRef, options?: FetchOptions): Promise<RepoMetadata>;
 
   // URL builders — the provider knows its own URL shape.
   buildIssueUrl(repo: RepoRef, number: number): string;
@@ -353,6 +428,27 @@ export interface ForgeProviderImpl {
 
   // Host-visible rate-limit state, parsed from the provider's own transport.
   getRateLimit?(): Promise<RateLimitInfo>;
+
+  /**
+   * Optional. Capture a cheap, opaque freshness token for the repo's overall
+   * activity, so a caller can skip an expensive list/stats refresh when nothing
+   * has changed since the last probe. The token is opaque to the host — a
+   * GraphQL provider packs an activity timestamp tuple (e.g. repo `pushedAt`
+   * plus the newest issue/PR `updatedAt`), a REST provider packs an ETag — and
+   * the host only byte-compares two tokens for equality.
+   *
+   * This is a cost optimization, not a correctness guarantee: a timestamp-tuple
+   * probe misses mutations that don't bump those fields (emoji reactions,
+   * Project v2 metadata, repo settings, wiki/discussion edits). Callers should
+   * pair it with a bounded TTL so list content can't go stale indefinitely
+   * behind a continuously-matching probe.
+   *
+   * May reject when the probe is unavailable (auth/network failure, the
+   * provider can't compute a token). Since the optimization is best-effort,
+   * callers must catch and fall back to a full fetch rather than surfacing the
+   * error.
+   */
+  getRepoActivityProbe?(repo: RepoRef): Promise<{ freshnessToken: string }>;
 
   /**
    * Optional. Classify a `git push` failure from raw stderr. Lets the host
