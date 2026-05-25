@@ -34,9 +34,9 @@ describe("forgePollLeaseService", () => {
     // expiry is still denied.
     expect(acquirePollLease(PROJECT_A, HOLDER_A, now + 45_000)).toBe(true);
     expect(acquirePollLease(PROJECT_A, HOLDER_B, now + FORGE_POLL_LEASE_TTL_MS + 1)).toBe(false);
-    expect(
-      acquirePollLease(PROJECT_A, HOLDER_B, now + 45_000 + FORGE_POLL_LEASE_TTL_MS + 1)
-    ).toBe(true);
+    expect(acquirePollLease(PROJECT_A, HOLDER_B, now + 45_000 + FORGE_POLL_LEASE_TTL_MS + 1)).toBe(
+      true
+    );
   });
 
   it("scopes leases per project", () => {

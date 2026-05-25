@@ -144,7 +144,10 @@ export function dispatchForgeRpc(req: ForgeRpcRequest, sender: Sender): Promise<
     try {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Forge RPC ${req.method} timed out after ${FORGE_INVOKE_TIMEOUT_MS}ms`)),
+          () =>
+            reject(
+              new Error(`Forge RPC ${req.method} timed out after ${FORGE_INVOKE_TIMEOUT_MS}ms`)
+            ),
           FORGE_INVOKE_TIMEOUT_MS
         );
         timer.unref?.();

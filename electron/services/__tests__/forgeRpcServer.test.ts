@@ -13,6 +13,25 @@ const NAMESPACED_ID = `${PLUGIN_ID}.${CONTRIBUTION_ID}`;
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
 
+function makePR(overrides: Partial<PR> = {}): PR {
+  return {
+    number: 42,
+    title: "test",
+    body: "",
+    state: "open",
+    rawState: "OPEN",
+    isDraft: false,
+    merged: false,
+    url: "u",
+    baseRef: "main",
+    headRef: "feature",
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+    ...overrides,
+  };
+}
+
 type ForgeRpcResult = Extract<WorkspaceHostRequest, { type: "forge:rpc-result" }>;
 
 function captureSender(): {
@@ -58,7 +77,7 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     const getPR = vi.fn(async (): Promise<PR | null> => {
       // Deliberately yield so the second dispatch can join while the first is in-flight.
       await new Promise((r) => setTimeout(r, 0));
-      return { number: 42, title: "test", url: "u", state: "open", providerId: NAMESPACED_ID } as PR;
+      return makePR({ number: 42 });
     });
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ getPR }));
 
@@ -86,13 +105,7 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
   });
 
   it("differing args produce independent upstream calls", async () => {
-    const getPR = vi.fn(async (_: RepoRef, n: number) => ({
-      number: n,
-      title: "t",
-      url: "u",
-      state: "open" as const,
-      providerId: NAMESPACED_ID,
-    }));
+    const getPR = vi.fn(async (_: RepoRef, n: number) => makePR({ number: n }));
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ getPR }));
 
     const { send } = captureSender();
@@ -119,11 +132,21 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     const { send } = captureSender();
     await Promise.all([
       dispatchForgeRpc(
-        { forgeRequestId: "r1", method: "getPR", namespacedId: `${PLUGIN_ID}.provider-a`, args: [repo, 1] },
+        {
+          forgeRequestId: "r1",
+          method: "getPR",
+          namespacedId: `${PLUGIN_ID}.provider-a`,
+          args: [repo, 1],
+        },
         send
       ),
       dispatchForgeRpc(
-        { forgeRequestId: "r2", method: "getPR", namespacedId: `${PLUGIN_ID}.provider-b`, args: [repo, 1] },
+        {
+          forgeRequestId: "r2",
+          method: "getPR",
+          namespacedId: `${PLUGIN_ID}.provider-b`,
+          args: [repo, 1],
+        },
         send
       ),
     ]);
@@ -144,11 +167,21 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     const { send } = captureSender();
     await Promise.all([
       dispatchForgeRpc(
-        { forgeRequestId: "r1", method: "findPRByBranch", namespacedId: NAMESPACED_ID, args: [repoA, "main"] },
+        {
+          forgeRequestId: "r1",
+          method: "findPRByBranch",
+          namespacedId: NAMESPACED_ID,
+          args: [repoA, "main"],
+        },
         send
       ),
       dispatchForgeRpc(
-        { forgeRequestId: "r2", method: "findPRByBranch", namespacedId: NAMESPACED_ID, args: [repoB, "main"] },
+        {
+          forgeRequestId: "r2",
+          method: "findPRByBranch",
+          namespacedId: NAMESPACED_ID,
+          args: [repoB, "main"],
+        },
         send
       ),
     ]);
@@ -160,7 +193,7 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     const getPR = vi
       .fn()
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ number: 1, title: "t", url: "u", state: "open", providerId: NAMESPACED_ID });
+      .mockResolvedValueOnce(makePR({ number: 1 }));
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ getPR }));
 
     const a = captureSender();
@@ -210,13 +243,7 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
   });
 
   it("waiter whose sender returns false receives an explicit error envelope", async () => {
-    const getPR = vi.fn(async () => ({
-      number: 1,
-      title: "t",
-      url: "u",
-      state: "open" as const,
-      providerId: NAMESPACED_ID,
-    }));
+    const getPR = vi.fn(async () => makePR({ number: 1 }));
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ getPR }));
 
     const sent: ForgeRpcResult[] = [];

@@ -166,8 +166,9 @@ describe("ForgeBridge poll-lease IPC (#9055)", () => {
       vi.advanceTimersByTime(5_001);
       await expect(p).resolves.toBe(true);
       // Now-stale result must not throw or resolve a second time.
-      expect(() => bridge.handleLeaseResult({ requestId: acquire.requestId, acquired: false }))
-        .not.toThrow();
+      expect(() =>
+        bridge.handleLeaseResult({ requestId: acquire.requestId, acquired: false })
+      ).not.toThrow();
     } finally {
       vi.useRealTimers();
     }
