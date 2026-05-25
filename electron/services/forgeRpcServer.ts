@@ -64,6 +64,14 @@ interface InFlightEntry {
 // already handles staggered repeats.
 const inFlight = new Map<string, InFlightEntry>();
 
+// Hard ceiling on a single in-flight provider call. The bridge's per-caller
+// timeout is 30s; this sits just beyond it so a hung third-party provider
+// (no internal timeout, no abort signal) can't wedge the singleflight entry
+// forever and leak waiters as new identical requests join the dead promise.
+// The built-in GitHub provider's own 15s AbortSignal.timeout settles long
+// before this; only misbehaving plugins ever reach it.
+const FORGE_INVOKE_TIMEOUT_MS = 35_000;
+
 function buildSingleflightKey(req: ForgeRpcRequest): string {
   return `${req.method}\0${req.namespacedId ?? ""}\0${stringifyArgs(req.args) ?? ""}`;
 }
@@ -132,12 +140,21 @@ export function dispatchForgeRpc(req: ForgeRpcRequest, sender: Sender): Promise<
 
   const waiters: Waiter[] = [waiter];
   const promise = (async () => {
+    let timer: NodeJS.Timeout | undefined;
     try {
-      const value = await invoke(req);
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Forge RPC ${req.method} timed out after ${FORGE_INVOKE_TIMEOUT_MS}ms`)),
+          FORGE_INVOKE_TIMEOUT_MS
+        );
+        timer.unref?.();
+      });
+      const value = await Promise.race([invoke(req), timeout]);
       for (const w of waiters) deliverResult(w, value);
     } catch (error) {
       for (const w of waiters) deliverError(w, error);
     } finally {
+      if (timer !== undefined) clearTimeout(timer);
       inFlight.delete(key);
     }
   })();

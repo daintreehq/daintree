@@ -83,4 +83,25 @@ describe("forgePollLeaseService", () => {
     // Holder B's lease on PROJECT_B still holds; a third holder is denied.
     expect(acquirePollLease(PROJECT_B, "other-holder", now)).toBe(false);
   });
+
+  it("treats exact-TTL expiry as expired (strict > on expiresAt)", () => {
+    const now = 1_000_000;
+    expect(acquirePollLease(PROJECT_A, HOLDER_A, now)).toBe(true);
+    // At now + TTL exactly, expiresAt === now, which is NOT strictly greater
+    // than now. Another holder wins.
+    expect(acquirePollLease(PROJECT_A, HOLDER_B, now + FORGE_POLL_LEASE_TTL_MS)).toBe(true);
+  });
+
+  it("ignores a stale release from a preempted prior holder", () => {
+    const now = 1_000_000;
+    expect(acquirePollLease(PROJECT_A, HOLDER_A, now)).toBe(true);
+    // Holder A's lease times out; holder B takes over.
+    const afterExpiry = now + FORGE_POLL_LEASE_TTL_MS + 1;
+    expect(acquirePollLease(PROJECT_A, HOLDER_B, afterExpiry)).toBe(true);
+
+    // A late release from holder A (e.g. delayed cooperative release event)
+    // must not free holder B's fresh lease.
+    releasePollLease(PROJECT_A, HOLDER_A);
+    expect(acquirePollLease(PROJECT_A, "third-holder", afterExpiry)).toBe(false);
+  });
 });

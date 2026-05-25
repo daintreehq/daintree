@@ -1077,6 +1077,56 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("skips checkForPRs when a sibling window holds the poll lease (#9055)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    // Deny the lease — simulates a sibling Electron window already polling
+    // this project. The service must short-circuit without calling ANY forge
+    // provider methods; PR events still propagate from the elected host
+    // through main → renderer fan-out.
+    lastMockBridge!.acquirePollLease.mockResolvedValue(false);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+    );
+
+    await pullRequestService.refresh();
+
+    // None of the provider's PR-fetching methods are called when the lease is denied.
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
+    expect(mockImpl.findPRsByBranches).toBeUndefined();
+    expect(mockImpl.getPR).not.toHaveBeenCalled();
+    expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+    expect(detected).toHaveLength(0);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("releases the poll lease on stop (#9055)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    mockForgeProviderResolved();
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.stop();
+
+    expect(lastMockBridge!.releasePollLease).toHaveBeenCalled();
+
+    pullRequestService.destroy();
+  });
+
   it("skips revalidation when provider reports rate-limited", async () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
