@@ -91,6 +91,11 @@ function makeMockBridge(impl: ForgeProviderImpl) {
     }),
     getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
     handleResult: vi.fn(),
+    // Default to lease-granted so existing tests (single-window assumption)
+    // behave exactly as they did before the cross-window lease landed.
+    acquirePollLease: vi.fn(async () => true),
+    releasePollLease: vi.fn(),
+    handleLeaseResult: vi.fn(),
     dispose: vi.fn(),
   };
 }

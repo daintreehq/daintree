@@ -1,3 +1,4 @@
+import { configure } from "safe-stable-stringify";
 import type {
   ForgeRpcMethod,
   ForgeResolveProviderResult,
@@ -16,6 +17,14 @@ import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
+// Deterministic stringify so two windows calling the same method with the same
+// arg shape coalesce regardless of property order. Mirrors the bridge-side
+// singleflight key in `forgeBridge.ts`. NOTE: `Map`/`Set` instances serialize
+// as `{}` here and would silently collide — all current `ForgeRpcMethod` args
+// are `RepoRef`, primitives, or arrays-of-primitives, so this is safe today.
+// If a future method adds a Map/Set arg, key it explicitly before stringify.
+const stringifyArgs = configure({ bigint: false });
+
 /**
  * Incoming `forge:rpc` event shape (workspace-host → main). Defined locally as
  * a structural type so this server stays decoupled from the full
@@ -31,6 +40,65 @@ export interface ForgeRpcRequest {
 
 type Sender = (request: WorkspaceHostRequest) => boolean;
 
+interface Waiter {
+  sender: Sender;
+  forgeRequestId: string;
+  method: ForgeRpcMethod;
+}
+
+interface InFlightEntry {
+  promise: Promise<void>;
+  waiters: Waiter[];
+}
+
+// Cross-window singleflight. Each Electron window forks its own workspace-host
+// UtilityProcess; before this map, N windows watching the same project meant
+// N identical GraphQL calls per poll. The bridge-side singleflight in
+// `forgeBridge.ts` only dedupes within a single host. This map sits at the
+// boundary main owns and absorbs the cross-host fan-in: identical concurrent
+// requests join a single in-flight provider call and the result is delivered
+// to every waiter. See #9055.
+//
+// Evicted on settlement (success or error) so retries proceed immediately —
+// no TTL caching here; the GitHub response cache in `forgeProvider.runQuery`
+// already handles staggered repeats.
+const inFlight = new Map<string, InFlightEntry>();
+
+function buildSingleflightKey(req: ForgeRpcRequest): string {
+  return `${req.method}\0${req.namespacedId ?? ""}\0${stringifyArgs(req.args) ?? ""}`;
+}
+
+function deliverResult(waiter: Waiter, value: unknown): void {
+  const sent = waiter.sender({
+    type: "forge:rpc-result",
+    forgeRequestId: waiter.forgeRequestId,
+    ok: true,
+    value,
+  });
+  if (!sent) {
+    // `child.postMessage` either threw (non-cloneable result, e.g. a
+    // third-party provider whose `rawData` contains functions or proxies)
+    // or the child has already exited. Either way, the workspace-host
+    // would otherwise hang on the 30s bridge timeout. Send an error
+    // envelope so the bridge fails fast.
+    waiter.sender({
+      type: "forge:rpc-result",
+      forgeRequestId: waiter.forgeRequestId,
+      ok: false,
+      error: `Forge RPC ${waiter.method} result could not be delivered (non-cloneable or child gone)`,
+    });
+  }
+}
+
+function deliverError(waiter: Waiter, error: unknown): void {
+  waiter.sender({
+    type: "forge:rpc-result",
+    forgeRequestId: waiter.forgeRequestId,
+    ok: false,
+    error: formatErrorMessage(error, `Forge RPC ${waiter.method} failed`),
+  });
+}
+
 /**
  * Dispatch a forge RPC call from the workspace-host against the local
  * forge provider registry, then send the result back via `sender`. Errors
@@ -41,37 +109,46 @@ type Sender = (request: WorkspaceHostRequest) => boolean;
  * This is the single point where the workspace-host crosses the process
  * boundary into the forge layer. Plugin authors do not need to know it
  * exists — their impls run in main as usual; the bridge is transparent.
+ *
+ * Concurrent identical requests across any number of workspace-hosts share
+ * one upstream provider call: the first request initiates `invoke()`; any
+ * matching request that arrives while it is in-flight is registered as a
+ * waiter, and the eventual result (or error) is delivered to every waiter
+ * with each one's own `forgeRequestId`. See `inFlight` above.
  */
-export async function dispatchForgeRpc(req: ForgeRpcRequest, sender: Sender): Promise<void> {
-  try {
-    const value = await invoke(req);
-    const sent = sender({
-      type: "forge:rpc-result",
-      forgeRequestId: req.forgeRequestId,
-      ok: true,
-      value,
-    });
-    if (!sent) {
-      // `child.postMessage` either threw (non-cloneable result, e.g. a
-      // third-party provider whose `rawData` contains functions or proxies)
-      // or the child has already exited. Either way, the workspace-host
-      // would otherwise hang on the 30s bridge timeout. Send an error
-      // envelope so the bridge fails fast.
-      sender({
-        type: "forge:rpc-result",
-        forgeRequestId: req.forgeRequestId,
-        ok: false,
-        error: `Forge RPC ${req.method} result could not be delivered (non-cloneable or child gone)`,
-      });
-    }
-  } catch (error) {
-    sender({
-      type: "forge:rpc-result",
-      forgeRequestId: req.forgeRequestId,
-      ok: false,
-      error: formatErrorMessage(error, `Forge RPC ${req.method} failed`),
-    });
+export function dispatchForgeRpc(req: ForgeRpcRequest, sender: Sender): Promise<void> {
+  const key = buildSingleflightKey(req);
+  const waiter: Waiter = {
+    sender,
+    forgeRequestId: req.forgeRequestId,
+    method: req.method,
+  };
+
+  const existing = inFlight.get(key);
+  if (existing) {
+    existing.waiters.push(waiter);
+    return existing.promise;
   }
+
+  const waiters: Waiter[] = [waiter];
+  const promise = (async () => {
+    try {
+      const value = await invoke(req);
+      for (const w of waiters) deliverResult(w, value);
+    } catch (error) {
+      for (const w of waiters) deliverError(w, error);
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
+
+  inFlight.set(key, { promise, waiters });
+  return promise;
+}
+
+/** Test-only reset. */
+export function _resetForgeRpcInFlightForTests(): void {
+  inFlight.clear();
 }
 
 async function invoke(req: ForgeRpcRequest): Promise<unknown> {
