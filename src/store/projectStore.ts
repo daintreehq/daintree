@@ -30,7 +30,10 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
   return (
     t.location !== "trash" &&
     t.location !== "background" &&
-    t.kind !== "assistant" &&
+    // The carrier's kind is the discriminated union of built-in kinds; the
+    // runtime can still hand us an assistant panel whose kind escapes the
+    // declared union, so widen to string before comparing.
+    (t.kind as string) !== "assistant" &&
     !(isPtyPanel(t) && t.ephemeral === true) &&
     !isSmokeTestTerminalId(t.id)
   );

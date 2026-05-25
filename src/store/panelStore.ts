@@ -49,9 +49,8 @@ type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export type { AddPanelOptions, QueuedCommand, CrashType };
 // Re-exported for backwards-compat with tests still typing fixtures as
-// `TerminalInstance`. Production code drains in #8957 batch C+; this
-// re-export goes away with the interface itself in #8957 step 6.
-// eslint-disable-next-line no-restricted-imports -- sanctioned re-export of the draining alias
+// `TerminalInstance`. The interface itself is now the persistence Tolerant
+// Reader; production code uses `PanelInstance` from `@shared/types/panel`.
 export type { TerminalInstance } from "@shared/types";
 export { isAgentReady };
 export type { TerminalMruSlice, WatchedPanelsSlice };

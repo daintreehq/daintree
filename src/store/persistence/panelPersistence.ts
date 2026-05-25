@@ -1,4 +1,3 @@
-// eslint-disable-next-line no-restricted-imports -- panelToSnapshot is the persistence Tolerant Reader; PanelSnapshot is the on-disk wire format and intentionally keeps the wide TerminalInstance read shape (#8957)
 import type { TerminalInstance, PanelSnapshot, TabGroup } from "@/types";
 import { projectClient } from "@/clients";
 import { debounce } from "@/utils/debounce";
@@ -30,6 +29,8 @@ const BASE_PANEL_FIELDS = [
   "location",
   "extensionState",
   "pluginId",
+  "createdAt",
+  "lastActiveAt",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
@@ -45,6 +46,8 @@ export function panelToSnapshot(
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     ...(t.pluginId !== undefined && { pluginId: t.pluginId }),
+    ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
+    ...(t.lastActiveAt !== undefined && { lastActiveAt: t.lastActiveAt }),
   };
 
   const config = getPanelKindConfig(t.kind ?? "terminal");

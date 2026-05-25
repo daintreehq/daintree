@@ -37,7 +37,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         launchAgentId: undefined,
         cwd: "/home",
         command: "ls -la",
-        createdAt: 100,
         exitBehavior: "keep",
       });
     });
@@ -121,7 +120,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         browserZoom: 1.0,
         devPreviewConsoleOpen: true,
         devPreviewConsoleTab: "console",
-        createdAt: 100,
         exitBehavior: "keep",
       });
     });
