@@ -7,7 +7,9 @@ import {
   clearGitHubCaches,
   clearPRCaches,
   velocityCache,
-  repoActivityProbeCache,
+  repoEventsETagCache,
+  repoEventsNoChangeCount,
+  repoEventsLastProbeAt,
   repoStatsAndPageSnapshotCache,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
@@ -104,20 +106,20 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
   });
 });
 
-describe("polling-optimization caches (issue #8757)", () => {
+describe("polling-optimization caches (issues #8757, #9041)", () => {
   beforeEach(() => {
     velocityCache.clear();
-    repoActivityProbeCache.clear();
+    repoEventsETagCache.clear();
+    repoEventsNoChangeCount.clear();
+    repoEventsLastProbeAt.clear();
     repoStatsAndPageSnapshotCache.clear();
   });
 
   function seedAll(): void {
     velocityCache.set("owner/repo::velocity::2026-05-20", { 60: 1, 120: 2, 180: 3 });
-    repoActivityProbeCache.set("owner/repo", {
-      pushedAt: "2026-05-20T00:00:00Z",
-      issueUpdatedAt: "2026-05-20T00:00:00Z",
-      prUpdatedAt: "2026-05-20T00:00:00Z",
-    });
+    repoEventsETagCache.set("owner/repo", '"events-etag"');
+    repoEventsNoChangeCount.set("owner/repo", 3);
+    repoEventsLastProbeAt.set("owner/repo", Date.now());
     repoStatsAndPageSnapshotCache.set("owner/repo", {
       stats: { issueCount: 4, prCount: 5, lastUpdated: 1 },
       issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 4 },
@@ -125,18 +127,22 @@ describe("polling-optimization caches (issue #8757)", () => {
     });
   }
 
-  it("clearGitHubCaches clears the velocity, probe, and snapshot caches", () => {
+  it("clearGitHubCaches clears the velocity, events-ETag, and snapshot caches", () => {
     seedAll();
     clearGitHubCaches();
     expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toBeUndefined();
-    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 
-  it("clearPRCaches drops the probe + snapshot caches (they can serve a stale PR list)", () => {
+  it("clearPRCaches drops the events ETag + snapshot and resets the backoff state", () => {
     seedAll();
     clearPRCaches();
-    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 

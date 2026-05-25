@@ -10,7 +10,6 @@ import {
   REPO_STATS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
-  REPO_ACTIVITY_PROBE_QUERY,
   SEARCH_QUERY,
   GET_PR_QUERY,
   PROJECT_HEALTH_QUERY,
@@ -81,32 +80,6 @@ describe("MERGE_VELOCITY_QUERY", () => {
     expect(MERGE_VELOCITY_QUERY).toContain("cost");
     expect(MERGE_VELOCITY_QUERY).toContain("remaining");
     expect(MERGE_VELOCITY_QUERY).toContain("resetAt");
-  });
-});
-
-describe("REPO_ACTIVITY_PROBE_QUERY", () => {
-  it("fetches the three activity timestamps used as the change sentinel", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("pushedAt");
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("updatedAt");
-  });
-
-  it("orders both connections by UPDATED_AT desc so the freshest node is first", () => {
-    const matches = REPO_ACTIVITY_PROBE_QUERY.match(
-      /orderBy: \{field: UPDATED_AT, direction: DESC\}/g
-    );
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
-  });
-
-  it("spans every issue and PR state so closes and merges advance the probe", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("issues(first: 1, states: [OPEN, CLOSED]");
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain(
-      "pullRequests(first: 1, states: [OPEN, CLOSED, MERGED]"
-    );
-  });
-
-  it("includes rateLimit so the probe keeps rate-limit state in sync", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("rateLimit {");
   });
 });
 
