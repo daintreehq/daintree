@@ -616,6 +616,14 @@ class PullRequestService {
     this.boostExpiresAt = null;
     this.clearStagnantPollCounts();
     this.isPolling = false;
+    // Cooperative release so a sibling can poll immediately. Best-effort —
+    // the host's `dispose()` also clears any leases this holder owns, and
+    // the TTL expires within FORGE_POLL_LEASE_TTL_MS regardless.
+    try {
+      getForgeBridge().releasePollLease();
+    } catch {
+      // Bridge not initialized yet (early stop before bootstrap); nothing to release.
+    }
     logInfo("PullRequestService stopped");
   }
 
@@ -1200,6 +1208,19 @@ class PullRequestService {
     const waitMs = this.msUntilCheckAllowed();
     if (waitMs > 0) {
       logDebug("Skipping PR check — within throttle window", { waitMs });
+      return;
+    }
+
+    // Per-project poll lease (#9055): only one workspace-host polls per
+    // cycle when multiple windows watch the same project. Siblings receive
+    // PR updates via the elected host's `sys:pr:detected` / `sys:pr:cleared`
+    // events as they propagate through main → renderer fan-out. Fails open
+    // (returns true) on IPC timeout so a lost lease message can't wedge
+    // polling — `dispatchForgeRpc`'s cross-window singleflight still dedupes
+    // the actual GraphQL calls in that fallback path.
+    const leaseAcquired = await getForgeBridge().acquirePollLease();
+    if (!leaseAcquired) {
+      logDebug("Skipping PR check — sibling window holds poll lease");
       return;
     }
     this.lastCheckAt = Date.now();

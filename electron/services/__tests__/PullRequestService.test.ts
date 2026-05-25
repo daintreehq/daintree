@@ -91,6 +91,11 @@ function makeMockBridge(impl: ForgeProviderImpl) {
     }),
     getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
     handleResult: vi.fn(),
+    // Default to lease-granted so existing tests (single-window assumption)
+    // behave exactly as they did before the cross-window lease landed.
+    acquirePollLease: vi.fn(async () => true),
+    releasePollLease: vi.fn(),
+    handleLeaseResult: vi.fn(),
     dispose: vi.fn(),
   };
 }
@@ -1068,6 +1073,56 @@ describe("PullRequestService", () => {
     await pullRequestService.refresh();
 
     expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
+
+    pullRequestService.destroy();
+  });
+
+  it("skips checkForPRs when a sibling window holds the poll lease (#9055)", async () => {
+    const clearPRCaches = vi.fn();
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
+
+    const mockImpl = mockForgeProviderResolved();
+    // Deny the lease — simulates a sibling Electron window already polling
+    // this project. The service must short-circuit without calling ANY forge
+    // provider methods; PR events still propagate from the elected host
+    // through main → renderer fan-out.
+    lastMockBridge!.acquirePollLease.mockResolvedValue(false);
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+    );
+
+    await pullRequestService.refresh();
+
+    // None of the provider's PR-fetching methods are called when the lease is denied.
+    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
+    expect(mockImpl.findPRsByBranches).toBeUndefined();
+    expect(mockImpl.getPR).not.toHaveBeenCalled();
+    expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+    expect(detected).toHaveLength(0);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("releases the poll lease on stop (#9055)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    mockForgeProviderResolved();
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    pullRequestService.stop();
+
+    expect(lastMockBridge!.releasePollLease).toHaveBeenCalled();
 
     pullRequestService.destroy();
   });

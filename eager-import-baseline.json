@@ -1,6 +1,6 @@
 {
-  "count": 1361,
-  "moduleCount": 1361,
+  "count": 1362,
+  "moduleCount": 1362,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -1660,17 +1660,17 @@
     },
     {
       "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
-      "line": 373,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
-      "line": 374,
+      "line": 377,
       "pattern": "sync-fs"
     },
     {
       "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
       "line": 378,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
+      "line": 382,
       "pattern": "sync-fs"
     }
   ]
