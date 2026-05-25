@@ -277,7 +277,7 @@ export async function getIssueTooltip(
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
       const issue = response?.repository?.issue;
       if (!issue) {
@@ -369,7 +369,7 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_ISSUES_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
@@ -394,7 +394,7 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "LIST_ISSUES_QUERY");
 
         const issues = response?.repository?.issues;
         const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
@@ -458,7 +458,7 @@ export async function getIssueByNumber(
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
       const issue = response?.repository?.issue;
       if (!issue) {

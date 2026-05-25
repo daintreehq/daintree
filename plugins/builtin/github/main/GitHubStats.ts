@@ -92,7 +92,7 @@ export async function getRepoStats(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
@@ -185,7 +185,7 @@ async function fetchActivityProbe(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_ACTIVITY_PROBE_QUERY");
 
     const repository = result?.repository;
     if (!repository) return null;
@@ -370,7 +370,7 @@ export async function getRepoStatsAndPage(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_AND_PAGE_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
