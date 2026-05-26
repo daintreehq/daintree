@@ -617,18 +617,35 @@ export function HelpPanel({
       // matching `aria-hidden` (which would also be redundant on an `inert`
       // element per ARIA 1.2 and trips axe's `aria-hidden-focus` rule).
       inert={!isVisible || undefined}
-      data-macro-focus={isMacroFocused ? "true" : undefined}
-      onFocus={() => setHasDomFocus(true)}
+      data-macro-focus={isHighlighted ? "true" : undefined}
+      onFocus={() => {
+        setHasDomFocus(true);
+        // Promote the assistant to the active macro region whenever DOM focus
+        // lands inside the aside (mouse click, programmatic focus). Without
+        // this, only keyboard cycling via Cmd+` would mark the assistant
+        // active, leaving the grid's `terminal-selected` highlight stuck on
+        // while the user is actually typing into the assistant.
+        if (useMacroFocusStore.getState().focusedRegion !== "assistant") {
+          useMacroFocusStore.setState({ focusedRegion: "assistant" });
+        }
+      }}
       onBlur={(e) => {
         // Keep the highlight while focus moves between controls inside the
         // aside (xterm textarea ↔ header buttons). `contains(null)` is false,
         // so window/page blur correctly clears it.
-        if (!e.currentTarget.contains(e.relatedTarget)) setHasDomFocus(false);
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          setHasDomFocus(false);
+          // Release the macro region only if we still own it — another region
+          // may have already claimed focus by the time blur runs.
+          if (useMacroFocusStore.getState().focusedRegion === "assistant") {
+            useMacroFocusStore.setState({ focusedRegion: null });
+          }
+        }
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-daintree-bg border-l border-daintree-border",
-        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
+        "bg-daintree-bg border-l border-daintree-border transition-colors duration-300",
+        isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
       style={{ width: effectiveWidth }}
@@ -815,9 +832,12 @@ export function HelpPanel({
         )}
       </div>
 
-      {/* Bottom info bar */}
+      {/* Bottom info bar — explicit `bg-daintree-bg` so the parent
+          `.assistant-focused` surface-highlight lift bleeds through to the
+          header only, not down here. The footer is ambient metadata and
+          shouldn't share the active-surface anchor. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40 bg-daintree-bg">
           {pinnedContext && (
             <span
               className="flex items-center gap-1.5 min-w-0"

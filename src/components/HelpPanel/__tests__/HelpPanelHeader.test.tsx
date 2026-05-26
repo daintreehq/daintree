@@ -20,28 +20,22 @@ function renderHeader(isFocused?: boolean) {
 }
 
 describe("HelpPanelHeader", () => {
-  it("does not lift the header background when unfocused", () => {
-    const { container } = renderHeader(false);
-    const root = container.firstElementChild!;
+  it("renders identically when unfocused and when isFocused is omitted", () => {
+    const { container: a } = renderHeader(false);
+    const { container: b } = renderHeader(undefined);
 
-    expect(root.classList.contains("bg-overlay-subtle")).toBe(false);
-    expect(root.classList.contains("transition-colors")).toBe(true);
+    expect(a.firstElementChild!.className).toBe(b.firstElementChild!.className);
   });
 
-  it("does not lift the header background when isFocused is omitted", () => {
-    const { container } = renderHeader(undefined);
-    const root = container.firstElementChild!;
+  it("applies focused-state styling distinct from unfocused", () => {
+    const { container: unfocused } = renderHeader(false);
+    const { container: focused } = renderHeader(true);
 
-    expect(root.classList.contains("bg-overlay-subtle")).toBe(false);
-  });
-
-  it("lifts the header background with a neutral overlay when focused", () => {
-    const { container } = renderHeader(true);
-    const root = container.firstElementChild!;
-
-    expect(root.classList.contains("bg-overlay-subtle")).toBe(true);
-    expect(root.classList.contains("transition-colors")).toBe(true);
-    // Neutral lift only — the accent ring is reserved for the macro-focus signal.
-    expect([...root.classList].some((c) => c.includes("accent"))).toBe(false);
+    // The exact tokens are a design decision and may shift; we only verify
+    // that focused vs unfocused render differently and that the focused
+    // state stays neutral (no accent — accent is reserved for the macro
+    // focus anchor per CLAUDE.md accent-restraint rules).
+    expect(focused.firstElementChild!.className).not.toBe(unfocused.firstElementChild!.className);
+    expect([...focused.firstElementChild!.classList].some((c) => c.includes("accent"))).toBe(false);
   });
 });

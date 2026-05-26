@@ -353,9 +353,23 @@ export function AppLayout({
     useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
   }, [showAssistant]);
 
-  // Clear macro focus on mouse interaction
+  // Clear macro focus on mouse interaction. A click inside the currently-
+  // focused region must NOT clear the claim — otherwise a click within the
+  // already-focused assistant (or any other claimed region) drops the macro
+  // region while DOM focus remains in place, and no new `focus` event fires
+  // to reclaim it. That recreates the "two active surfaces" bug where the
+  // grid panel re-shows its `.terminal-selected` chrome while the user is
+  // still typing into the assistant.
   useEffect(() => {
-    const handleMouseDown = () => useMacroFocusStore.getState().clearFocus();
+    const handleMouseDown = (e: MouseEvent) => {
+      const state = useMacroFocusStore.getState();
+      const focused = state.focusedRegion;
+      if (focused && e.target instanceof Node) {
+        const ref = state.refs.get(focused);
+        if (ref && ref.contains(e.target)) return;
+      }
+      state.clearFocus();
+    };
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
     return () => window.removeEventListener("mousedown", handleMouseDown, { capture: true });
   }, []);

@@ -254,6 +254,12 @@ vi.mock("@/store/macroFocusStore", () => {
   const state = { focusedRegion: null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
+  store.setState = (
+    partial: Partial<typeof state> | ((s: typeof state) => Partial<typeof state>)
+  ) => {
+    const next = typeof partial === "function" ? partial(state) : partial;
+    Object.assign(state, next);
+  };
   return { useMacroFocusStore: store };
 });
 

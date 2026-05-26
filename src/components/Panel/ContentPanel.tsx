@@ -20,6 +20,7 @@ import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -252,6 +253,14 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
   const showGridAttention = location === "grid" && !isMaximized && isMultiPanelGrid;
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
+  // When the Daintree Assistant region owns focus, suppress the grid panel's
+  // `terminal-selected` accent so the visual "active surface" follows where
+  // keystrokes are actually going. `focusedId` stays pinned (incumbent guard
+  // — see #6959 in panelStore.assistantFocusGuard.test.ts), so spatial
+  // navigation and action-target resolution are unaffected; only the chrome
+  // releases. Ambient agent-state borders (`panel-state-*`) still render.
+  const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
+  const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
 
   // Per-worktree color identity
   const worktreeColorMap = useWorktreeColorMap();
@@ -442,7 +451,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
-            ((isFocused || isSelected) && showGridAttention
+            (showSelectedChrome && showGridAttention
               ? "terminal-selected"
               : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
                 ? "panel-state-waiting"

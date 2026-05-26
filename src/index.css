@@ -1863,6 +1863,20 @@ body,
   border-bottom-color: var(--border-overlay);
 }
 
+/* Daintree Assistant focus state — mirrors `.terminal-selected` strength so
+   the active-surface affordance is consistent whether the user is typing into
+   a grid panel or the assistant. The assistant aside has only `border-l`, so
+   the border-color shift lands on the left edge; the inset + outer 1px rings
+   wrap the full aside (the rightmost ring sits at the viewport edge and is
+   visually clipped, which matches the panel rendering). */
+.assistant-focused {
+  border-left-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
+  background-color: var(--color-surface-highlight);
+  box-shadow:
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong);
+}
+
 /* Panel Agent State Borders — grid panel container state-driven styling */
 .panel-state-waiting {
   border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);
@@ -2576,7 +2590,8 @@ body[data-performance-mode="true"] .settings-section-header {
 
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
-body[data-performance-mode="true"] .terminal-focused {
+body[data-performance-mode="true"] .terminal-focused,
+body[data-performance-mode="true"] .assistant-focused {
   box-shadow: inset 0 0 0 1px var(--theme-overlay-medium) !important;
 }
 
@@ -2610,6 +2625,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
+  }
+
+  .assistant-focused {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-left-color: Highlight;
   }
 
   .panel-state-waiting {
@@ -2716,6 +2737,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .terminal-selected,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  .assistant-focused {
+    border-left-width: 2px;
   }
 
   .panel-state-waiting,
