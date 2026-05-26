@@ -5,6 +5,7 @@ import React, { Suspense } from "react";
 import { render, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
+import { actionService } from "@/services/ActionService";
 import { XtermAdapter } from "../XtermAdapter";
 
 const mocks = vi.hoisted(() => {
@@ -287,6 +288,51 @@ describe("XtermAdapter lifecycle", () => {
     expect(firstOnExit).not.toHaveBeenCalled();
     expect(secondOnExit).toHaveBeenCalledWith(7);
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+  });
+
+  it("passes Tab and Shift+Tab through to the PTY without dispatching focus-region actions (#9082)", async () => {
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const keyHandler = mocks.getKeyHandler();
+    expect(keyHandler).toBeTruthy();
+
+    const tabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(tabEvent, "preventDefault");
+    const tabResult = keyHandler?.(tabEvent);
+    expect(tabResult).toBe(true);
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+    const shiftTabResult = keyHandler?.(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        code: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    expect(shiftTabResult).toBe(true);
+
+    // Held Tab (key-repeat) must also pass through — shell autocomplete and
+    // many TUIs rely on sustained Tab presses.
+    const repeatedTabResult = keyHandler?.(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        code: "Tab",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    expect(repeatedTabResult).toBe(true);
+
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("re-applies renderer policy when a stable tier provider returns a new tier", async () => {
