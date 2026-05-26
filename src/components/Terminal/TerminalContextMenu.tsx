@@ -232,6 +232,13 @@ export function TerminalContextMenu({
             { source: sourceRef.current }
           );
           break;
+        case "redraw":
+          void actionService.dispatch(
+            "terminal.redraw",
+            { terminalId },
+            { source: sourceRef.current }
+          );
+          break;
         case "restart":
           if (terminalHasRunningAgentSession(terminal)) {
             setDestructiveConfirm({
@@ -717,6 +724,12 @@ export function TerminalContextMenu({
           )}
           {layoutSection}
           <ContextMenuSeparator />
+          {hasPty && (
+            <ContextMenuItem disabled={isHibernated} onSelect={() => handleAction("redraw")}>
+              <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+              Redraw Terminal
+            </ContextMenuItem>
+          )}
           {hasPty && (
             <ContextMenuItem onSelect={() => handleAction("restart")}>
               <RotateCcw className={ICON_CLASS} aria-hidden="true" />

@@ -24,6 +24,7 @@ import {
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  RefreshCw,
   SquareArrowOutUpRight,
   Trash2,
   Unlock,
@@ -55,6 +56,7 @@ import {
   useKeybindingDisplay,
   useTabOverflow,
 } from "@/hooks";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
@@ -288,6 +290,7 @@ function PanelHeaderComponent({
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const isInputLocked = terminalPty?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
+  const isHibernated = useIsHibernated(id);
 
   // Whether the overflow "..." menu has any items to show.
   // Dock rendering is PTY-only (`ContentDock` / `DockPanelOffscreenContainer`
@@ -883,6 +886,23 @@ function PanelHeaderComponent({
             </Tooltip>
             <DropdownMenuContent align="end" className="min-w-[160px]">
               {/* Session group */}
+              {hasPty && (
+                <DropdownMenuItem
+                  disabled={isHibernated}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "terminal.redraw",
+                      { terminalId: id },
+                      { source: "menu" }
+                    )
+                  }
+                  data-testid="panel-redraw"
+                >
+                  <RefreshCw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Redraw
+                </DropdownMenuItem>
+              )}
+
               {canRestart && onRestart && (
                 <DropdownMenuItem
                   onSelect={handleRestartSelect}
@@ -919,7 +939,7 @@ function PanelHeaderComponent({
               )}
 
               {/* Management group */}
-              {((canRestart && onRestart) || agentId) && <DropdownMenuSeparator />}
+              {((canRestart && onRestart) || hasPty || agentId) && <DropdownMenuSeparator />}
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
                   <PanelTopClose className="w-3 h-3 mr-2" aria-hidden="true" />
