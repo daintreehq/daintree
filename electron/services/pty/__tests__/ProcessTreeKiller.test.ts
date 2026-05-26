@@ -58,6 +58,13 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
     killer.execute(true);
 
     expect(warnSpy).not.toHaveBeenCalled();
+    // Guard against the loop being silently skipped: both descendants must
+    // have received SIGTERM and the follow-up SIGCONT (ESRCH on SIGTERM is
+    // treated as "process already gone" — SIGCONT still runs and ESRCHs too).
+    expect(killSpy).toHaveBeenCalledWith(1001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(1001, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(1002, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(1002, "SIGCONT");
   });
 
   it("warns once per pid when SIGTERM fails with EPERM", () => {
@@ -126,6 +133,10 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
       .map((c: unknown[]) => String(c[0]))
       .filter((m: string) => m.includes("SIGKILL"));
     expect(sigkillWarnings).toHaveLength(0);
+    // Guard against the sweep being a no-op: SIGKILL must have been attempted
+    // for both descendant and shell pids.
+    expect(killSpy).toHaveBeenCalledWith(3001, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(3000, "SIGKILL");
   });
 
   it("sends SIGCONT after SIGTERM for each descendant, then SIGCONT for shell", () => {
@@ -171,6 +182,11 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
       .map((c: unknown[]) => String(c[0]))
       .filter((m: string) => m.includes("SIGCONT"));
     expect(sigcontWarnings).toHaveLength(0);
+    // Guard against SIGCONT being silently skipped: each descendant and the
+    // shell must have received a SIGCONT call.
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(5002, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(5000, "SIGCONT");
   });
 
   it("warns once per pid when SIGCONT fails with EPERM", () => {
@@ -198,6 +214,30 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
     sigcontWarnings.forEach((m: string) => {
       expect(m).toContain("[ProcessTreeKiller]");
     });
+  });
+
+  it("skips SIGCONT when SIGTERM fails with EPERM", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
+      if (sig === "SIGTERM") {
+        throw makeErrnoError("EPERM", "kill EPERM");
+      }
+      return true;
+    });
+
+    const killer = new ProcessTreeKiller(makePty(8000), makeTreeCache([8001, 8002]));
+    killer.execute(true);
+
+    // Descendant SIGCONT must NOT be called when its SIGTERM was rejected.
+    // Waking a process we couldn't signal would let it run freely without
+    // the queued SIGTERM the wake was meant to deliver.
+    expect(killSpy).not.toHaveBeenCalledWith(8001, "SIGCONT");
+    expect(killSpy).not.toHaveBeenCalledWith(8002, "SIGCONT");
+    // Shell SIGCONT is independent of the descendant gate — it's tied to
+    // ptyProcess.kill() (SIGHUP), not the descendant SIGTERM loop.
+    expect(killSpy).toHaveBeenCalledWith(8000, "SIGCONT");
   });
 
   it("sends shell SIGCONT even when ptyProcess.kill() throws", () => {

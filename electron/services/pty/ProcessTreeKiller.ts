@@ -69,6 +69,7 @@ export class ProcessTreeKiller {
     const descendants = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
 
     for (const pid of descendants) {
+      let sigtermBlocked = false;
       try {
         process.kill(pid, "SIGTERM");
       } catch (err) {
@@ -78,8 +79,14 @@ export class ProcessTreeKiller {
         // operator needs to know.
         if (code !== "ESRCH") {
           console.warn(`[ProcessTreeKiller] SIGTERM pid=${pid}: ${(err as Error).message}`);
+          sigtermBlocked = true;
         }
       }
+      // Skip SIGCONT when SIGTERM was rejected (EPERM, etc.) — there is no
+      // queued kill to deliver, and waking a process we couldn't signal does
+      // nothing useful. ESRCH falls through (the SIGCONT will also ESRCH and
+      // be silent).
+      if (sigtermBlocked) continue;
       try {
         process.kill(pid, "SIGCONT");
       } catch (err) {
