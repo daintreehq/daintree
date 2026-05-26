@@ -610,7 +610,7 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.url).toBe("http://localhost:4173/");
   });
 
-  it("escalates stuckTier at 6s/12s/25s without restarting a stuck starting session (#8276)", async () => {
+  it("escalates stuckTier at 6s/20s/45s without restarting a stuck starting session (#8276, retuned #9099)", async () => {
     vi.useFakeTimers();
     try {
       ensureMock.mockImplementation((request: { projectId: string }) =>
@@ -651,20 +651,23 @@ describe("useDevServer adversarial races", () => {
       expect(result.current.stuckTier).toBe(0);
       expect(ensureMock).toHaveBeenCalledTimes(1);
 
+      // 0 → 6000 (Tier 1)
       await act(async () => {
         vi.advanceTimersByTime(6000);
         await Promise.resolve();
       });
       expect(result.current.stuckTier).toBe(1);
 
+      // 6000 → 20000 (Tier 2)
       await act(async () => {
-        vi.advanceTimersByTime(6000);
+        vi.advanceTimersByTime(14000);
         await Promise.resolve();
       });
       expect(result.current.stuckTier).toBe(2);
 
+      // 20000 → 45000 (Tier 3)
       await act(async () => {
-        vi.advanceTimersByTime(13000);
+        vi.advanceTimersByTime(25000);
         await Promise.resolve();
       });
       expect(result.current.stuckTier).toBe(3);
@@ -756,7 +759,7 @@ describe("useDevServer adversarial races", () => {
     }
   });
 
-  it("advances stuckTier exactly on the 6s/12s/25s boundaries (#8276)", async () => {
+  it("advances stuckTier exactly on the 6s/20s/45s boundaries (#8276, retuned #9099)", async () => {
     vi.useFakeTimers();
     try {
       ensureMock.mockImplementation((request: { projectId: string }) =>
@@ -804,16 +807,152 @@ describe("useDevServer adversarial races", () => {
       expect(result.current.stuckTier).toBe(0);
       await tick(1); // 6000
       expect(result.current.stuckTier).toBe(1);
-      await tick(5999); // 11999
+      await tick(13999); // 19999
       expect(result.current.stuckTier).toBe(1);
-      await tick(1); // 12000
+      await tick(1); // 20000
       expect(result.current.stuckTier).toBe(2);
-      await tick(12999); // 24999
+      await tick(24999); // 44999
       expect(result.current.stuckTier).toBe(2);
-      await tick(1); // 25000
+      await tick(1); // 45000
       expect(result.current.stuckTier).toBe(3);
 
       expect(restartMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suppresses Tier 2 when phaseLabel turns 'Compiling' before the 20s mark (#9099)", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      let stateChangedHandler: ((payload: { state: DevPreviewSessionState }) => void) | null = null;
+      onStateChangedMock.mockImplementation(
+        (cb: (payload: { state: DevPreviewSessionState }) => void) => {
+          stateChangedHandler = cb;
+          return vi.fn();
+        }
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Advance past Tier 1 — confirm ambient signal still fires.
+      await act(async () => {
+        vi.advanceTimersByTime(6000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(1);
+
+      // Backend emits "Compiling" before the 20s Tier 2 timer fires.
+      await act(async () => {
+        stateChangedHandler?.({
+          state: buildState({
+            panelId: "panel-1",
+            projectId: "project-1",
+            status: "starting",
+            terminalId: "term-project-1",
+            phaseLabel: "Compiling",
+          }),
+        });
+        await Promise.resolve();
+      });
+      expect(result.current.phaseLabel).toBe("Compiling");
+
+      // 6000 → 20000: Tier 2 timer fires, but the fire-time guard
+      // suppresses it because Compiling is now active.
+      await act(async () => {
+        vi.advanceTimersByTime(14000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(1);
+
+      // 20000 → 45000: Tier 3 still fires even mid-compile.
+      await act(async () => {
+        vi.advanceTimersByTime(25000);
+        await Promise.resolve();
+      });
+      expect(result.current.stuckTier).toBe(3);
+
+      expect(restartMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows Tier 2 to fire normally when phaseLabel never reaches 'Compiling' (#9099)", async () => {
+    vi.useFakeTimers();
+    try {
+      ensureMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+      getStateMock.mockImplementation((request: { projectId: string }) =>
+        Promise.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: request.projectId,
+            status: "starting",
+            terminalId: `term-${request.projectId}`,
+          })
+        )
+      );
+
+      const { result } = renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Advance to 20s with no Compiling signal — Tier 2 must fire.
+      await act(async () => {
+        vi.advanceTimersByTime(20000);
+        await Promise.resolve();
+      });
+      expect(result.current.phaseLabel).toBeUndefined();
+      expect(result.current.stuckTier).toBe(2);
     } finally {
       vi.useRealTimers();
     }
