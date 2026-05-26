@@ -1,5 +1,3 @@
-"use no memo";
-
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +31,12 @@ const TRANSFORM_ORIGIN: Record<Side, string> = {
   right: "left center",
 };
 
+// Per-instance show-delay timers keyed by popoverId. Module scope (rather than
+// useRef) keeps ref reads out of the cloneElement-passed handler closures —
+// the React Compiler can't classify those as event handlers and would flag
+// `ref.current` access as a render-phase read (see spike commit 0319cab22).
+const showTimers = new Map<string, number>();
+
 function sanitizeAnchorId(id: string): string {
   return `--np-${id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 }
@@ -50,32 +54,37 @@ export function NativeTooltip({
   const reactId = React.useId();
   const anchorName = sanitizeAnchorId(reactId);
   const popoverId = `np-tt-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  const popoverRef = React.useRef<HTMLDivElement | null>(null);
-  const showTimerRef = React.useRef<number | null>(null);
 
   React.useEffect(
     () => () => {
-      if (showTimerRef.current !== null) {
-        window.clearTimeout(showTimerRef.current);
-        showTimerRef.current = null;
+      const pending = showTimers.get(popoverId);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+        showTimers.delete(popoverId);
       }
     },
-    []
+    [popoverId]
   );
 
   function show() {
-    if (showTimerRef.current !== null) window.clearTimeout(showTimerRef.current);
-    showTimerRef.current = window.setTimeout(() => {
-      popoverRef.current?.showPopover();
+    const pending = showTimers.get(popoverId);
+    if (pending !== undefined) window.clearTimeout(pending);
+    const timer = window.setTimeout(() => {
+      showTimers.delete(popoverId);
+      // togglePopover(force) is idempotent — bare showPopover throws
+      // InvalidStateError when called on an already-open popover.
+      document.getElementById(popoverId)?.togglePopover(true);
     }, delay);
+    showTimers.set(popoverId, timer);
   }
 
   function hide() {
-    if (showTimerRef.current !== null) {
-      window.clearTimeout(showTimerRef.current);
-      showTimerRef.current = null;
+    const pending = showTimers.get(popoverId);
+    if (pending !== undefined) {
+      window.clearTimeout(pending);
+      showTimers.delete(popoverId);
     }
-    popoverRef.current?.hidePopover();
+    document.getElementById(popoverId)?.togglePopover(false);
   }
 
   const childProps = children.props;
@@ -125,7 +134,6 @@ export function NativeTooltip({
     <>
       {React.cloneElement(children, triggerOverrides)}
       <div
-        ref={popoverRef}
         id={popoverId}
         popover="hint"
         role="tooltip"

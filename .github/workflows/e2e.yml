@@ -4,7 +4,7 @@ name: E2E Tests
 # callers (release-{macos,linux,windows}.yml, nightly.yml) keep their own
 # parent run title; the matrix job names still make the suite visible inside
 # the run.
-run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}
+run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}${{ inputs.shard && inputs.shard_total && format(' · shard {0}/{1}', inputs.shard, inputs.shard_total) || '' }}
 
 # Unified runner for every E2E suite: core smoke, the six full-* domain
 # buckets, online (agent integration), and nightly (memory-leak detection).
@@ -51,6 +51,14 @@ on:
           - full-resilience
           - online
           - nightly
+      shard:
+        description: "Optional single shard index to run, e.g. 2. Must be paired with shard_total."
+        type: string
+        default: ""
+      shard_total:
+        description: "Optional total shard count for a single-shard rerun, e.g. 4. Must be paired with shard."
+        type: string
+        default: ""
   workflow_call:
     inputs:
       platform:
@@ -65,6 +73,14 @@ on:
         description: "Suite to run (full meta-suite, core, any full-* bucket, online, or nightly)"
         type: string
         default: "full"
+      shard:
+        description: "Optional single shard index to run. Must be paired with shard_total."
+        type: string
+        default: ""
+      shard_total:
+        description: "Optional total shard count for a single-shard rerun. Must be paired with shard."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -104,6 +120,8 @@ jobs:
           PLATFORM="${{ inputs.platform || 'all' }}"
           SUITE="${{ inputs.suite || 'core' }}"
           TEST_FILE="${{ inputs.test_file }}"
+          REQUESTED_SHARD="${{ inputs.shard }}"
+          REQUESTED_SHARD_TOTAL="${{ inputs.shard_total }}"
 
           case "$PLATFORM" in
             macos)       OSES='[{"os":"macos-14","name":"macOS"}]' ;;
@@ -118,7 +136,8 @@ jobs:
           # Windows full-platform contains restart/persistence-heavy tests
           # that still form a >45m shard at 8 slices, so use 16 slices there.
           # full-worktree/full-panels are lighter but still need more than the
-          # default 4.
+          # default 4. full-presets also needs extra Windows slices after
+          # Windows 2/4 exceeded the nightly shard window in run 26445552027.
           case "$SUITE" in
             full-platform)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
@@ -127,7 +146,7 @@ jobs:
                 SHARD_TOTAL=4
               fi
               ;;
-            full-worktree|full-panels)
+            full-worktree|full-presets|full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=8
               else
@@ -140,18 +159,36 @@ jobs:
           if [ -n "$TEST_FILE" ]; then
             SHARD_TOTAL=1
           fi
+          if [ -n "$REQUESTED_SHARD" ] || [ -n "$REQUESTED_SHARD_TOTAL" ]; then
+            if [ -z "$REQUESTED_SHARD" ] || [ -z "$REQUESTED_SHARD_TOTAL" ]; then
+              echo "::error::shard and shard_total must be provided together"
+              exit 1
+            fi
+            case "$REQUESTED_SHARD" in *[!0-9]*|"") echo "::error::shard must be a positive integer"; exit 1 ;; esac
+            case "$REQUESTED_SHARD_TOTAL" in *[!0-9]*|"") echo "::error::shard_total must be a positive integer"; exit 1 ;; esac
+            if [ "$REQUESTED_SHARD" -lt 1 ] || [ "$REQUESTED_SHARD_TOTAL" -lt 1 ] || [ "$REQUESTED_SHARD" -gt "$REQUESTED_SHARD_TOTAL" ]; then
+              echo "::error::shard must be between 1 and shard_total"
+              exit 1
+            fi
+            SHARD_TOTAL="$REQUESTED_SHARD_TOTAL"
+          fi
 
           MATRIX=$(node -e '
             const oses = JSON.parse(process.argv[1]);
             const total = Number(process.argv[2]);
+            const requested = process.argv[3] ? Number(process.argv[3]) : null;
             const include = [];
             for (const o of oses) {
-              for (let s = 1; s <= total; s++) {
-                include.push({ ...o, shard: s, shardTotal: total });
+              if (requested) {
+                include.push({ ...o, shard: requested, shardTotal: total });
+              } else {
+                for (let s = 1; s <= total; s++) {
+                  include.push({ ...o, shard: s, shardTotal: total });
+                }
               }
             }
             console.log(JSON.stringify({ include }));
-          ' "$OSES" "$SHARD_TOTAL")
+          ' "$OSES" "$SHARD_TOTAL" "$REQUESTED_SHARD")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   e2e:
@@ -226,7 +263,19 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+
+      - name: Resolve npm cache path
+        id: npm-cache-dir
+        shell: bash
+        run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache npm
+        id: cache-npm
+        continue-on-error: true
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.npm-cache-dir.outputs.dir }}
+          key: node-cache-${{ runner.os }}-${{ runner.arch }}-npm-${{ hashFiles('package-lock.json') }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'

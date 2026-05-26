@@ -3,7 +3,7 @@ import type { PanelComponentProps } from "@/registry";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { clampZoom } from "@/components/Browser/browserUtils";
-import { isPtyPanel, isBrowserPanel } from "@shared/types/panel";
+import { isPtyPanel, isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
 // `getNarrowPanel`'s parameter so this file doesn't import the deprecated
@@ -60,6 +60,7 @@ export function buildPanelProps({
 }: BuildPanelPropsConfig): PanelComponentProps {
   const pty = isPtyPanel(terminal) ? terminal : undefined;
   const browser = isBrowserPanel(terminal) ? terminal : undefined;
+  const devPreview = isDevPreviewPanel(terminal) ? terminal : undefined;
 
   return {
     id: terminal.id,
@@ -92,7 +93,7 @@ export function buildPanelProps({
     agentPresetId: pty?.agentPresetId,
     presetColor: pty?.agentPresetColor,
     agentLaunchFlags: pty?.agentLaunchFlags,
-    cwd: pty?.cwd,
+    cwd: pty?.cwd ?? devPreview?.cwd,
     agentState: pty?.agentState,
     activity: getStableActivity(
       terminal.id,
