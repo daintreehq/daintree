@@ -59,7 +59,13 @@ export class ProcessTreeKiller {
       return;
     }
 
-    // Unix: SIGTERM descendants bottom-up, then kill the shell
+    // Unix: SIGTERM descendants bottom-up, then kill the shell.
+    // SIGTERM is queued (not delivered) while a process is stopped via SIGSTOP
+    // (Ctrl+Z). SIGCONT wakes the process; the kernel then delivers the queued
+    // SIGTERM before any user-space code runs, so handlers like vite's port
+    // release fire normally. SIGTERM-then-SIGCONT (per pid) is the correct
+    // order — reversing it lets the resumed process fork() new children in the
+    // window between SIGCONT delivery and SIGTERM delivery.
     const descendants = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
 
     for (const pid of descendants) {
@@ -74,12 +80,36 @@ export class ProcessTreeKiller {
           console.warn(`[ProcessTreeKiller] SIGTERM pid=${pid}: ${(err as Error).message}`);
         }
       }
+      try {
+        process.kill(pid, "SIGCONT");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        // ESRCH is silent; EPERM warns because a failed SIGCONT leaves the
+        // stopped process holding its queued SIGTERM forever — a permanent
+        // orphan rather than a clean shutdown.
+        if (code !== "ESRCH") {
+          console.warn(`[ProcessTreeKiller] SIGCONT pid=${pid}: ${(err as Error).message}`);
+        }
+      }
     }
 
     try {
       this.ptyProcess.kill();
     } catch {
       // Process may already be dead
+    }
+
+    // node-pty's IPty.kill() sends SIGHUP to the shell, which also queues
+    // while stopped. Wake the shell so the queued SIGHUP delivers. Kept
+    // outside the ptyProcess.kill() try/catch so it still fires if that
+    // throws (already-dead shell → ESRCH here, silent).
+    try {
+      process.kill(shellPid, "SIGCONT");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") {
+        console.warn(`[ProcessTreeKiller] SIGCONT pid=${shellPid}: ${(err as Error).message}`);
+      }
     }
 
     if (immediate) {
