@@ -1,5 +1,162 @@
 # Changelog
 
+## [0.14.0] - 2026-05-26
+
+GitHub and forge traffic was overhauled — host-side batch loading, cross-window GraphQL coalescing, an ETag-gated REST activity probe in front of PR detection, and in-band CI aggregates folded into the list query make PR and issue surfaces materially cheaper to poll. A broad accessibility sweep landed across menus, dialogs, palettes, the assistant, and forced-colors mode. The #8957 panel-refactor epic completed: `PanelInstance` is now the renderer carrier and `TerminalInstance` is gone. Five performance budgets gate every PR with a sticky summary comment.
+
+### Features
+
+**GitHub & forge**
+
+- Host-side BatchLoader coalesces forge provider calls behind a single bridge (#9043)
+- Forge contract gained freshness pass-through and `reviewDecision` (#9044)
+- Caching, in-flight dedup, and a probe gate now flow through the forge provider (#9046)
+- Per-query GraphQL `rateLimit.cost` captured for quota diagnostics (#9052)
+- Budget throttle wired into renderer polls; redundant `/rate_limit` timer dropped (#9054)
+- Repo-level REST ETag probe runs in front of PR detection (#9056)
+- PR-poll boost cadence decays on stuck CI checks (#9057)
+
+**Accessibility**
+
+- Automated focus-ring visibility validation (#8940)
+- `prefers-contrast: more` expanded beyond terminal panel borders (#8939)
+
+**Notifications**
+
+- Notify routing centralized in an EventKind policy manifest (#9007)
+- Threads re-promoted on severity escalation and un-snooze (#9008)
+- `useSkeletonDisplayFloor` minimum-dwell hook added with documented Suspense interaction (#9005)
+
+**Panels & welcome**
+
+- Panel kinds can now diverge on dock and focus behavior via per-kind descriptors (#8946)
+- Property-syntax variance enforced on `PanelKindConfig` via lint rule (#8961)
+- Backgrounded panels are now eligible for hibernation (#8965)
+- Welcome screen drives one clear first step (#8955)
+- First-run setup wizard split into discrete steps (#8966)
+- Recipe runner empty state surfaces detected run-command suggestions (#8947)
+
+**UI & interaction**
+
+- Bulk Empty trash action with confirm dialog (#8962)
+- Kinetic enter cue distinguishes fleet preview from multi-select (#8995)
+- Slim panel grid scrollbar with tinted gutter (#8913)
+- SkeletonHint long-wait escalation redesigned (#8910)
+- Source PR captured when creating a worktree from the PR dropdown (#8888)
+
+**CI & budgets**
+
+- Five performance budgets gate every PR (renderer bundle, first-render chunk, renderer imports, import budget, compiler bailouts) (#8900)
+- Module-set and per-T0-chunk gates added to the renderer-import budget (#8890)
+- First-render chunk budget wired into CI with sticky PR comment (#8898)
+- All five budget summaries post as one sticky PR comment (#8901)
+- Compiler bailout ratchet is now severity-aware (#8892)
+- Per-rule ESLint warning counts tracked in the ratchet (#8891)
+- Markdown summary emission added to budget-check scripts (#8899)
+- PR-trigger arm added to the fix-with-test ratio gate (#8897)
+
+### Bug Fixes
+
+**Accessibility & keyboard**
+
+- `aria-keyshortcuts` exposed on context and dropdown menu items (#8941)
+- ARIA live regions and list semantics added to the shortcut reference dialog (#8943)
+- `EmptyState` aria-live announcements debounced to stop screen-reader floods (#8971)
+- Three live-region bugs silently dropping screen-reader announcements (#8942)
+- Macro-focus region landmarks polished for screen readers (#8931)
+- Key-state transitions announced to screen readers (#8937)
+- Command palette accessibility polished (#8929)
+- Terminal pane accessibility gaps for screen-reader users closed (#8935)
+- Toolbar shortcut discoverability gaps closed (#8938)
+- Status indicators and toggles restored in forced-colors mode (#8936)
+- Forced-colors fallbacks added for chrome selection states (#8932)
+- Four JS reduced-motion gates now respect the Daintree reduce-animations toggle (#8930)
+- Aria-modal dropped on exiting palette dialog (palette handoff overlap, #8948)
+- Visible focus state restored on the Daintree Assistant (#8903)
+- Focus rings restored on browser webview and sidebar rows (#8933)
+
+**GitHub & forge**
+
+- Caching and in-flight dedup restored in the CodeForge data path (#9053)
+- Unbounded `reviewThreads` GraphQL pagination capped at 5 pages (#9059)
+- Redundant tooltip GraphQL calls eliminated via list-query cache prewarm (#9058)
+- GitHub rate-limit REST blocks now clear proactively via timer (#8974)
+- Bulk worktree create surfaces self-assignment failures instead of swallowing (#8975)
+- Drag preview status indicator matches the canonical agent state icon and color (#8973)
+
+**Panels, focus & dialogs**
+
+- New-panel focus policy decoupled from spawn provenance (#8945)
+- Additive-direction gaps in panel-kind serializer ratchet closed (#8959)
+- `BASE_PANEL_FIELDS` lockstep compile-time enforced in panel persistence (#8960)
+- Remaining panel-kind registries pinned with `satisfies` (#8958)
+- Trash and background group restore metadata de-anchored (#8944)
+- Dialogs accept `restoreFocusTo` for logical-successor focus when the trigger unmounts (#8970)
+- Open popovers reposition when the right-side panel toggles (#8969)
+- Anti-flicker palette gate split into typed-input (200ms) and discrete-action (400ms) tokens (#8993)
+- Review & Commit loading states shape-match with skeletons (close-mid-load crash fixed) (#8908)
+
+**UI polish**
+
+- Toast dwell defaults lowered toward the industry midpoint (#9009)
+- Floating-UI entry motion tightened (slide and scale) (#8968)
+- Armed-state ring on toolbar buttons now snaps instead of fading (#8967)
+- Accent fills removed from multi-select checkboxes and switches (#8950)
+- Fleet-preview enter cue stays invisible under performance mode (no #)
+- Tooltip and shortcut-hint reopen on the command palette button suppressed after focus restore (no #)
+- Surface-highlight lift scoped to the assistant header instead of the full aside (no #)
+- Assistant grid terminal-selected chrome suppressed when the assistant has focus (no #)
+- Voice keyframes cleanup + CLAUDE.md drift corrected (#8934)
+- `Cmd+Shift+V` routed to the focused Daintree Assistant; assistant dictation shortcut added (#8887)
+
+**Agents & dev preview**
+
+- Antigravity auth detection uses inherited Gemini OAuth paths instead of a nonexistent path (#8918)
+- Dev-preview server now stops on background, matching trash behavior (#8963)
+- `GitInitDialog` spinner Doherty-gated and the silent commit-message default removed (#8956)
+
+**Terminal**
+
+- Redraw menu item added to the panel header and context menu (no #)
+
+**CI & tests**
+
+- Nightly fix-with-test ratio gate tightened against sampling noise (#8896)
+- Bundle-budget failure message no longer references a non-existent label (#8894)
+- Silent budget-override flag replaced with a linked-issue gate (#8902)
+- `lint-ratchet` ESLint subprocess heap bumped to 4 GB (no #)
+- Nightly workflow stabilized (no #)
+- `opencode-online` E2E suite env-gated when OpenCode is absent (#8883)
+- Voice-input Clear-button selector tightened to avoid disabled-button match (#8882)
+
+### Performance
+
+**GitHub & forge**
+
+- GraphQL activity probe replaced with REST events + ETag (#9041)
+- Numeric `#N` and range searches batched into a single GraphQL query (#9047)
+- Required-checks signal folded into `LIST_PRS_QUERY` via in-band aggregates (#9060)
+- Forge-bridge GraphQL calls coalesced across Electron windows (#9055)
+- Tooltip and CI lookups batched at the forge bridge
+
+**Layout & build**
+
+- CSS layout containment added to resizable sidebar and assistant columns (#9014)
+- First-render chunk seed list derived from the panel-kind registry (#8895)
+
+### Other Changes
+
+- TerminalInstance fully drained from the renderer store — `PanelInstance` is the carrier (closes #8957)
+- `EmptyState` user-cleared scale narrowed to `sidebar | canvas` (#8972)
+- Tab-group dissolve and recreate deduped across background and trash (#8964)
+- Redundant motion wrapper removed from `SortableTabButton` (#8996)
+- Shared agent welcome card eligibility check extracted from `WelcomeScreen` (#8952)
+- Accent restraint tightened to per active focus region (#8953)
+- Accent-guard allowlist hygiene checks added and stale entries audited (#8954)
+- Forge `matches` contract corrected — exact-hostname only, no glob support (#8949)
+- Stale forge/github routing comments corrected (#8951)
+- Five performance budgets documented as PR-build gates (#8980)
+
 ## [0.13.0] - 2026-05-24
 
 The panel grid was reworked from count-driven to size-driven and now scrolls when fleets exceed the viewport, with a custom scroll chrome that survives panel churn. Cold-start trimmed further — PTY and workspace hosts fork concurrently, app:boot IPC overlaps the first render, and four background services defer past first paint. The action palette grew pinning, scope chips, mode-prefix routing, and destructive-action disclosure. The Daintree Assistant surfaces launch failures, MCP cascade, and pinned context inline. Antigravity (agy) joins the built-in agent roster.
