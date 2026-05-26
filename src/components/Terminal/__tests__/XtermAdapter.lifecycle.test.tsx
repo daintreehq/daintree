@@ -343,6 +343,56 @@ describe("XtermAdapter lifecycle", () => {
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
+  it("captures bare F11 so Electron's fullscreen accelerator does not fire (#9104)", async () => {
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const keyHandler = mocks.getKeyHandler();
+    expect(keyHandler).toBeTruthy();
+
+    const f11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(f11Event, "preventDefault");
+    const stopPropagationSpy = vi.spyOn(f11Event, "stopPropagation");
+    const f11Result = keyHandler?.(f11Event);
+    expect(f11Result).toBe(true);
+    expect(preventDefaultSpy).toHaveBeenCalled();
+    expect(stopPropagationSpy).toHaveBeenCalled();
+
+    // F11 with modifiers must still reach TUIs that bind them (e.g. Ctrl+F11).
+    const ctrlF11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const ctrlPreventDefaultSpy = vi.spyOn(ctrlF11Event, "preventDefault");
+    const ctrlStopPropagationSpy = vi.spyOn(ctrlF11Event, "stopPropagation");
+    keyHandler?.(ctrlF11Event);
+    expect(ctrlPreventDefaultSpy).not.toHaveBeenCalled();
+    expect(ctrlStopPropagationSpy).not.toHaveBeenCalled();
+
+    const shiftF11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const shiftPreventDefaultSpy = vi.spyOn(shiftF11Event, "preventDefault");
+    const shiftStopPropagationSpy = vi.spyOn(shiftF11Event, "stopPropagation");
+    keyHandler?.(shiftF11Event);
+    expect(shiftPreventDefaultSpy).not.toHaveBeenCalled();
+    expect(shiftStopPropagationSpy).not.toHaveBeenCalled();
+
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
   it("re-applies renderer policy when a stable tier provider returns a new tier", async () => {
     let tier = TerminalRefreshTier.BACKGROUND;
     const getRefreshTier = vi.fn(() => tier);
