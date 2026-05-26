@@ -76,13 +76,16 @@ export function HelpPanelHeader({
     <div
       className={cn(
         "flex items-center gap-1 px-3 py-2 border-b border-daintree-border shrink-0 transition-colors",
-        // Match the strength of a selected grid panel's lifted title bar.
-        // The parent `.assistant-focused` class already raises the aside's
-        // background to `--color-surface-highlight`; here we only tweak the
-        // separator to `--border-overlay`, mirroring `.terminal-selected >
-        // div:first-child`. Neutral surface lift — no accent — per the
-        // single-anchor-per-region rule in CLAUDE.md.
-        isFocused && "border-b-[var(--border-overlay)]"
+        // Title-bar lift owns the surface-highlight for the focused assistant
+        // region. Uses `--color-surface-highlight` (= theme-aware
+        // `surface-panel-elevated`) — the same token grid panels swap to via
+        // `.terminal-selected`, so the visual weight matches a selected
+        // panel's title bar across every theme. Scoping the fill here (not
+        // on the aside via `.assistant-focused`) keeps the launching
+        // skeleton, empty state, and any future no-terminal content anchored
+        // to `bg-daintree-bg`. Neutral lift — no accent — per the
+        // single-anchor-per-region rule.
+        isFocused && "bg-[var(--color-surface-highlight)] border-b-[var(--border-overlay)]"
       )}
     >
       <div className="flex items-center min-w-0 flex-1">

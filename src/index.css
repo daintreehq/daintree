@@ -1863,15 +1863,14 @@ body,
   border-bottom-color: var(--border-overlay);
 }
 
-/* Daintree Assistant focus state — mirrors `.terminal-selected` strength so
-   the active-surface affordance is consistent whether the user is typing into
-   a grid panel or the assistant. The assistant aside has only `border-l`, so
-   the border-color shift lands on the left edge; the inset + outer 1px rings
-   wrap the full aside (the rightmost ring sits at the viewport edge and is
-   visually clipped, which matches the panel rendering). */
+/* Daintree Assistant focus state — anchors the active-surface affordance on
+   the aside edge (border-left + 1px rings) while the surface-lift fill lives
+   on the header only (`HelpPanelHeader` uses `bg-overlay-subtle` when
+   focused). Filling the whole aside floods the launching skeleton, the empty
+   state, and any future no-terminal content with the lift, so the chrome is
+   scoped here to edges only. */
 .assistant-focused {
   border-left-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-  background-color: var(--color-surface-highlight);
   box-shadow:
     inset 0 0 0 1px var(--theme-overlay-soft),
     0 0 0 1px var(--theme-overlay-strong);

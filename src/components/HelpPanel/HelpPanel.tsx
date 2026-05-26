@@ -832,12 +832,9 @@ export function HelpPanel({
         )}
       </div>
 
-      {/* Bottom info bar — explicit `bg-daintree-bg` so the parent
-          `.assistant-focused` surface-highlight lift bleeds through to the
-          header only, not down here. The footer is ambient metadata and
-          shouldn't share the active-surface anchor. */}
+      {/* Bottom info bar */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40 bg-daintree-bg">
+        <div className="flex flex-col gap-1 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
           {pinnedContext && (
             <span
               className="flex items-center gap-1.5 min-w-0"
