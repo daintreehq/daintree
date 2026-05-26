@@ -104,9 +104,7 @@ export interface WorktreeMenuItemsProps {
   onCopyPath: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
-  onOpenIssuePortal?: () => void;
   onOpenIssueExternal?: () => void;
-  onOpenPRPortal?: () => void;
   onOpenPRExternal?: () => void;
   onAttachIssue?: () => void;
   onViewPlan?: () => void;
@@ -161,9 +159,7 @@ export function WorktreeMenuItems({
   onCopyPath,
   onOpenEditor,
   onRevealInFinder,
-  onOpenIssuePortal,
   onOpenIssueExternal,
-  onOpenPRPortal,
   onOpenPRExternal,
   onAttachIssue,
   onViewPlan,
@@ -198,9 +194,9 @@ export function WorktreeMenuItems({
   onResourceStatus,
   onResourceTeardown,
 }: WorktreeMenuItemsProps) {
-  const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssuePortal || onOpenIssueExternal));
-  const hasPRSub = Boolean(worktree.linked?.pr && (onOpenPRPortal || onOpenPRExternal));
-  const hasIssueOrPrSection = hasIssueSub || hasPRSub;
+  const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssueExternal);
+  const hasPRItem = Boolean(worktree.linked?.pr && onOpenPRExternal);
+  const hasIssueOrPrSection = hasIssueItem || hasPRItem;
   const hasRecipes = recipes.length > 0;
   const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
   const hasMoveSection = Boolean(onMoveUp || onMoveDown);
@@ -514,33 +510,19 @@ export function WorktreeMenuItems({
         </C.Item>
       )}
 
-      {/* Issue / PR submenus */}
+      {/* Issue / PR items */}
       {hasIssueOrPrSection && <C.Separator />}
-      {hasIssueSub && (
-        <C.Sub>
-          <C.SubTrigger>
-            <CircleDot className="w-3.5 h-3.5 mr-2" />
-            Open Issue #{worktree.issueNumber}
-          </C.SubTrigger>
-          <C.SubContent>
-            {onOpenIssuePortal && <C.Item onSelect={onOpenIssuePortal}>In Portal</C.Item>}
-            {onOpenIssueExternal && (
-              <C.Item onSelect={onOpenIssueExternal}>In External Browser</C.Item>
-            )}
-          </C.SubContent>
-        </C.Sub>
+      {hasIssueItem && (
+        <C.Item onSelect={onOpenIssueExternal}>
+          <CircleDot className="w-3.5 h-3.5 mr-2" />
+          Open Issue #{worktree.issueNumber}
+        </C.Item>
       )}
-      {hasPRSub && (
-        <C.Sub>
-          <C.SubTrigger>
-            <GitPullRequest className="w-3.5 h-3.5 mr-2" />
-            Open PR #{worktree.linked?.pr?.ref.number}
-          </C.SubTrigger>
-          <C.SubContent>
-            {onOpenPRPortal && <C.Item onSelect={onOpenPRPortal}>In Portal</C.Item>}
-            {onOpenPRExternal && <C.Item onSelect={onOpenPRExternal}>In External Browser</C.Item>}
-          </C.SubContent>
-        </C.Sub>
+      {hasPRItem && (
+        <C.Item onSelect={onOpenPRExternal}>
+          <GitPullRequest className="w-3.5 h-3.5 mr-2" />
+          Open PR #{worktree.linked?.pr?.ref.number}
+        </C.Item>
       )}
 
       {/* Recipes */}

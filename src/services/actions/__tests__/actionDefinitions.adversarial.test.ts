@@ -1043,69 +1043,6 @@ describe("worktree action hardening", () => {
     });
   });
 
-  it("does not dispatch portal open for malformed or unsafe PR URLs", async () => {
-    const actions = buildRegistry(registerWorktreeActions);
-    const openPRInPortal = actions.get("worktree.openPRInPortal")!();
-
-    worktreeViewStore.setState({
-      worktrees: new Map([
-        [
-          "wt-1",
-          {
-            id: "wt-1",
-            path: "/repo",
-            branch: "feature/test",
-            prUrl: "javascript:alert(1)",
-            prTitle: "Unsafe",
-            prNumber: 12,
-          },
-        ],
-        [
-          "wt-2",
-          {
-            id: "wt-2",
-            path: "/repo",
-            branch: "feature/bad",
-            prUrl: "not a url",
-            prTitle: "Broken",
-            prNumber: 13,
-          },
-        ],
-      ]),
-    } as never);
-
-    await openPRInPortal.run(undefined, { activeWorktreeId: "wt-1" } as never);
-    await openPRInPortal.run(undefined, { activeWorktreeId: "wt-2" } as never);
-
-    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("does not dispatch portal open when issue URL lookup returns nothing", async () => {
-    const actions = buildRegistry(registerWorktreeActions);
-    const openIssueInPortal = actions.get("worktree.openIssueInPortal")!();
-
-    worktreeViewStore.setState({
-      worktrees: new Map([
-        [
-          "wt-3",
-          {
-            id: "wt-3",
-            path: "/repo",
-            branch: "feature/no-issue-url",
-            issueNumber: 44,
-            issueTitle: "Missing URL",
-          },
-        ],
-      ]),
-    } as never);
-    mocks.forgeClient.getIssueUrl.mockResolvedValueOnce(null);
-
-    await openIssueInPortal.run(undefined, { activeWorktreeId: "wt-3" } as never);
-
-    expect(mocks.forgeClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
-    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
-  });
-
   it("propagates alias dispatch failures for worktree.copyContext", async () => {
     const actions = buildRegistry(registerWorktreeActions);
     const copyContext = actions.get("worktree.copyContext")!();
