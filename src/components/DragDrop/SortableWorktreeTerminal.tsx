@@ -3,13 +3,13 @@ import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/lib/animationUtils";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { WorktreeDragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
 import { pixelSnapTransform } from "./SortableTerminal";
 
 interface SortableWorktreeTerminalProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   worktreeId: string;
   sourceIndex: number;
   children: React.ReactNode;

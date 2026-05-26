@@ -1,3 +1,4 @@
+// eager-import-allow: writes logs via sync fs so early-boot logs survive a crash before async transports exist
 import { configure } from "safe-stable-stringify";
 import { getErrorDetails } from "./errorTypes.js";
 import {

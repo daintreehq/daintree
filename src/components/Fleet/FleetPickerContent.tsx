@@ -15,7 +15,7 @@ import {
   type PickerWorktreeGroup,
   type UseFleetPickerResult,
 } from "@/hooks/useFleetPicker";
-import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
+import type { AgentState, SemanticSearchMatch } from "@shared/types";
 
 export interface FleetPickerContentProps {
   /** Result of `useFleetPicker` — owned and called by the consumer. */
@@ -450,7 +450,7 @@ function SnippetLine({
   );
 }
 
-function renderStateBadge(agentState: TerminalInstance["agentState"]): ReactElement | null {
+function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
   const label = agentState === "waiting" ? "Waiting" : "Working";
   return (
@@ -496,8 +496,8 @@ function PickerCheckbox({
       className={cn(
         "relative flex shrink-0 w-4 h-4 rounded border transition-colors duration-150",
         "bg-daintree-bg border-border-strong",
-        "data-[state=checked]:bg-daintree-accent data-[state=checked]:border-daintree-accent",
-        "data-[state=indeterminate]:bg-border-strong data-[state=indeterminate]:border-border-strong",
+        "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
+        "data-[state=indeterminate]:bg-daintree-text data-[state=indeterminate]:border-daintree-text",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
       )}
     >

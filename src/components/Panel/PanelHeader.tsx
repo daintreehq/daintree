@@ -24,6 +24,7 @@ import {
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  RefreshCw,
   SquareArrowOutUpRight,
   Trash2,
   Unlock,
@@ -55,6 +56,7 @@ import {
   useKeybindingDisplay,
   useTabOverflow,
 } from "@/hooks";
+import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
@@ -67,6 +69,7 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
@@ -284,11 +287,16 @@ function PanelHeaderComponent({
   );
 
   const terminal = usePanelStore((state) => state.panelsById[id]);
-  const isInputLocked = terminal?.isInputLocked ?? false;
+  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
+  const isInputLocked = terminalPty?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
+  const isHibernated = useIsHibernated(id);
 
-  // Whether the overflow "..." menu has any items to show
-  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
+  // Whether the overflow "..." menu has any items to show.
+  // Dock rendering is PTY-only (`ContentDock` / `DockPanelOffscreenContainer`
+  // filter via `isPtyPanel`); offering the move-to-dock affordance for
+  // browser/dev-preview/review panels would silently strand them.
+  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock" && hasPty;
   const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect
@@ -346,15 +354,28 @@ function PanelHeaderComponent({
     if (isWatched) {
       unwatchPanel(id);
     } else if (
-      terminal?.agentState === "completed" ||
-      terminal?.agentState === "waiting" ||
-      terminal?.agentState === "exited"
+      terminalPty?.agentState === "completed" ||
+      terminalPty?.agentState === "waiting" ||
+      terminalPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, terminal.title ?? id, terminal.agentState);
+      fireWatchNotification(id, terminal?.title ?? id, terminalPty.agentState);
     } else {
       watchPanel(id);
     }
-  }, [id, isWatched, unwatchPanel, watchPanel, terminal]);
+  }, [id, isWatched, unwatchPanel, watchPanel, terminal, terminalPty]);
+
+  // Bump a generation counter on each false→true transition of
+  // `isFleetPreviewed` so the enter-cue overlay (keyed by this counter)
+  // remounts and re-runs its keyframe. Avoids a per-pane `void offsetWidth`
+  // forced reflow that would thrash layout across a fleet of headers.
+  const prevFleetPreviewedRef = useRef(isFleetPreviewed);
+  const [previewEnterGen, setPreviewEnterGen] = useState(0);
+  useEffect(() => {
+    if (!prevFleetPreviewedRef.current && isFleetPreviewed) {
+      setPreviewEnterGen((g) => g + 1);
+    }
+    prevFleetPreviewedRef.current = isFleetPreviewed;
+  }, [isFleetPreviewed]);
 
   // In dock, show shortened title without command summary for space efficiency
   const displayTitle = location === "dock" ? getBaseTitle(title) : title;
@@ -865,6 +886,23 @@ function PanelHeaderComponent({
             </Tooltip>
             <DropdownMenuContent align="end" className="min-w-[160px]">
               {/* Session group */}
+              {hasPty && (
+                <DropdownMenuItem
+                  disabled={isHibernated}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "terminal.redraw",
+                      { terminalId: id },
+                      { source: "menu" }
+                    )
+                  }
+                  data-testid="panel-redraw"
+                >
+                  <RefreshCw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Redraw
+                </DropdownMenuItem>
+              )}
+
               {canRestart && onRestart && (
                 <DropdownMenuItem
                   onSelect={handleRestartSelect}
@@ -901,7 +939,7 @@ function PanelHeaderComponent({
               )}
 
               {/* Management group */}
-              {((canRestart && onRestart) || agentId) && <DropdownMenuSeparator />}
+              {((canRestart && onRestart) || hasPty || agentId) && <DropdownMenuSeparator />}
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
                   <PanelTopClose className="w-3 h-3 mr-2" aria-hidden="true" />
@@ -1141,6 +1179,14 @@ function PanelHeaderComponent({
         {/* Kind-specific header content slot */}
         {headerContent}
       </div>
+      {isFleetPreviewed ? (
+        <span
+          key={previewEnterGen}
+          className="fleet-preview-enter-overlay"
+          aria-hidden="true"
+          data-testid="fleet-preview-enter-overlay"
+        />
+      ) : null}
     </div>
   );
 }

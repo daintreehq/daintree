@@ -1,29 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
+import { checkShrinkageGuard, aggregateByRule, checkByRule } from "./lint-ratchet.mjs";
 
-// Test the lint-ratchet shrinkage guard logic in isolation. We don't shell out
-// to eslint; we test the guard that fires inside the --update path.
+// These import the pure helpers directly from the script — the `invokedDirectly`
+// guard means importing the module does not spawn ESLint or touch the baseline.
 
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
-
-/**
- * Core guard logic extracted from lint-ratchet.mjs for testability.
- * Returns `{ blocked: true, message: string }` or `{ blocked: false }`.
- */
-function checkShrinkageGuard(priorCount, newCount, force, threshold = UPDATE_SHRINKAGE_THRESHOLD) {
-  if (force) return { blocked: false };
-
-  if (priorCount > 0) {
-    const drop = (priorCount - newCount) / priorCount;
-    if (drop > threshold) {
-      return {
-        blocked: true,
-        message: `::error::refusing to update baseline — warning count would drop from ${priorCount} to ${newCount} (${(drop * 100).toFixed(1)}% shrinkage > ${(threshold * 100).toFixed(0)}% threshold).`,
-      };
-    }
-  }
-
-  return { blocked: false };
-}
 
 describe("lint-ratchet shrinkage guard", () => {
   describe("UPDATE_SHRINKAGE_THRESHOLD = 0.1", () => {
@@ -124,5 +105,144 @@ describe("lint-ratchet shrinkage guard", () => {
       const result = checkShrinkageGuard(10, 9, false);
       expect(result.blocked).toBe(false);
     });
+  });
+});
+
+describe("aggregateByRule", () => {
+  const mkFile = (filePath, messages) => ({ filePath, messages });
+
+  it("tallies severity-1 warnings per rule across files", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 1, ruleId: "@typescript-eslint/no-explicit-any" },
+        { severity: 1, ruleId: "no-console" },
+      ]),
+      mkFile("/src/b.ts", [{ severity: 1, ruleId: "@typescript-eslint/no-explicit-any" }]),
+    ];
+    expect(aggregateByRule(results)).toEqual({
+      "@typescript-eslint/no-explicit-any": 2,
+      "no-console": 1,
+    });
+  });
+
+  it("excludes severity-2 (error) messages", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 2, ruleId: "no-debugger" },
+        { severity: 1, ruleId: "no-console" },
+      ]),
+    ];
+    expect(aggregateByRule(results)).toEqual({ "no-console": 1 });
+  });
+
+  it("excludes messages with null ruleId (parse/syntax errors)", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 1, ruleId: null },
+        { severity: 1, ruleId: "no-console" },
+      ]),
+    ];
+    expect(aggregateByRule(results)).toEqual({ "no-console": 1 });
+  });
+
+  it("returns keys sorted for deterministic diffs", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 1, ruleId: "zebra-rule" },
+        { severity: 1, ruleId: "alpha-rule" },
+        { severity: 1, ruleId: "@scope/mid-rule" },
+      ]),
+    ];
+    expect(Object.keys(aggregateByRule(results))).toEqual([
+      "@scope/mid-rule",
+      "alpha-rule",
+      "zebra-rule",
+    ]);
+  });
+
+  it("returns an empty object when there are no warnings", () => {
+    const results = [mkFile("/src/a.ts", [{ severity: 2, ruleId: "no-debugger" }])];
+    expect(aggregateByRule(results)).toEqual({});
+  });
+
+  it("counts a ruleId that collides with an Object prototype member", () => {
+    const results = [
+      mkFile("/src/a.ts", [
+        { severity: 1, ruleId: "constructor" },
+        { severity: 1, ruleId: "toString" },
+        { severity: 1, ruleId: "constructor" },
+      ]),
+    ];
+    expect(aggregateByRule(results)).toEqual({ constructor: 2, toString: 1 });
+  });
+});
+
+describe("checkByRule", () => {
+  it("flags a rule whose live count exceeds the baseline (warning-shift)", () => {
+    const baseline = { "no-console": 5, "no-explicit-any": 10 };
+    const live = { "no-console": 7, "no-explicit-any": 10 };
+    const { regressed, disappeared, newRules } = checkByRule(baseline, live);
+    expect(regressed).toEqual([{ rule: "no-console", from: 5, to: 7, delta: 2 }]);
+    expect(disappeared).toEqual([]);
+    expect(newRules).toEqual([]);
+  });
+
+  it("flags a rule present in the baseline but absent from live as disappeared", () => {
+    const baseline = { "no-console": 5, "no-explicit-any": 10 };
+    const live = { "no-explicit-any": 10 };
+    const { disappeared, regressed, newRules } = checkByRule(baseline, live);
+    expect(disappeared).toEqual(["no-console"]);
+    expect(regressed).toEqual([]);
+    expect(newRules).toEqual([]);
+  });
+
+  it("flags a rule present in live but absent from baseline as new", () => {
+    const baseline = { "no-console": 5 };
+    const live = { "no-console": 5, "new-rule": 3 };
+    const { newRules, regressed, disappeared } = checkByRule(baseline, live);
+    expect(newRules).toEqual([{ rule: "new-rule", to: 3 }]);
+    expect(regressed).toEqual([]);
+    expect(disappeared).toEqual([]);
+  });
+
+  it("passes cleanly when every rule's live count is <= baseline and present", () => {
+    const baseline = { "no-console": 5, "no-explicit-any": 10 };
+    const live = { "no-console": 4, "no-explicit-any": 10 };
+    const { disappeared, regressed, newRules } = checkByRule(baseline, live);
+    expect(disappeared).toEqual([]);
+    expect(regressed).toEqual([]);
+    expect(newRules).toEqual([]);
+  });
+
+  it("detects the canonical warning-shift: total flat, one rule up, one rule down", () => {
+    // Total is 15 in both, but no-console rose while no-explicit-any fell —
+    // the flat total can't see this; the per-rule check must.
+    const baseline = { "no-console": 5, "no-explicit-any": 10 };
+    const live = { "no-console": 8, "no-explicit-any": 7 };
+    const { regressed } = checkByRule(baseline, live);
+    expect(regressed).toEqual([{ rule: "no-console", from: 5, to: 8, delta: 3 }]);
+  });
+
+  it("reports multiple simultaneous regressions", () => {
+    const baseline = { a: 1, b: 2, c: 3 };
+    const live = { a: 2, b: 5, c: 3 };
+    const { regressed } = checkByRule(baseline, live);
+    expect(regressed).toEqual([
+      { rule: "a", from: 1, to: 2, delta: 1 },
+      { rule: "b", from: 2, to: 5, delta: 3 },
+    ]);
+  });
+
+  it("treats a prototype-named rule as a real new rule, not an inherited member", () => {
+    // `"toString" in {}` is true — using Object.hasOwn avoids the false positive.
+    const { newRules, disappeared } = checkByRule({}, { toString: 1 });
+    expect(newRules).toEqual([{ rule: "toString", to: 1 }]);
+    expect(disappeared).toEqual([]);
+  });
+
+  it("flags a prototype-named baseline rule as disappeared when absent from live", () => {
+    const { disappeared, regressed } = checkByRule({ toString: 3 }, { "no-console": 1 });
+    expect(disappeared).toEqual(["toString"]);
+    expect(regressed).toEqual([]);
   });
 });

@@ -1318,6 +1318,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../github.js").GitHubPR | null;
   };
+  "github:get-issues-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: Array<import("../github.js").GitHubIssue | null>;
+  };
+  "github:get-prs-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: Array<import("../github.js").GitHubPR | null>;
+  };
   "github:get-pr-review-threads": {
     args: [payload: { cwd: string; prNumber: number }];
     result: Record<string, number>;

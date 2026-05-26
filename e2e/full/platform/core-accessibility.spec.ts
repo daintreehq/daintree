@@ -61,7 +61,7 @@ test.describe.serial("Core: Accessibility", () => {
   test.describe.serial("Axe Audits", () => {
     test("welcome screen passes WCAG 2.2 AA audit", async () => {
       const { window } = ctx;
-      await window.getByRole("button", { name: "Open Folder" }).waitFor({
+      await window.getByRole("button", { name: "Open folder" }).waitFor({
         state: "visible",
         timeout: T_MEDIUM,
       });
@@ -288,6 +288,40 @@ test.describe.serial("Core: Accessibility", () => {
           expect(traps, `Unintentional focus traps detected:\n${traps.join("\n")}`).toEqual([]);
           // Sanity check: we visited a reasonable number of unique elements
           expect(visited.size).toBeGreaterThanOrEqual(3);
+        });
+
+        test("Tab moves focus out of a focused terminal (no keyboard trap)", async () => {
+          const { window } = ctx;
+          await ensureWindowFocused(ctx.app);
+
+          const before = await getGridPanelCount(window);
+          await window.keyboard.press(`${mod}+Alt+t`);
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+          await window
+            .locator(SEL.terminal.xtermRows)
+            .first()
+            .waitFor({ state: "visible", timeout: T_LONG });
+
+          // Click into the terminal so xterm's textarea holds focus.
+          await window.locator(SEL.panel.gridPanel).first().locator(SEL.terminal.xtermRows).click();
+          await expect
+            .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
+              timeout: T_LONG,
+            })
+            .toBe(true);
+
+          // Tab must escape the terminal rather than being swallowed as \t.
+          await window.keyboard.press("Tab");
+          await expect
+            .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
+              timeout: T_LONG,
+            })
+            .toBe(false);
+
+          // Clean up via the close button (Cmd+W quits on the last panel).
+          const panel = window.locator(SEL.panel.gridPanel).first();
+          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
         });
 
         test("Action Palette traps focus correctly", async () => {

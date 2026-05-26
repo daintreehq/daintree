@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { broadcastFleetLiteralPaste, executeFleetBroadcast } from "../fleetExecution";
+import {
+  broadcastFleetLiteralPaste,
+  buildFleetTargetPreviews,
+  executeFleetBroadcast,
+} from "../fleetExecution";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
@@ -32,11 +36,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
@@ -44,11 +51,11 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PanelInstance[]): void {
+  const panelsById: Record<string, PanelInstance> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -558,5 +565,48 @@ describe("executeFleetBroadcast", () => {
       expect(notifyEnterPressedMock).not.toHaveBeenCalled();
       expect(clearDirectingStateMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("buildFleetTargetPreviews", () => {
+  beforeEach(() => {
+    reset();
+  });
+
+  it("marks non-PTY armed panels as excluded but preserves their title", () => {
+    // Documents #8957 batch A: the carrier surfaces non-PTY kinds via the
+    // PanelInstance union, and `buildFleetTargetPreviews` must drop them
+    // through the eligibility check rather than the prior (panel as TerminalInstance)
+    // cast which silently coerced any shape into the eligible branch.
+    seedPanels([
+      makeAgent("terminal-1"),
+      {
+        id: "browser-1",
+        kind: "browser",
+        title: "Browser pane",
+        location: "grid",
+      } as PanelInstance,
+    ]);
+    useFleetArmingStore.getState().armIds(["terminal-1", "browser-1"]);
+    const previews = buildFleetTargetPreviews("hi");
+    expect(previews).toHaveLength(2);
+    const terminal = previews.find((p) => p.terminalId === "terminal-1");
+    const browser = previews.find((p) => p.terminalId === "browser-1");
+    expect(terminal?.excluded).toBe(false);
+    expect(browser?.excluded).toBe(true);
+    expect(browser?.title).toBe("Browser pane");
+    expect(browser?.exclusionReason).toBe("Panel no longer eligible");
+  });
+
+  it("falls back to 'Unknown' title when an armed id is no longer in the carrier", () => {
+    // Mirrors the user opening the broadcast preview after a terminal has
+    // been torn down — `panelsById[id]` is undefined, so getNarrowPanel
+    // returns undefined and the preview falls back to a neutral label.
+    seedPanels([makeAgent("alive")]);
+    useFleetArmingStore.getState().armIds(["alive", "ghost"]);
+    const previews = buildFleetTargetPreviews("hi");
+    const ghost = previews.find((p) => p.terminalId === "ghost");
+    expect(ghost?.excluded).toBe(true);
+    expect(ghost?.title).toBe("Unknown");
   });
 });

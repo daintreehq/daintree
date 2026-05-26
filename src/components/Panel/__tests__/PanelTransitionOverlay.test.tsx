@@ -16,6 +16,7 @@ describe("PanelTransitionOverlay", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    document.body.removeAttribute("data-reduce-animations");
     document.body.removeAttribute("data-performance-mode");
 
     vi.spyOn(performance, "now").mockReturnValue(1000);
@@ -30,6 +31,18 @@ describe("PanelTransitionOverlay", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("suppresses ghost render when data-reduce-animations is true", () => {
+    document.body.setAttribute("data-reduce-animations", "true");
+    const onComplete = vi.fn();
+    const { container } = render(<PanelTransitionOverlay onTransitionComplete={onComplete} />);
+
+    act(() => {
+      triggerPanelTransition("panel-1", "minimize", sourceRect, targetRect);
+    });
+
+    expect(container.querySelector("[class*='absolute']")).toBeNull();
   });
 
   it("applies minimize duration and easing to ghost element", () => {

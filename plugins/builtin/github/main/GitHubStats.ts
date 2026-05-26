@@ -1,12 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
-import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
-import {
-  REPO_STATS_QUERY,
-  REPO_STATS_AND_PAGE_QUERY,
-  REPO_ACTIVITY_PROBE_QUERY,
-} from "./GitHubQueries.js";
+import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
+import { REPO_STATS_QUERY, REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { rateLimitMessage } from "./GitHubErrors.js";
 import { parseGitHubError } from "./GitHubErrors.js";
@@ -16,12 +12,16 @@ import {
   repoStatsCache,
   issueListCache,
   prListCache,
-  repoActivityProbeCache,
   repoStatsAndPageSnapshotCache,
+  repoEventsETagCache,
+  repoEventsPollIntervalCache,
+  repoEventsNoChangeCount,
+  repoEventsLastProbeAt,
+  getETagCacheVersion,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import type { RepoActivityProbe, RepoStats, RepoStatsResult } from "./types.js";
+import type { RepoStats, RepoStatsResult } from "./types.js";
 import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
 import { parseIssueNode } from "./GitHubIssues.js";
 import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
@@ -92,7 +92,7 @@ export async function getRepoStats(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
@@ -166,52 +166,132 @@ export interface RepoStatsAndPageResult {
   error?: string;
 }
 
-type GraphQLClient = NonNullable<ReturnType<typeof GitHubAuth.createClient>>;
+/** Default `X-Poll-Interval` floor (ms) when the events feed hasn't advertised one. */
+const DEFAULT_EVENTS_POLL_INTERVAL_MS = 60_000;
 
 /**
- * Run the cheap {@link REPO_ACTIVITY_PROBE_QUERY} to capture the repo's three
- * activity timestamps. Returns `null` on any failure — the probe is purely an
- * optimization, so a failure must silently fall through to the full fetch.
+ * Consecutive no-change (`304`) probes required before the adaptive backoff
+ * engages. Below this the cadence stays pinned to the poll-interval floor; the
+ * hysteresis prevents a single quiet poll from oscillating the interval. See
+ * issue #4629 for the same engage-after-N pattern in `GitHubRateLimitService`.
  */
-async function fetchActivityProbe(
-  client: GraphQLClient,
-  owner: string,
-  repo: string
-): Promise<RepoActivityProbe | null> {
-  try {
-    const result = (await client(REPO_ACTIVITY_PROBE_QUERY, {
-      owner,
-      repo,
-      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-    })) as GraphQlQueryResponseData;
+const EVENTS_BACKOFF_ENGAGE_THRESHOLD = 2;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+/** Per-no-change growth factor and ceiling (×floor) for the probe cadence. */
+const EVENTS_BACKOFF_GROWTH = 1.5;
+const EVENTS_BACKOFF_MAX_FACTOR = 5;
 
-    const repository = result?.repository;
-    if (!repository) return null;
-
-    const issueNode = (repository.issues as { nodes?: Array<{ updatedAt?: string }> } | undefined)
-      ?.nodes?.[0];
-    const prNode = (
-      repository.pullRequests as { nodes?: Array<{ updatedAt?: string }> } | undefined
-    )?.nodes?.[0];
-
-    return {
-      pushedAt: (repository.pushedAt as string | null | undefined) ?? null,
-      issueUpdatedAt: issueNode?.updatedAt ?? null,
-      prUpdatedAt: prNode?.updatedAt ?? null,
-    };
-  } catch {
-    return null;
-  }
+/**
+ * Adaptive cadence (ms) for the REST events probe. The floor is the
+ * server-advertised `X-Poll-Interval` (default 60s, raised by GitHub under
+ * load). Once at least {@link EVENTS_BACKOFF_ENGAGE_THRESHOLD} consecutive
+ * no-change polls have accrued, the interval grows by
+ * {@link EVENTS_BACKOFF_GROWTH}× per extra no-change poll, capped at
+ * {@link EVENTS_BACKOFF_MAX_FACTOR}× the floor — so an idle repo is probed
+ * progressively less often. A real event (`200`) or a manual refresh resets the
+ * counter, snapping the cadence back to the floor.
+ */
+function eventsProbeDelayMs(cacheKey: string): number {
+  const floor = repoEventsPollIntervalCache.get(cacheKey) ?? DEFAULT_EVENTS_POLL_INTERVAL_MS;
+  const noChange = repoEventsNoChangeCount.get(cacheKey) ?? 0;
+  if (noChange < EVENTS_BACKOFF_ENGAGE_THRESHOLD) return floor;
+  const factor = Math.min(
+    EVENTS_BACKOFF_GROWTH ** (noChange - EVENTS_BACKOFF_ENGAGE_THRESHOLD + 1),
+    EVENTS_BACKOFF_MAX_FACTOR
+  );
+  return Math.round(floor * factor);
 }
 
-function activityProbesEqual(a: RepoActivityProbe, b: RepoActivityProbe): boolean {
-  return (
-    a.pushedAt === b.pushedAt &&
-    a.issueUpdatedAt === b.issueUpdatedAt &&
-    a.prUpdatedAt === b.prUpdatedAt
-  );
+export interface ActivityProbeResult {
+  status: "changed" | "unchanged" | "unknown";
+  /**
+   * The new events-feed ETag observed on a `200` (or `null` when GitHub omitted
+   * it). Deliberately NOT written to {@link repoEventsETagCache} here — the
+   * caller commits it only after the full stats query succeeds, so a failed
+   * fetch can't advance the ETag ahead of the snapshot and mask a real change
+   * behind a later `304`. `undefined` on `304`/`unknown` (no ETag to commit).
+   */
+  etag?: string | null;
+  /** True iff the cache version changed mid-request (a concurrent clear). */
+  staleVersion?: boolean;
+}
+
+/**
+ * Conditional GET against the repo's REST `/events` feed to detect whether
+ * anything has changed since the last poll. Mirrors the ETag pattern in
+ * `GitHubPRDiscovery.ts`: an authenticated `304 Not Modified` costs zero
+ * rate-limit quota, so an idle repo can be polled indefinitely without
+ * spending the GraphQL budget the old `REPO_ACTIVITY_PROBE_QUERY` consumed.
+ *
+ * Returns `"unchanged"` on `304`, `"changed"` on `200` (carrying the new ETag
+ * for the caller to commit on a successful fetch), and `"unknown"` on any
+ * error, rate-limit block, or unexpected status — the probe is a pure
+ * optimization, so an inconclusive result must fall through to the full stats
+ * query rather than suppress it.
+ *
+ * Uses the REST `"core"` rate-limit bucket, not `"graphql"`: a depleted GraphQL
+ * budget must not gate a REST request that draws from a separate quota.
+ * `daintreeSkipRateLimitPreflight` bypasses the wrapper's own unscoped block
+ * check (which would trip on `"graphql"` state) since the `"core"` check above
+ * is the correct gate for this request.
+ */
+export async function fetchActivityProbe(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<ActivityProbeResult> {
+  const cacheKey = `${owner}/${repo}`;
+
+  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  if (block.blocked) return { status: "unknown" };
+
+  const cachedETag = repoEventsETagCache.get(cacheKey);
+  const versionAtStart = getETagCacheVersion();
+  const url = `https://api.github.com/repos/${owner}/${repo}/events?per_page=1`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (cachedETag) {
+    headers["If-None-Match"] = cachedETag;
+  }
+
+  repoEventsLastProbeAt.set(cacheKey, Date.now());
+
+  try {
+    const response = await rateLimitAwareFetch(url, {
+      headers,
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+      daintreeSkipRateLimitPreflight: true,
+    });
+
+    // A concurrent cache clear (token change / manual refresh) invalidates the
+    // ETag baseline this request was built on — treat the result as unknown so
+    // we don't act on a 304 against a now-cleared ETag.
+    if (getETagCacheVersion() !== versionAtStart) {
+      return { status: "unknown", staleVersion: true };
+    }
+
+    // GitHub advertises (and raises under load) the minimum poll interval on
+    // both 200 and 304 responses. Honor it as the backoff floor whenever present.
+    const pollIntervalSeconds = parseInt(response.headers.get("x-poll-interval") ?? "", 10);
+    if (Number.isFinite(pollIntervalSeconds) && pollIntervalSeconds > 0) {
+      repoEventsPollIntervalCache.set(cacheKey, pollIntervalSeconds * 1000);
+    }
+
+    if (response.status === 304) {
+      repoEventsNoChangeCount.set(cacheKey, (repoEventsNoChangeCount.get(cacheKey) ?? 0) + 1);
+      return { status: "unchanged" };
+    }
+    if (response.status === 200) {
+      repoEventsNoChangeCount.set(cacheKey, 0);
+      return { status: "changed", etag: response.headers.get("etag") };
+    }
+    return { status: "unknown" };
+  } catch {
+    return { status: "unknown" };
+  }
 }
 
 export async function getRepoStatsAndPage(
@@ -270,26 +350,6 @@ export async function getRepoStatsAndPage(
     };
   }
 
-  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
-  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
-    const diskCached = persistentCache.get(cacheKey);
-    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
-    if (diskCached) {
-      return {
-        stats: {
-          issueCount: diskCached.issueCount,
-          prCount: diskCached.prCount,
-          stale: true,
-          lastUpdated: diskCached.lastUpdated,
-        },
-        issues: null,
-        prs: null,
-        error: message,
-      };
-    }
-    return { stats: null, issues: null, prs: null, error: message };
-  }
-
   if (!bypassCache) {
     const cachedStats = repoStatsCache.get(cacheKey);
     const cachedIssues = issueListCache.get(issuesListCacheKey);
@@ -315,17 +375,45 @@ export async function getRepoStatsAndPage(
   }
 
   // Activity-probe gate: when the short-lived memory cache has expired, a cheap
-  // probe (~3 rate-limit points) decides whether the expensive stats query
-  // (~6+ points) is needed at all. If the probe timestamps match the previous
-  // run, nothing the stats query observes can have changed, so the cached
-  // snapshot is re-warmed and returned without the heavy fetch.
-  let probeResult: RepoActivityProbe | null = null;
-  if (!bypassCache) {
-    probeResult = await fetchActivityProbe(client, context.owner, context.repo);
-    if (probeResult) {
-      const lastProbe = repoActivityProbeCache.get(cacheKey);
+  // conditional GET to the REST `/events` feed decides whether the expensive
+  // stats query (~6+ GraphQL points) is needed at all. An authenticated `304`
+  // costs zero rate-limit quota, so an idle repo polls indefinitely for free.
+  // When the probe reports "unchanged", nothing the stats query observes can
+  // have changed, so the cached snapshot is re-warmed and returned without the
+  // heavy fetch. This runs BEFORE the GraphQL rate-limit gate below: the probe
+  // and the snapshot it validates draw from the REST `"core"` bucket, so a
+  // depleted GraphQL budget must not suppress a zero-cost `304` cache hit.
+  //
+  // `pendingEventsEtag` carries a changed-probe's new ETag so it can be written
+  // only after the full query succeeds — committing it eagerly would let a
+  // failed fetch advance the ETag ahead of the snapshot and mask the change.
+  let pendingEventsEtag: string | null | undefined;
+  if (bypassCache) {
+    // A manual refresh / window focus is the explicit "something might have
+    // changed, check now" signal — snap the adaptive backoff back to its floor
+    // so the next probe runs without delay.
+    repoEventsNoChangeCount.delete(cacheKey);
+    repoEventsLastProbeAt.delete(cacheKey);
+  } else {
+    const token = GitHubAuth.getToken();
+    if (token) {
       const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
-      if (lastProbe && snapshot && activityProbesEqual(lastProbe, probeResult)) {
+      // Skip the network probe entirely while inside the adaptive window: never
+      // poll `/events` faster than the server-advertised `X-Poll-Interval`, and
+      // back off further on an idle repo. The cached snapshot stands in for the
+      // "unchanged" result we'd otherwise pay a request to confirm.
+      const withinBackoff =
+        snapshot !== undefined &&
+        Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
+      const probe: ActivityProbeResult = withinBackoff
+        ? { status: "unchanged" }
+        : await fetchActivityProbe(token, context.owner, context.repo);
+
+      if (probe.status === "changed") {
+        pendingEventsEtag = probe.etag;
+      }
+
+      if (probe.status === "unchanged" && snapshot) {
         const freshStats: RepoStats = { ...snapshot.stats, lastUpdated: Date.now() };
         repoStatsCache.set(cacheKey, freshStats);
         issueListCache.set(issuesListCacheKey, {
@@ -348,10 +436,10 @@ export async function getRepoStatsAndPage(
         // counts when a full fetch fails. Without this, a run of probe-match
         // hits lets the disk cache age out behind the in-memory caches, so the
         // eventual probe-miss + failed fetch has no fallback and the badge goes
-        // `—`. The probe/snapshot caches are intentionally NOT re-stamped — they
-        // keep their 10-min TTL so list content can't go stale indefinitely
-        // behind a continuously-matching probe; aging out just forces a full
-        // refresh, which the disk re-stamp keeps safe.
+        // `—`. The snapshot cache is intentionally NOT re-stamped — it keeps its
+        // 10-min TTL so list content can't go stale indefinitely behind a
+        // continuously-matching probe; aging out just forces a full refresh,
+        // which the disk re-stamp keeps safe.
         persistentCache.set(cacheKey, freshStats, cwd);
         return {
           stats: freshStats,
@@ -363,6 +451,26 @@ export async function getRepoStatsAndPage(
     }
   }
 
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    const diskCached = persistentCache.get(cacheKey);
+    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        issues: null,
+        prs: null,
+        error: message,
+      };
+    }
+    return { stats: null, issues: null, prs: null, error: message };
+  }
+
   try {
     const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
       owner: context.owner,
@@ -370,7 +478,7 @@ export async function getRepoStatsAndPage(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result);
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_AND_PAGE_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
@@ -458,17 +566,26 @@ export async function getRepoStatsAndPage(
       pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
     });
 
-    // Record the snapshot + the probe that preceded this fetch so the next
-    // poll can skip the heavy query if nothing changed. Both are only written
-    // on a successful network fetch — a failed fetch must not advance them.
-    if (probeResult) {
-      repoActivityProbeCache.set(cacheKey, probeResult);
-    }
+    // Record the snapshot so the next poll can skip the heavy query when the
+    // activity probe reports no change. Written only on a successful network
+    // fetch — a failed fetch must not advance it.
     repoStatsAndPageSnapshotCache.set(cacheKey, {
       stats,
       issues: issuesPage,
       prs: prsPage,
     });
+    // Commit the changed-probe's events ETag now, in lockstep with the snapshot
+    // it describes. Deferring it to here (rather than writing it in
+    // `fetchActivityProbe`) guarantees the ETag never advances ahead of the
+    // snapshot: if this query had failed, the old ETag would survive and the
+    // next probe would re-detect the change instead of masking it behind a 304.
+    if (pendingEventsEtag !== undefined) {
+      if (pendingEventsEtag) {
+        repoEventsETagCache.set(cacheKey, pendingEventsEtag);
+      } else {
+        repoEventsETagCache.invalidate(cacheKey);
+      }
+    }
 
     return { stats, issues: issuesPage, prs: prsPage, source: "network" };
   } catch (error) {

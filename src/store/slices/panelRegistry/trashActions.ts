@@ -1,14 +1,22 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import type { TrashExpiryHelpers } from "./trash";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel, isPtyPanel } from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
-import { stopDevPreviewByPanelId } from "./helpers";
+import {
+  stopDevPreviewByPanelId,
+  dissolvePanelFromGroup,
+  computeRestoredTabGroup,
+} from "./helpers";
 import { logError } from "@/utils/logger";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 
@@ -40,14 +48,14 @@ export const createTrashActions = (
     // Ephemeral panels (e.g. the help-panel assistant terminal) are bound to
     // a transient UI surface and must never linger in trash for the TTL window
     // — they bypass the trash flow and are removed outright.
-    if (terminal.ephemeral === true) {
+    if (isPtyPanel(terminal) && terminal.ephemeral === true) {
       get().removePanel(id);
       return;
     }
 
     const expiresAt = Date.now() + TRASH_TTL_MS;
 
-    if (terminal.kind === "dev-preview") {
+    if (isDevPreviewPanel(terminal)) {
       stopDevPreviewByPanelId(id);
     }
 
@@ -69,34 +77,17 @@ export const createTrashActions = (
     set((state) => {
       const existing = state.panelsById[id];
       if (!existing) return state;
-      const newById: Record<string, TerminalInstance> = {
+      const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
         [id]: { ...existing, location: "trash" as const },
       };
       const newTrashed = new Map(state.trashedTerminals);
       newTrashed.set(id, { id, expiresAt, originalLocation });
 
-      // Remove panel from tab group
-      let newTabGroups = state.tabGroups;
-      for (const group of state.tabGroups.values()) {
-        if (group.panelIds.includes(id)) {
-          newTabGroups = new Map(state.tabGroups);
-          const newPanelIds = group.panelIds.filter((pid) => pid !== id);
-
-          if (newPanelIds.length <= 1) {
-            newTabGroups.delete(group.id);
-          } else {
-            const newActiveTabId =
-              group.activeTabId === id ? (newPanelIds[0] ?? "") : group.activeTabId;
-            newTabGroups.set(group.id, {
-              ...group,
-              panelIds: newPanelIds,
-              activeTabId: newActiveTabId,
-            });
-          }
-          saveTabGroups(newTabGroups);
-          break;
-        }
+      const dissolved = dissolvePanelFromGroup(state.tabGroups, id);
+      const newTabGroups = dissolved.tabGroups;
+      if (dissolved.dissolved) {
+        saveTabGroups(newTabGroups);
       }
 
       // Clear backgrounded metadata if trashing from background
@@ -170,7 +161,7 @@ export const createTrashActions = (
     // Trash PTY processes for all PTY-backed panels
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
-      if (terminal?.kind === "dev-preview") {
+      if (terminal && isDevPreviewPanel(terminal)) {
         stopDevPreviewByPanelId(id);
         continue;
       }
@@ -182,7 +173,7 @@ export const createTrashActions = (
     }
 
     set((state) => {
-      const newById: Record<string, TerminalInstance> = { ...state.panelsById };
+      const newById: Record<string, CarrierPanel> = { ...state.panelsById };
       for (const tid of trashPanelIds) {
         const current = newById[tid];
         if (current) {
@@ -192,21 +183,22 @@ export const createTrashActions = (
 
       const newTrashed = new Map(state.trashedTerminals);
 
-      for (const [i, id] of trashPanelIds.entries()) {
-        const isAnchor = i === 0;
+      // Store groupMetadata on every member, not just an anchor. If any single
+      // member is removed before restore (expiry, individual deletion, hydration
+      // loss), the surviving members still carry the full restore metadata so
+      // ordering and the active tab are preserved. See issue #8944.
+      for (const id of trashPanelIds) {
         newTrashed.set(id, {
           id,
           expiresAt,
           originalLocation,
           groupRestoreId,
-          ...(isAnchor && {
-            groupMetadata: {
-              panelIds: trashPanelIds,
-              activeTabId: resolvedActiveTabId,
-              location: group.location,
-              worktreeId,
-            },
-          }),
+          groupMetadata: {
+            panelIds: [...trashPanelIds],
+            activeTabId: resolvedActiveTabId,
+            location: group.location,
+            worktreeId,
+          },
         });
       }
 
@@ -295,7 +287,9 @@ export const createTrashActions = (
       for (const [id, trashed] of trashedTerminals.entries()) {
         if (trashed.groupRestoreId === groupRestoreId) {
           groupPanels.push({ id, trashed });
-          if (trashed.groupMetadata) {
+          // Metadata is replicated identically across all members (#8944); take
+          // the first one found so the restore source is deterministic.
+          if (!anchorPanel && trashed.groupMetadata) {
             anchorPanel = trashed;
           }
         }
@@ -357,31 +351,14 @@ export const createTrashActions = (
       const existingIds = new Set(get().panelIds);
       const validPanelIds = restoredPanelIds.filter((id) => existingIds.has(id));
 
-      if (validPanelIds.length > 1) {
-        let orderedPanelIds = validPanelIds;
-        let activeTabId = validPanelIds[0];
-
-        if (anchorPanel?.groupMetadata) {
-          const { panelIds, activeTabId: metadataActiveTabId } = anchorPanel.groupMetadata;
-          orderedPanelIds = panelIds.filter((id) => validPanelIds.includes(id));
-          for (const id of validPanelIds) {
-            if (!orderedPanelIds.includes(id)) {
-              orderedPanelIds.push(id);
-            }
-          }
-          activeTabId = orderedPanelIds.includes(metadataActiveTabId)
-            ? metadataActiveTabId
-            : orderedPanelIds[0];
-        }
-
-        if (orderedPanelIds.length > 1) {
-          get().createTabGroup(
-            restoreLocation as "dock" | "grid",
-            worktreeId,
-            orderedPanelIds,
-            activeTabId
-          );
-        }
+      const groupResult = computeRestoredTabGroup(validPanelIds, anchorPanel?.groupMetadata);
+      if (groupResult) {
+        get().createTabGroup(
+          restoreLocation as "dock" | "grid",
+          worktreeId,
+          groupResult.orderedPanelIds,
+          groupResult.activeTabId
+        );
       }
 
       for (const { id } of groupPanels) {
@@ -431,7 +408,7 @@ export const createTrashActions = (
           saveNormalized(state.panelsById, state.panelIds);
           return { trashedTerminals: newTrashed };
         }
-        const newById: Record<string, TerminalInstance> = {
+        const newById: Record<string, CarrierPanel> = {
           ...state.panelsById,
           [id]: { ...existing, location: "trash" as const },
         };

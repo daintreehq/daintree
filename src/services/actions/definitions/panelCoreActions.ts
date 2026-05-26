@@ -3,7 +3,8 @@ import { z } from "zod";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
 export function registerPanelCoreActions(
   actions: ActionRegistry,
@@ -53,7 +54,7 @@ export function registerPanelCoreActions(
       const state = usePanelStore.getState();
       let panels = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((p): p is TerminalInstance => p !== undefined);
+        .filter((p): p is PanelInstance => p !== undefined);
 
       if (worktreeId) {
         panels = panels.filter((p) => p.worktreeId === worktreeId);
@@ -75,8 +76,8 @@ export function registerPanelCoreActions(
           worktreeId: p.worktreeId ?? null,
           title: p.title ?? null,
           location: p.location ?? "grid",
-          agentId: p.launchAgentId ?? null,
-          agentState: p.agentState ?? null,
+          agentId: isPtyPanel(p) ? (p.launchAgentId ?? null) : null,
+          agentState: isPtyPanel(p) ? (p.agentState ?? null) : null,
         })),
         dock: {
           panelCount: panels.filter((p) => p.location === "dock").length,

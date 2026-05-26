@@ -31,7 +31,9 @@ export interface UseSearchablePaletteReturn<T> {
   /**
    * True while the deferred filter pass is catching up to the latest input.
    * Consumers can pass this to `SearchablePalette.isFiltering` to dim the
-   * listbox after the Doherty 400ms threshold so sub-frame work never flashes.
+   * listbox after the 200ms palette stale-delay (`UI_PALETTE_STALE_DELAY`) —
+   * a typed-input gate that's deliberately shorter than the 400ms Doherty
+   * floor so it actually fires between keystrokes.
    */
   isStale: boolean;
   open: () => void;

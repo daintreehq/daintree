@@ -353,9 +353,23 @@ export function AppLayout({
     useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
   }, [showAssistant]);
 
-  // Clear macro focus on mouse interaction
+  // Clear macro focus on mouse interaction. A click inside the currently-
+  // focused region must NOT clear the claim — otherwise a click within the
+  // already-focused assistant (or any other claimed region) drops the macro
+  // region while DOM focus remains in place, and no new `focus` event fires
+  // to reclaim it. That recreates the "two active surfaces" bug where the
+  // grid panel re-shows its `.terminal-selected` chrome while the user is
+  // still typing into the assistant.
   useEffect(() => {
-    const handleMouseDown = () => useMacroFocusStore.getState().clearFocus();
+    const handleMouseDown = (e: MouseEvent) => {
+      const state = useMacroFocusStore.getState();
+      const focused = state.focusedRegion;
+      if (focused && e.target instanceof Node) {
+        const ref = state.refs.get(focused);
+        if (ref && ref.contains(e.target)) return;
+      }
+      state.clearFocus();
+    };
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
     return () => window.removeEventListener("mousedown", handleMouseDown, { capture: true });
   }, []);
@@ -474,7 +488,16 @@ export function AppLayout({
                 "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
               !showSidebar && "pointer-events-none"
             )}
-            style={{ width: effectiveSidebarWidth, overflowClipMargin: "6px" }}
+            style={{
+              width: effectiveSidebarWidth,
+              overflowClipMargin: "6px",
+              contain: "layout paint",
+              // The contain boundary makes this wrapper a stacking context, so
+              // the resize handle's 6px overhang (-right-1.5, z-50) would fall
+              // behind <main>'s opaque background by DOM order. z-index 1 keeps
+              // the sidebar painting above the later <main> sibling.
+              zIndex: 1,
+            }}
           >
             <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
               {currentProject != null && (
@@ -518,7 +541,7 @@ export function AppLayout({
                   "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
                 !showAssistant && "pointer-events-none"
               )}
-              style={{ width: effectiveAssistantWidth }}
+              style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
             >
               <div
                 className="absolute top-0 right-0 h-full"

@@ -1526,6 +1526,12 @@ const api: ElectronAPI = {
     getPRByNumber: (cwd: string, prNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
 
+    getIssuesByNumbers: (cwd: string, numbers: number[]) =>
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, { cwd, numbers }),
+
+    getPRsByNumbers: (cwd: string, numbers: number[]) =>
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, { cwd, numbers }),
+
     getPRReviewThreads: (cwd: string, prNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, { cwd, prNumber }),
 

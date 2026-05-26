@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { TabGroup } from "@/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 const mockStopByPanel = vi.fn().mockResolvedValue(undefined);
 
@@ -32,6 +33,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
   },
 }));
@@ -97,7 +99,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-panel-1"],
     });
@@ -119,7 +121,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-panel-2"],
     });
@@ -148,7 +150,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
         "term-1": {
           id: "term-1",
           kind: "terminal",
@@ -188,7 +190,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
         "dev-panel-b": {
           id: "dev-panel-b",
           kind: "dev-preview",
@@ -198,7 +200,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "pnpm dev",
-        },
+        } as PanelInstance,
         "term-2": {
           id: "term-2",
           kind: "terminal",
@@ -218,5 +220,67 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-a" });
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-b" });
     expect(mockStopByPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops dev-preview runtime when panel is backgrounded", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-bg": {
+          id: "dev-panel-bg",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        } as PanelInstance,
+      },
+      panelIds: ["dev-panel-bg"],
+    });
+
+    usePanelStore.getState().backgroundTerminal("dev-panel-bg");
+
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-bg" });
+  });
+
+  it("stops dev-preview runtimes when backgrounding a panel group", () => {
+    const group: TabGroup = {
+      id: "group-bg-dev-preview",
+      panelIds: ["dev-panel-bg-1", "term-bg-1"],
+      activeTabId: "dev-panel-bg-1",
+      location: "grid",
+    };
+
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-bg-1": {
+          id: "dev-panel-bg-1",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        } as PanelInstance,
+        "term-bg-1": {
+          id: "term-bg-1",
+          kind: "terminal",
+          title: "Terminal",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["dev-panel-bg-1", "term-bg-1"],
+      tabGroups: new Map([["group-bg-dev-preview", group]]),
+    });
+
+    usePanelStore.getState().backgroundPanelGroup("dev-panel-bg-1");
+
+    expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-bg-1" });
+    expect(mockStopByPanel).toHaveBeenCalledTimes(1);
   });
 });

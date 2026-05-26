@@ -153,3 +153,76 @@ describe("ContentPanel fleet-dim unmatched panes (#8696)", () => {
     expect(panel?.className.includes("fleet-pane-dimmed")).toBe(false);
   });
 });
+
+describe("PanelHeader fleet-preview enter overlay (#8995)", () => {
+  beforeEach(() => {
+    useFleetArmingStore.setState({ previewArmedIds: new Set<string>() });
+  });
+
+  afterEach(() => {
+    useFleetArmingStore.setState({ previewArmedIds: new Set<string>() });
+    cleanup();
+  });
+
+  it("has no enter overlay when the pane is not previewed", () => {
+    const { container } = renderPanel("t-1");
+    expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
+  });
+
+  it("mounts the enter overlay when the pane joins the preview set", () => {
+    const { container } = renderPanel("t-1");
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).not.toBeNull();
+  });
+
+  it("remounts the overlay on each false→true transition so the keyframe re-runs", () => {
+    const { container } = renderPanel("t-1");
+
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    const firstOverlay = container.querySelector('[data-testid="fleet-preview-enter-overlay"]');
+    expect(firstOverlay).not.toBeNull();
+
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set<string>() });
+    });
+    expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
+
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    const secondOverlay = container.querySelector('[data-testid="fleet-preview-enter-overlay"]');
+    expect(secondOverlay).not.toBeNull();
+    // Distinct DOM node identity proves the overlay was remounted (not
+    // merely re-rendered), which is what triggers CSS keyframe replay.
+    expect(secondOverlay).not.toBe(firstOverlay);
+  });
+
+  it("removes the overlay when the pane leaves the preview set", () => {
+    const { container } = renderPanel("t-1");
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).not.toBeNull();
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set<string>() });
+    });
+    expect(container.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
+  });
+
+  it("scopes the overlay per-pane during a multi-pane preview", () => {
+    // Two panes rendered; only one is in the preview set. The non-previewed
+    // pane must not pick up the enter cue — this is the core differentiator
+    // between the kinetic preview cue and the global multi-select state.
+    const { container: previewed } = renderPanel("t-1");
+    const { container: untouched } = renderPanel("t-2");
+    act(() => {
+      useFleetArmingStore.setState({ previewArmedIds: new Set(["t-1"]) });
+    });
+    expect(previewed.querySelector('[data-testid="fleet-preview-enter-overlay"]')).not.toBeNull();
+    expect(untouched.querySelector('[data-testid="fleet-preview-enter-overlay"]')).toBeNull();
+  });
+});

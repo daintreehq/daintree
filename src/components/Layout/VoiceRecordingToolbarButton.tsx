@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -56,6 +56,7 @@ export function VoiceRecordingToolbarButton({
   const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
   const shortcut = useKeybindingDisplay("voiceInput.toggle");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
+  const hover = useShortcutHintHover("voiceInput.toggle");
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const isConnecting = status === "connecting";
@@ -187,6 +188,7 @@ export function VoiceRecordingToolbarButton({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              {...hover}
               variant="ghost"
               size="icon"
               data-toolbar-item={dataToolbarItem}

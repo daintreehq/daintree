@@ -13,6 +13,7 @@ import {
   unregisterPluginPanelKinds,
   clearPanelKindRegistry,
   getBuiltInPanelKinds,
+  getFirstRenderSeeds,
   type PanelKindConfig,
 } from "../panelKindRegistry.js";
 
@@ -446,5 +447,58 @@ describe("getPanelKindColor fallback", () => {
 
     unregisterPluginPanelKinds("ext-a");
     expect(getPanelKindColor("ext-a.viewer")).toBe("var(--theme-text-secondary)");
+  });
+});
+
+describe("getFirstRenderSeeds", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("returns the lazy import paths of every first-render built-in kind", () => {
+    expect([...getFirstRenderSeeds()].sort()).toEqual([
+      "src/components/Browser/BrowserPane.tsx",
+      "src/components/DevPreview/DevPreviewPane.tsx",
+      "src/panels/review/ReviewPane.tsx",
+    ]);
+  });
+
+  it("includes the review pane — the seed that previously drifted (#8895)", () => {
+    expect(getFirstRenderSeeds()).toContain("src/panels/review/ReviewPane.tsx");
+  });
+
+  it("emits no empty or non-string seeds", () => {
+    for (const seed of getFirstRenderSeeds()) {
+      expect(typeof seed).toBe("string");
+      expect(seed.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("excludes the eager terminal kind (no lazy first-render chunk)", () => {
+    expect(getFirstRenderSeeds()).not.toContain(getPanelKindConfig("terminal")?.id);
+    // Terminal has no lazyImportPath, so its path can't appear regardless.
+    expect(getPanelKindConfig("terminal")?.firstRenderRestore).toBeUndefined();
+  });
+
+  it("excludes plugin-registered kinds even when they set firstRenderRestore", () => {
+    registerPanelKind({
+      ...makeExtensionConfig("ext-a.lazy", "ext-a"),
+      firstRenderRestore: true,
+      lazyImportPath: "src/plugins/ext-a/LazyPane.tsx",
+    });
+    expect(getFirstRenderSeeds()).not.toContain("src/plugins/ext-a/LazyPane.tsx");
+  });
+
+  it("throws when a built-in sets firstRenderRestore without a lazyImportPath", () => {
+    // clearPanelKindRegistry only removes extension entries, so overwriting a
+    // built-in would corrupt state for sibling tests — save and restore it.
+    const original = getPanelKindConfig("browser") as PanelKindConfig;
+    const { lazyImportPath: _omitted, ...broken } = original;
+    try {
+      registerPanelKind(broken);
+      expect(() => getFirstRenderSeeds()).toThrow(/lazyImportPath/);
+    } finally {
+      registerPanelKind(original);
+    }
   });
 });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { TerminalRecipe } from "@/types";
+import type { TerminalRecipe, RunCommand } from "@/types";
 import type { RecipeSpawnResults } from "@/store/recipeStore";
 
 const recipes: TerminalRecipe[] = [];
@@ -57,11 +57,19 @@ vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => fakeWorktreeStore,
 }));
 
-const projectSettingsState = { allDetectedRunners: [] };
+const projectSettingsState: { allDetectedRunners: RunCommand[] } = { allDetectedRunners: [] };
 
 vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: <T,>(selector: (state: typeof projectSettingsState) => T) =>
     selector(projectSettingsState),
+}));
+
+const addPanelMock = vi.fn<(options: unknown) => Promise<string | null>>();
+const panelStoreState = {
+  addPanel: (options: unknown) => addPanelMock(options),
+};
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: <T,>(selector: (state: typeof panelStoreState) => T) => selector(panelStoreState),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -96,7 +104,10 @@ function makeRecipe(
 
 beforeEach(() => {
   recipes.length = 0;
+  projectSettingsState.allDetectedRunners = [];
   runRecipeWithResultsMock.mockReset();
+  addPanelMock.mockReset();
+  addPanelMock.mockResolvedValue("panel-1");
   logErrorMock.mockReset();
 });
 
@@ -561,5 +572,210 @@ describe("useRecipeRunner — async lifecycle", () => {
     });
     await flush();
     expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+function makeRunCommand(overrides: Partial<RunCommand> & { id: string; name: string }): RunCommand {
+  return {
+    command: `npm run ${overrides.name}`,
+    ...overrides,
+  };
+}
+
+describe("useRecipeRunner — suggestions", () => {
+  it("caps suggestions to two even when several keyword-matching runners are detected", () => {
+    projectSettingsState.allDetectedRunners = [
+      makeRunCommand({ id: "1", name: "dev" }),
+      makeRunCommand({ id: "2", name: "start" }),
+      makeRunCommand({ id: "3", name: "serve" }),
+      makeRunCommand({ id: "4", name: "test" }),
+      makeRunCommand({ id: "5", name: "build" }),
+    ];
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.suggestions).toHaveLength(2);
+    expect(result.current.suggestions.map((s) => s.id)).toEqual(["1", "2"]);
+  });
+
+  it("filters out runners that do not match any keyword", () => {
+    projectSettingsState.allDetectedRunners = [
+      makeRunCommand({ id: "1", name: "lint", command: "eslint ." }),
+      makeRunCommand({ id: "2", name: "dev", command: "vite" }),
+      makeRunCommand({ id: "3", name: "format", command: "prettier ." }),
+    ];
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.suggestions.map((s) => s.id)).toEqual(["2"]);
+  });
+
+  it("returns an empty array when no detected runners match", () => {
+    projectSettingsState.allDetectedRunners = [
+      makeRunCommand({ id: "1", name: "lint", command: "eslint ." }),
+    ];
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.suggestions).toEqual([]);
+  });
+
+  it("matches the keyword in either the name or the command field", () => {
+    projectSettingsState.allDetectedRunners = [
+      // keyword only in name
+      makeRunCommand({ id: "1", name: "dev", command: "vite" }),
+      // keyword only in command
+      makeRunCommand({ id: "2", name: "watch", command: "npm run dev" }),
+      // neither field matches
+      makeRunCommand({ id: "3", name: "lint", command: "eslint ." }),
+    ];
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    expect(result.current.suggestions.map((s) => s.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("useRecipeRunner — handleRunSuggestion", () => {
+  it("spawns a terminal via addPanel with the suggestion command", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev", command: "npm run dev" });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+    expect(addPanelMock).toHaveBeenCalledWith({
+      kind: "terminal",
+      title: "dev",
+      cwd: "/repo",
+      command: "npm run dev",
+      location: "grid",
+      worktreeId: "wt-1",
+      spawnedBy: "quickrun",
+    });
+  });
+
+  it("does nothing when defaultCwd is missing", () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev" });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: undefined })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+
+    expect(addPanelMock).not.toHaveBeenCalled();
+  });
+
+  it("guards against double-click reentrancy while the spawn is in flight", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev" });
+    let resolve: (id: string) => void = () => {};
+    addPanelMock.mockReturnValueOnce(
+      new Promise<string>((r) => {
+        resolve = r;
+      })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+      result.current.handleRunSuggestion(suggestion);
+    });
+
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolve("panel-1");
+      await Promise.resolve();
+    });
+
+    // Guard cleared — a fresh click should fire again.
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+    expect(addPanelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the guard when addPanel rejects", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev" });
+    addPanelMock.mockRejectedValueOnce(new Error("Panel limit reached"));
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    addPanelMock.mockResolvedValueOnce("panel-2");
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(addPanelMock).toHaveBeenCalledTimes(2);
+    expect(logErrorMock).toHaveBeenCalledWith("Suggestion run failed", expect.any(Error));
+  });
+
+  it("logs and releases the guard when addPanel resolves null (panel rejected)", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev", command: "npm run dev" });
+    addPanelMock.mockResolvedValueOnce(null);
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "Suggestion run rejected by panel store",
+      "npm run dev"
+    );
+
+    // Guard released — a follow-up click fires.
+    addPanelMock.mockResolvedValueOnce("panel-2");
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+    expect(addPanelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes worktreeId: undefined to addPanel when activeWorktreeId is null", async () => {
+    const suggestion = makeRunCommand({ id: "s-dev", name: "dev", command: "npm run dev" });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: null, defaultCwd: "/repo" })
+    );
+
+    act(() => {
+      result.current.handleRunSuggestion(suggestion);
+    });
+    await flush();
+
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+    expect(addPanelMock.mock.calls[0]?.[0]).toMatchObject({ worktreeId: undefined });
   });
 });

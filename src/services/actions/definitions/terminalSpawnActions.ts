@@ -5,8 +5,9 @@ import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
-import { TerminalSpawnSourceSchema } from "./schemas";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -19,9 +20,14 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ spawnedBy: TerminalSpawnSourceSchema.optional() }).optional(),
+    argsSchema: z
+      .object({
+        spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
+      })
+      .optional(),
     run: async (args) => {
-      const { spawnedBy } = args ?? {};
+      const { spawnedBy, focusPolicy } = args ?? {};
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
@@ -29,6 +35,7 @@ export function registerTerminalSpawnActions(
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
         spawnedBy,
+        focusPolicy,
       });
       if (!terminalId) return;
       return { terminalId };
@@ -47,11 +54,18 @@ export function registerTerminalSpawnActions(
       .object({
         terminalId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       })
       .optional(),
     run: async (args: unknown) => {
-      const { terminalId, spawnedBy } =
-        (args as { terminalId?: string; spawnedBy?: TerminalSpawnSource } | undefined) ?? {};
+      const { terminalId, spawnedBy, focusPolicy } =
+        (args as
+          | {
+              terminalId?: string;
+              spawnedBy?: TerminalSpawnSource;
+              focusPolicy?: "auto" | "preserve" | "take";
+            }
+          | undefined) ?? {};
       const state = usePanelStore.getState();
       const nonTrashed = state.panelIds
         .map((id) => state.panelsById[id])
@@ -66,9 +80,12 @@ export function registerTerminalSpawnActions(
         const terminal = state.panelsById[targetId];
         if (!terminal) return;
 
+        const narrowedTerminal = getNarrowPanel(state.panelsById, targetId);
+        if (!narrowedTerminal) return;
+
         const location =
           terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
-        const options = await buildPanelDuplicateOptions(terminal, location);
+        const options = await buildPanelDuplicateOptions(narrowedTerminal, location);
         if (options.title) {
           const defaultTitle = getDefaultTitle(terminal.kind, terminal);
           if (options.title !== defaultTitle) {
@@ -78,6 +95,9 @@ export function registerTerminalSpawnActions(
         if (spawnedBy) {
           options.spawnedBy = spawnedBy;
         }
+        if (focusPolicy) {
+          options.focusPolicy = focusPolicy;
+        }
         await state.addPanel(options);
       } else if (nonTrashed.length === 0) {
         const lastClosed = state.lastClosedConfig;
@@ -86,11 +106,14 @@ export function registerTerminalSpawnActions(
             ? await buildPanelDuplicateOptions(
                 {
                   id: "last-closed",
+                  kind: "terminal",
+                  cols: 80,
+                  rows: 24,
                   title: lastClosed.title ?? "Terminal",
                   cwd: lastClosed.cwd ?? callbacks.getDefaultCwd(),
                   location: "grid",
                   ...lastClosed,
-                },
+                } as PtyPanelData,
                 "grid"
               )
             : lastClosed;

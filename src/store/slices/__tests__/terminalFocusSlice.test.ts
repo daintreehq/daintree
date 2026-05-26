@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFocusSlice";
-import type { TerminalInstance } from "../panelRegistrySlice";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -13,7 +13,7 @@ const mockStampLastActive = vi.fn();
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
-  const mockTerminals: TerminalInstance[] = [
+  const mockTerminals: PtyPanelData[] = [
     {
       id: "term-1",
       title: "Terminal 1",
@@ -36,7 +36,7 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
       rows: 24,
       worktreeId: "worktree-1",
     },
-  ] as TerminalInstance[];
+  ] as PtyPanelData[];
 
   const getTerminals = vi.fn(() => mockTerminals);
 
@@ -135,7 +135,7 @@ describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
   let state: TerminalFocusSlice;
   let setState: any;
   let getState: any;
-  const getTerminals = vi.fn(() => [] as TerminalInstance[]);
+  const getTerminals = vi.fn(() => [] as PtyPanelData[]);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -185,7 +185,7 @@ describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
 });
 
 describe("TerminalFocusSlice - Tab Group Maximize", () => {
-  const mockTerminals: TerminalInstance[] = [
+  const mockTerminals: PtyPanelData[] = [
     {
       id: "term-1",
       title: "Terminal 1",
@@ -219,7 +219,7 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
       rows: 24,
       worktreeId: "worktree-1",
     },
-  ] as TerminalInstance[];
+  ] as PtyPanelData[];
 
   const mockGroup = {
     id: "group-1",
@@ -409,10 +409,11 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
     id: string,
     location: "grid" | "dock",
     worktreeId = "worktree-1"
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
+      kind: "terminal",
       type: "terminal",
       cwd: "/test",
       location,
@@ -421,9 +422,9 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
       cols: 80,
       rows: 24,
       worktreeId,
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let state: TerminalFocusSlice;
 
   const setup = () => {
@@ -602,10 +603,11 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
     id: string,
     agentState: string,
     worktreeId = "worktree-1"
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
+      kind: "terminal",
       type: "claude",
       cwd: "/test",
       location: "dock",
@@ -614,9 +616,9 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       cols: 80,
       rows: 24,
       worktreeId,
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let getTerminals: any;
   let state: TerminalFocusSlice;
   let setState: any;
@@ -685,7 +687,7 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       {
         ...makeDockTerminal("g1", "waiting"),
         location: "grid",
-      } as TerminalInstance,
+      } as PtyPanelData,
       makeDockTerminal("d1", "waiting", "worktree-2"),
       makeDockTerminal("d2", "waiting"),
     ];
@@ -738,7 +740,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
       everDetectedAgent?: boolean;
       agentState?: string;
     } = {}
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
@@ -753,9 +755,9 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
       cols: 80,
       rows: 24,
       worktreeId: "worktree-1",
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let state: TerminalFocusSlice;
 
   const setup = () => {
@@ -921,7 +923,7 @@ describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () 
       everDetectedAgent?: boolean;
       agentState?: string;
     } = {}
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
@@ -936,9 +938,9 @@ describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () 
       cols: 80,
       rows: 24,
       worktreeId: "worktree-1",
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let state: TerminalFocusSlice;
 
   beforeEach(() => {
@@ -1086,7 +1088,7 @@ describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () 
 });
 
 describe("TerminalFocusSlice - setFocused ping gating", () => {
-  const mockTerminals: TerminalInstance[] = [
+  const mockTerminals: PtyPanelData[] = [
     {
       id: "term-1",
       title: "Terminal 1",
@@ -1109,7 +1111,7 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
       rows: 24,
       worktreeId: "worktree-1",
     },
-  ] as TerminalInstance[];
+  ] as PtyPanelData[];
 
   const getTerminals = vi.fn(() => mockTerminals);
 
@@ -1190,7 +1192,7 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
     id: string,
     location: "grid" | "dock" | "trash" | "background" = "grid",
     worktreeId = "worktree-1"
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
@@ -1201,9 +1203,9 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
       cols: 80,
       rows: 24,
       worktreeId,
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let state: TerminalFocusSlice;
 
   const setup = () => {
@@ -1415,7 +1417,7 @@ describe("TerminalFocusSlice - lastActiveAt stamping (issue #8703)", () => {
   const makeTerminal = (
     id: string,
     location: "grid" | "dock" | "trash" | "background" = "grid"
-  ): TerminalInstance =>
+  ): PtyPanelData =>
     ({
       id,
       title: id,
@@ -1426,9 +1428,9 @@ describe("TerminalFocusSlice - lastActiveAt stamping (issue #8703)", () => {
       cols: 80,
       rows: 24,
       worktreeId: "worktree-1",
-    }) as TerminalInstance;
+    }) as PtyPanelData;
 
-  let terminals: TerminalInstance[];
+  let terminals: PtyPanelData[];
   let state: TerminalFocusSlice;
 
   beforeEach(() => {

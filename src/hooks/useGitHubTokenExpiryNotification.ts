@@ -33,6 +33,7 @@ export function useGitHubTokenExpiryNotification(isTokenError: boolean): void {
           "Your GitHub token isn't working. Reconnect in settings to restore issues, PRs, and stats.",
         correlationId: "github:token-expiry",
         supersedeKey: GITHUB_TOKEN_SUPERSEDE_KEY,
+        context: { eventKind: "connectivity" },
         coalesce: {
           key: "github:token-expiry",
           windowMs: 30000,
@@ -68,6 +69,7 @@ export function useGitHubTokenExpiryNotification(isTokenError: boolean): void {
           supersedeKey: GITHUB_TOKEN_SUPERSEDE_KEY,
           title: "GitHub token validated",
           message: "Your GitHub token is working again.",
+          context: { eventKind: "connectivity" },
         });
       }
     }

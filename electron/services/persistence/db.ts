@@ -1,3 +1,4 @@
+// eager-import-allow: opens the SQLite store and reads its file synchronously at bootstrap (sync is the storage contract)
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";

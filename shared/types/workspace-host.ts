@@ -112,6 +112,15 @@ export interface WorktreeSnapshot {
    * fetched yet so the sidebar never shows the raw slug (#8851).
    */
   branchDerivedTitle?: string;
+  /**
+   * PR number this worktree was created from via the GitHub PR dropdown (#8888).
+   * Acts as the "PR-originated" discriminator: when set, the card surfaces the
+   * PR title as the primary headline with the linked issue underneath, inverting
+   * the default issue-first display. Held in-memory by the monitor (like
+   * `worktreeMode`); not persisted to disk, so after a host restart the PR is
+   * re-detected by polling and shown as a subordinate badge until then.
+   */
+  sourcePrNumber?: number;
   prLastUpdatedAt?: number;
   issueLastUpdatedAt?: number;
   worktreeChanges?: WorktreeChanges | null;
@@ -438,6 +447,15 @@ export type WorkspaceHostRequest =
       forgeRequestId: string;
       ok: false;
       error: string;
+    }
+  // Forge poll-lease acquire response (main → workspace-host). Correlated to a
+  // prior `forge:poll-lease-acquire` event by `requestId`. `acquired === true`
+  // means the workspace-host now holds (or renewed) the lease and may proceed
+  // with the poll cycle; `false` means a sibling host already holds it.
+  | {
+      type: "forge:poll-lease-result";
+      requestId: string;
+      acquired: boolean;
     };
 
 /**
@@ -455,10 +473,13 @@ export type ForgeRpcMethod =
   | "resolveProvider"
   | "findPRByBranch"
   | "findPRsByBranches"
+  | "findPRsByNumbers"
   | "getPR"
   | "getIssue"
   | "getCIStatus"
-  | "getRateLimit";
+  | "getCIStatuses"
+  | "getRateLimit"
+  | "clearPullRequestCaches";
 
 /** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */
 export interface ForgeResolveProviderResult {
@@ -678,6 +699,23 @@ export type WorkspaceHostEvent =
       method: ForgeRpcMethod;
       namespacedId?: string;
       args: unknown[];
+    }
+  // Per-project poll lease acquire (workspace-host → main). Main answers with
+  // `forge:poll-lease-result` keyed by `requestId`. Holding the lease means
+  // this workspace-host is the elected poller for the project this cycle; a
+  // denial means a sibling window already polls and this one should skip.
+  // The lease key is the workspace-host's `projectPath`, known to main from
+  // the `WorkspaceHostProcess` instance — the event carries no path because
+  // main must not trust a workspace-host's self-reported identity (#4670).
+  | {
+      type: "forge:poll-lease-acquire";
+      requestId: string;
+    }
+  // Per-project poll lease release (workspace-host → main, fire-and-forget).
+  // Best-effort cooperative release on `stop()`; the lease also drops on host
+  // dispose and after the TTL, so a missed release never wedges siblings.
+  | {
+      type: "forge:poll-lease-release";
     };
 
 /** Configuration for WorkspaceClient */

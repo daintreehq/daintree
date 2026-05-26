@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SimpleGit } from "simple-git";
+import path from "path";
 import { WorktreeListService } from "../WorktreeListService.js";
 
 vi.mock("../../utils/gitUtils.js", () => ({
@@ -250,6 +251,26 @@ describe("WorktreeListService", () => {
 
       expect(worktrees[0].name).toBe("my-repo");
       expect(worktrees[1].name).toBe("feature/cool");
+    });
+
+    it("normalizes listed paths before using them as worktree IDs", () => {
+      const basePath = path.resolve("/projects/my-repo");
+      const rawPath = `${basePath}${path.sep}..${path.sep}my-repo-feature`;
+      const expectedPath = path.resolve(basePath, "..", "my-repo-feature");
+      const raw = [
+        {
+          path: rawPath,
+          branch: "feature/cool",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = service.mapToWorktrees(raw);
+
+      expect(worktrees[0].id).toBe(expectedPath);
+      expect(worktrees[0].path).toBe(expectedPath);
+      expect(worktrees[0].gitDir).toBe(`${expectedPath}/.git`);
     });
 
     it("propagates locked/prunable fields to the mapped Worktree", () => {

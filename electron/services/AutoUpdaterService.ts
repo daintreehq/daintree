@@ -1,3 +1,4 @@
+// eager-import-allow: reads updater config via store.get and the staged installer via sync fs
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { app, ipcMain } from "electron";

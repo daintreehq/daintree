@@ -8,27 +8,30 @@ const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const STYLES_ROOT = path.join(REPO_ROOT, "src/styles/components");
 
 // Surfaces that apply `backdrop-filter` unconditionally must degrade to a
-// solid background for engines without backdrop-filter and for users who set
-// the OS "reduce transparency" accessibility preference (issue #8166). The
-// two gates are independent concerns and must be separate at-rules (a
-// GPU-capable machine can still have Reduce Transparency enabled), and they
-// must appear after the base rule so source-order cascade wins.
+// solid background for engines without backdrop-filter, for users who set
+// the OS "reduce transparency" preference (issue #8166), and for users who
+// set the OS "increase contrast" preference (issue #8939, macOS Increase
+// Contrast which fires prefers-contrast: more but NOT forced-colors:active).
+// The three gates are independent concerns and must be separate at-rules,
+// and they must appear after the base rule so source-order cascade wins.
 const SURFACES = [
   { file: "toolbar.css", selector: ".surface-toolbar" },
   { file: "panels.css", selector: ".surface-chrome" },
 ] as const;
 
-describe("backdrop-filter fallbacks contract (#8166)", () => {
+describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
   for (const { file, selector } of SURFACES) {
     const css = fs.readFileSync(path.join(STYLES_ROOT, file), "utf8");
 
     const baseIdx = css.indexOf(`${selector} {`);
     const supportsIdx = css.indexOf("@supports not (backdrop-filter: blur(1px))");
-    const mediaIdx = css.indexOf("@media (prefers-reduced-transparency: reduce)");
+    const reducedIdx = css.indexOf("@media (prefers-reduced-transparency: reduce)");
+    const contrastIdx = css.indexOf("@media (prefers-contrast: more)");
 
     if (baseIdx < 0) throw new Error(`Missing selector ${selector} in ${file}`);
     if (supportsIdx < 0) throw new Error(`Missing @supports in ${file}`);
-    if (mediaIdx < 0) throw new Error(`Missing @media in ${file}`);
+    if (reducedIdx < 0) throw new Error(`Missing prefers-reduced-transparency in ${file}`);
+    if (contrastIdx < 0) throw new Error(`Missing prefers-contrast in ${file}`);
 
     describe(`${file} — ${selector}`, () => {
       it("has an @supports not (backdrop-filter: blur(1px)) fallback", () => {
@@ -37,38 +40,54 @@ describe("backdrop-filter fallbacks contract (#8166)", () => {
 
       it("has a @media (prefers-reduced-transparency: reduce) fallback", () => {
         // Guards against the common `reduced` typo — the spec value is `reduce`.
-        expect(mediaIdx).toBeGreaterThan(-1);
+        expect(reducedIdx).toBeGreaterThan(-1);
         expect(css).not.toMatch(/prefers-reduced-transparency:\s*reduced\b/);
       });
 
-      it("declares both fallback blocks after the base rule (source-order cascade)", () => {
+      it("has a @media (prefers-contrast: more) fallback (#8939)", () => {
+        expect(contrastIdx).toBeGreaterThan(-1);
+      });
+
+      it("declares all fallback blocks after the base rule (source-order cascade)", () => {
         expect(baseIdx).toBeGreaterThan(-1);
         expect(supportsIdx).toBeGreaterThan(baseIdx);
-        expect(mediaIdx).toBeGreaterThan(baseIdx);
+        expect(reducedIdx).toBeGreaterThan(baseIdx);
+        expect(contrastIdx).toBeGreaterThan(baseIdx);
       });
 
       it("nulls both prefixed and unprefixed backdrop-filter and restores a solid bg", () => {
-        // Both fallback blocks scope to the surface selector and zero out the
-        // filter; the solid background uses an opaque --theme-surface-* token,
-        // never a translucent color-mix.
-        // @ts-expect-error - indices verified not -1 by guard checks above
-        const blocks = css
-          .slice(supportsIdx)
-          .split("@media (prefers-reduced-transparency: reduce)")[0]
-          .concat(css.slice(mediaIdx));
-        expect(blocks).toMatch(new RegExp(`\\${selector}\\s*{`));
-        expect(blocks).toMatch(/-webkit-backdrop-filter:\s*none/);
-        expect(blocks).toMatch(/[^-]backdrop-filter:\s*none/);
-        expect(blocks).toMatch(/background-color:\s*var\(--theme-surface-(toolbar|sidebar)\)/);
+        // Each fallback block scopes to the surface selector and zeroes out
+        // the filter; the solid background uses an opaque --theme-surface-*
+        // token, never a translucent color-mix. Bound the contrast slice to
+        // its own closing `}\n}` (media-query close + ruleset close) so the
+        // assertions can't be satisfied by an unrelated later rule.
+        const supportsBlock = css.slice(supportsIdx, reducedIdx);
+        const reducedBlock = css.slice(reducedIdx, contrastIdx);
+        const contrastEnd = css.indexOf("\n}\n}", contrastIdx);
+        const contrastBlock = css.slice(
+          contrastIdx,
+          contrastEnd > -1 ? contrastEnd + 4 : css.length
+        );
+
+        for (const block of [supportsBlock, reducedBlock, contrastBlock]) {
+          expect(block).toMatch(new RegExp(`\\${selector}\\s*{`));
+          expect(block).toMatch(/-webkit-backdrop-filter:\s*none/);
+          expect(block).toMatch(/[^-]backdrop-filter:\s*none/);
+          expect(block).toMatch(/background-color:\s*var\(--theme-surface-(toolbar|sidebar)\)/);
+        }
       });
 
       it("does not use !important (cross-file perf-mode override owns that layer)", () => {
-        const supportsBlock = css
-          .slice(supportsIdx)
-          .split("@media (prefers-reduced-transparency: reduce)")[0];
-        const mediaBlock = css.slice(mediaIdx).split("\n}")[0];
+        const supportsBlock = css.slice(supportsIdx, reducedIdx);
+        const reducedBlock = css.slice(reducedIdx, contrastIdx);
+        const contrastEnd = css.indexOf("\n}\n}", contrastIdx);
+        const contrastBlock = css.slice(
+          contrastIdx,
+          contrastEnd > -1 ? contrastEnd + 4 : css.length
+        );
         expect(supportsBlock).not.toMatch(/!important/);
-        expect(mediaBlock).not.toMatch(/!important/);
+        expect(reducedBlock).not.toMatch(/!important/);
+        expect(contrastBlock).not.toMatch(/!important/);
       });
     });
   }

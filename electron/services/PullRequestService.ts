@@ -1,12 +1,12 @@
 import { events } from "./events.js";
-import { clearPRCaches } from "./GitHubService.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { generateProjectId } from "./projectStorePaths.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
-import type { RepoRef, PR as ForgePR, RateLimitInfo } from "../../shared/types/forge.js";
+import { BatchLoader } from "../workspace-host/batchLoader.js";
+import type { RepoRef, PR as ForgePR, RateLimitInfo, CIStatus } from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
 // users see PR transitions promptly, slower when fully blurred to conserve the
@@ -54,13 +54,23 @@ const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
 
 // Adaptive boost: when any resolved PR has CI in-flight (PENDING/EXPECTED), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
-// the floor — statusCheckRollup is ~10–30 GraphQL points per call, so 30s keeps
-// headroom for ~8 active PRs under the 5000/hr primary limit. The ceiling caps
-// boosted polling at 15 min after the last observed PENDING result, preventing
-// a hung CI from indefinitely burning quota; subsequent PENDING observations
-// slide the window forward.
+// the floor. Each CI status query costs ~2 GraphQL points (commits(last:1) +
+// nested contexts(first:100) = 101 nodes; 101/100 rounds to 2), and with the
+// accompanying getPR call (~1 point), revalidating each resolved PR costs ~3
+// points total. At 30s the full 5000/hr primary limit can support ~14 PRs; the
+// decay bands reduce that burn rate proportionally. The ceiling caps boosted
+// polling at 15 min after the last observed PENDING result, preventing a hung
+// CI from indefinitely burning quota; subsequent PENDING observations slide the
+// window forward.
 const RESOLVED_REVALIDATION_BOOST_INTERVAL_MS = 30 * 1000; // 30 seconds
 const RESOLVED_REVALIDATION_BOOST_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+// Decay thresholds: when CI status hasn't changed for this many consecutive
+// polls on the most-stagnant PR, the revalidation interval steps up.
+const STAGNANT_POLL_DECAY_AT_10 = 10;
+const STAGNANT_POLL_DECAY_AT_20 = 20;
+const RESOLVED_REVALIDATION_DECAY_INTERVAL_MS = 60 * 1000;
+const RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS = 120 * 1000;
 
 // Rate-limit block constants extracted from the GitHub-specific service so the
 // polling loops consult the active provider's rate-limit state through
@@ -82,6 +92,7 @@ interface InternalLinkedPR {
   ciStatus?: import("../../shared/types/github.js").GitHubPRCIStatus;
   _ciStatus?: import("../../shared/types/forge.js").CIStatus;
   providerId: string;
+  stagnantPollCount: number;
 }
 
 export interface PRDetectionResult {
@@ -89,23 +100,6 @@ export interface PRDetectionResult {
   prNumber: number;
   prUrl: string;
   prState: "open" | "merged" | "closed";
-}
-
-async function mapWithConcurrencyLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let index = 0;
-  async function worker(): Promise<void> {
-    while (index < items.length) {
-      const i = index++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
 }
 
 function isCandidateBranch(branchName: string | undefined): boolean {
@@ -166,8 +160,16 @@ class PullRequestService {
   // Selected git remote name (`forgeRemote`, #8456). When set, the provider is
   // resolved against this remote's URL instead of `origin`.
   private forgeRemote: string | null = null;
-  // In-flight dedup: keyed by branch name
-  private inFlightBranchLookups = new Map<string, Promise<ForgePR | null>>();
+  // Host-side request coalescers, scoped to the resolved provider. Created in
+  // `resolveProvider()`, disposed in `invalidateProvider()` — a fresh instance
+  // per provider so a swap can never bind the old provider's in-flight results
+  // (the dispose rejects them). They replace the hand-rolled per-branch
+  // in-flight dedup map and collapse same-tick fan-out (branch → PR, PR-number
+  // → PR, PR-number → CI status) into one batch call when the provider
+  // implements the matching `batchLookups` capability.
+  private prByBranchLoader: BatchLoader<string, ForgePR | null> | null = null;
+  private prByNumberLoader: BatchLoader<number, ForgePR | null> | null = null;
+  private ciStatusLoader: BatchLoader<number, CIStatus | null> | null = null;
 
   constructor() {
     this.unsubscribers.push(events.on("sys:worktree:update", this.handleWorktreeUpdate.bind(this)));
@@ -385,10 +387,12 @@ class PullRequestService {
       if (!resolved) {
         this.providerNamespacedId = null;
         this.repoRef = null;
+        this.disposeLoaders();
         return;
       }
       this.providerNamespacedId = resolved.namespacedId;
       this.repoRef = resolved.repo;
+      this.createLoaders(resolved.namespacedId, resolved.repo);
       logInfo("PullRequestService resolved forge provider", {
         namespacedId: resolved.namespacedId,
         owner: resolved.repo.owner,
@@ -400,12 +404,143 @@ class PullRequestService {
       });
       this.providerNamespacedId = null;
       this.repoRef = null;
+      this.disposeLoaders();
     }
   }
 
   private invalidateProvider(): void {
     this.providerNamespacedId = null;
     this.repoRef = null;
+    this.disposeLoaders();
+  }
+
+  private async clearProviderPullRequestCaches(): Promise<void> {
+    const providerId = this.providerNamespacedId;
+    if (!providerId) return;
+    try {
+      await getForgeBridge().clearPullRequestCaches(providerId);
+    } catch (error) {
+      logDebug("PullRequestService provider cache clear failed", {
+        providerId,
+        error: formatErrorMessage(error, "Provider cache clear failed"),
+      });
+    }
+  }
+
+  /**
+   * Build the provider-scoped coalescers. Each loader's batch function prefers
+   * the optional `batchLookups` capability (one round-trip for many keys) and
+   * falls back to per-key bridge calls when the provider doesn't implement it,
+   * mirroring the truthiness-guarded capability convention. `providerId`/`repo`
+   * are captured here so the loader always calls the provider it was minted
+   * for; a swap disposes it before a new one is created.
+   */
+  private createLoaders(providerId: string, repo: RepoRef): void {
+    this.disposeLoaders();
+    const bridge = getForgeBridge();
+
+    this.prByBranchLoader = new BatchLoader<string, ForgePR | null>(async (branches) => {
+      const list = [...branches];
+      let batchMap: Map<string, ForgePR | null> | null = null;
+      try {
+        batchMap = await bridge.findPRsByBranches(providerId, repo, list);
+      } catch (error) {
+        logWarn("Batched PR-by-branch lookup failed; retrying per-branch", {
+          branchCount: list.length,
+          error: formatErrorMessage(error, "findPRsByBranches failed"),
+        });
+      }
+      // A branch missing from the batch map falls back to a per-branch call,
+      // matching the old `perBranchFallback`. A transient per-branch error
+      // resolves to null (treated as "no PR"), as the prior path did.
+      return Promise.all(
+        list.map((branch) => {
+          if (batchMap?.has(branch)) return batchMap.get(branch) ?? null;
+          return bridge.findPRByBranch(providerId, repo, branch).catch(() => null);
+        })
+      );
+    });
+
+    this.prByNumberLoader = new BatchLoader<number, ForgePR | null>(async (prNumbers) => {
+      const list = [...prNumbers];
+      let batchMap: Map<number, ForgePR | null> | null = null;
+      try {
+        batchMap = await bridge.findPRsByNumbers(providerId, repo, list);
+      } catch {
+        batchMap = null; // fall through to per-number lookups
+      }
+      if (batchMap) {
+        // A present key (even with a null value) is authoritative "found / not
+        // found"; an omitted key is a transient miss → surface as a per-key
+        // Error so the loader rejects it and the caller skips (never wipes) it.
+        return list.map((prNumber) =>
+          batchMap.has(prNumber)
+            ? (batchMap.get(prNumber) ?? null)
+            : new Error(`PR #${prNumber} omitted from findPRsByNumbers batch`)
+        );
+      }
+      // Per-number fallback preserves the transient-vs-not-found distinction:
+      // getPR resolves null for a confirmed missing PR but throws on transient
+      // failure, which we surface as a per-key Error.
+      return Promise.all(
+        list.map((prNumber) =>
+          bridge.getPR(providerId, repo, prNumber).then(
+            (pr) => pr,
+            (error: unknown) => (error instanceof Error ? error : new Error(String(error)))
+          )
+        )
+      );
+    });
+
+    this.ciStatusLoader = new BatchLoader<number, CIStatus | null>(async (prNumbers) => {
+      const list = [...prNumbers];
+      let batchMap: Map<number, CIStatus | null> | null = null;
+      try {
+        batchMap = await bridge.getCIStatuses(providerId, repo, list);
+      } catch {
+        batchMap = null; // fall through to per-number lookups
+      }
+      if (batchMap) {
+        // A present key (even null-valued) is authoritative; an omitted key is
+        // a transient miss per the BatchLookupCapability contract — surface it
+        // as a per-key Error so it rejects (enrich drops it) and stays eligible
+        // for retry rather than being written as a confirmed "no CI status".
+        return list.map((prNumber) =>
+          batchMap.has(prNumber)
+            ? (batchMap.get(prNumber) ?? null)
+            : new Error(`CI status for PR #${prNumber} omitted from getCIStatuses batch`)
+        );
+      }
+      // CI status is best-effort: a transient failure resolves to null rather
+      // than rejecting, so it never invalidates an already-detected PR.
+      return Promise.all(
+        list.map((prNumber) => bridge.getCIStatus(providerId, repo, prNumber).catch(() => null))
+      );
+    });
+  }
+
+  private disposeLoaders(): void {
+    this.prByBranchLoader?.dispose();
+    this.prByNumberLoader?.dispose();
+    this.ciStatusLoader?.dispose();
+    this.prByBranchLoader = null;
+    this.prByNumberLoader = null;
+    this.ciStatusLoader = null;
+  }
+
+  /**
+   * Currently-resolved forge provider context, or null when no provider has
+   * resolved yet (e.g. token not connected). Read synchronously so callers can
+   * eagerly compose a `linked` projection at worktree-create time without an
+   * IPC roundtrip (#8888).
+   */
+  public getProviderContext(): { providerId: string; owner: string; repo: string } | null {
+    if (!this.providerNamespacedId || !this.repoRef) return null;
+    return {
+      providerId: this.providerNamespacedId,
+      owner: this.repoRef.owner,
+      repo: this.repoRef.repo,
+    };
   }
 
   /**
@@ -491,7 +626,16 @@ class PullRequestService {
       this.updateDebounceTimer = null;
     }
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.isPolling = false;
+    // Cooperative release so a sibling can poll immediately. Best-effort —
+    // the host's `dispose()` also clears any leases this holder owns, and
+    // the TTL expires within FORGE_POLL_LEASE_TTL_MS regardless.
+    try {
+      getForgeBridge().releasePollLease();
+    } catch {
+      // Bridge not initialized yet (early stop before bootstrap); nothing to release.
+    }
     logInfo("PullRequestService stopped");
   }
 
@@ -511,10 +655,10 @@ class PullRequestService {
       this.revalidationTimer = null;
     }
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
     this.setDetectionState(false);
-    clearPRCaches();
     // Force a full re-detect cycle so already-resolved worktrees re-query
     // dynamic PR fields (state, CI status). Without this, checkForPRs() skips
     // resolved worktrees and only the 90s revalidation timer would refresh
@@ -523,12 +667,13 @@ class PullRequestService {
     this.resolvedWorktrees.clear();
     this.issueTitleFetchedWorktrees.clear();
     // Re-resolve the forge provider on manual refresh so token changes
-    // and provider installs/uninstalls take effect immediately. Clear the
-    // in-flight branch-lookup dedup so a stale promise from the previous
-    // provider can't bind a wrong-repo PR to a worktree after refresh.
-    this.inFlightBranchLookups.clear();
+    // and provider installs/uninstalls take effect immediately.
+    // `invalidateProvider()` disposes the request coalescers, rejecting any
+    // in-flight lookup so a stale promise from the previous provider can't bind
+    // a wrong-repo PR to a worktree after refresh.
     this.invalidateProvider();
     await this.resolveProvider();
+    await this.clearProviderPullRequestCaches();
     // Manual refresh is an explicit "I want fresh data now" — bypass the 5s
     // floor by clearing the throttle clock before the direct checkForPRs().
     this.lastCheckAt = Number.NEGATIVE_INFINITY;
@@ -558,8 +703,8 @@ class PullRequestService {
     // suppress a later genuine trip (the flag is false afterward).
     this.setDetectionState(false);
     this.boostExpiresAt = null;
+    this.clearStagnantPollCounts();
     this.lastCheckAt = Number.NEGATIVE_INFINITY;
-    this.inFlightBranchLookups.clear();
     this.invalidateProvider();
   }
 
@@ -726,6 +871,28 @@ class PullRequestService {
       : null;
   }
 
+  private getBoostRevalidationIntervalMs(): number {
+    const maxStagnant = Math.max(
+      0,
+      ...Array.from(this.detectedPRs.values(), (pr) =>
+        pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED" ? pr.stagnantPollCount : 0
+      )
+    );
+    if (maxStagnant >= STAGNANT_POLL_DECAY_AT_20) {
+      return RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS;
+    }
+    if (maxStagnant >= STAGNANT_POLL_DECAY_AT_10) {
+      return RESOLVED_REVALIDATION_DECAY_INTERVAL_MS;
+    }
+    return RESOLVED_REVALIDATION_BOOST_INTERVAL_MS;
+  }
+
+  private clearStagnantPollCounts(): void {
+    for (const pr of this.detectedPRs.values()) {
+      pr.stagnantPollCount = 0;
+    }
+  }
+
   private hasUnresolvedCandidates(): boolean {
     for (const worktreeId of this.candidates.keys()) {
       if (!this.resolvedWorktrees.has(worktreeId)) {
@@ -762,7 +929,7 @@ class PullRequestService {
     }
     const intervalMs =
       this.boostExpiresAt !== null
-        ? RESOLVED_REVALIDATION_BOOST_INTERVAL_MS
+        ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
 
     this.revalidationTimer = setTimeout(() => {
@@ -850,19 +1017,34 @@ class PullRequestService {
     if (uniquePRNumbers.size === 0) return;
     logDebug("Revalidating resolved PRs", { count: uniquePRNumbers.size });
 
+    const prByNumberLoader = this.prByNumberLoader;
+    if (!prByNumberLoader) return;
+
     try {
-      // Revalidate each known PR by number via provider.getPR.
-      // Transient errors (network, 5xx) are captured as `error: true` and
-      // skipped so a flaky API call doesn't clear valid PR state.
+      // Revalidate each known PR by number through the provider-scoped loader,
+      // coalescing the fan-out into one `findPRsByNumbers` batch when supported.
+      // The loader resolves null for a confirmed-missing PR but rejects on a
+      // transient error, which we map to `error: true` and skip so a flaky API
+      // call doesn't clear valid PR state.
       const prNumbers = [...uniquePRNumbers];
-      const results = await mapWithConcurrencyLimit(prNumbers, 5, async (prNumber) => {
-        try {
-          const pr = await bridge.getPR(providerId, repo, prNumber);
-          return { prNumber, pr, error: false };
-        } catch {
-          return { prNumber, pr: null, error: true };
-        }
-      });
+      const results = await Promise.all(
+        prNumbers.map((prNumber) =>
+          prByNumberLoader.load(prNumber).then(
+            (pr): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
+              prNumber,
+              pr,
+              error: false,
+            }),
+            (): { prNumber: number; pr: ForgePR | null; error: boolean } => ({
+              prNumber,
+              pr: null,
+              error: true,
+            })
+          )
+        )
+      );
+
+      const enrichedPRNumbers = new Set<number>();
 
       for (const { prNumber, pr, error } of results) {
         // Skip transient errors — a single flaky API call must not wipe PR state.
@@ -925,8 +1107,14 @@ class PullRequestService {
             });
           }
 
-          // Revalidate CI status (best-effort, non-blocking)
-          this.enrichPRWithCIStatus(detectedPR, repo, providerId);
+          // Revalidate CI status once per unique PR number. Multiple
+          // worktrees on the same branch share the same detectedPR object
+          // reference — deduplicating avoids double-counting stagnant polls
+          // and redundant API calls.
+          if (!enrichedPRNumbers.has(prNumber)) {
+            enrichedPRNumbers.add(prNumber);
+            this.enrichPRWithCIStatus(detectedPR, repo);
+          }
         }
       }
 
@@ -1034,6 +1222,19 @@ class PullRequestService {
       logDebug("Skipping PR check — within throttle window", { waitMs });
       return;
     }
+
+    // Per-project poll lease (#9055): only one workspace-host polls per
+    // cycle when multiple windows watch the same project. Siblings receive
+    // PR updates via the elected host's `sys:pr:detected` / `sys:pr:cleared`
+    // events as they propagate through main → renderer fan-out. Fails open
+    // (returns true) on IPC timeout so a lost lease message can't wedge
+    // polling — `dispatchForgeRpc`'s cross-window singleflight still dedupes
+    // the actual GraphQL calls in that fallback path.
+    const leaseAcquired = await getForgeBridge().acquirePollLease();
+    if (!leaseAcquired) {
+      logDebug("Skipping PR check — sibling window holds poll lease");
+      return;
+    }
     this.lastCheckAt = Date.now();
 
     logDebug("Checking PRs for candidates", { count: activeCandidates.length });
@@ -1135,7 +1336,7 @@ class PullRequestService {
       // error doesn't blank every row's PR state. Truthiness guard per the
       // forge.ts capability convention.
       const branches = [...uniqueBranches.keys()];
-      const prResults = await this.resolvePRsForBranches(providerId, repo, branches);
+      const prResults = await this.resolvePRsForBranches(branches);
 
       // Fire issue lookups in parallel with PR lookups
       await Promise.allSettled(issueLookups);
@@ -1188,6 +1389,7 @@ class PullRequestService {
           state: pr.state === "declined" ? "closed" : pr.state,
           isDraft: pr.isDraft,
           providerId,
+          stagnantPollCount: 0,
         };
 
         for (const worktreeId of worktreeIds) {
@@ -1221,7 +1423,7 @@ class PullRequestService {
         }
 
         // Fire-and-forget CI status enrichment
-        this.enrichPRWithCIStatus(internalPR, repo, providerId);
+        this.enrichPRWithCIStatus(internalPR, repo);
       }
 
       this.updateBoostFromDetectedPRs();
@@ -1231,75 +1433,41 @@ class PullRequestService {
   }
 
   /**
-   * Resolve a list of unique branches to PRs. Prefers the optional batch
-   * capability `findPRsByBranches` to collapse N round-trips into ceil(N/chunk)
-   * GraphQL requests. If the batch call throws — single transient error from
-   * one chunk shouldn't blank every row's PR state — falls back to the
-   * existing per-branch concurrency-5 path; branches missing from the batch
-   * result Map likewise get the per-branch fallback.
+   * Resolve a list of unique branches to PRs through the provider-scoped
+   * `prByBranchLoader`. All `load()` calls here enqueue synchronously, so the
+   * loader coalesces them into a single `findPRsByBranches` batch (or per-branch
+   * fallback) and dedups any branch already in flight from an overlapping
+   * cycle. The loader resolves a transient error to `null` ("no PR"), matching
+   * the prior `perBranchFallback` behavior.
    */
   private async resolvePRsForBranches(
-    providerId: string,
-    repo: RepoRef,
     branches: string[]
   ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
     if (branches.length === 0) return [];
 
-    const bridge = getForgeBridge();
-    // `findPRsByBranches` is capability-gated on the impl. The bridge returns
-    // `null` when the provider does not implement it, so we treat that case
-    // as a fall-through to per-branch (mirrors the old `if (provider.findPRsByBranches)`
-    // truthiness guard, just one IPC hop away).
-    try {
-      const batchMap = await bridge.findPRsByBranches(providerId, repo, branches);
-      if (batchMap) {
-        const results: Array<{ branch: string; pr: ForgePR | null }> = [];
-        const missing: string[] = [];
-        for (const branch of branches) {
-          if (batchMap.has(branch)) {
-            results.push({ branch, pr: batchMap.get(branch) ?? null });
-          } else {
-            missing.push(branch);
-          }
-        }
-        if (missing.length > 0) {
-          const fallback = await this.perBranchFallback(providerId, repo, missing);
-          results.push(...fallback);
-        }
-        return results;
-      }
-    } catch (error) {
-      logWarn("Batched PR lookup failed; retrying per-branch", {
-        branchCount: branches.length,
-        error: formatErrorMessage(error, "findPRsByBranches failed"),
-      });
-      // Fall through to per-branch path below.
+    const loader = this.prByBranchLoader;
+    if (!loader) {
+      // Unreachable in practice — checkForPRs() resolves the provider (which
+      // creates the loaders) before calling here. Guard defensively without
+      // wiping state: leave every branch unresolved for the next cycle.
+      logWarn("resolvePRsForBranches called with no provider loader; skipping");
+      return [];
     }
 
-    return this.perBranchFallback(providerId, repo, branches);
-  }
-
-  private perBranchFallback(
-    providerId: string,
-    repo: RepoRef,
-    branches: string[]
-  ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
-    const bridge = getForgeBridge();
-    return mapWithConcurrencyLimit(
-      branches,
-      5,
-      (branch): Promise<{ branch: string; pr: ForgePR | null }> => {
-        const existing = this.inFlightBranchLookups.get(branch);
-        if (existing) {
-          return existing.then((pr) => ({ branch, pr }));
-        }
-        const promise = bridge.findPRByBranch(providerId, repo, branch).catch(() => null);
-        this.inFlightBranchLookups.set(branch, promise);
-        promise.finally(() => {
-          this.inFlightBranchLookups.delete(branch);
-        });
-        return promise.then((pr) => ({ branch, pr }));
-      }
+    // Absorb a per-load rejection as `null` ("no PR found"). The only source of
+    // rejection here is the loader being disposed by a mid-cycle provider swap
+    // (`invalidateProvider()` from refresh()/setForgeSettings()); propagating it
+    // would land in checkForPRs's catch and wrongly bump `consecutiveErrors`
+    // toward the circuit breaker. The downstream stale-provider guard discards
+    // the whole cycle once it sees the provider changed, so the null is never
+    // written as a spurious `sys:pr:cleared`.
+    return Promise.all(
+      branches.map((branch) =>
+        loader.load(branch).then(
+          (pr) => ({ branch, pr }),
+          () => ({ branch, pr: null as ForgePR | null })
+        )
+      )
     );
   }
 
@@ -1308,11 +1476,18 @@ class PullRequestService {
    * On success, updates the detectedPRs entry and re-emits sys:pr:detected
    * with the enriched CI status so the renderer can update the badge.
    */
-  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef, providerId: string): void {
-    getForgeBridge()
-      .getCIStatus(providerId, repo, pr.number)
+  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef): void {
+    const loader = this.ciStatusLoader;
+    if (!loader) return;
+    // Synchronous `load()` here: enrichPRWithCIStatus is called fire-and-forget
+    // in a `for` loop per detected PR, so all loads enqueue in the same tick and
+    // coalesce into one `getCIStatuses` batch. Do NOT add an `await` before this
+    // call — it would drain the microtask queue and defeat the coalescing.
+    loader
+      .load(pr.number)
       .then((ciStatus) => {
         if (!ciStatus) return;
+        const prevCiStatus = pr.ciStatus;
         pr.ciStatus =
           ciStatus.state === "success"
             ? "SUCCESS"
@@ -1322,6 +1497,9 @@ class PullRequestService {
                 ? "PENDING"
                 : undefined;
         pr._ciStatus = ciStatus;
+        if (pr.ciStatus !== undefined) {
+          pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
+        }
         // Re-emit for each worktree that has this PR
         for (const [worktreeId, detected] of this.detectedPRs) {
           if (detected.number === pr.number) {

@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the project file store via sync fs
 import type { TerminalRecipe } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";

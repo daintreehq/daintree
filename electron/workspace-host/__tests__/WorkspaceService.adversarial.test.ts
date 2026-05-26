@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { resolve as pathResolve } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
@@ -152,14 +153,16 @@ describe("WorkspaceService adversarial", () => {
     // (plus firing worktree-removed for each), so bulk-creating 30 worktrees
     // converged to "main + last-created". Fix: createWorktree uses a narrower
     // addNewWorktreeMonitor that only adds.
+    const existingPath = pathResolve("/repo/wt-existing");
+    const newPath = pathResolve("/repo/wt-new");
     const existingWorktree = {
-      id: "/repo/wt-existing",
-      path: "/repo/wt-existing",
+      id: existingPath,
+      path: existingPath,
       name: "feature/existing",
       branch: "feature/existing",
       isCurrent: false,
       isMainWorktree: false,
-      gitDir: "/repo/wt-existing/.git",
+      gitDir: `${existingPath}/.git`,
     };
     await (
       service as unknown as {
@@ -170,7 +173,7 @@ describe("WorkspaceService adversarial", () => {
         ) => Promise<void>;
       }
     ).addNewWorktreeMonitor(existingWorktree, false, true);
-    expect(service["monitors"].has("/repo/wt-existing")).toBe(true);
+    expect(service["monitors"].has(existingPath)).toBe(true);
 
     // Drop the events recorded during the seeding so the assertion below is
     // clean.
@@ -183,8 +186,8 @@ describe("WorkspaceService adversarial", () => {
     });
 
     // Both monitors must be present — the existing one was NOT removed.
-    expect(service["monitors"].has("/repo/wt-existing")).toBe(true);
-    expect(service["monitors"].has("/repo/wt-new")).toBe(true);
+    expect(service["monitors"].has(existingPath)).toBe(true);
+    expect(service["monitors"].has(newPath)).toBe(true);
 
     // No worktree-removed event was fired for the existing worktree.
     const removedEvents = sentEvents.filter(
@@ -249,6 +252,7 @@ describe("WorkspaceService adversarial", () => {
     listService.invalidateCache = vi.fn();
     listService.list = vi.fn().mockResolvedValue([]);
     listService.mapToWorktrees = vi.fn().mockReturnValue([]);
+    const expectedWorktreeId = pathResolve("/repo/wt-missing");
 
     await service.createWorktree("req-missing", "/repo", {
       baseBranch: "main",
@@ -261,13 +265,14 @@ describe("WorkspaceService adversarial", () => {
         type: "create-worktree-result",
         requestId: "req-missing",
         success: true,
-        worktreeId: "/repo/wt-missing",
+        worktreeId: expectedWorktreeId,
       })
     );
     expect(listService.list).not.toHaveBeenCalled();
   });
 
   it("does not accumulate duplicate monitors when delete and create overlap on the same path", async () => {
+    const racePath = pathResolve("/repo/wt-race");
     let releaseGit!: () => void;
     mockSimpleGit.raw.mockImplementationOnce(
       () =>
@@ -282,7 +287,7 @@ describe("WorkspaceService adversarial", () => {
       path: "/repo/wt-race",
     });
 
-    const deletePromise = service.deleteWorktree("req-race-delete", "/repo/wt-race");
+    const deletePromise = service.deleteWorktree("req-race-delete", racePath);
 
     releaseGit();
     await Promise.allSettled([createPromise, deletePromise]);
@@ -292,7 +297,7 @@ describe("WorkspaceService adversarial", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     const monitorEntries = Array.from(service["monitors"].keys()).filter(
-      (worktreeId) => worktreeId === "/repo/wt-race"
+      (worktreeId) => worktreeId === racePath
     );
     expect(monitorEntries.length).toBeLessThanOrEqual(1);
   });

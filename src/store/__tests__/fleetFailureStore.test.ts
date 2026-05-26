@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useFleetFailureStore } from "../fleetFailureStore";
 import { useFleetArmingStore } from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
   useFleetFailureStore.setState({ failedIds: new Set(), payload: null, recordedAt: null });
@@ -16,12 +16,14 @@ function resetStores() {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
-    type: "terminal",
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     agentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
@@ -29,7 +31,7 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "waiting",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("useFleetFailureStore", () => {

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import {
   cancelPanelStatusBuffer,
   enqueueActivityUpdate,
@@ -38,6 +39,10 @@ function installFakeRaf(): FakeRaf {
       }
     },
   };
+}
+
+function getPtyPanel(id: string): PtyPanelData | undefined {
+  return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
 }
 
 function seedPanel(id: string, overrides: Record<string, unknown> = {}): void {
@@ -89,9 +94,8 @@ describe("panelStatusBuffer — activity batching", () => {
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
 
-    const state = usePanelStore.getState();
     for (let i = 0; i < 10; i++) {
-      const t = state.panelsById[`term-${i}`];
+      const t = getPtyPanel(`term-${i}`);
       expect(t?.activityHeadline).toBe(`Working ${i}`);
       expect(t?.activityStatus).toBe("working");
       expect(t?.activityType).toBe("interactive");
@@ -105,7 +109,7 @@ describe("panelStatusBuffer — activity batching", () => {
     enqueueActivityUpdate("term-1", "First", "working", "interactive", 100, "a");
     enqueueActivityUpdate("term-1", "Second", "waiting", "interactive", 200, "b");
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Second");
     expect(t?.activityStatus).toBe("waiting");
     expect(t?.activityTimestamp).toBe(200);
@@ -126,7 +130,7 @@ describe("panelStatusBuffer — activity batching", () => {
     // setState is still called once (the fold runs), but the returned object
     // reflects no terminal change. Assert via state equality, not call count.
     expect(setSpy).toHaveBeenCalledTimes(1);
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Stable");
   });
 
@@ -150,9 +154,8 @@ describe("panelStatusBuffer — flow-status batching", () => {
 
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
-    const state = usePanelStore.getState();
     for (let i = 0; i < 5; i++) {
-      const t = state.panelsById[`term-${i}`];
+      const t = getPtyPanel(`term-${i}`);
       expect(t?.flowStatus).toBe("suspended");
       expect(t?.flowStatusTimestamp).toBe(1000 + i);
       // deriveRuntimeStatus(isVisible=true, flowStatus="suspended", "running") -> "suspended"
@@ -174,7 +177,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
       },
     }));
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
     expect(t?.runtimeStatus).toBe("background");
   });
@@ -188,7 +191,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
     enqueueFlowStatusUpdate("term-1", "running", 200);
     enqueueFlowStatusUpdate("term-1", "suspended", 100);
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
     expect(t?.flowStatusTimestamp).toBe(200);
   });
@@ -202,7 +205,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
     });
     enqueueFlowStatusUpdate("term-1", "suspended", 400);
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
     expect(t?.flowStatusTimestamp).toBe(500);
   });
@@ -212,7 +215,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
     enqueueFlowStatusUpdate("term-1", "suspended", 100);
     enqueueFlowStatusUpdate("term-1", "paused-backpressure", 200);
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("paused-backpressure");
     expect(t?.flowStatusTimestamp).toBe(200);
   });
@@ -230,9 +233,8 @@ describe("panelStatusBuffer — combined flush", () => {
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
 
-    const state = usePanelStore.getState();
-    expect(state.panelsById["term-1"]?.activityHeadline).toBe("Doing");
-    expect(state.panelsById["term-2"]?.flowStatus).toBe("suspended");
+    expect(getPtyPanel("term-1")?.activityHeadline).toBe("Doing");
+    expect(getPtyPanel("term-2")?.flowStatus).toBe("suspended");
   });
 
   it("same terminal: activity + flow-status patches do not clobber each other", () => {
@@ -243,7 +245,7 @@ describe("panelStatusBuffer — combined flush", () => {
     enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", 100, "npm run dev");
     enqueueFlowStatusUpdate("term-1", "suspended", 100);
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Compiling");
     expect(t?.activityStatus).toBe("working");
     expect(t?.lastCommand).toBe("npm run dev");
@@ -260,7 +262,7 @@ describe("panelStatusBuffer — lifecycle", () => {
     cancelPanelStatusBuffer();
     cancelPanelStatusBuffer();
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBeUndefined();
   });
 
@@ -270,7 +272,7 @@ describe("panelStatusBuffer — lifecycle", () => {
     cancelPanelStatusBuffer();
     enqueueActivityUpdate("term-1", "Second", "working", "interactive", 200, undefined);
     raf.flushAll();
-    const t = usePanelStore.getState().panelsById["term-1"];
+    const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Second");
   });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -28,6 +28,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
   },
 }));
@@ -58,7 +59,7 @@ type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
 >;
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
@@ -70,10 +71,10 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "waiting",
     hasPty: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
+function seedPanels(terminals: PtyPanelData[]): void {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),

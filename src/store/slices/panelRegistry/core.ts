@@ -1,13 +1,11 @@
-import type {
-  PanelRegistryStoreApi,
-  PanelRegistrySlice,
-  PanelRegistryMiddleware,
-  TerminalInstance,
-} from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice, PanelRegistryMiddleware } from "./types";
+import { isPtyPanel } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
@@ -46,6 +44,7 @@ export const createCorePanelActions = (
   | "moveTerminalToDock"
   | "moveTerminalToGrid"
   | "toggleTerminalLocation"
+  | "emptyTrash"
 > => ({
   beginHydrationBatch: () => beginBatch(),
 
@@ -142,6 +141,76 @@ export const createCorePanelActions = (
     middleware?.onTerminalRemoved?.(id, removedIndex, remainingIds, terminal);
   },
 
+  emptyTrash: (ids) => {
+    if (ids.length === 0) return;
+
+    const idSet = new Set(ids);
+    const state = get();
+
+    for (const id of idSet) {
+      clearTrashExpiryTimer(id);
+      cancelReconnectErrorDebounce(id);
+      const terminal = state.panelsById[id];
+      if (!terminal) continue;
+
+      if (isDevPreviewPanel(terminal)) {
+        stopDevPreviewByPanelId(id);
+      }
+
+      if (panelKindHasPty(terminal.kind ?? "terminal")) {
+        terminalClient.kill(id).catch((error) => {
+          logError("[TerminalStore] Failed to kill terminal", error);
+        });
+        terminalInstanceService.destroy(id);
+      }
+    }
+
+    set((state) => {
+      const newById = { ...state.panelsById };
+      for (const id of idSet) {
+        delete newById[id];
+      }
+
+      const newIds = state.panelIds.filter((tid) => !idSet.has(tid));
+
+      let newWorktreeIndex = state.panelIdsByWorktreeId;
+      for (const id of idSet) {
+        const terminal = state.panelsById[id];
+        if (terminal) {
+          newWorktreeIndex = removeFromWorktreeIndex(newWorktreeIndex, terminal.worktreeId, id);
+        }
+      }
+
+      const newTrashed = new Map(state.trashedTerminals);
+      for (const id of idSet) {
+        newTrashed.delete(id);
+      }
+
+      const newBackgrounded = new Map(state.backgroundedTerminals);
+      for (const id of idSet) {
+        newBackgrounded.delete(id);
+      }
+
+      const { tabGroups: newTabGroups } = removePanelIdsFromTabGroups(state.tabGroups, idSet);
+
+      saveNormalized(newById, newIds);
+      saveTabGroups(newTabGroups);
+      return {
+        panelsById: newById,
+        panelIds: newIds,
+        panelIdsByWorktreeId: newWorktreeIndex,
+        trashedTerminals: newTrashed,
+        backgroundedTerminals: newBackgrounded,
+        tabGroups: newTabGroups,
+      };
+    });
+
+    for (const id of idSet) {
+      const removedIndex = state.panelIds.indexOf(id);
+      middleware?.onTerminalRemoved?.(id, removedIndex, get().panelIds, state.panelsById[id]);
+    }
+  },
+
   updateTitle: (id, newTitle) => {
     set((state) => {
       const terminal = state.panelsById[id];
@@ -157,7 +226,7 @@ export const createCorePanelActions = (
   updateLastObservedTitle: (id, title) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
+      if (!terminal || !isPtyPanel(terminal)) return state;
       const trimmed = title.trim();
       if (!trimmed || terminal.lastObservedTitle === trimmed) return state;
       const newById = {
@@ -186,6 +255,7 @@ export const createCorePanelActions = (
         logWarn("[TerminalStore] Cannot update agent state: terminal not found", { id });
         return state;
       }
+      if (!isPtyPanel(terminal)) return state;
 
       // Equality short-circuit: skip the write (and crucially `lastStateChange`)
       // when no user-visible field changed. `lastStateChange` gates the
@@ -239,7 +309,7 @@ export const createCorePanelActions = (
   updateActivity: (id, headline, status, type, timestamp, lastCommand) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
+      if (!terminal || !isPtyPanel(terminal)) return state;
 
       if (
         terminal.activityHeadline === headline &&
@@ -270,7 +340,7 @@ export const createCorePanelActions = (
   updateLastCommand: (id, lastCommand) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
+      if (!terminal || !isPtyPanel(terminal)) return state;
 
       return {
         panelsById: {
@@ -287,16 +357,24 @@ export const createCorePanelActions = (
       if (!terminal) return state;
       if (terminal.isVisible === isVisible) return state;
 
-      const runtimeStatus = deriveRuntimeStatus(
-        isVisible,
-        terminal.flowStatus,
-        terminal.runtimeStatus
-      );
+      if (isPtyPanel(terminal)) {
+        const runtimeStatus = deriveRuntimeStatus(
+          isVisible,
+          terminal.flowStatus,
+          terminal.runtimeStatus
+        );
+        return {
+          panelsById: {
+            ...state.panelsById,
+            [id]: { ...terminal, isVisible, runtimeStatus },
+          },
+        };
+      }
 
       return {
         panelsById: {
           ...state.panelsById,
-          [id]: { ...terminal, isVisible, runtimeStatus },
+          [id]: { ...terminal, isVisible },
         },
       };
     });
@@ -334,15 +412,15 @@ export const createCorePanelActions = (
       if (!terminal || terminal.location === "dock") return state;
 
       const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
-      const newById = {
-        ...state.panelsById,
-        [id]: {
-          ...terminal,
-          location: "dock" as const,
-          isVisible: false,
-          runtimeStatus: deriveRuntimeStatus(false, terminal.flowStatus, terminal.runtimeStatus),
-        },
-      };
+      const updatedPanel = isPtyPanel(terminal)
+        ? {
+            ...terminal,
+            location: "dock" as const,
+            isVisible: false,
+            runtimeStatus: deriveRuntimeStatus(false, terminal.flowStatus, terminal.runtimeStatus),
+          }
+        : { ...terminal, location: "dock" as const, isVisible: false };
+      const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);
@@ -368,7 +446,7 @@ export const createCorePanelActions = (
 
     // Single ungrouped panel - move just this panel
     let moveSucceeded = false;
-    let terminal: TerminalInstance | undefined;
+    let terminal: PanelInstance | undefined;
 
     set((state) => {
       terminal = state.panelsById[id];
@@ -378,15 +456,16 @@ export const createCorePanelActions = (
       // succeed, the grid scrolls vertically to absorb additional panels.
       moveSucceeded = true;
       const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
-      const newById = {
-        ...state.panelsById,
-        [id]: {
-          ...terminal!,
-          location: "grid" as const,
-          isVisible: true,
-          runtimeStatus: deriveRuntimeStatus(true, terminal!.flowStatus, terminal!.runtimeStatus),
-        },
-      };
+      const t = terminal!;
+      const updatedPanel = isPtyPanel(t)
+        ? {
+            ...t,
+            location: "grid" as const,
+            isVisible: true,
+            runtimeStatus: deriveRuntimeStatus(true, t.flowStatus, t.runtimeStatus),
+          }
+        : { ...t, location: "grid" as const, isVisible: true };
+      const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);

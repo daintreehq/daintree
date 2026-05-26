@@ -310,6 +310,17 @@ export default tseslint.config(
     },
   },
 
+  // Enforce property syntax on interface method signatures to preserve
+  // function parameter contravariance under strictFunctionTypes. Method
+  // syntax is bivariant and would silently accept unsafe widening casts.
+  // See #8961.
+  {
+    files: ["shared/config/**/*.ts"],
+    rules: {
+      "@typescript-eslint/method-signature-style": ["error", "property"],
+    },
+  },
+
   // Catch un-awaited promises in renderer code. `safeFireAndForget` is the
   // sanctioned escape hatch for fire-and-forget IPC — see issue #6029.
   {
@@ -440,6 +451,26 @@ export default tseslint.config(
             "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:has(> Property[key.name='type'][value.value='success']):not(:has(> Property[key.name='transient'][value.value=true])):not(:has(> Property[key.name='priority'][value.value='low'])):not(:has(> Property[key.name='correlationId']))",
           message:
             'Unprotected success toast. Success is over-used — fires on routine in-place state changes users can already see. Add one of: `transient: true` (one-shot, no inbox row), `priority: "low"` (history-only), or a `correlationId` (threads into an existing notification group). Or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` when the call is deliberate. See #8249.',
+        },
+        {
+          // why: routing each notify() through the EVENT_POLICY manifest needs a
+          // `context.eventKind` so the dispatcher can resolve priority/placement/
+          // duration centrally instead of re-deriving them per call site. Flags
+          // inline-literal notify()/addNotification() calls missing
+          // context.eventKind. Skips spread-bearing payloads (`notify({
+          // ...payload })`) and variable-reference contexts (`context: ctxVar`)
+          // since neither can be statically verified — those plus the ~74 legacy
+          // sites annotate with `// eslint-disable-next-line no-restricted-syntax
+          // -- notify-event-kind: ok` until migrated. See #9007.
+          // NOTE: the eventKind `:has()` clause intentionally omits the leading
+          // `>` before the `context` property — esquery in this version
+          // mishandles a child combinator followed by a descendant chain inside
+          // `:has(> A > B > C)`, silently matching nothing. The SpreadElement and
+          // Identifier-context guards keep their `>` since they're single-level.
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:not(:has(> SpreadElement)):not(:has(Property[key.name='context'] > ObjectExpression > Property[key.name='eventKind'])):not(:has(> Property[key.name='context'][value.type='Identifier']))",
+          message:
+            'notify() call missing context.eventKind — add `context: { eventKind: "<kind>" }` so EVENT_POLICY can route it, or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok` for legacy sites. See #9007.',
         },
         {
           selector:

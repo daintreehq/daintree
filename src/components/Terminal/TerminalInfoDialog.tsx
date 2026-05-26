@@ -9,6 +9,7 @@ import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 
 const SYNC_MODE_POLL_MS = 250;
 
@@ -131,7 +132,8 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncMode, setSyncMode] = useState<boolean | null>(null);
-  const panel = usePanelStore((state) => state.panelsById[terminalId]);
+  const panelRaw = usePanelStore((state) => state.panelsById[terminalId]);
+  const panel = panelRaw && isPtyPanel(panelRaw) ? panelRaw : undefined;
 
   useEffect(() => {
     if (!isOpen) {

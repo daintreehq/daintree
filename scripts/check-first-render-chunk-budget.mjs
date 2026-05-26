@@ -6,38 +6,44 @@
 // "what the user actually downloads before they can interact" — eager imports
 // plus the lazy chunks for any panel restored from the previous session.
 //
-// Compares against the checked-in first-render-chunk-baseline.json. Warn-only
-// for the first nightly week per #7576 — use --override in CI until the
-// staged-rollout window expires.
+// Compares against the checked-in first-render-chunk-baseline.json.
+//
+// There is no override flag: an intentional regression is accepted by applying
+// the `first-render-chunk-override` label to the PR with a linked tracking
+// issue (enforced by scripts/check-budget-override-gate.mjs in CI).
 //
 // Usage:
 //   node scripts/check-first-render-chunk-budget.mjs                   # check (CI)
 //   node scripts/check-first-render-chunk-budget.mjs --update          # write baseline
 //   node scripts/check-first-render-chunk-budget.mjs --update --force  # bypass shrink guard
-//   node scripts/check-first-render-chunk-budget.mjs --override        # don't fail exit code
 //   node scripts/check-first-render-chunk-budget.mjs --threshold 0.10  # 10% growth allowed
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const DIST = path.join(ROOT, "dist");
 const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
+const SEEDS_FILE = path.join(DIST, ".vite", "first-render-seeds.json");
 const BASELINE_FILE = path.join(ROOT, "first-render-chunk-baseline.json");
 const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 
 // Seed list: every source path that is part of the renderer's first-paint
 // bundle. The renderer entry chunk is auto-detected via `isEntry`. The lazy
-// entries below are React.lazy boundaries in src/panels/registry.tsx that
-// resolve immediately when a persisted browser/dev-preview panel is restored
-// — i.e. on the first-render path even though they're nominally "lazy".
-export const LAZY_FIRST_RENDER_SEEDS = [
-  "src/components/Browser/BrowserPane.tsx",
-  "src/components/DevPreview/DevPreviewPane.tsx",
-];
+// entries are React.lazy boundaries in src/panels/registry.tsx that resolve
+// immediately when a persisted browser/dev-preview/review panel is restored —
+// i.e. on the first-render path even though they're nominally "lazy".
+//
+// The list is no longer hardcoded here: it's derived from the panel-kind
+// registry (shared/config/panelKindRegistry.ts → getFirstRenderSeeds) and
+// emitted to dist/.vite/first-render-seeds.json by firstRenderSeedsPlugin at
+// build time. This script can't import the TS registry directly from plain
+// Node ESM, so it reads the emitted artifact. Keeping the registry as the
+// single source of truth is the whole point — see #8895.
 
 const DEFAULT_THRESHOLD = 0.05;
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
@@ -54,12 +60,11 @@ export function shrinkageGuardError(priorGzip, nextGzip, threshold) {
 }
 
 function parseArgs(argv) {
-  const args = { isUpdate: false, force: false, override: false, threshold: DEFAULT_THRESHOLD };
+  const args = { isUpdate: false, force: false, threshold: DEFAULT_THRESHOLD };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--update") args.isUpdate = true;
     else if (arg === "--force") args.force = true;
-    else if (arg === "--override") args.override = true;
     else if (arg === "--threshold" && argv[i + 1]) {
       const val = argv[i + 1];
       args.threshold = parseFloat(val);
@@ -91,6 +96,38 @@ function readManifest() {
   }
 }
 
+// Reads the registry-derived seed list emitted by firstRenderSeedsPlugin. Fails
+// loud on a missing/invalid/empty artifact rather than falling back to a
+// hardcoded list — a silently-empty seed set would measure only the entry chunk
+// and let a regression slip past the gate, exactly the drift #8895 closes.
+function readFirstRenderSeeds() {
+  if (!existsSync(SEEDS_FILE)) {
+    console.error(`::error::first-render seeds not found at ${path.relative(ROOT, SEEDS_FILE)}`);
+    console.error(
+      "   Run `vite build` first (seeds artifact emitted by firstRenderSeedsPlugin in vite.config.ts)."
+    );
+    process.exit(1);
+  }
+  let seeds;
+  try {
+    seeds = JSON.parse(readFileSync(SEEDS_FILE, "utf8"));
+  } catch (err) {
+    console.error(`::error::failed to parse first-render seeds: ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(seeds) || seeds.some((s) => typeof s !== "string" || s.length === 0)) {
+    console.error("::error::first-render seeds must be a non-empty array of source-path strings");
+    process.exit(1);
+  }
+  if (seeds.length === 0) {
+    console.error(
+      "::error::first-render seeds is empty — the registry produced no firstRenderRestore kinds"
+    );
+    process.exit(1);
+  }
+  return seeds;
+}
+
 // BFS the manifest graph. `imports[]` and `dynamicImports[]` reference other
 // manifest keys (source paths). Visiting by manifest key (not file name) avoids
 // double-counting chunks shared via Rolldown's `codeSplitting.groups`
@@ -105,10 +142,10 @@ function readManifest() {
 //     entire reachable bundle. Report-only, retained as a coarse total-bundle
 //     regression signal.
 //
-// The seeds (renderer entry + LAZY_FIRST_RENDER_SEEDS) are always enqueued
-// explicitly regardless of `followDynamic` — they're first-paint paths by
-// definition (a persisted browser/dev-preview panel restores synchronously),
-// not edges discovered by walking `dynamicImports[]`.
+// The seeds (renderer entry + the registry-derived first-render seeds) are
+// always enqueued explicitly regardless of `followDynamic` — they're first-paint
+// paths by definition (a persisted browser/dev-preview/review panel restores
+// synchronously), not edges discovered by walking `dynamicImports[]`.
 export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}) {
   const visited = new Set();
   const queue = [];
@@ -184,14 +221,14 @@ function sizeClosure(manifest, closure) {
   return { chunks, totals: { raw: totalRaw, gzip: totalGzip }, missing };
 }
 
-function buildReport(manifest) {
+function buildReport(manifest, lazySeeds) {
   const entryKey = findEntryKey(manifest);
   if (!entryKey) {
     console.error("::error::no entry chunk found in manifest (no chunk has isEntry: true)");
     process.exit(1);
   }
 
-  const seedKeys = [entryKey, ...LAZY_FIRST_RENDER_SEEDS];
+  const seedKeys = [entryKey, ...lazySeeds];
 
   // Eager walk (gated): the static first-render closure.
   const eagerClosure = collectClosure(manifest, seedKeys, { followDynamic: false });
@@ -204,8 +241,8 @@ function buildReport(manifest) {
 
   for (const m of [...eager.missing, ...total.missing]) console.warn(`::warning::${m}`);
 
-  const seedsResolved = LAZY_FIRST_RENDER_SEEDS.filter((s) => Boolean(manifest[s]));
-  const seedsMissing = LAZY_FIRST_RENDER_SEEDS.filter((s) => !manifest[s]);
+  const seedsResolved = lazySeeds.filter((s) => Boolean(manifest[s]));
+  const seedsMissing = lazySeeds.filter((s) => !manifest[s]);
   for (const s of seedsMissing) {
     console.warn(
       `::warning::seed ${s} not present in manifest — closure may be undercounted (rename or refactor?)`
@@ -269,6 +306,57 @@ function writeBaseline(report, { force }) {
   );
 }
 
+// Pure four-state classifier for the first-render budget. Does NOT change the
+// gate — `ratio > threshold` still determines `ok` in `compareToBaseline`. The
+// classification is reviewer visibility: it tells the PR author whether their
+// change is a genuine win, a regression, a shift-trap (bytes moved from eager
+// to lazy but total bundle grew), or a watch (eager stable, total creeping up).
+//
+// `stabilityBytes` (default 1024) defines the noise floor — deltas within this
+// band are treated as "stable" rather than meaningful movement.
+export function classifyFirstRenderBudget(
+  { delta, totalDelta, ratio, threshold },
+  { stabilityBytes = 1024 } = {}
+) {
+  const descriptions = {
+    regression: "Eager first-render gzip grew beyond the threshold — this is a gating failure.",
+    win: "Eager closure shrank with no net increase in total bundle size.",
+    "shift-trap":
+      "Eager bytes moved to lazy chunks but total bundle grew — verify the split was intentional.",
+    watch: "Eager bytes are stable but total bundle size crept up — monitor for trend.",
+    pass: "All metrics within thresholds.",
+  };
+
+  if (ratio > threshold) {
+    return {
+      classification: "regression",
+      emoji: "🔴",
+      label: "Regression",
+      description: descriptions.regression,
+    };
+  }
+  if (delta <= -stabilityBytes && totalDelta <= stabilityBytes) {
+    return { classification: "win", emoji: "🟢", label: "Win", description: descriptions.win };
+  }
+  if (delta <= -stabilityBytes && totalDelta > stabilityBytes) {
+    return {
+      classification: "shift-trap",
+      emoji: "⚠️",
+      label: "Shift trap",
+      description: descriptions["shift-trap"],
+    };
+  }
+  if (Math.abs(delta) <= stabilityBytes && totalDelta > stabilityBytes) {
+    return {
+      classification: "watch",
+      emoji: "🟡",
+      label: "Watch",
+      description: descriptions.watch,
+    };
+  }
+  return { classification: "pass", emoji: "✅", label: "Pass", description: descriptions.pass };
+}
+
 function compareToBaseline(report, threshold) {
   if (!existsSync(BASELINE_FILE)) {
     console.error(
@@ -301,36 +389,62 @@ function compareToBaseline(report, threshold) {
   const currentTotalGzip = report.totals.gzip;
   const totalDelta = currentTotalGzip - baselineTotalGzip;
 
-  const lines = [];
-  lines.push("# First-render chunk gzip budget");
-  lines.push("");
-  lines.push("## Eager first-render closure (gated)");
-  lines.push("");
-  lines.push(`- baseline gzip: ${baselineGzip} bytes`);
-  lines.push(`- current gzip:  ${currentGzip} bytes`);
-  lines.push(
-    `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`
-  );
-  lines.push(`- threshold:     +${(threshold * 100).toFixed(1)}%`);
-  lines.push(`- eager chunks:  ${report.chunkCount}`);
-  lines.push(`- result:        ${overBudget ? "OVER BUDGET" : "OK"}`);
-  lines.push("");
-  lines.push("## Total reachable bundle (report-only)");
-  lines.push("");
-  lines.push(`- baseline gzip: ${baselineTotalGzip} bytes`);
-  lines.push(`- current gzip:  ${currentTotalGzip} bytes`);
-  lines.push(`- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`);
+  const classification = classifyFirstRenderBudget({ delta, totalDelta, ratio, threshold });
 
-  mkdirSync(path.dirname(SUMMARY_FILE), { recursive: true });
-  writeFileSync(SUMMARY_FILE, lines.join("\n") + "\n");
+  const markdown = formatBudgetSummary({
+    title: "First-render chunk gzip budget",
+    status: `${classification.emoji} ${classification.label}`,
+    headerLine: `eager gzip ${currentGzip} bytes (${delta >= 0 ? "+" : ""}${delta}, ${(ratio * 100).toFixed(2)}%, threshold +${(threshold * 100).toFixed(1)}%)`,
+    sections: [
+      {
+        heading: "Reviewer signal",
+        body: [
+          `${classification.emoji} **${classification.label}** — ${classification.description}`,
+        ],
+      },
+      {
+        heading: "Eager first-render closure (gated)",
+        body: [
+          `- baseline gzip: ${baselineGzip} bytes`,
+          `- current gzip:  ${currentGzip} bytes`,
+          `- delta:         ${delta >= 0 ? "+" : ""}${delta} bytes (${(ratio * 100).toFixed(2)}%)`,
+          `- threshold:     +${(threshold * 100).toFixed(1)}%`,
+          `- eager chunks:  ${report.chunkCount}`,
+          `- result:        ${overBudget ? "🔴 OVER BUDGET" : "OK"}`,
+        ],
+      },
+      {
+        heading: "Total reachable bundle (report-only)",
+        body: [
+          `- baseline gzip: ${baselineTotalGzip} bytes`,
+          `- current gzip:  ${currentTotalGzip} bytes`,
+          `- delta:         ${totalDelta >= 0 ? "+" : ""}${totalDelta} bytes (not gated)`,
+        ],
+      },
+    ],
+  });
 
-  return { ok: !overBudget, delta, ratio, baselineGzip, currentGzip };
+  const markerComment = `<!-- daintree-first-render-budget classification:"${classification.classification}" delta:${delta} -->`;
+  writeSummary(SUMMARY_FILE, markdown + "\n" + markerComment);
+
+  return {
+    ok: !overBudget,
+    delta,
+    ratio,
+    baselineGzip,
+    currentGzip,
+    totalDelta,
+    baselineTotalGzip,
+    currentTotalGzip,
+    classification,
+  };
 }
 
 function main() {
   const args = parseArgs(process.argv);
   const manifest = readManifest();
-  const report = buildReport(manifest);
+  const lazySeeds = readFirstRenderSeeds();
+  const report = buildReport(manifest, lazySeeds);
 
   if (args.isUpdate) {
     writeBaseline(report, { force: args.force });
@@ -350,14 +464,9 @@ function main() {
     `::error::first-render chunk gzip grew from ${result.baselineGzip} to ${result.currentGzip} (+${result.delta}, ${(result.ratio * 100).toFixed(2)}%, threshold +${(args.threshold * 100).toFixed(1)}%)`
   );
   console.error(
-    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline.`
+    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline, ` +
+      `or apply the \`first-render-chunk-override\` label to the PR with a linked tracking issue (\`Fixes #N\`, \`Resolves #N\`, or \`Closes #N\` in the PR body).`
   );
-  if (args.override) {
-    console.log(
-      "[check-first-render-chunk-budget] override active — exiting successfully despite regression"
-    );
-    return;
-  }
   process.exit(1);
 }
 

@@ -2,8 +2,18 @@ import { describe, it, expect } from "vitest";
 import {
   collectClosure,
   shrinkageGuardError,
-  LAZY_FIRST_RENDER_SEEDS,
+  classifyFirstRenderBudget,
 } from "./check-first-render-chunk-budget.mjs";
+
+// The seed list is now registry-derived (shared/config/panelKindRegistry.ts) and
+// read from dist/.vite/first-render-seeds.json at runtime. collectClosure takes
+// seed keys as a parameter, so these tests pass the lazy seeds as a literal —
+// the registry contract itself is covered by panelKindRegistry.test.ts.
+const LAZY_FIRST_RENDER_SEEDS = [
+  "src/components/Browser/BrowserPane.tsx",
+  "src/components/DevPreview/DevPreviewPane.tsx",
+  "src/panels/review/ReviewPane.tsx",
+];
 
 // Synthetic manifest mirroring the Vite 8 / Rolldown shape: top-level keys are
 // either source paths (for entries / lazy seeds) or `_vendor-*.js` keys for
@@ -47,6 +57,12 @@ function makeManifest(extra = {}) {
       imports: [],
       dynamicImports: [],
     },
+    "src/panels/review/ReviewPane.tsx": {
+      file: "assets/ReviewPane-yz0.js",
+      imports: ["_vendor-review.js"],
+      dynamicImports: [],
+    },
+    "_vendor-review.js": { file: "assets/vendor-review-123.js", imports: [], dynamicImports: [] },
     ...extra,
   };
 }
@@ -93,6 +109,10 @@ describe("collectClosure — first-render seeds", () => {
     const eager = collectClosure(manifest, seeds, { followDynamic: false });
     expect(eager.has("src/components/Browser/BrowserPane.tsx")).toBe(true);
     expect(eager.has("src/components/DevPreview/DevPreviewPane.tsx")).toBe(true);
+    // ReviewPane is the seed that previously drifted out of the list (#8895) —
+    // it must be enqueued and its static vendor dep pulled into the closure.
+    expect(eager.has("src/panels/review/ReviewPane.tsx")).toBe(true);
+    expect(eager.has("_vendor-review.js")).toBe(true);
     // And the BrowserPane's own static import is reachable from the seed.
     expect(eager.has("_vendor-browser.js")).toBe(true);
     // domMax is still excluded — it isn't a seed and only the dynamic edge
@@ -166,5 +186,233 @@ describe("shrinkageGuardError", () => {
     expect(shrinkageGuardError(0, 50, THRESHOLD)).toBeNull();
     expect(shrinkageGuardError(undefined, 50, THRESHOLD)).toBeNull();
     expect(shrinkageGuardError(null, 50, THRESHOLD)).toBeNull();
+  });
+});
+
+describe("classifyFirstRenderBudget", () => {
+  const THRESHOLD = 0.05;
+
+  it("returns regression when ratio exceeds threshold, even with decreasing total", () => {
+    const result = classifyFirstRenderBudget({
+      delta: 6000,
+      totalDelta: -5000,
+      ratio: 0.06,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("regression");
+    expect(result.emoji).toBe("🔴");
+  });
+
+  it("returns pass when ratio equals threshold exactly", () => {
+    // ratio === threshold: not > threshold, so not regression.
+    // delta=5000 > stabilityBytes and ratio <= threshold → falls through to pass.
+    const result = classifyFirstRenderBudget({
+      delta: 5000,
+      totalDelta: 1000,
+      ratio: 0.05,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("pass");
+  });
+
+  it("returns win when eager shrinks meaningfully and total is stable/down", () => {
+    // Eager down 5000, total down 10000 — genuine net reduction.
+    const result = classifyFirstRenderBudget({
+      delta: -5000,
+      totalDelta: -10000,
+      ratio: -0.05,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("win");
+    expect(result.emoji).toBe("🟢");
+  });
+
+  it("returns win when eager shrinks and total is within stability band (+500)", () => {
+    // Eager down 5000, total up only 500 — within noise floor.
+    const result = classifyFirstRenderBudget({
+      delta: -5000,
+      totalDelta: 500,
+      ratio: -0.05,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("win");
+  });
+
+  it("returns shift-trap when eager shrinks meaningfully but total grew", () => {
+    // Eager down 5000, but total up 5000 — bytes just moved to lazy.
+    const result = classifyFirstRenderBudget({
+      delta: -5000,
+      totalDelta: 5000,
+      ratio: -0.05,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("shift-trap");
+    expect(result.emoji).toBe("⚠️");
+  });
+
+  it("returns watch when eager is stable but total is creeping up", () => {
+    // Eager delta within ±1024, total up past stability band.
+    const result = classifyFirstRenderBudget({
+      delta: 500,
+      totalDelta: 5000,
+      ratio: 0.005,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("watch");
+    expect(result.emoji).toBe("🟡");
+  });
+
+  it("returns pass when both eager and total are stable", () => {
+    const result = classifyFirstRenderBudget({
+      delta: 100,
+      totalDelta: -100,
+      ratio: 0.001,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("pass");
+    expect(result.emoji).toBe("✅");
+  });
+
+  it("returns pass when eager grows within stability band and total is stable", () => {
+    const result = classifyFirstRenderBudget({
+      delta: 800,
+      totalDelta: 300,
+      ratio: 0.008,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("pass");
+  });
+
+  it("respects custom stabilityBytes", () => {
+    // With stabilityBytes=5000, a delta of 3000 is "stable", making this a watch
+    // since totalDelta > 5000.
+    const result = classifyFirstRenderBudget(
+      { delta: 3000, totalDelta: 6000, ratio: 0.03, threshold: THRESHOLD },
+      { stabilityBytes: 5000 }
+    );
+    expect(result.classification).toBe("watch");
+  });
+
+  it("treats ratio 0 (zero baseline) as pass", () => {
+    const result = classifyFirstRenderBudget({
+      delta: 10000,
+      totalDelta: 10000,
+      ratio: 0,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("pass");
+  });
+
+  it("returns regression when delta is just above threshold boundary", () => {
+    // Baseline 100000, threshold 5% → budget at 105000. Delta of 5001 on 100000
+    // baseline is ratio 0.05001 > 0.05.
+    const result = classifyFirstRenderBudget({
+      delta: 5001,
+      totalDelta: 5001,
+      ratio: 0.05001,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("regression");
+  });
+
+  it("returns correct label and description for each classification", () => {
+    const win = classifyFirstRenderBudget({
+      delta: -5000,
+      totalDelta: -5000,
+      ratio: -0.05,
+      threshold: THRESHOLD,
+    });
+    expect(win.label).toBe("Win");
+    expect(win.description).toBeTruthy();
+
+    const regression = classifyFirstRenderBudget({
+      delta: 6000,
+      totalDelta: 6000,
+      ratio: 0.06,
+      threshold: THRESHOLD,
+    });
+    expect(regression.label).toBe("Regression");
+    expect(regression.description).toBeTruthy();
+
+    const shiftTrap = classifyFirstRenderBudget({
+      delta: -5000,
+      totalDelta: 5000,
+      ratio: -0.05,
+      threshold: THRESHOLD,
+    });
+    expect(shiftTrap.label).toBe("Shift trap");
+    expect(shiftTrap.description).toBeTruthy();
+
+    const watch = classifyFirstRenderBudget({
+      delta: 500,
+      totalDelta: 5000,
+      ratio: 0.005,
+      threshold: THRESHOLD,
+    });
+    expect(watch.label).toBe("Watch");
+    expect(watch.description).toBeTruthy();
+
+    const pass = classifyFirstRenderBudget({
+      delta: 100,
+      totalDelta: -100,
+      ratio: 0.001,
+      threshold: THRESHOLD,
+    });
+    expect(pass.label).toBe("Pass");
+    expect(pass.description).toBeTruthy();
+  });
+
+  it("returns watch when eager is stable-negative but total is creeping up", () => {
+    // Eager slightly down (within stability band), total growing — still a watch
+    // because the total-bundle trend is what matters.
+    const result = classifyFirstRenderBudget({
+      delta: -500,
+      totalDelta: 5000,
+      ratio: -0.005,
+      threshold: THRESHOLD,
+    });
+    expect(result.classification).toBe("watch");
+  });
+
+  describe("stabilityBytes boundary", () => {
+    it("delta -1024, totalDelta 1024 → win (exactly at stability boundary)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: -1024,
+        totalDelta: 1024,
+        ratio: -0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("win");
+    });
+
+    it("delta -1024, totalDelta 1025 → shift-trap (total just past stability)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: -1024,
+        totalDelta: 1025,
+        ratio: -0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("shift-trap");
+    });
+
+    it("delta 1024, totalDelta 1025 → watch (eager at stability edge, total up)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: 1024,
+        totalDelta: 1025,
+        ratio: 0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("watch");
+    });
+
+    it("delta 1025, totalDelta 1025 → pass (eager grew beyond noise but within budget)", () => {
+      const result = classifyFirstRenderBudget({
+        delta: 1025,
+        totalDelta: 1025,
+        ratio: 0.01,
+        threshold: THRESHOLD,
+      });
+      expect(result.classification).toBe("pass");
+    });
   });
 });

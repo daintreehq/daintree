@@ -1,3 +1,4 @@
+// eager-import-allow: performs sync fs and SQLite setup while preparing the runtime environment
 // Dead-fd errnos that must not propagate on GUI launch (AppImage/Wayland, no
 // terminal). EPIPE is a closed pipe (e.g. user quits Terminal.app while
 // Daintree runs); EIO is a disconnected pty (the primary errno for AppImage

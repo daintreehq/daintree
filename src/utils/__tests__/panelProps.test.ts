@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { buildPanelProps } from "../panelProps";
-import type { TerminalInstance } from "@/store";
+import type { DevPreviewPanelData, PtyPanelData } from "@shared/types/panel";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 
 const noop = () => {};
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t-1",
     title: "Terminal 1",
@@ -27,12 +27,32 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     detectedProcessId: undefined,
     browserUrl: undefined,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function build(terminal: TerminalInstance) {
+function build(terminal: PtyPanelData) {
   return buildPanelProps({
     terminal,
+    isFocused: false,
+    overrides: { onFocus: noop, onClose: noop },
+  });
+}
+
+function makeDevPreview(overrides: Partial<DevPreviewPanelData> = {}): DevPreviewPanelData {
+  return {
+    id: "dev-1",
+    kind: "dev-preview",
+    title: "Dev Server",
+    worktreeId: "w-1",
+    location: "grid",
+    cwd: "/repo",
+    ...overrides,
+  };
+}
+
+function buildDevPreview(panel: DevPreviewPanelData) {
+  return buildPanelProps({
+    terminal: panel,
     isFocused: false,
     overrides: { onFocus: noop, onClose: noop },
   });
@@ -172,5 +192,12 @@ describe("buildPanelProps extensionState", () => {
   it("passes undefined extensionState when not set", () => {
     const result = build(makeTerminal({}));
     expect(result.extensionState).toBeUndefined();
+  });
+});
+
+describe("buildPanelProps dev-preview", () => {
+  it("forwards cwd from dev-preview panels", () => {
+    const result = buildDevPreview(makeDevPreview({ cwd: "/repo/app" }));
+    expect(result.cwd).toBe("/repo/app");
   });
 });

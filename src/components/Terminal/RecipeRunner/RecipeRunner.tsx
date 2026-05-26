@@ -34,7 +34,14 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   const runner = useRecipeRunner({ activeWorktreeId, defaultCwd });
 
   if (runner.recipes.length === 0) {
-    return <RecipeRunnerEmpty onCreate={runner.handleCreate} />;
+    return (
+      <RecipeRunnerEmpty
+        onCreate={runner.handleCreate}
+        suggestions={runner.suggestions}
+        onRunSuggestion={runner.handleRunSuggestion}
+        disabled={!defaultCwd}
+      />
+    );
   }
 
   const flatRecipes = runner.getFlatRecipes();

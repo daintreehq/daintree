@@ -4,6 +4,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -14,7 +15,8 @@ import {
   TRASH_DROPPABLE_ID,
 } from "@/components/DragDrop";
 import { DURATION_200, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
-import type { TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
 import { TrashGroupItem } from "./TrashGroupItem";
@@ -23,7 +25,7 @@ const MOVED_HINT_MAX_SHOWS = 3;
 
 interface TrashContainerProps {
   trashedTerminals: Array<{
-    terminal: TerminalInstance;
+    terminal: PanelInstance;
     trashedInfo: TrashedTerminal;
   }>;
   compact?: boolean;
@@ -31,7 +33,7 @@ interface TrashContainerProps {
 
 interface GroupedTrashItem {
   type: "single";
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
   sortKey: number;
 }
@@ -41,7 +43,7 @@ interface GroupedTrashGroup {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: Array<{
-    terminal: TerminalInstance;
+    terminal: PanelInstance;
     trashedInfo: TrashedTerminal;
   }>;
   earliestExpiry: number;
@@ -55,9 +57,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const [isOpen, setIsOpen] = useState(false);
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const [showMovedHint, setShowMovedHint] = useState(false);
+  const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
   const prevLengthRef = useRef(trashedTerminals.length);
   const hintShowCountRef = useRef(0);
+  const isExecutingRef = useRef(false);
   const { worktreeMap } = useWorktrees();
+  const emptyTrash = usePanelStore((s) => s.emptyTrash);
   // Only show the ghost pill for panel drags — worktree-card sort drags also flip
   // isDragging but cannot drop on trash, and a phantom drop target is misleading.
   const isDragging = useIsDragging();
@@ -109,12 +114,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       string,
       {
         metadata: TrashedTerminalGroupMetadata | undefined;
-        terminals: Array<{ terminal: TerminalInstance; trashedInfo: TrashedTerminal }>;
+        terminals: Array<{ terminal: PanelInstance; trashedInfo: TrashedTerminal }>;
         earliestExpiry: number;
         latestExpiry: number;
       }
     >();
-    const singles: Array<{ terminal: TerminalInstance; trashedInfo: TrashedTerminal }> = [];
+    const singles: Array<{ terminal: PanelInstance; trashedInfo: TrashedTerminal }> = [];
 
     for (const item of trashedTerminals) {
       const { trashedInfo } = item;
@@ -182,6 +187,17 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
 
     // LIFO: newest-trashed item first.
     return items.sort((a, b) => b.sortKey - a.sortKey);
+  }, [trashedTerminals]);
+
+  const trashPreviewTitles = useMemo(() => {
+    const titles: string[] = [];
+    for (const item of trashedTerminals) {
+      const panel = item.terminal;
+      const lastObservedTitle = isPtyPanel(panel) ? panel.lastObservedTitle : undefined;
+      const title = panel.title || lastObservedTitle;
+      titles.push(title || "Untitled");
+    }
+    return titles;
   }, [trashedTerminals]);
 
   if (trashedTerminals.length === 0 && !isPanelDragging) return null;
@@ -269,11 +285,34 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           side="top"
           align="end"
           sideOffset={8}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => {
+            if (emptyTrashConfirmOpen) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (emptyTrashConfirmOpen) e.preventDefault();
+          }}
+          onEscapeKeyDown={(e) => {
+            if (emptyTrashConfirmOpen) e.preventDefault();
+          }}
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
               <span className="text-xs font-medium text-daintree-text/70">Recently closed</span>
-              <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
+              {trashedTerminals.length > 0 ? (
+                <Button
+                  variant="ghost-danger"
+                  size="sm"
+                  className="text-[11px] h-auto py-0.5 px-1.5"
+                  onClick={() => setEmptyTrashConfirmOpen(true)}
+                  data-testid="empty-trash-button"
+                >
+                  Empty trash
+                </Button>
+              ) : (
+                <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
+              )}
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
@@ -309,6 +348,37 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
             </div>
           </div>
         </PopoverContent>
+
+        <ConfirmDialog
+          isOpen={emptyTrashConfirmOpen}
+          onClose={() => {
+            setEmptyTrashConfirmOpen(false);
+            isExecutingRef.current = false;
+          }}
+          title="Empty trash?"
+          description={`${trashedTerminals.length} panel${trashedTerminals.length === 1 ? "" : "s"} will be permanently removed.`}
+          variant="destructive"
+          confirmLabel="Empty trash"
+          onConfirm={() => {
+            if (isExecutingRef.current) return;
+            isExecutingRef.current = true;
+            const ids = trashedTerminals.map((t) => t.terminal.id);
+            emptyTrash(ids);
+            setEmptyTrashConfirmOpen(false);
+            setIsOpen(false);
+            isExecutingRef.current = false;
+          }}
+        >
+          <div className="max-h-40 overflow-y-auto">
+            <ul className="space-y-0.5 text-xs text-daintree-text/70">
+              {trashPreviewTitles.map((title, i) => (
+                <li key={i} className="truncate">
+                  {title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </ConfirmDialog>
       </Popover>
     </div>
   );

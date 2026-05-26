@@ -54,6 +54,7 @@ export function ActivityLight({ lastActivityTimestamp, className }: ActivityLigh
   return (
     <div
       aria-hidden="true"
+      data-activity-active={active ? "true" : "false"}
       className={cn(
         "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
         active ? "" : "border bg-transparent",

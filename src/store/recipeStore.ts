@@ -1,12 +1,18 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { usePanelStore, type TerminalInstance } from "./panelStore";
+import { usePanelStore } from "./panelStore";
+import {
+  isDevPreviewPanel,
+  isPtyPanel,
+  type DevPreviewPanelData,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -28,6 +34,7 @@ export interface RecipeSpawnResults {
 
 export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
+  focusPolicy?: AddPanelFocusPolicy;
   terminalIndices?: number[];
 }
 
@@ -73,21 +80,32 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
   };
 }
 
-function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
+function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData): RecipeTerminal {
   // Map kind to RecipeTerminalType.
   // Launch-intent only: recipes encode what the terminal was launched as, not
   // what runtime detection observed. Persisting `detectedAgentId` would corrupt
   // a recipe by baking ephemeral session state into a reusable template.
-  const type: RecipeTerminalType =
-    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.launchAgentId ?? "terminal");
+  if (isDevPreviewPanel(terminal)) {
+    return {
+      type: "dev-preview",
+      title: terminal.title || undefined,
+      command: undefined,
+      devCommand: terminal.devCommand,
+      env: {},
+      exitBehavior: terminal.exitBehavior,
+      agentModelId: undefined,
+      agentLaunchFlags: undefined,
+    };
+  }
 
+  const type: RecipeTerminalType = terminal.launchAgentId ?? "terminal";
   const isAgent = isAgentRecipeType(type);
 
   return {
     type,
     title: terminal.title || undefined,
     command: terminal.command || undefined,
-    devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
+    devCommand: undefined,
     env: {},
     exitBehavior: terminal.exitBehavior,
     agentModelId: isAgent ? terminal.agentModelId : undefined,
@@ -534,6 +552,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const indicesToSpawn = options?.terminalIndices ?? recipe.terminals.map((_, i) => i);
     const spawnedBy = options?.spawnedBy;
+    // Pass focusPolicy through as-is (potentially undefined). panelStore.addPanel
+    // resolves undefined to "auto" — which suppresses focus only when the assistant
+    // owns input — or to "preserve" when an MCP dispatch is on the stack
+    // (isMcpSpawnFocusSuppressed). Defaulting to "preserve" here would silently
+    // strip focus from user-initiated recipe runs (dock menu, NewWorktreeDialog,
+    // WorktreeCard); MCP-initiated runs already get "preserve" via panelStore.
+    const focusPolicy = options?.focusPolicy;
 
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
@@ -575,6 +600,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
           if (terminalId) {
             results.spawned.push({ index, terminalId });
@@ -615,6 +641,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
         } else {
           terminalId = await terminalStore.addPanel({
@@ -626,6 +653,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
+            focusPolicy,
           });
         }
         if (terminalId) {
@@ -827,7 +855,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 
-    return terminalsToCapture.map(terminalToRecipeTerminal);
+    return terminalsToCapture
+      .filter((t): t is PtyPanelData | DevPreviewPanelData => isPtyPanel(t) || isDevPreviewPanel(t))
+      .map(terminalToRecipeTerminal);
   },
 
   reset: () =>

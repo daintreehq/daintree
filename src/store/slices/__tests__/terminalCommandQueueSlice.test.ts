@@ -4,7 +4,7 @@ import {
   type TerminalCommandQueueSlice,
 } from "../terminalCommandQueueSlice";
 import { terminalClient } from "@/clients";
-import type { TerminalInstance } from "../panelRegistrySlice";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -16,6 +16,7 @@ describe("TerminalCommandQueueSlice", () => {
   const mockTerminal = {
     id: "test-terminal",
     title: "Test Terminal",
+    kind: "terminal",
     type: "claude",
     cwd: "/test",
     location: "grid",
@@ -23,7 +24,7 @@ describe("TerminalCommandQueueSlice", () => {
     isVisible: true,
     cols: 80,
     rows: 24,
-  } as TerminalInstance;
+  } as PtyPanelData;
 
   const getTerminal = vi.fn((id: string) => {
     if (id === "test-terminal" || id === "terminal-b") {

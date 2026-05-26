@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -41,6 +42,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
   },
 }));
@@ -103,8 +105,12 @@ describe("reconnect error debounce", () => {
   it("does not write reconnectError synchronously", () => {
     seedPanel("t-1");
     usePanelStore.getState().setReconnectError("t-1", ERROR_A);
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toBeUndefined();
-    expect(usePanelStore.getState().panelsById["t-1"]?.runtimeStatus).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.runtimeStatus
+    ).toBeUndefined();
   });
 
   it("writes the error after the 400ms gate elapses", async () => {
@@ -112,12 +118,18 @@ describe("reconnect error debounce", () => {
     usePanelStore.getState().setReconnectError("t-1", ERROR_A);
 
     await vi.advanceTimersByTimeAsync(399);
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toEqual(ERROR_A);
-    expect(usePanelStore.getState().panelsById["t-1"]?.runtimeStatus).toBe("error");
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toEqual(ERROR_A);
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.runtimeStatus
+    ).toBe("error");
   });
 
   it("collapses rapid repeated calls into a single write of the latest error", async () => {
@@ -126,11 +138,15 @@ describe("reconnect error debounce", () => {
     await vi.advanceTimersByTimeAsync(200);
     usePanelStore.getState().setReconnectError("t-1", ERROR_B);
     await vi.advanceTimersByTimeAsync(399);
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toEqual(ERROR_B);
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toEqual(ERROR_B);
   });
 
   it("clearReconnectError cancels a pending debounce so no stale write lands", async () => {
@@ -140,8 +156,12 @@ describe("reconnect error debounce", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toBeUndefined();
-    expect(usePanelStore.getState().panelsById["t-1"]?.runtimeStatus).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.runtimeStatus
+    ).toBeUndefined();
   });
 
   it("removePanel cancels a pending debounce so it can't resurrect a removed panel", async () => {
@@ -161,8 +181,12 @@ describe("reconnect error debounce", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toBeUndefined();
-    expect(usePanelStore.getState().panelsById["t-1"]?.runtimeStatus).not.toBe("error");
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.runtimeStatus
+    ).not.toBe("error");
   });
 
   it("evicts the debouncer entry from the map after firing", async () => {
@@ -172,7 +196,9 @@ describe("reconnect error debounce", () => {
 
     await vi.advanceTimersByTimeAsync(400);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toEqual(ERROR_A);
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toEqual(ERROR_A);
     expect(__getReconnectErrorDebouncerCountForTesting()).toBe(0);
   });
 
@@ -201,12 +227,18 @@ describe("reconnect error debounce", () => {
     // t-1's gate elapses first
     await vi.advanceTimersByTimeAsync(100);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-1"]?.reconnectError).toEqual(ERROR_A);
-    expect(usePanelStore.getState().panelsById["t-2"]?.reconnectError).toBeUndefined();
+    expect(
+      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
+    ).toEqual(ERROR_A);
+    expect(
+      (usePanelStore.getState().panelsById["t-2"] as PtyPanelData | undefined)?.reconnectError
+    ).toBeUndefined();
 
     // t-2's gate elapses 300ms later
     await vi.advanceTimersByTimeAsync(300);
     await Promise.resolve();
-    expect(usePanelStore.getState().panelsById["t-2"]?.reconnectError).toEqual(ERROR_B);
+    expect(
+      (usePanelStore.getState().panelsById["t-2"] as PtyPanelData | undefined)?.reconnectError
+    ).toEqual(ERROR_B);
   });
 });

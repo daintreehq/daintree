@@ -1,15 +1,22 @@
 import { create } from "zustand";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import type { TerminalInstance } from "@shared/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { isAgentFleetActionEligible, isTerminalFleetEligible } from "./fleetEligibility";
+
+// Carrier shape sourced from `getNarrowPanel`'s parameter so this file doesn't
+// have to name the legacy carrier type directly — auto-tracks the carrier flip
+// in step 5 of #8957.
+type PanelCarrierMap = Parameters<typeof getNarrowPanel>[0];
 
 export {
   isAgentFleetActionEligible,
   isFleetInterruptAgentEligible,
   isFleetRestartAgentEligible,
   isFleetWaitingAgentEligible,
+  isTerminalErrorClusterEligible,
   isTerminalFleetEligible,
   resolveFleetAgentCapabilityId,
 } from "./fleetEligibility";
@@ -67,7 +74,9 @@ function matchesPreset(state: AgentState | null | undefined, preset: FleetArmSta
   }
 }
 
-export function isFleetArmEligible(t: TerminalInstance | undefined): t is TerminalInstance {
+export function isFleetArmEligible(
+  t: PanelInstance | PanelCarrierMap[string] | undefined
+): t is PtyPanelData {
   return isTerminalFleetEligible(t);
 }
 
@@ -82,7 +91,7 @@ export function collectEligibleIds(
   const state = usePanelStore.getState();
   const ids: string[] = [];
   for (const id of state.panelIds) {
-    const t = state.panelsById[id];
+    const t = getNarrowPanel(state.panelsById, id);
     if (!isFleetArmEligible(t)) continue;
     if (scope === "current") {
       if (!activeWorktreeId || t.worktreeId !== activeWorktreeId) continue;
@@ -105,7 +114,7 @@ export function computeArmByStateIds(
   const state = usePanelStore.getState();
   const ids: string[] = [];
   for (const id of state.panelIds) {
-    const t = state.panelsById[id];
+    const t = getNarrowPanel(state.panelsById, id);
     if (!isAgentFleetActionEligible(t)) continue;
     if (scope === "current") {
       if (!activeWorktreeId || t.worktreeId !== activeWorktreeId) continue;
@@ -128,13 +137,13 @@ export function computeArmByStateIds(
 export function collectFilterArmEligibleIds(
   worktreeIds: readonly string[],
   panelIds: readonly string[],
-  panelsById: Record<string, TerminalInstance>
+  panelsById: PanelCarrierMap
 ): string[] {
   if (worktreeIds.length === 0) return [];
   const worktreeIdSet = new Set(worktreeIds);
   const ids: string[] = [];
   for (const id of panelIds) {
-    const t = panelsById[id];
+    const t = getNarrowPanel(panelsById, id);
     if (!isFleetArmEligible(t)) continue;
     if (!t.worktreeId || !worktreeIdSet.has(t.worktreeId)) continue;
     ids.push(id);
@@ -225,7 +234,7 @@ export const useFleetArmingStore = create<FleetArmingState>()((set, get) => ({
         if (seenInBatch.has(id)) continue;
         seenInBatch.add(id);
         if (nextArmed.has(id)) continue;
-        if (!isFleetArmEligible(panels[id])) continue;
+        if (!isFleetArmEligible(getNarrowPanel(panels, id))) continue;
         nextArmed.add(id);
         nextOrder.push(id);
         lastAdded = id;
@@ -382,16 +391,13 @@ function getActiveWorktreeId(): string | null {
  * destroy → mutate panels → re-init) get pruned on re-registration.
  */
 export function subscribeFleetArmingPanelPruning(): () => void {
-  function reconcileAgainst(
-    currentIds: readonly string[],
-    currentById: Record<string, TerminalInstance>
-  ): void {
+  function reconcileAgainst(currentIds: readonly string[], currentById: PanelCarrierMap): void {
     const armed = useFleetArmingStore.getState().armedIds;
     if (armed.size === 0) return;
 
     const validIds = new Set<string>();
     for (const id of currentIds) {
-      const t = currentById[id];
+      const t = getNarrowPanel(currentById, id);
       if (isFleetArmEligible(t)) validIds.add(id);
     }
 

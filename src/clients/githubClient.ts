@@ -31,11 +31,12 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
  */
 function toGitHubRateLimitPayload(info: RateLimitInfo): GitHubRateLimitPayload {
   const blocked = info.remaining === 0 || info.secondaryThrottled === true;
-  if (!blocked) return { blocked: false, kind: null };
+  if (!blocked) return { blocked: false, kind: null, throttleMultiplier: info.throttleMultiplier };
   return {
     blocked: true,
     kind: info.secondaryThrottled ? "secondary" : "primary",
     ...(info.resetAt != null ? { resetAt: info.resetAt } : {}),
+    throttleMultiplier: info.throttleMultiplier,
   };
 }
 
@@ -166,6 +167,20 @@ export const githubClient = {
     prNumber: number
   ): Promise<import("@shared/types/github").GitHubPR | null> => {
     return window.electron.github.getPRByNumber(cwd, prNumber);
+  },
+
+  getIssuesByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<Array<import("@shared/types/github").GitHubIssue | null>> => {
+    return window.electron.github.getIssuesByNumbers(cwd, numbers);
+  },
+
+  getPRsByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<Array<import("@shared/types/github").GitHubPR | null>> => {
+    return window.electron.github.getPRsByNumbers(cwd, numbers);
   },
 
   getPRReviewThreads: (cwd: string, prNumber: number): Promise<Record<string, number>> => {

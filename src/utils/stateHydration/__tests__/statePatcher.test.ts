@@ -1036,6 +1036,22 @@ describe("buildArgsForNonPtyRecreation", () => {
     expect(result.devCommand).toBe("npm start");
   });
 
+  it("falls back to projectRoot when a non-PTY saved cwd is relative", () => {
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "d1",
+        kind: "dev-preview",
+        title: "Dev",
+        cwd: "relative/path",
+        command: "npm start",
+        location: "grid",
+      },
+      "dev-preview",
+      "/project"
+    );
+    expect(result.cwd).toBe("/project");
+  });
+
   it("prefers devCommand over command for dev-preview", () => {
     const result = buildArgsForNonPtyRecreation(
       {

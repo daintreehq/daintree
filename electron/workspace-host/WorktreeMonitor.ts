@@ -147,6 +147,7 @@ export class WorktreeMonitor {
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
   private _branchDerivedTitle: string | undefined;
+  private _sourcePrNumber: number | undefined;
   private prLastUpdatedAt: number | undefined;
   private issueLastUpdatedAt: number | undefined;
 
@@ -639,10 +640,24 @@ export class WorktreeMonitor {
     this.prCiStatus = undefined;
     this.prTitle = undefined;
     this.prLastUpdatedAt = undefined;
+    // Drop the PR-originated discriminator too (#8888): clearing PR info means
+    // the branch no longer maps to its source PR (branch rename, or detection
+    // found no PR), so the inverted PR-title headline must not linger with a
+    // stale number and no title.
+    this._sourcePrNumber = undefined;
   }
 
   setLinked(linked: import("../../shared/types/plugin.js").PluginWorktreeLinked | null): void {
     this._linked = linked;
+  }
+
+  /**
+   * Mark this worktree as PR-originated by recording the source PR number (#8888).
+   * Set once at creation time from the PR-dropdown flow; immutable thereafter.
+   * Drives the inverted PR-title-as-headline display in the worktree card.
+   */
+  setSourcePrNumber(prNumber: number | undefined): void {
+    this._sourcePrNumber = prNumber;
   }
 
   /**
@@ -1077,6 +1092,7 @@ export class WorktreeMonitor {
       prTitle: linkedPr ? linkedPr.title : this.prTitle,
       issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
       branchDerivedTitle: this._branchDerivedTitle,
+      sourcePrNumber: this._sourcePrNumber,
       prLastUpdatedAt: this.prLastUpdatedAt,
       issueLastUpdatedAt: this.issueLastUpdatedAt,
       worktreeChanges: this.worktreeChanges,

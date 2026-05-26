@@ -8,6 +8,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { actionService } from "@/services/ActionService";
+import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
@@ -195,7 +196,7 @@ const ContextMenuSubContent = React.forwardRef<
         style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
         className={cn(
           "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className
         )}
         {...props}
@@ -232,7 +233,7 @@ const ContextMenuContent = React.forwardRef<
         style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
         className={cn(
           "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className
         )}
         {...props}
@@ -286,6 +287,7 @@ const ContextMenuActionItem = React.forwardRef<
   ContextMenuActionItemProps
 >(({ actionId, args, dispatchOptions, onSelect, disabled, ...props }, ref) => {
   const source = useMenuActionSource();
+  const ariaKeyshortcuts = useAriaKeyshortcuts(actionId);
 
   const handleSelect: React.ComponentPropsWithoutRef<
     typeof ContextMenuPrimitiveType.Item
@@ -295,7 +297,15 @@ const ContextMenuActionItem = React.forwardRef<
     void actionService.dispatch(actionId, args, { ...dispatchOptions, source });
   };
 
-  return <ContextMenuItem ref={ref} onSelect={handleSelect} disabled={disabled} {...props} />;
+  return (
+    <ContextMenuItem
+      ref={ref}
+      onSelect={handleSelect}
+      disabled={disabled}
+      {...props}
+      aria-keyshortcuts={ariaKeyshortcuts}
+    />
+  );
 });
 ContextMenuActionItem.displayName = "ContextMenuActionItem";
 

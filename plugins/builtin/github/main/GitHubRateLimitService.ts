@@ -1,8 +1,14 @@
+import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
+// eager-import-allow: sync-fs calls (appendFileSync, existsSync, mkdirSync)
+// are gated behind DAINTREE_DEBUG_GITHUB_GRAPHQL=1 — never executed at import
+// time. The imports resolve three symbols that are only dereferenced inside
+// _logGraphQLCost(), which returns immediately when the env var is absent.
 import type {
   GitHubRateLimitKind,
   GitHubRateLimitPayload,
 } from "../../../../shared/types/ipc/github.js";
-import { logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
+import { getLogDirectory, logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 // Buffer applied to GitHub's `x-ratelimit-reset` to absorb clock skew between
@@ -153,6 +159,10 @@ class GitHubRateLimitServiceImpl {
   // One-shot timer that sweeps stale budget state just after the window
   // resets, so a stretched cadence doesn't defer throttle recovery.
   private _budgetResetTimer: ReturnType<typeof setTimeout> | null = null;
+  // One-shot timer that sweeps the soonest-expiring REST/secondary block.
+  // Without it, a renderer that short-circuits while blocked never triggers
+  // the lazy `autoClearExpired` poll, so the block lingers until app restart.
+  private _blockResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Register a subscriber that fires on every state transition (entering a
@@ -310,7 +320,7 @@ class GitHubRateLimitServiceImpl {
    *
    * Ignores missing or malformed rateLimit objects silently.
    */
-  updateFromGraphQL(data: Record<string, unknown>): void {
+  updateFromGraphQL(data: Record<string, unknown>, queryLabel?: string): void {
     const rateLimit = data?.rateLimit as
       | { cost?: number; remaining?: number; resetAt?: string; limit?: number }
       | undefined;
@@ -323,7 +333,12 @@ class GitHubRateLimitServiceImpl {
     const resetMs = Date.parse(resetAt);
     if (!Number.isFinite(resetMs)) return;
 
+    const cost = typeof rateLimit.cost === "number" ? rateLimit.cost : null;
     const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
+
+    if (queryLabel && cost !== null) {
+      this._logGraphQLCost(queryLabel, cost, remaining, limit);
+    }
 
     // Budget exhausted (or within the hard-stop band): hard-block GraphQL
     // until the window resets, exactly as the legacy `remaining === 0` path.
@@ -347,6 +362,26 @@ class GitHubRateLimitServiceImpl {
     if (limit === null || limit <= 0) return;
 
     this.recordBudgetReading(remaining, limit, resetMs);
+  }
+
+  private _logGraphQLCost(
+    queryLabel: string,
+    cost: number,
+    remaining: number,
+    limit: number | null
+  ): void {
+    if (process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL !== "1") return;
+    try {
+      const dir = join(getLogDirectory(), "..", "debug");
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const escaped = queryLabel.replace(/["\n\r]/g, "");
+      const line = `[${new Date().toISOString()}] label="${escaped}" cost=${cost} remaining=${remaining} limit=${limit ?? "null"}\n`;
+      appendFileSync(join(dir, "github-graphql-costs.log"), line, "utf-8");
+    } catch {
+      // Must never throw — diagnostic logging is best-effort.
+    }
   }
 
   /**
@@ -426,6 +461,38 @@ class GitHubRateLimitServiceImpl {
     }
   }
 
+  /**
+   * Arm a one-shot timer that runs {@link autoClearExpired} just after the
+   * soonest active block's `resumeAt`. Re-arms itself from the callback so
+   * stacked blocks across multiple resources each clear on time even when
+   * the renderer's blocked-state short-circuit suppresses lazy sweeps.
+   */
+  private scheduleBlockResetSweep(): void {
+    this.clearBlockResetTimer();
+    if (this.states.size === 0) return;
+    let minResumeAt = Number.POSITIVE_INFINITY;
+    for (const state of this.states.values()) {
+      if (state.resumeAt < minResumeAt) minResumeAt = state.resumeAt;
+    }
+    // Cap at the Node setTimeout int32 ceiling — without this a malformed
+    // far-future resumeAt wraps to a 1ms delay and the self-rearm spins.
+    const delay = Math.min(Math.max(0, minResumeAt - Date.now()), 2_147_483_647);
+    const timer = setTimeout(() => {
+      this._blockResetTimer = null;
+      this.autoClearExpired();
+      this.scheduleBlockResetSweep();
+    }, delay);
+    timer.unref?.();
+    this._blockResetTimer = timer;
+  }
+
+  private clearBlockResetTimer(): void {
+    if (this._blockResetTimer) {
+      clearTimeout(this._blockResetTimer);
+      this._blockResetTimer = null;
+    }
+  }
+
   /** Snapshot for push/pull consumers. Collapses multi-resource state to a single payload. */
   getState(): GitHubRateLimitPayload {
     this.autoClearExpired();
@@ -483,6 +550,7 @@ class GitHubRateLimitServiceImpl {
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
     this.clearBudgetResetTimer();
+    this.clearBlockResetTimer();
     if (this.states.size === 0) {
       // Still surface the cleared budget so consumers snap back to baseline.
       if (hadBudget) this.notifyListeners();
@@ -501,6 +569,7 @@ class GitHubRateLimitServiceImpl {
     this._lastNotifiedMultiplier = 1;
     this._hasNotifiedBudget = false;
     this.clearBudgetResetTimer();
+    this.clearBlockResetTimer();
   }
 
   /** Test-only inspector. */
@@ -518,6 +587,7 @@ class GitHubRateLimitServiceImpl {
     this.states.delete(resource);
     logInfo("GitHub rate limit cleared for resource", { resource });
     this.notifyListeners();
+    this.scheduleBlockResetSweep();
   }
 
   private markBlocked(
@@ -548,6 +618,7 @@ class GitHubRateLimitServiceImpl {
     } else {
       logDebug("GitHub rate limit refreshed", { kind, resumeAt, resource });
     }
+    this.scheduleBlockResetSweep();
   }
 
   private autoClearExpired(): void {

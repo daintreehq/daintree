@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+    # labeled/unlabeled/edited are needed so the budget override gate
+    # re-evaluates when a `*-override` label or the PR body changes without a
+    # new commit — otherwise a label added after a green run would never be
+    # re-checked. The heavyweight build job skips those label/edit-only events
+    # (see the build job `if:`).
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
   workflow_dispatch:
     inputs:
       os:
@@ -61,6 +67,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fast-fail before the slow check: a budget `*-override` label must be
+      # backed by a linked tracking issue in the PR body. PR-only — push and
+      # workflow_dispatch have no PR context, so the step is skipped there.
+      # PR body and label names are injected via env (never the shell) so PR
+      # body metacharacters can't reach a command line.
+      - name: Budget override gate
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-budget-override-gate.mjs
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+
       - name: Check (typecheck + lint + format)
         run: npm run check
 
@@ -68,8 +86,18 @@ jobs:
         run: npm run test
 
   build:
+    # Skip the full build on label/description-only PR events — those only need
+    # the budget override gate (in the check job) to re-evaluate, not a fresh
+    # electron build. ci-ok treats a skipped build as non-failing.
+    if: >-
+      !(github.event_name == 'pull_request' && contains(fromJSON('["labeled","unlabeled","edited"]'), github.event.action))
+
+
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -111,6 +139,149 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Build import budget metadata
+        run: npm run import-budget:build
+
+      - name: Check renderer bundle budget
+        id: renderer_bundle_budget
+        continue-on-error: true
+        run: npm run renderer-bundle-budget:check
+
+      - name: Check first render chunk budget
+        id: first_render_chunk_budget
+        continue-on-error: true
+        run: npm run first-render-chunk-budget:check
+
+      - name: Check renderer import budget
+        id: renderer_import_budget
+        continue-on-error: true
+        run: npm run renderer-import-budget:check
+
+      - name: Check import budget
+        id: import_budget
+        continue-on-error: true
+        run: npm run import-budget:check
+
+      - name: Check compiler budget
+        id: compiler_budget
+        continue-on-error: true
+        run: npm run compiler-budget:check
+
+      - name: Budget summaries
+        if: always()
+        run: |
+          for f in \
+            dist/renderer-bundle-size-summary.md \
+            dist/first-render-chunk-summary.md \
+            dist/renderer-import-budget-summary.md \
+            dist/import-budget-summary.md \
+            dist/compiler-budget-summary.md; do
+            if [ -f "$f" ]; then
+              cat "$f" >> "$GITHUB_STEP_SUMMARY"
+              printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload budget summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: budget-summaries
+          path: |
+            dist/renderer-bundle-size-summary.md
+            dist/first-render-chunk-summary.md
+            dist/renderer-import-budget-summary.md
+            dist/import-budget-summary.md
+            dist/compiler-budget-summary.md
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate performance budgets
+        if: always()
+        env:
+          RENDERER_BUNDLE: ${{ steps.renderer_bundle_budget.outcome }}
+          FIRST_RENDER: ${{ steps.first_render_chunk_budget.outcome }}
+          RENDERER_IMPORT: ${{ steps.renderer_import_budget.outcome }}
+          IMPORT_BUDGET: ${{ steps.import_budget.outcome }}
+          COMPILER_BUDGET: ${{ steps.compiler_budget.outcome }}
+        run: |
+          failed=0
+          [ "$RENDERER_BUNDLE" = "failure" ] && echo "::error::renderer-bundle-budget failed" && failed=1
+          [ "$FIRST_RENDER" = "failure" ] && echo "::error::first-render-chunk-budget failed" && failed=1
+          [ "$RENDERER_IMPORT" = "failure" ] && echo "::error::renderer-import-budget failed" && failed=1
+          [ "$IMPORT_BUDGET" = "failure" ] && echo "::error::import-budget failed" && failed=1
+          [ "$COMPILER_BUDGET" = "failure" ] && echo "::error::compiler-budget failed" && failed=1
+          exit $failed
+
+      - name: Post first-render budget comment
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'dist/first-render-chunk-summary.md';
+            if (!fs.existsSync(summaryPath)) {
+              console.log('No first-render budget summary found — skipping comment.');
+              return;
+            }
+            const body = fs.readFileSync(summaryPath, 'utf8');
+            const markerMatch = body.match(/<!-- daintree-first-render-budget classification:"([^"]+)" delta:(-?\d+) -->/);
+            if (!markerMatch) {
+              console.log('No budget marker found in summary — skipping comment.');
+              return;
+            }
+            const currentClassification = markerMatch[1];
+            const currentDelta = parseInt(markerMatch[2], 10);
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const markerPrefix = '<!-- daintree-first-render-budget';
+            const existing = comments.find(c => c.body && c.body.includes(markerPrefix));
+            let shouldUpdate = false;
+            if (!existing) {
+              console.log('No existing budget comment — creating.');
+              shouldUpdate = true;
+            } else {
+              const priorMatch = existing.body.match(/<!-- daintree-first-render-budget classification:"([^"]+)" delta:(-?\d+) -->/);
+              if (!priorMatch) {
+                console.log('Existing comment has no parseable marker — updating.');
+                shouldUpdate = true;
+              } else {
+                const priorClassification = priorMatch[1];
+                const priorDelta = parseInt(priorMatch[2], 10);
+                if (priorClassification !== currentClassification) {
+                  console.log(`Classification changed: ${priorClassification} → ${currentClassification} — updating.`);
+                  shouldUpdate = true;
+                } else if (Math.abs(currentDelta - priorDelta) > 1024) {
+                  console.log(`Delta changed by ${Math.abs(currentDelta - priorDelta)} bytes (> 1024) — updating.`);
+                  shouldUpdate = true;
+                } else {
+                  console.log(`No significant change (classification: ${currentClassification}, delta drift: ${currentDelta - priorDelta} bytes) — skipping.`);
+                }
+              }
+            }
+            if (!shouldUpdate) return;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log(`Updated comment ${existing.id}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              console.log('Created new budget comment.');
+            }
 
       - name: Smoke test
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

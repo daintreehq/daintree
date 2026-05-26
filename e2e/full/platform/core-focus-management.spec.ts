@@ -115,7 +115,7 @@ test.describe.serial("Core: Focus Management", () => {
     await test.step("First F6: terminal → grid region", async () => {
       // First F6 from terminal: focusedRegion is null → targets "grid" (first visible region)
       await window.keyboard.press("F6");
-      // The grid region may have aria-label "Panel grid" or "Panel grid region"
+      // The grid region has aria-label "Panels" across all layout variants
       await expect(grid).toBeFocused({ timeout: T_MEDIUM });
     });
 

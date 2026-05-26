@@ -25,7 +25,8 @@ import {
   type QueuedCommand,
   isAgentReady,
 } from "./slices";
-import type { TerminalInstance, TerminalRefreshTier } from "@shared/types";
+import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -37,14 +38,93 @@ import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { clearTerminalRestartGuard } from "./restartExitSuppression";
 import { buildPanelSnapshotOptions } from "@/services/terminal/panelDuplicationService";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { resolvePanelKindPolicy, type PanelKindPolicy } from "@shared/config/panelKindRegistry";
 
-export type { TerminalInstance, AddPanelOptions, QueuedCommand, CrashType };
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name (#8957). The alias auto-resolves once
+// the carrier flips to `PanelInstance` in step 5.
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+
+export type { AddPanelOptions, QueuedCommand, CrashType };
+// Re-exported for backwards-compat with tests still typing fixtures as
+// `TerminalInstance`. The interface itself is now the persistence Tolerant
+// Reader; production code uses `PanelInstance` from `@shared/types/panel`.
+export type { TerminalInstance } from "@shared/types";
 export { isAgentReady };
 export type { TerminalMruSlice, WatchedPanelsSlice };
 
 const PROJECT_SWITCH_RESIZE_SUPPRESSION_MS = 10_000;
 
-function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
+/**
+ * State snapshot required by `pickFallbackFocusId` — a minimal subset of the
+ * panel store so the helper stays pure and easy to test in isolation.
+ */
+interface FallbackFocusStateSnapshot {
+  panelsById: Record<string, CarrierPanel>;
+  panelIds: string[];
+  previousFocusedId: string | null;
+}
+
+/**
+ * Pick the next `focusedId` after a panel (or group) leaves the grid.
+ *
+ * Policy-driven via `policy.dockFallbackTarget`:
+ *   - `"previous-focused"` — restore to `state.previousFocusedId` when it is
+ *     still a grid-resident panel in the active worktree and isn't being
+ *     removed by the same operation; otherwise fall through to first-grid.
+ *   - `"first-grid"` (default / unknown) — first remaining grid panel of the
+ *     active worktree. When `preferAgent` is true, prefer the first runtime
+ *     agent terminal in that set before falling back to the plain first-grid
+ *     pick (trash variants only).
+ *
+ * Pure: no `set`/`get` calls, no `getActiveWorktreeId` indirection — the
+ * caller passes the active worktree id so the helper can be exercised in
+ * unit tests without booting the store.
+ *
+ * @returns the next panel id, or `null` if no candidate exists
+ */
+function pickFallbackFocusId(
+  state: FallbackFocusStateSnapshot,
+  excludeIds: ReadonlySet<string>,
+  activeWorktreeId: string | undefined,
+  policy: Required<PanelKindPolicy>,
+  preferAgent: boolean
+): string | null {
+  if (policy.dockFallbackTarget === "previous-focused") {
+    const prevId = state.previousFocusedId;
+    if (prevId !== null && !excludeIds.has(prevId)) {
+      const prev = state.panelsById[prevId];
+      if (prev && prev.location === "grid" && (prev.worktreeId ?? undefined) === activeWorktreeId) {
+        return prevId;
+      }
+    }
+    // Stale or invalid previous focus — fall through to first-grid so the
+    // user always lands on a real panel rather than being stranded at null.
+  }
+
+  // Default "first-grid" path (also the fallback for unknown strategies).
+  const gridTerminals: CarrierPanel[] = [];
+  for (const tid of state.panelIds) {
+    const t = state.panelsById[tid];
+    if (
+      t &&
+      !excludeIds.has(t.id) &&
+      t.location === "grid" &&
+      (t.worktreeId ?? undefined) === activeWorktreeId
+    ) {
+      gridTerminals.push(t);
+    }
+  }
+  if (preferAgent) {
+    const nextAgent = gridTerminals.find((t) => isRuntimeAgentTerminal(t));
+    if (nextAgent) return nextAgent.id;
+  }
+  return gridTerminals[0]?.id ?? null;
+}
+
+function isVisibleLivePtyTerminal(terminal: PtyPanelData): boolean {
   const location = terminal.location ?? "grid";
   if (location === "trash" || location === "background" || location === "dock") return false;
   if (terminal.isVisible === false) return false;
@@ -56,7 +136,7 @@ function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
 }
 
 export function getTerminalRefreshTier(
-  terminal: TerminalInstance | undefined,
+  terminal: CarrierPanel | undefined,
   isFocused: boolean,
   options: { isFleetArmed?: boolean } = {}
 ): TerminalRefreshTier {
@@ -76,8 +156,10 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.BACKGROUND;
   }
 
+  const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
+
   // Working agents that ARE visible get max refresh to prevent render jitter.
-  if (terminal.agentState === "working") {
+  if (ptyTerminal?.agentState === "working") {
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
@@ -86,12 +168,12 @@ export function getTerminalRefreshTier(
   // promptly instead of being parked in the background tier.
   if (
     options.isFleetArmed &&
-    terminal.hasPty !== false &&
+    ptyTerminal?.hasPty !== false &&
     terminal.location !== "trash" &&
     terminal.location !== "background" &&
     terminal.location !== "dock" &&
-    terminal.runtimeStatus !== "exited" &&
-    terminal.runtimeStatus !== "error"
+    ptyTerminal?.runtimeStatus !== "exited" &&
+    ptyTerminal?.runtimeStatus !== "error"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
@@ -101,8 +183,8 @@ export function getTerminalRefreshTier(
   // Uses runtime-detected identity so panels that have left agent mode can hibernate.
   if (
     isRuntimeAgentTerminal(terminal) &&
-    terminal.agentState !== "completed" &&
-    terminal.agentState !== "exited"
+    ptyTerminal?.agentState !== "completed" &&
+    ptyTerminal?.agentState !== "exited"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
@@ -111,7 +193,7 @@ export function getTerminalRefreshTier(
   // The previous "working" guard was too dependent on activity heuristics:
   // if a long-running process was still classified as waiting/idle, the
   // renderer moved to BACKGROUND and output stopped until focus/wake.
-  if (isVisibleLivePtyTerminal(terminal)) {
+  if (isPtyPanel(terminal) && isVisibleLivePtyTerminal(terminal)) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
@@ -226,11 +308,20 @@ export const usePanelStore = create<PanelGridState>()(
         // boundary; capturing here pins them to the user's pre-create state
         // (#6959 — assistant focus theft when MCP launches an agent).
         const assistantHasFocus = isAssistantFocused();
-        const suppressMcpSpawnFocus = options.spawnedBy === "mcp" || isMcpSpawnFocusSuppressed();
-        const panelOptions =
-          suppressMcpSpawnFocus && options.spawnedBy !== "mcp"
-            ? ({ ...options, spawnedBy: "mcp" } as AddPanelOptions)
-            : options;
+        // Resolve the kind's policy synchronously — by the time `addPanel`
+        // returns, plugin teardown could have changed the registry. A kind
+        // that declares `defaultFocusOnCreate: false` is treated as an
+        // implicit `focusPolicy: "preserve"` when the caller didn't supply
+        // an explicit policy, so kinds can opt out without forcing every
+        // call site to pass an option.
+        const kindPolicy = resolvePanelKindPolicy(options.kind);
+        const resolvedFocusPolicy: AddPanelFocusPolicy =
+          options.focusPolicy ??
+          (isMcpSpawnFocusSuppressed() || !kindPolicy.defaultFocusOnCreate ? "preserve" : "auto");
+        const panelOptions: AddPanelOptions =
+          resolvedFocusPolicy === options.focusPolicy
+            ? options
+            : { ...options, focusPolicy: resolvedFocusPolicy };
         const id = await registrySlice.addPanel(panelOptions);
         if (id === null) return null;
         // Skip the per-panel focus mutation while a hydration batch is collecting panels:
@@ -239,10 +330,15 @@ export const usePanelStore = create<PanelGridState>()(
         // focus also isn't meaningful during restore — focus is resolved elsewhere once
         // the active worktree is set.
         if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
-          // Suppress focus capture for MCP-initiated spawns or when the
+          // Suppress focus capture for preserve-policy spawns or when the
           // Daintree Assistant currently owns keyboard focus. The new panel
           // still lands in the grid; the user keeps typing where they were.
-          if (assistantHasFocus || suppressMcpSpawnFocus) {
+          // The kind's `defaultFocusOnCreate: false` flag is already folded
+          // into `resolvedFocusPolicy` above.
+          if (
+            resolvedFocusPolicy === "preserve" ||
+            (resolvedFocusPolicy === "auto" && assistantHasFocus)
+          ) {
             return id;
           }
           if (focusedBeforeCreate !== id) {
@@ -258,14 +354,13 @@ export const usePanelStore = create<PanelGridState>()(
           // The registry slice atomically advances `focusedId` to the new id
           // inside its commit for normal dock activations (#6590). When the
           // assistant currently owns input we issue a corrective set() to roll
-          // keyboard focus back while leaving the dock popover open. MCP spawns
-          // skip both registry focus and dock-popover activation entirely
-          // (handled in `panelRegistry/addPanel.ts`), so no rollback is needed
-          // for the MCP case.
-          if (assistantHasFocus && !suppressMcpSpawnFocus) {
+          // keyboard focus back while leaving the dock popover open. Preserve-policy
+          // spawns skip both registry focus and dock-popover activation entirely
+          // (handled in `panelRegistry/addPanel.ts`), so no rollback is needed.
+          if (assistantHasFocus && resolvedFocusPolicy !== "preserve") {
             set({ focusedId: focusedBeforeCreate });
           } else if (
-            !suppressMcpSpawnFocus &&
+            resolvedFocusPolicy !== "preserve" &&
             focusedBeforeCreate !== null &&
             focusedBeforeCreate !== id
           ) {
@@ -273,7 +368,7 @@ export const usePanelStore = create<PanelGridState>()(
             // Updating in a follow-up set() is fine — previousFocusedId is metadata,
             // not load-bearing for dock visibility (which the watchdog effect cares
             // about and which is already covered by the registry's atomic commit).
-            // MCP spawns skip this — they never participate in alternate-pane focus.
+            // Preserve-policy panels skip this — they never participate in alternate-pane focus.
             set({ previousFocusedId: focusedBeforeCreate });
           }
         }
@@ -282,24 +377,24 @@ export const usePanelStore = create<PanelGridState>()(
 
       moveTerminalToDock: (id: string) => {
         const state = get();
+        // Resolve the kind's policy BEFORE the registry mutation so the
+        // pick-rule reads pre-move grid contents and a sync read can't be
+        // replayed against a partially-mutated store under React 19
+        // concurrent rendering.
+        const movingKind = state.panelsById[id]?.kind;
+        const policy = resolvePanelKindPolicy(movingKind);
         registrySlice.moveTerminalToDock(id);
 
         const updates: Partial<PanelGridState> = {};
 
         if (state.focusedId === id) {
-          const activeWt = getActiveWorktreeId() ?? undefined;
-          const gridTerminals: TerminalInstance[] = [];
-          for (const tid of state.panelIds) {
-            const t = state.panelsById[tid];
-            if (
-              t &&
-              t.id !== id &&
-              t.location === "grid" &&
-              (t.worktreeId ?? undefined) === activeWt
-            )
-              gridTerminals.push(t);
-          }
-          updates.focusedId = gridTerminals[0]?.id ?? null;
+          updates.focusedId = pickFallbackFocusId(
+            state,
+            new Set([id]),
+            getActiveWorktreeId() ?? undefined,
+            policy,
+            false
+          );
           // Auto-fallback focus from a moved-to-dock panel isn't a user
           // navigation event — clear the alternate pointer to avoid round-
           // tripping into a panel the user didn't choose.
@@ -378,11 +473,17 @@ export const usePanelStore = create<PanelGridState>()(
         const state = get();
         const terminalToTrash = state.panelsById[id];
         if (terminalToTrash && terminalToTrash.location !== "trash") {
-          const snapshot = buildPanelSnapshotOptions(terminalToTrash);
+          const narrowed = getNarrowPanel(state.panelsById, id);
+          const snapshot = narrowed ? buildPanelSnapshotOptions(narrowed) : null;
           if (snapshot !== null) {
             set({ lastClosedConfig: snapshot });
           }
         }
+
+        // Resolve the kind's policy and trashed-as-agent flag BEFORE the
+        // registry mutation — `state.panelsById[id]` may be gone afterward.
+        const policy = resolvePanelKindPolicy(terminalToTrash?.kind);
+        const preferAgent = Boolean(terminalToTrash && isRuntimeAgentTerminal(terminalToTrash));
 
         registrySlice.trashPanel(id);
 
@@ -392,24 +493,13 @@ export const usePanelStore = create<PanelGridState>()(
         const updates: Partial<PanelGridState> = {};
 
         if (state.focusedId === id) {
-          const activeWt = getActiveWorktreeId() ?? undefined;
-          const gridTerminals: TerminalInstance[] = [];
-          for (const tid of state.panelIds) {
-            const t = state.panelsById[tid];
-            if (
-              t &&
-              t.id !== id &&
-              t.location === "grid" &&
-              (t.worktreeId ?? undefined) === activeWt
-            )
-              gridTerminals.push(t);
-          }
-          const trashedTerminal = state.panelsById[id];
-          const wasAgent = trashedTerminal && isRuntimeAgentTerminal(trashedTerminal);
-          const nextAgent = wasAgent
-            ? gridTerminals.find((t) => isRuntimeAgentTerminal(t))
-            : undefined;
-          updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
+          updates.focusedId = pickFallbackFocusId(
+            state,
+            new Set([id]),
+            getActiveWorktreeId() ?? undefined,
+            policy,
+            preferAgent
+          );
           updates.previousFocusedId = null;
         } else if (state.previousFocusedId === id) {
           updates.previousFocusedId = null;
@@ -437,36 +527,34 @@ export const usePanelStore = create<PanelGridState>()(
           group && panelIdsInGroup.includes(state.focusedId ?? "") ? state.focusedId! : panelId;
         const snapshotSource = state.panelsById[snapshotSourceId];
         if (snapshotSource && snapshotSource.location !== "trash") {
-          const snapshot = buildPanelSnapshotOptions(snapshotSource);
+          const narrowedSource = getNarrowPanel(state.panelsById, snapshotSourceId);
+          const snapshot = narrowedSource ? buildPanelSnapshotOptions(narrowedSource) : null;
           if (snapshot !== null) {
             set({ lastClosedConfig: snapshot });
           }
         }
+
+        // Resolve the kind's policy from the FOCUSED panel of the group
+        // (mixed-kind groups don't exist today — only `terminal` has
+        // canConvert: true — so this matches the existing single-kind
+        // assumption while staying well-defined if that ever changes).
+        const focusedTerminal =
+          state.focusedId !== null ? state.panelsById[state.focusedId] : undefined;
+        const policy = resolvePanelKindPolicy(focusedTerminal?.kind);
+        const preferAgent = Boolean(focusedTerminal && isRuntimeAgentTerminal(focusedTerminal));
 
         registrySlice.trashPanelGroup(panelId);
 
         const updates: Partial<PanelGridState> = {};
 
         if (panelIdsInGroup.includes(state.focusedId ?? "")) {
-          const activeWt = getActiveWorktreeId() ?? undefined;
-          const groupSet = new Set(panelIdsInGroup);
-          const gridTerminals: TerminalInstance[] = [];
-          for (const tid of state.panelIds) {
-            const t = state.panelsById[tid];
-            if (
-              t &&
-              !groupSet.has(t.id) &&
-              t.location === "grid" &&
-              (t.worktreeId ?? undefined) === activeWt
-            )
-              gridTerminals.push(t);
-          }
-          const focusedTerminal = state.panelsById[state.focusedId!];
-          const wasAgent = focusedTerminal && isRuntimeAgentTerminal(focusedTerminal);
-          const nextAgent = wasAgent
-            ? gridTerminals.find((t) => isRuntimeAgentTerminal(t))
-            : undefined;
-          updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
+          updates.focusedId = pickFallbackFocusId(
+            state,
+            new Set(panelIdsInGroup),
+            getActiveWorktreeId() ?? undefined,
+            policy,
+            preferAgent
+          );
           updates.previousFocusedId = null;
         } else if (
           state.previousFocusedId !== null &&
@@ -556,6 +644,10 @@ export const usePanelStore = create<PanelGridState>()(
         worktreeId?: string | null
       ) => {
         const state = get();
+        // Resolve the kind's policy from the pre-move snapshot so the dock
+        // branch's pick-rule reads the moving panel's kind.
+        const movingKind = state.panelsById[id]?.kind;
+        const policy = resolvePanelKindPolicy(movingKind);
         registrySlice.moveTerminalToPosition(id, toIndex, location, worktreeId);
 
         if (location === "grid") {
@@ -566,21 +658,18 @@ export const usePanelStore = create<PanelGridState>()(
             ...(previousFocusedId !== id && { previousFocusedId }),
           });
         } else if (state.focusedId === id) {
-          const activeWt = getActiveWorktreeId() ?? undefined;
-          const gridTerminals: TerminalInstance[] = [];
-          for (const tid of state.panelIds) {
-            const t = state.panelsById[tid];
-            if (
-              t &&
-              t.id !== id &&
-              t.location === "grid" &&
-              (t.worktreeId ?? undefined) === activeWt
-            )
-              gridTerminals.push(t);
-          }
           // Auto-fallback focus when the focused panel is moved to dock —
           // not a user navigation, so the alternate pointer becomes stale.
-          set({ focusedId: gridTerminals[0]?.id ?? null, previousFocusedId: null });
+          set({
+            focusedId: pickFallbackFocusId(
+              state,
+              new Set([id]),
+              getActiveWorktreeId() ?? undefined,
+              policy,
+              false
+            ),
+            previousFocusedId: null,
+          });
         }
       },
 

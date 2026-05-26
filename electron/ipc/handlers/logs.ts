@@ -1,3 +1,4 @@
+// eager-import-allow: reads logging config via store.get synchronously in the IPC handler
 import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
 import { logBuffer } from "../../services/LogBuffer.js";

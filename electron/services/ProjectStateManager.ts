@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes project state via sync fs
 import type { ProjectState } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";

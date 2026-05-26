@@ -491,7 +491,7 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
 
       // If we're back on Welcome, explicitly reopen the fixture project instead of
       // relying only on the recent-project shortcut state.
-      const openFolder = w().getByRole("button", { name: "Open Folder" });
+      const openFolder = w().getByRole("button", { name: "Open folder" });
       if (await openFolder.isVisible({ timeout: 1000 }).catch(() => false)) {
         await openProject(ctx.app, w(), fixture);
         await w().waitForTimeout(2000);

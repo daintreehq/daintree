@@ -68,6 +68,19 @@ export async function waitForTerminalText(
     .toContain(text);
 }
 
+export async function waitForTerminalTextIgnoringLineBreaks(
+  panelLocator: Locator,
+  text: string,
+  timeout = 60_000
+): Promise<void> {
+  await expect
+    .poll(async () => compactTerminalText(await getTerminalText(panelLocator)), {
+      timeout,
+      intervals: [200, 500, 1000],
+    })
+    .toContain(compactTerminalText(text));
+}
+
 export async function waitForTerminalPty(
   page: Page,
   panelLocator: Locator,

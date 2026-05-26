@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useId } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useOverlayState } from "@/hooks";
@@ -35,6 +35,8 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
   const [searchQuery, setSearchQuery] = useState("");
   const [bindingsVersion, setBindingsVersion] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const resultsId = useId();
+  const headingPrefix = useId();
 
   useEffect(() => {
     const unsubscribe = keybindingService.subscribe(() => {
@@ -147,51 +149,75 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search shortcuts"
+          aria-controls={resultsId}
           className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
         />
       </AppDialog.Header>
 
       <AppDialog.Body>
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {searchQuery.trim()
+            ? `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""} found for "${searchQuery.trim()}"`
+            : `${filteredBindings.length} shortcut${filteredBindings.length !== 1 ? "s" : ""}`}
+        </div>
+
         {sortedCategories.length === 0 ? (
-          <div className="text-center text-daintree-text/60 py-8">
+          <div
+            id={resultsId}
+            role="status"
+            aria-live="polite"
+            className="text-center text-daintree-text/60 py-8"
+          >
             No shortcuts found matching "{searchQuery}"
           </div>
         ) : (
-          <div className="space-y-8">
-            {sortedCategories.map((category) => (
-              <div key={category}>
-                <h3 className="text-lg font-semibold text-daintree-text mb-3 pb-2 border-b border-daintree-border">
-                  {category}
-                </h3>
-                <dl className="space-y-2">
-                  {groupedBindings[category]!.map((binding) => (
-                    <div
-                      key={binding.actionId}
-                      className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
-                    >
-                      <dt className="flex-1">
-                        <div className="text-daintree-text font-medium">{binding.description}</div>
-                        {binding.scope !== "global" && (
-                          <div className="text-xs text-daintree-text/60 mt-1">
-                            Scope: {binding.scope}
+          <div id={resultsId} className="space-y-8">
+            {sortedCategories.map((category) => {
+              const headingId = `${headingPrefix}-${category
+                .replace(/[^a-zA-Z0-9]/g, "-")
+                .replace(/-+/g, "-")
+                .replace(/^-|-$/g, "")}`;
+              return (
+                <div key={category}>
+                  <h3
+                    id={headingId}
+                    className="text-lg font-semibold text-daintree-text mb-3 pb-2 border-b border-daintree-border"
+                  >
+                    {category}
+                  </h3>
+                  <div role="list" aria-labelledby={headingId} className="space-y-2">
+                    {groupedBindings[category]!.map((binding) => (
+                      <div
+                        key={binding.actionId}
+                        role="listitem"
+                        className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
+                      >
+                        <div className="flex-1">
+                          <div className="text-daintree-text font-medium">
+                            {binding.description}
                           </div>
-                        )}
-                      </dt>
-                      <dd className="ml-4">
-                        {binding.effectiveCombo ? (
-                          <KbdChord
-                            shortcut={binding.effectiveCombo}
-                            aria-label={binding.displayCombo}
-                          />
-                        ) : (
-                          <span className="text-xs text-daintree-text/60 italic">unbound</span>
-                        )}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            ))}
+                          {binding.scope !== "global" && (
+                            <div className="text-xs text-daintree-text/60 mt-1">
+                              Scope: {binding.scope}
+                            </div>
+                          )}
+                        </div>
+                        <div className="ml-4">
+                          {binding.effectiveCombo ? (
+                            <KbdChord
+                              shortcut={binding.effectiveCombo}
+                              aria-label={binding.displayCombo}
+                            />
+                          ) : (
+                            <span className="text-xs text-daintree-text/60 italic">unbound</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </AppDialog.Body>

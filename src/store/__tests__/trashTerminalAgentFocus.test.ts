@@ -28,6 +28,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
+    wake: vi.fn(),
   },
 }));
 
@@ -512,6 +514,279 @@ describe("worktree-scoped focus fallback (#4327)", () => {
     usePanelStore.getState().moveTerminalToPosition("panel-1", 0, "dock");
 
     expect(usePanelStore.getState().focusedId).toBe("shell-same");
+  });
+});
+
+function makeReviewPanel(id: string, worktreeId?: string) {
+  return {
+    id,
+    kind: "review" as const,
+    worktreeId,
+    title: id,
+    location: "grid" as const,
+  };
+}
+
+describe("review-kind dock fallback (#8946 — previous-focused policy)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      previousFocusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("trashPanel: review restores focus to previousFocusedId rather than first-grid", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+        "shell-2": makeTerminal("shell-2", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["shell-1", "review-1", "shell-2"],
+      // User was reading the review pane and previously had shell-2 focused
+      focusedId: "review-1",
+      previousFocusedId: "shell-2",
+    });
+
+    usePanelStore.getState().trashPanel("review-1");
+
+    // Review opts into "previous-focused", so focus returns to shell-2
+    // (not shell-1, which is what first-grid would pick).
+    expect(usePanelStore.getState().focusedId).toBe("shell-2");
+  });
+
+  it("trashPanel: review falls back to first-grid when previousFocusedId is stale", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-first", "review-1"],
+      focusedId: "review-1",
+      // Stale pointer — panel was trashed/never existed
+      previousFocusedId: "ghost-id",
+    });
+
+    usePanelStore.getState().trashPanel("review-1");
+
+    // Stale previousFocusedId is invalid, fall through to first-grid pick
+    expect(usePanelStore.getState().focusedId).toBe("shell-first");
+  });
+
+  it("trashPanel: review falls back to first-grid when previousFocusedId points to a docked panel", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+        "docked-shell": {
+          ...makeTerminal("docked-shell", "terminal", undefined, "wt-1"),
+          location: "dock" as const,
+        },
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-first", "docked-shell", "review-1"],
+      focusedId: "review-1",
+      previousFocusedId: "docked-shell",
+    });
+
+    usePanelStore.getState().trashPanel("review-1");
+
+    // Previously-focused panel is no longer grid-resident → fall through.
+    expect(usePanelStore.getState().focusedId).toBe("shell-first");
+  });
+
+  it("trashPanel: review falls back to first-grid when previousFocusedId is null", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-1", "review-1"],
+      focusedId: "review-1",
+      previousFocusedId: null,
+    });
+
+    usePanelStore.getState().trashPanel("review-1");
+
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
+  });
+
+  it("moveTerminalToDock: review restores focus to previousFocusedId", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+        "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-first", "shell-last", "review-1"],
+      focusedId: "review-1",
+      previousFocusedId: "shell-last",
+    });
+
+    usePanelStore.getState().moveTerminalToDock("review-1");
+
+    // Without policy: would pick shell-first. With "previous-focused":
+    // restores shell-last as the user expected.
+    expect(usePanelStore.getState().focusedId).toBe("shell-last");
+  });
+
+  it("moveTerminalToPosition to dock: review restores focus to previousFocusedId", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+        "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-first", "shell-last", "review-1"],
+      focusedId: "review-1",
+      previousFocusedId: "shell-last",
+    });
+
+    usePanelStore.getState().moveTerminalToPosition("review-1", 0, "dock");
+
+    expect(usePanelStore.getState().focusedId).toBe("shell-last");
+  });
+
+  it("terminal kind without policy still uses first-grid behavior (no regression)", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+        "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+        "shell-focused": makeTerminal("shell-focused", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["shell-first", "shell-last", "shell-focused"],
+      focusedId: "shell-focused",
+      // Even if previousFocusedId is set, the default first-grid policy ignores it.
+      previousFocusedId: "shell-last",
+    });
+
+    usePanelStore.getState().trashPanel("shell-focused");
+
+    // Terminal kind = default "first-grid" policy → shell-first wins, not shell-last
+    expect(usePanelStore.getState().focusedId).toBe("shell-first");
+  });
+
+  it("unknown dockFallbackTarget string degrades to first-grid", async () => {
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "plugin-custom-fallback",
+      name: "Plugin Custom",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      usesTerminalUi: false,
+      extensionId: "test-policy-plugin",
+      policy: { dockFallbackTarget: "some-future-strategy" },
+    });
+
+    try {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      usePanelStore.setState({
+        panelsById: {
+          "shell-first": makeTerminal("shell-first", "terminal", undefined, "wt-1"),
+          "shell-last": makeTerminal("shell-last", "terminal", undefined, "wt-1"),
+          "plugin-1": {
+            id: "plugin-1",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            kind: "plugin-custom-fallback" as any,
+            worktreeId: "wt-1",
+            title: "plugin-1",
+            location: "grid" as const,
+          },
+        },
+        panelIds: ["shell-first", "shell-last", "plugin-1"],
+        focusedId: "plugin-1",
+        // Even with a valid previous-focused, an unknown strategy must
+        // degrade to first-grid rather than guessing.
+        previousFocusedId: "shell-last",
+      });
+
+      usePanelStore.getState().trashPanel("plugin-1");
+
+      expect(usePanelStore.getState().focusedId).toBe("shell-first");
+    } finally {
+      unregisterPanelKind("plugin-custom-fallback");
+    }
+  });
+
+  it("previous-focused via real focus-navigation mechanism (no injected previousFocusedId)", () => {
+    // End-to-end check: navigate via `setFocused` (the real mechanism the
+    // store uses when the user clicks/Tab/keyboard-focuses a panel), then
+    // trash a review panel and verify focus returns to the previously-
+    // focused panel without manually seeding `previousFocusedId`.
+    usePanelStore.setState({
+      panelsById: {
+        "real-shell-a": makeTerminal("real-shell-a", "terminal"),
+        "real-shell-b": makeTerminal("real-shell-b", "terminal"),
+        "real-review": makeReviewPanel("real-review"),
+      },
+      panelIds: ["real-shell-a", "real-shell-b", "real-review"],
+      focusedId: null,
+      previousFocusedId: null,
+    });
+
+    const { setFocused } = usePanelStore.getState();
+    // Simulate a real navigation sequence — `setFocused` is what every
+    // user-driven focus change goes through (click, Tab, keyboard, etc.).
+    setFocused("real-shell-a");
+    setFocused("real-shell-b");
+    expect(usePanelStore.getState().focusedId).toBe("real-shell-b");
+    expect(usePanelStore.getState().previousFocusedId).toBe("real-shell-a");
+
+    setFocused("real-review");
+    expect(usePanelStore.getState().focusedId).toBe("real-review");
+    expect(usePanelStore.getState().previousFocusedId).toBe("real-shell-b");
+
+    // Trash the review pane. Per the previous-focused policy, focus must
+    // return to shell-b (the panel the user was reading from).
+    usePanelStore.getState().trashPanel("real-review");
+    expect(usePanelStore.getState().focusedId).toBe("real-shell-b");
+  });
+
+  it("trashPanel: review respects worktree scoping when reading previousFocusedId", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    usePanelStore.setState({
+      panelsById: {
+        "shell-other-wt": makeTerminal("shell-other-wt", "terminal", undefined, "wt-2"),
+        "shell-same-wt": makeTerminal("shell-same-wt", "terminal", undefined, "wt-1"),
+        "review-1": makeReviewPanel("review-1", "wt-1"),
+      },
+      panelIds: ["shell-other-wt", "shell-same-wt", "review-1"],
+      focusedId: "review-1",
+      // previousFocusedId points to a panel in a DIFFERENT worktree —
+      // restoring it would jump across worktrees. Treat as invalid.
+      previousFocusedId: "shell-other-wt",
+    });
+
+    usePanelStore.getState().trashPanel("review-1");
+
+    // Falls through to first-grid in the active worktree.
+    expect(usePanelStore.getState().focusedId).toBe("shell-same-wt");
   });
 });
 

@@ -1,5 +1,10 @@
-import type { TerminalInstance } from "@/store";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
+import {
+  isPtyPanel,
+  isBrowserPanel,
+  isDevPreviewPanel,
+  type PanelInstance,
+} from "@shared/types/panel";
 import type { TabGroupLocation } from "@/types";
 import { generateAgentCommand } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
@@ -27,8 +32,8 @@ export interface ResolvedCommand {
  * merges globalEnv + preset env the same way useAgentLauncher does (global
  * first, preset overrides). For all others, copies the existing command.
  */
-async function resolveCommandForPanel(panel: TerminalInstance): Promise<ResolvedCommand> {
-  if (panel.launchAgentId && isRegisteredAgent(panel.launchAgentId)) {
+async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCommand> {
+  if (isPtyPanel(panel) && panel.launchAgentId && isRegisteredAgent(panel.launchAgentId)) {
     const agentConfig = getAgentConfig(panel.launchAgentId);
     if (agentConfig) {
       try {
@@ -83,22 +88,22 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<Resolved
     }
   }
   return {
-    command: panel.command,
+    command: isPtyPanel(panel) ? panel.command : undefined,
     env: undefined,
-    agentLaunchFlags: panel.agentLaunchFlags,
+    agentLaunchFlags: isPtyPanel(panel) ? panel.agentLaunchFlags : undefined,
     preset: undefined,
     presetWasStale: false,
   };
 }
 
-function buildBrowserOptions(panel: TerminalInstance) {
+function buildBrowserOptions(panel: import("@shared/types/panel").BrowserPanelData) {
   return {
     browserUrl: panel.browserUrl,
     browserConsoleOpen: panel.browserConsoleOpen,
   };
 }
 
-function buildDevPreviewOptions(panel: TerminalInstance) {
+function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewPanelData) {
   return {
     devCommand: panel.devCommand,
     browserUrl: panel.browserUrl,
@@ -118,10 +123,10 @@ function buildDevPreviewOptions(panel: TerminalInstance) {
  * silently dropping agent identity (the #5211 bare-shell bug) is worse than no
  * snapshot.
  */
-export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOptions | null {
-  const kind = panel.kind ?? "terminal";
+export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions | null {
+  const kind = panel.kind;
 
-  if (panel.launchAgentId && kind === "terminal") {
+  if (isPtyPanel(panel) && panel.launchAgentId && kind === "terminal") {
     if (!panel.command) {
       return null;
     }
@@ -144,24 +149,21 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
     };
   }
 
-  if (kind === "browser") {
+  if (isBrowserPanel(panel)) {
     return {
       kind: "browser",
-      cwd: panel.cwd || "",
+      cwd: "",
       worktreeId: panel.worktreeId,
-      exitBehavior: panel.exitBehavior,
-      isInputLocked: panel.isInputLocked,
       ...buildBrowserOptions(panel),
     };
   }
 
-  if (kind === "dev-preview") {
+  if (isDevPreviewPanel(panel)) {
     return {
       kind: "dev-preview",
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
-      isInputLocked: panel.isInputLocked,
       ...buildDevPreviewOptions(panel),
     };
   }
@@ -173,20 +175,24 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
     };
   }
 
-  return {
-    kind: "terminal",
-    launchAgentId: panel.launchAgentId,
-    title: panel.title,
-    cwd: panel.cwd || "",
-    worktreeId: panel.worktreeId,
-    exitBehavior: panel.exitBehavior,
-    isInputLocked: panel.isInputLocked,
-    agentModelId: panel.agentModelId,
-    agentPresetId: panel.agentPresetId,
-    agentPresetColor: panel.agentPresetColor,
-    agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
-    command: panel.command,
-  };
+  if (isPtyPanel(panel)) {
+    return {
+      kind: "terminal",
+      launchAgentId: panel.launchAgentId,
+      title: panel.title,
+      cwd: panel.cwd || "",
+      worktreeId: panel.worktreeId,
+      exitBehavior: panel.exitBehavior,
+      isInputLocked: panel.isInputLocked,
+      agentModelId: panel.agentModelId,
+      agentPresetId: panel.agentPresetId,
+      agentPresetColor: panel.agentPresetColor,
+      agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
+      command: panel.command,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -198,14 +204,14 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
  * `agentId` is unresolvable — callers already wrap this in try/catch.
  */
 export async function buildPanelDuplicateOptions(
-  sourcePanel: TerminalInstance,
+  sourcePanel: PanelInstance,
   targetLocation: TabGroupLocation
 ): Promise<AddPanelOptions> {
-  const kind = sourcePanel.kind ?? "terminal";
+  const kind = sourcePanel.kind;
   const { command, env, agentLaunchFlags, preset, presetWasStale } =
     await resolveCommandForPanel(sourcePanel);
 
-  if (sourcePanel.launchAgentId && kind === "terminal") {
+  if (isPtyPanel(sourcePanel) && sourcePanel.launchAgentId && kind === "terminal") {
     if (!command) {
       throw new Error(`Cannot duplicate agent terminal: command is missing`);
     }
@@ -238,26 +244,23 @@ export async function buildPanelDuplicateOptions(
     };
   }
 
-  if (kind === "browser") {
+  if (isBrowserPanel(sourcePanel)) {
     return {
       kind: "browser",
-      cwd: sourcePanel.cwd || "",
+      cwd: "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
-      exitBehavior: sourcePanel.exitBehavior,
-      isInputLocked: sourcePanel.isInputLocked,
       ...buildBrowserOptions(sourcePanel),
     };
   }
 
-  if (kind === "dev-preview") {
+  if (isDevPreviewPanel(sourcePanel)) {
     return {
       kind: "dev-preview",
       cwd: sourcePanel.cwd || "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
-      isInputLocked: sourcePanel.isInputLocked,
       ...buildDevPreviewOptions(sourcePanel),
     };
   }
@@ -270,20 +273,24 @@ export async function buildPanelDuplicateOptions(
     };
   }
 
-  return {
-    kind: "terminal",
-    launchAgentId: sourcePanel.launchAgentId,
-    cwd: sourcePanel.cwd || "",
-    title: sourcePanel.title,
-    worktreeId: sourcePanel.worktreeId,
-    location: targetLocation,
-    exitBehavior: sourcePanel.exitBehavior,
-    isInputLocked: sourcePanel.isInputLocked,
-    agentModelId: sourcePanel.agentModelId,
-    agentPresetId: sourcePanel.agentPresetId,
-    agentPresetColor: sourcePanel.agentPresetColor,
-    agentLaunchFlags: sourcePanel.agentLaunchFlags,
-    env,
-    command,
-  };
+  if (isPtyPanel(sourcePanel)) {
+    return {
+      kind: "terminal",
+      launchAgentId: sourcePanel.launchAgentId,
+      cwd: sourcePanel.cwd || "",
+      title: sourcePanel.title,
+      worktreeId: sourcePanel.worktreeId,
+      location: targetLocation,
+      exitBehavior: sourcePanel.exitBehavior,
+      isInputLocked: sourcePanel.isInputLocked,
+      agentModelId: sourcePanel.agentModelId,
+      agentPresetId: sourcePanel.agentPresetId,
+      agentPresetColor: sourcePanel.agentPresetColor,
+      agentLaunchFlags: sourcePanel.agentLaunchFlags,
+      env,
+      command,
+    };
+  }
+
+  throw new Error(`Cannot duplicate panel of kind "${kind}"`);
 }

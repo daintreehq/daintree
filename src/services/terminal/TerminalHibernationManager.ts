@@ -21,6 +21,13 @@ export interface HibernationManagerDeps extends TerminalListenerInstallDeps {
   openLink: (url: string, id: string, event?: MouseEvent) => void;
   getCwdProvider: (id: string) => (() => string) | undefined;
   onHibernationChanged: (id: string) => void;
+  /**
+   * Live lookup for "has the user explicitly backgrounded this panel?" —
+   * reads the renderer-side `backgroundedTerminals` map. Evaluated at every
+   * eligibility check (never captured into a timer closure) so a restore
+   * between schedule and fire correctly drops the bypass.
+   */
+  getIsBackgrounded: (id: string) => boolean;
 }
 
 export class TerminalHibernationManager {
@@ -39,7 +46,7 @@ export class TerminalHibernationManager {
     // lockstep. The predicate adds a tier check on top; hibernate() itself
     // is permissive about tier because callers (memory-pressure accelerator)
     // may want to force teardown regardless of the renderer-policy tier.
-    if (!this.isSafeToHibernate(managed)) return;
+    if (!this.isSafeToHibernate(managed, id)) return;
 
     logDebug(`[TIS.hibernate] Hibernating terminal ${id}`);
 
@@ -226,12 +233,23 @@ export class TerminalHibernationManager {
    *   either non-existent or at least AGENT_IDLE_SILENCE_MS old. The
    *   "never wrote" case is treated as safe because silence is by
    *   definition infinite if no write has ever been recorded.
+   * - User-backgrounded panels: the silence window is bypassed — the user
+   *   explicitly hid the panel, so an active agent is no objection to
+   *   reclaiming its memory under pressure. The `pendingWrites === 0` burst
+   *   guard still holds unconditionally so we never tear down mid-write.
+   *   Read live via `getIsBackgrounded` so a restore between schedule and
+   *   fire drops the bypass.
    */
-  private isSafeToHibernate(managed: ManagedTerminal, now: number = Date.now()): boolean {
+  private isSafeToHibernate(
+    managed: ManagedTerminal,
+    id: string,
+    now: number = Date.now()
+  ): boolean {
     if (!managed.runtimeAgentId) return true;
     const state = managed.canonicalAgentState;
     if (state === undefined || !ACTIVE_AGENT_STATES.has(state)) return true;
     if ((managed.pendingWrites ?? 0) > 0) return false;
+    if (this.deps.getIsBackgrounded(id)) return true;
     if (managed.lastWriteAt === undefined) return true;
     return now - managed.lastWriteAt >= AGENT_IDLE_SILENCE_MS;
   }
@@ -242,14 +260,17 @@ export class TerminalHibernationManager {
    * (working/waiting/directing) becomes eligible after AGENT_IDLE_SILENCE_MS
    * of output silence so a long-parked agent doesn't permanently strand
    * memory the way the original "active agent → never hibernate" rule did.
+   * A user-backgrounded panel skips that silence window entirely (see
+   * `isSafeToHibernate`).
    */
   isHibernationEligible(
     tier: TerminalRefreshTier,
     managed: ManagedTerminal,
+    id: string,
     now: number = Date.now()
   ): boolean {
     if (tier !== TerminalRefreshTier.BACKGROUND) return false;
-    return this.isSafeToHibernate(managed, now);
+    return this.isSafeToHibernate(managed, id, now);
   }
 
   /**
@@ -281,12 +302,16 @@ export class TerminalHibernationManager {
     // every write, since that would create unbounded deferral. The next
     // write will naturally re-trigger scheduleHibernation via the renderer
     // policy if the tier is still BACKGROUND.
+    // A user-backgrounded panel skips the eligibility re-check entirely and
+    // falls through to the normal hibernation timer — the silence window
+    // does not apply when the user has explicitly hidden the panel.
     if (
       managed.runtimeAgentId &&
       managed.canonicalAgentState !== undefined &&
       ACTIVE_AGENT_STATES.has(managed.canonicalAgentState) &&
       (managed.pendingWrites ?? 0) === 0 &&
-      managed.lastWriteAt !== undefined
+      managed.lastWriteAt !== undefined &&
+      !this.deps.getIsBackgrounded(id)
     ) {
       const now = Date.now();
       const elapsed = now - managed.lastWriteAt;

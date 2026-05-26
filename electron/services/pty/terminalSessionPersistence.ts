@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes terminal session snapshots via sync fs
 import { readFileSync, statSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { resilientAtomicWriteFile, resilientAtomicWriteFileSync } from "../../utils/fs.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads help-session state via store.get synchronously
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

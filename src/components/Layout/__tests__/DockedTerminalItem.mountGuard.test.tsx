@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import { useEffect } from "react";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const openDockTerminalMock = vi.fn();
 const closeDockTerminalMock = vi.fn();
@@ -164,14 +164,17 @@ import { DockedTerminalItem } from "../DockedTerminalItem";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t-1",
     title: "Terminal",
     location: "dock",
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("DockedTerminalItem mount-time close guard (#6602)", () => {
@@ -256,7 +259,11 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
 
   it("does not focus an MCP-created dock terminal from Radix open autofocus", () => {
     mockActiveDockTerminalId = "t-1";
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1", spawnedBy: "mcp" })} />);
+    render(
+      <DockedTerminalItem
+        terminal={makeTerminal({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" })}
+      />
+    );
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 
     const preventDefault = vi.fn();

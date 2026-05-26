@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { PanelInstance, DevPreviewPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -29,6 +30,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
   },
 }));
@@ -87,7 +89,7 @@ describe("setDevPreviewScrollPosition", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-1"],
     });
@@ -96,7 +98,7 @@ describe("setDevPreviewScrollPosition", () => {
       .getState()
       .setDevPreviewScrollPosition("dev-1", { url: "http://localhost:3000", scrollY: 420 });
 
-    const stored = usePanelStore.getState().panelsById["dev-1"];
+    const stored = usePanelStore.getState().panelsById["dev-1"] as DevPreviewPanelData | undefined;
     expect(stored?.kind).toBe("dev-preview");
     expect(stored?.devPreviewScrollPosition).toEqual({
       url: "http://localhost:3000",
@@ -117,14 +119,14 @@ describe("setDevPreviewScrollPosition", () => {
           rows: 24,
           location: "grid",
           devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 100 },
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-1"],
     });
 
     usePanelStore.getState().setDevPreviewScrollPosition("dev-1", undefined);
 
-    const stored = usePanelStore.getState().panelsById["dev-1"];
+    const stored = usePanelStore.getState().panelsById["dev-1"] as DevPreviewPanelData | undefined;
     expect(stored?.devPreviewScrollPosition).toBeUndefined();
   });
 
@@ -163,7 +165,7 @@ describe("setDevPreviewScrollPosition", () => {
           cols: 80,
           rows: 24,
           location: "grid",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-1"],
     });
@@ -185,7 +187,7 @@ describe("setDevPreviewScrollPosition", () => {
           rows: 24,
           location: "grid",
           devPreviewScrollPosition: { url: "http://localhost:3000", scrollY: 420 },
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-1"],
     });

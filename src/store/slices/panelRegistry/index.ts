@@ -12,8 +12,8 @@ import { createBrowserActions } from "./browser";
 import { createTabGroupActions } from "./tabGroups";
 
 // Re-exports for backward compatibility
+export type { TerminalInstance } from "@shared/types/panel";
 export type {
-  TerminalInstance,
   AddPanelOptions,
   TrashedTerminal,
   TrashedTerminalGroupMetadata,

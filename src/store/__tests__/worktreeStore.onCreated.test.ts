@@ -12,6 +12,7 @@ const focusStateGetterMock = vi.hoisted(() =>
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
   },
 }));
 

@@ -3,7 +3,11 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { waitForTerminalText, runTerminalCommand } from "../../helpers/terminal";
+import {
+  waitForTerminalText,
+  waitForTerminalTextIgnoringLineBreaks,
+  runTerminalCommand,
+} from "../../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -92,7 +96,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       // Verify working directory is inherited
       await runTerminalCommand(window, panel, 'node -p "process.cwd()"');
       const dirBasename = path.basename(fixtureDir);
-      await waitForTerminalText(panel, dirBasename, T_LONG);
+      await waitForTerminalTextIgnoringLineBreaks(panel, dirBasename, T_LONG);
     });
 
     test("clicking tab switches active terminal", async () => {

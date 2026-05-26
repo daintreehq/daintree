@@ -109,6 +109,13 @@ vi.mock("@/hooks/useWorktrees", () => ({
 vi.mock("@/hooks", () => ({
   useKeybindingDisplay: () => null,
   useAriaKeyshortcuts: () => undefined,
+  useShortcutHintHover: () => ({
+    onPointerEnter: () => {},
+    onPointerLeave: () => {},
+    onPointerDown: () => {},
+    onFocus: () => {},
+    onBlur: () => {},
+  }),
 }));
 
 vi.mock("@/config/agents", () => ({

@@ -75,7 +75,7 @@ describe("terminal.getStatus", () => {
       panelIds: ["t1", "t2"],
       panelsById: {
         t1: { id: "t1", kind: "terminal", location: "grid", agentState: "working" },
-        t2: { id: "t2", kind: "agent", location: "grid", agentState: "completed" },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "completed" },
       },
     });
 

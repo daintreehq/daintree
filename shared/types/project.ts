@@ -139,6 +139,8 @@ export interface PanelSnapshot {
    * the priority restore tier.
    */
   lastActiveAt?: number;
+  /** Legacy persisted creation timestamp (milliseconds since epoch). */
+  createdAt?: number;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

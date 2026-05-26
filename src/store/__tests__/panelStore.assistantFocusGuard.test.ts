@@ -4,9 +4,9 @@
  * an agent terminal. Verifies that `panelStore.addPanel` does NOT advance
  * `focusedId` to the freshly-spawned panel when:
  *   1. the assistant region currently owns keyboard focus, OR
- *   2. the spawn was tagged `spawnedBy: "mcp"` (issued through the MCP bridge).
+ *   2. the spawn carries `focusPolicy: "preserve"` (issued through the MCP bridge).
  *
- * For both cases, the panel still lands in the panel registry. MCP-created
+ * For both cases, the panel still lands in the panel registry. Focus-preserve
  * dock panels also must not auto-open the dock popover, because mounting that
  * popover runs its own terminal focus path.
  */
@@ -44,6 +44,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     prewarmTerminal: vi.fn(),
     sendPtyResize: vi.fn(),
     setInputLocked: vi.fn(),
@@ -82,6 +83,7 @@ vi.mock("@/store/terminalInputStore", () => ({
 import { usePanelStore } from "../panelStore";
 import { useMacroFocusStore } from "../macroFocusStore";
 import { runWithMcpSpawnFocusSuppressed } from "../mcpSpawnFocusGuard";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function resetState() {
   usePanelStore.setState((s) => ({
@@ -171,11 +173,12 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     document.body.removeChild(panelEl);
   });
 
-  it("does not advance focusedId when spawnedBy is 'mcp'", async () => {
+  it("does not advance focusedId when focusPolicy is 'preserve'", async () => {
     const newId = await usePanelStore.getState().addPanel({
       kind: "terminal",
       cwd: "/test",
       location: "grid",
+      focusPolicy: "preserve",
       spawnedBy: "mcp",
     });
 
@@ -183,10 +186,11 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     const state = usePanelStore.getState();
     expect(state.focusedId).toBe("incumbent-1");
     expect(state.previousFocusedId).toBeNull();
-    expect(state.panelsById[newId!]?.spawnedBy).toBe("mcp");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.spawnedBy).toBe("mcp");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
   });
 
-  it("does not advance focusedId while an MCP dispatch is active even without an action tag", async () => {
+  it("does not advance focusedId while an MCP dispatch is active even without explicit focusPolicy", async () => {
     const newId = await runWithMcpSpawnFocusSuppressed(() =>
       usePanelStore.getState().addPanel({
         kind: "terminal",
@@ -199,7 +203,7 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     const state = usePanelStore.getState();
     expect(state.focusedId).toBe("incumbent-1");
     expect(state.previousFocusedId).toBeNull();
-    expect(state.panelsById[newId!]?.spawnedBy).toBe("mcp");
+    expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
   });
 
   it("still advances focusedId for a normal user-initiated grid spawn", async () => {
@@ -231,12 +235,13 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
   });
 
   describe("dock activation path", () => {
-    it("MCP spawn into dock with activateDockOnCreate adds the panel but does not open or focus it", async () => {
+    it("focus-preserve spawn into dock with activateDockOnCreate adds the panel but does not open or focus it", async () => {
       const newId = await usePanelStore.getState().addPanel({
         kind: "terminal",
         cwd: "/test",
         location: "dock",
         activateDockOnCreate: true,
+        focusPolicy: "preserve",
         spawnedBy: "mcp",
       });
 
@@ -263,15 +268,16 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
       expect(state.activeDockTerminalId).toBeNull();
       expect(state.focusedId).toBe("incumbent-1");
       expect(state.previousFocusedId).toBeNull();
-      expect(state.panelsById[newId!]?.spawnedBy).toBe("mcp");
+      expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
       expect(state.panelsById[newId!]?.location).toBe("dock");
     });
 
-    it("MCP spawn of a non-PTY (browser) panel into the dock does not steal focus", async () => {
+    it("focus-preserve spawn of a non-PTY (browser) panel into the dock does not steal focus", async () => {
       const newId = await usePanelStore.getState().addPanel({
         kind: "browser",
         location: "dock",
         activateDockOnCreate: true,
+        focusPolicy: "preserve",
         spawnedBy: "mcp",
       });
 

@@ -579,6 +579,11 @@ export function useGitHubResourceListSWR({
         ? githubClient.getIssueByNumber(projectPath, num)
         : githubClient.getPRByNumber(projectPath, num);
 
+    const getByNumbers = (numbers: number[]) =>
+      type === "issue"
+        ? githubClient.getIssuesByNumbers(projectPath, numbers)
+        : githubClient.getPRsByNumbers(projectPath, numbers);
+
     const matchesFilter = (item: GitHubIssue | GitHubPR) =>
       filterState === "all" || item.state.toLowerCase() === filterState;
 
@@ -597,7 +602,7 @@ export function useGitHubResourceListSWR({
         }
 
         case "multi": {
-          const results = await Promise.all(numberQuery.numbers.map(getByNumber));
+          const results = await getByNumbers(numberQuery.numbers);
           if (abortController.signal.aborted) return;
           const filtered = results.filter(
             (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)
@@ -611,7 +616,7 @@ export function useGitHubResourceListSWR({
           for (let n = numberQuery.from; n <= numberQuery.to; n++) {
             numbers.push(n);
           }
-          const results = await Promise.all(numbers.map(getByNumber));
+          const results = await getByNumbers(numbers);
           if (abortController.signal.aborted) return;
           const filtered = results.filter(
             (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)

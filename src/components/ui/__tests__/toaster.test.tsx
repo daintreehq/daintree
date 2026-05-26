@@ -1063,7 +1063,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
     expect(screen.getByText("Something failed")).toBeTruthy();
   });
 
-  it("error toast dismisses around the 12s severity default", async () => {
+  it("error toast dismisses around the 8s severity default", async () => {
     render(<Toaster />);
     await act(async () => {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -1071,13 +1071,13 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
       vi.advanceTimersByTime(16);
     });
 
-    // Just before 12s — still visible.
+    // Just before 8s — still visible.
     await act(async () => {
-      vi.advanceTimersByTime(11500);
+      vi.advanceTimersByTime(7500);
     });
     expect(screen.getByText("Failed once")).toBeTruthy();
 
-    // Past 12s + the exit fade — gone.
+    // Past 8s + the exit fade — gone.
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });

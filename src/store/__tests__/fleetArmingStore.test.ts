@@ -7,12 +7,14 @@ import {
   isFleetInterruptAgentEligible,
   isFleetRestartAgentEligible,
   isFleetWaitingAgentEligible,
+  isTerminalErrorClusterEligible,
+  isTerminalFleetEligible,
   resolveFleetAgentCapabilityId,
   subscribeFleetArmingPanelPruning,
 } from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
 import { useWorktreeSelectionStore } from "../worktreeStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 function resetStore() {
   useFleetArmingStore.setState({
@@ -25,10 +27,7 @@ function resetStore() {
   });
 }
 
-function makeAgentTerminal(
-  id: string,
-  overrides: Partial<TerminalInstance> = {}
-): TerminalInstance {
+function makeAgentTerminal(id: string, overrides: Record<string, unknown> = {}): PanelInstance {
   return {
     id,
     title: id,
@@ -39,12 +38,12 @@ function makeAgentTerminal(
     location: "grid",
     agentState: "idle",
     hasPty: true,
-    ...(overrides as object),
-  } as TerminalInstance;
+    ...overrides,
+  } as PanelInstance;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PanelInstance[]): void {
+  const panelsById: Record<string, PanelInstance> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -202,6 +201,25 @@ describe("fleetArmingStore", () => {
       const s = useFleetArmingStore.getState();
       expect(s.armOrder).toEqual(["t1"]);
       expect(s.lastArmedId).toBe("t1");
+    });
+
+    it("is a no-op when every id in the batch is a non-PTY kind (#8957 batch B)", () => {
+      // Locks the no-op + lastArmedId-preservation contract for non-PTY input.
+      // addToFleet calls isFleetArmEligible(getNarrowPanel(...)) — the
+      // isPtyPanel guard rejects browser/dev-preview/review, so the batch
+      // should leave the prior fleet (and lastArmedId) untouched.
+      seedPanels([
+        makeAgentTerminal("t1"),
+        makeAgentTerminal("b1", { kind: "browser", hasPty: undefined }),
+        makeAgentTerminal("d1", { kind: "dev-preview", hasPty: undefined }),
+        makeAgentTerminal("r1", { kind: "review", hasPty: undefined }),
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      const before = useFleetArmingStore.getState().lastArmedId;
+      useFleetArmingStore.getState().addToFleet(["b1", "d1", "r1"]);
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["t1"]);
+      expect(s.lastArmedId).toBe(before);
     });
 
     it("seeds an empty fleet when armedIds is initially empty", () => {
@@ -366,6 +384,20 @@ describe("fleetArmingStore", () => {
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["runtime-a1"]);
     });
+
+    it("skips non-PTY panel kinds via collectEligibleIds (#8957 batch B)", () => {
+      // collectEligibleIds → getNarrowPanel → isFleetArmEligible — the
+      // isPtyPanel guard must drop browser/dev-preview/review even when the
+      // panel reports a matching worktree.
+      seedPanels([
+        makeAgentTerminal("a1"),
+        makeAgentTerminal("b1", { kind: "browser", hasPty: undefined }),
+        makeAgentTerminal("d1", { kind: "dev-preview", hasPty: undefined }),
+        makeAgentTerminal("r1", { kind: "review", hasPty: undefined }),
+      ]);
+      useFleetArmingStore.getState().armAll("all");
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+    });
   });
 
   describe("armMatchingFilter", () => {
@@ -395,6 +427,20 @@ describe("fleetArmingStore", () => {
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1", "a5"]);
+    });
+
+    it("skips non-PTY panel kinds (browser, dev-preview, review) (#8957 batch B)", () => {
+      // The carrier surfaces non-PTY panels via the narrowed PanelInstance
+      // union now that #8957 routes reads through getNarrowPanel. Confirms
+      // collectFilterArmEligibleIds drops them via the isPtyPanel guard.
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("b1", { worktreeId: "wt-1", kind: "browser", hasPty: undefined }),
+        makeAgentTerminal("d1", { worktreeId: "wt-1", kind: "dev-preview", hasPty: undefined }),
+        makeAgentTerminal("r1", { worktreeId: "wt-1", kind: "review", hasPty: undefined }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
 
     it("empty worktreeIds is a no-op and preserves any prior armed set", () => {
@@ -660,6 +706,18 @@ describe("fleetArmingStore", () => {
         )
       ).toBe(false);
     });
+
+    it("rejects non-PTY panel kinds (browser, dev-preview, review)", () => {
+      // Documents the isPtyPanel guard added in #8957 — the carrier now
+      // surfaces non-PTY panels via the narrowed PanelInstance union, and
+      // fleet predicates must drop them before checking PTY-specific fields.
+      const browser = makeAgentTerminal("a", { kind: "browser", hasPty: undefined });
+      const devPreview = makeAgentTerminal("a", { kind: "dev-preview", hasPty: undefined });
+      const review = makeAgentTerminal("a", { kind: "review", hasPty: undefined });
+      expect(isFleetArmEligible(browser)).toBe(false);
+      expect(isFleetArmEligible(devPreview)).toBe(false);
+      expect(isFleetArmEligible(review)).toBe(false);
+    });
   });
 
   describe("agent Fleet action eligibility", () => {
@@ -677,8 +735,12 @@ describe("fleetArmingStore", () => {
       });
       expect(resolveFleetAgentCapabilityId(exAgent)).toBeUndefined();
       expect(isAgentFleetActionEligible(exAgent)).toBe(false);
-      expect(isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" })).toBe(false);
-      expect(isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" })).toBe(false);
+      expect(
+        isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" } as PanelInstance)
+      ).toBe(false);
+      expect(
+        isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" } as PanelInstance)
+      ).toBe(false);
       expect(isFleetRestartAgentEligible(exAgent)).toBe(false);
     });
 
@@ -699,6 +761,37 @@ describe("fleetArmingStore", () => {
       expect(isFleetInterruptAgentEligible(working)).toBe(true);
       expect(isFleetWaitingAgentEligible(working)).toBe(false);
       expect(isFleetInterruptAgentEligible(idle)).toBe(false);
+    });
+
+    it("rejects non-PTY panel kinds across every fleet predicate (#8957 batch B)", () => {
+      // The narrowed PanelInstance union now flows non-PTY panels through these
+      // predicates; each must drop browser/dev-preview/review before touching
+      // PTY-specific fields. Mirrors the isFleetArmEligible coverage above so
+      // the entire fleet eligibility surface is covered.
+      const browser = makeAgentTerminal("a", {
+        kind: "browser",
+        hasPty: undefined,
+        agentState: "waiting",
+      });
+      const devPreview = makeAgentTerminal("a", {
+        kind: "dev-preview",
+        hasPty: undefined,
+        agentState: "working",
+      });
+      const review = makeAgentTerminal("a", {
+        kind: "review",
+        hasPty: undefined,
+        agentState: "waiting",
+      });
+      for (const panel of [browser, devPreview, review]) {
+        expect(isTerminalFleetEligible(panel)).toBe(false);
+        expect(isTerminalErrorClusterEligible(panel)).toBe(false);
+        expect(resolveFleetAgentCapabilityId(panel)).toBeUndefined();
+        expect(isAgentFleetActionEligible(panel)).toBe(false);
+        expect(isFleetWaitingAgentEligible(panel)).toBe(false);
+        expect(isFleetInterruptAgentEligible(panel)).toBe(false);
+        expect(isFleetRestartAgentEligible(panel)).toBe(false);
+      }
     });
   });
 
@@ -834,6 +927,22 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armIds(["a", "b"]);
 
       seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "dock" })]);
+
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
+    });
+
+    it("drops armed ids when a panel mutates into a non-PTY kind (#8957 batch B)", () => {
+      // The reconcileAgainst path inside the subscription now consumes
+      // the narrowed PanelInstance union via getNarrowPanel. A panel
+      // whose kind flips to browser/dev-preview/review must fail the
+      // isPtyPanel guard and be pruned from the armed set.
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b")]);
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+
+      seedPanels([
+        makeAgentTerminal("a"),
+        makeAgentTerminal("b", { kind: "browser", hasPty: undefined }),
+      ]);
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
     });

@@ -1,16 +1,16 @@
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 
 export interface DockRenderItem {
   group: TabGroup;
-  panels: TerminalInstance[];
+  panels: PtyPanelData[];
 }
 
 export function buildDockRenderItems(
   tabGroups: TabGroup[],
-  resolvePanels: (groupId: string) => TerminalInstance[],
+  resolvePanels: (groupId: string) => PtyPanelData[],
   excludedPanelId?: string | null,
-  dockTerminals: TerminalInstance[] = []
+  dockTerminals: PtyPanelData[] = []
 ): DockRenderItem[] {
   const renderedPanelIds = new Set<string>();
   const items = tabGroups.flatMap((group) => {

@@ -1,3 +1,5 @@
+import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +9,25 @@ import {
   MAX_THROTTLE_MULTIPLIER,
 } from "../GitHubRateLimitService.js";
 import type { GitHubRateLimitPayload } from "../../../../../shared/types/ipc/github.js";
+
+vi.mock("fs", () => ({
+  appendFileSync: vi.fn(),
+  existsSync: vi.fn(),
+  mkdirSync: vi.fn(),
+}));
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn((name: string) => {
+      if (name === "userData") return "/mock/user/data";
+      throw new Error(`Unexpected getPath arg: ${name}`);
+    }),
+  },
+}));
+
+const mockedAppendFileSync = vi.mocked(appendFileSync);
+const mockedExistsSync = vi.mocked(existsSync);
+const mockedMkdirSync = vi.mocked(mkdirSync);
 
 function makeHeaders(entries: Record<string, string>): Headers {
   return new Headers(entries);
@@ -145,6 +166,210 @@ describe("GitHubRateLimitService", () => {
 
       const block = gitHubRateLimitService.shouldBlockRequest();
       expect(block.blocked).toBe(false);
+    });
+  });
+
+  describe("proactive block expiry timer", () => {
+    it("clears the block on its own when the reset elapses without any lazy call", () => {
+      vi.useFakeTimers();
+      try {
+        const resetSeconds = Math.floor(Date.now() / 1000) + 60;
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(resetSeconds),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(listener).toHaveBeenCalledWith(
+          expect.objectContaining({ blocked: false, kind: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-arms to the next-soonest expiry after the first block clears", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "graphql",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+        expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(true);
+
+        listener.mockClear();
+        vi.advanceTimersByTime(540_000);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(false);
+        expect(listener).toHaveBeenCalledWith(
+          expect.objectContaining({ blocked: false, kind: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not fire stale callbacks after clear()", () => {
+      vi.useFakeTimers();
+      try {
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.clear();
+        listener.mockClear();
+
+        vi.advanceTimersByTime(120_000);
+
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-arms to an earlier time when the same resource is re-blocked sooner", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not clear early when the same resource is re-blocked later", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clearResource() cancels the pending block timer", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "4999",
+            "x-ratelimit-reset": String(nowSec + 3600),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        listener.mockClear();
+
+        vi.advanceTimersByTime(120_000);
+
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a later block does not delay an earlier block's timer", () => {
+      vi.useFakeTimers();
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 60),
+            "x-ratelimit-resource": "core",
+          }),
+          200
+        );
+        gitHubRateLimitService.update(
+          makeHeaders({
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(nowSec + 600),
+            "x-ratelimit-resource": "graphql",
+          }),
+          200
+        );
+
+        vi.advanceTimersByTime(60_000 + 7_500);
+
+        expect(gitHubRateLimitService.shouldBlockRequest("core").blocked).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -402,6 +627,109 @@ describe("GitHubRateLimitService", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    describe("per-query cost logging (DAINTREE_DEBUG_GITHUB_GRAPHQL)", () => {
+      const label = "TEST_QUERY";
+      const debugDir = join("/mock/user/data", "debug");
+      const logPath = join(debugDir, "github-graphql-costs.log");
+      let previousUserData: string | undefined;
+
+      function setDebugEnv(value: string) {
+        process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL = value;
+      }
+
+      beforeEach(() => {
+        previousUserData = process.env.DAINTREE_USER_DATA;
+        process.env.DAINTREE_USER_DATA = "/mock/user/data";
+        delete process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL;
+        mockedAppendFileSync.mockReset();
+        mockedExistsSync.mockReset();
+        mockedMkdirSync.mockReset();
+        mockedExistsSync.mockReturnValue(true);
+      });
+
+      afterEach(() => {
+        delete process.env.DAINTREE_DEBUG_GITHUB_GRAPHQL;
+        if (previousUserData === undefined) {
+          delete process.env.DAINTREE_USER_DATA;
+        } else {
+          process.env.DAINTREE_USER_DATA = previousUserData;
+        }
+      });
+
+      it("does not write when env var is unset", () => {
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000), label);
+        expect(mockedAppendFileSync).not.toHaveBeenCalled();
+      });
+
+      it("writes one log line when env var is set and label and cost are present", () => {
+        setDebugEnv("1");
+        const data = graphQLData(4995, 5000);
+        gitHubRateLimitService.updateFromGraphQL(data, label);
+
+        expect(mockedAppendFileSync).toHaveBeenCalledTimes(1);
+        const call = mockedAppendFileSync.mock.calls[0];
+        expect(call[0]).toBe(logPath);
+        const line = call[1] as string;
+        expect(line).toContain(`label="${label}"`);
+        expect(line).toContain("cost=1");
+        expect(line).toContain("remaining=4995");
+        expect(line).toContain("limit=5000");
+        expect(line).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
+      });
+
+      it("does not write when label is missing", () => {
+        setDebugEnv("1");
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000));
+        expect(mockedAppendFileSync).not.toHaveBeenCalled();
+      });
+
+      it("does not write when rateLimit.cost is missing", () => {
+        setDebugEnv("1");
+        const data = {
+          rateLimit: {
+            remaining: 4995,
+            resetAt: new Date(Date.now() + ONE_HOUR_MS).toISOString(),
+            limit: 5000,
+          },
+        };
+        gitHubRateLimitService.updateFromGraphQL(data, label);
+        expect(mockedAppendFileSync).not.toHaveBeenCalled();
+        expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+      });
+
+      it("creates the debug directory if it does not exist", () => {
+        setDebugEnv("1");
+        mockedAppendFileSync.mockClear();
+        mockedExistsSync.mockImplementation((p) => p !== debugDir);
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000), label);
+
+        expect(mockedMkdirSync).toHaveBeenCalledWith(debugDir, { recursive: true });
+        expect(mockedAppendFileSync).toHaveBeenCalled();
+      });
+
+      it("does not throw when appendFileSync throws", () => {
+        setDebugEnv("1");
+        mockedAppendFileSync.mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(() =>
+          gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000), label)
+        ).not.toThrow();
+        expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+      });
+
+      it("strips quotes and newlines from the label", () => {
+        setDebugEnv("1");
+        mockedAppendFileSync.mockClear();
+        gitHubRateLimitService.updateFromGraphQL(graphQLData(4995, 5000), 'label"with\nquotes"');
+
+        expect(mockedAppendFileSync).toHaveBeenCalled();
+        const line = mockedAppendFileSync.mock.calls[0][1] as string;
+        expect(line).toContain('label="labelwithquotes"');
+      });
     });
   });
 

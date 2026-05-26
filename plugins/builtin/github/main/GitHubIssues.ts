@@ -1,10 +1,21 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
-import { LIST_ISSUES_QUERY, SEARCH_QUERY, GET_ISSUE_QUERY } from "./GitHubQueries.js";
+import {
+  LIST_ISSUES_QUERY,
+  SEARCH_QUERY,
+  GET_ISSUE_QUERY,
+  buildBatchIssuesQuery,
+  GRAPHQL_BATCH_CHUNK_SIZE,
+} from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
-import { repoStatsCache, issueListCache, issueTooltipCache } from "./GitHubCaches.js";
+import {
+  repoStatsCache,
+  issueListCache,
+  issueTooltipCache,
+  issueTooltipWrittenAt,
+} from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
 import { truncateBody } from "./GitHubCaches.js";
@@ -22,15 +33,27 @@ export function extractLinkedPR(
   timelineItems:
     | {
         nodes?: Array<{
-          source?: { number?: number; state?: string; merged?: boolean; url?: string };
-          subject?: { number?: number; state?: string; merged?: boolean; url?: string };
+          source?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
+          subject?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
         }>;
       }
     | undefined
 ): LinkedPRInfo | undefined {
   if (!timelineItems?.nodes) return undefined;
 
-  const prs: Array<{ number: number; state: "OPEN" | "CLOSED" | "MERGED"; url: string }> = [];
+  const prs: LinkedPRInfo[] = [];
   const seenPRNumbers = new Set<number>();
 
   for (const node of timelineItems.nodes) {
@@ -40,21 +63,29 @@ export function extractLinkedPR(
       const state: "OPEN" | "CLOSED" | "MERGED" = prData.merged
         ? "MERGED"
         : (prData.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
-      prs.push({ number: prData.number, state, url: prData.url });
+      prs.push({
+        number: prData.number,
+        state,
+        url: prData.url,
+        ...(typeof prData.updatedAt === "string" ? { updatedAt: prData.updatedAt } : {}),
+      });
     }
   }
 
   if (prs.length === 0) return undefined;
 
-  const openPRs = prs.filter((pr) => pr.state === "OPEN");
-  const mergedPRs = prs.filter((pr) => pr.state === "MERGED");
-  const closedPRs = prs.filter((pr) => pr.state === "CLOSED");
+  prs.sort(compareLinkedPRFreshness);
+  return prs[0];
+}
 
-  if (openPRs.length > 0) return openPRs[openPRs.length - 1];
-  if (mergedPRs.length > 0) return mergedPRs[mergedPRs.length - 1];
-  if (closedPRs.length > 0) return closedPRs[closedPRs.length - 1];
+function compareLinkedPRFreshness(a: LinkedPRInfo, b: LinkedPRInfo): number {
+  const aUpdatedAt = typeof a.updatedAt === "string" ? Date.parse(a.updatedAt) : 0;
+  const bUpdatedAt = typeof b.updatedAt === "string" ? Date.parse(b.updatedAt) : 0;
+  const aTime = Number.isFinite(aUpdatedAt) ? aUpdatedAt : 0;
+  const bTime = Number.isFinite(bUpdatedAt) ? bUpdatedAt : 0;
+  if (aTime !== bTime) return bTime - aTime;
 
-  return undefined;
+  return b.number - a.number;
 }
 
 export function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
@@ -65,7 +96,20 @@ export function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
   const timelineItems = node.timelineItems as
     | {
         nodes?: Array<{
-          source?: { number?: number; state?: string; merged?: boolean; url?: string };
+          source?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
+          subject?: {
+            number?: number;
+            state?: string;
+            merged?: boolean;
+            url?: string;
+            updatedAt?: string;
+          };
         }>;
       }
     | undefined;
@@ -253,6 +297,8 @@ function updateIssueAssigneeInCache(
   issueTooltipCache.invalidate(`${owner}/${repo}:${issueNumber}`);
 }
 
+const inFlightIssueTooltips = new Map<string, Promise<IssueTooltipData | null>>();
+
 export async function getIssueTooltip(
   cwd: string,
   issueNumber: number
@@ -270,51 +316,113 @@ export async function getIssueTooltip(
         return cached;
       }
 
-      const response = (await client(GET_ISSUE_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        number: issueNumber,
-        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-      })) as GraphQlQueryResponseData;
+      const inFlight = inFlightIssueTooltips.get(cacheKey);
+      if (inFlight) return inFlight;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      const requestedAt = Date.now();
+      const promise = (async () => {
+        const response = (await client(GET_ISSUE_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          number: issueNumber,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
 
-      const issue = response?.repository?.issue;
-      if (!issue) {
-        return null;
-      }
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
-      const author = issue.author as { login?: string; avatarUrl?: string } | null;
-      const assigneesData = issue.assignees as {
-        nodes?: Array<{ login?: string; avatarUrl?: string }>;
-      };
-      const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+        const issue = response?.repository?.issue;
+        if (!issue) {
+          return null;
+        }
 
-      const tooltipData: IssueTooltipData = {
-        number: issue.number as number,
-        title: issue.title as string,
-        bodyExcerpt: truncateBody(issue.bodyText as string | null),
-        state: issue.state as "OPEN" | "CLOSED",
-        createdAt: issue.createdAt as string,
-        author: {
-          login: author?.login ?? "unknown",
-          avatarUrl: author?.avatarUrl ?? "",
+        const author = issue.author as { login?: string; avatarUrl?: string } | null;
+        const assigneesData = issue.assignees as {
+          nodes?: Array<{ login?: string; avatarUrl?: string }>;
+        };
+        const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+
+        const tooltipData: IssueTooltipData = {
+          number: issue.number as number,
+          title: issue.title as string,
+          bodyExcerpt: truncateBody(issue.bodyText as string | null),
+          state: issue.state as "OPEN" | "CLOSED",
+          createdAt: issue.createdAt as string,
+          author: {
+            login: author?.login ?? "unknown",
+            avatarUrl: author?.avatarUrl ?? "",
+          },
+          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+            login: a.login ?? "unknown",
+            avatarUrl: a.avatarUrl ?? "",
+          })),
+          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+            name: l.name ?? "",
+            color: l.color ?? "",
+          })),
+        };
+
+        const existing = issueTooltipWrittenAt.get(cacheKey);
+        if (existing === undefined || requestedAt >= existing) {
+          issueTooltipCache.set(cacheKey, tooltipData);
+          issueTooltipWrittenAt.set(cacheKey, requestedAt);
+        }
+        return tooltipData;
+      })();
+
+      inFlightIssueTooltips.set(cacheKey, promise);
+      promise.then(
+        () => {
+          inFlightIssueTooltips.delete(cacheKey);
         },
-        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-          login: a.login ?? "unknown",
-          avatarUrl: a.avatarUrl ?? "",
-        })),
-        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-          name: l.name ?? "",
-          color: l.color ?? "",
-        })),
-      };
+        () => {
+          inFlightIssueTooltips.delete(cacheKey);
+        }
+      );
 
-      issueTooltipCache.set(cacheKey, tooltipData);
-      return tooltipData;
+      return promise;
     });
   } catch {
     return null;
+  }
+}
+
+function prewarmIssueTooltips(
+  owner: string,
+  repo: string,
+  nodes: Array<Record<string, unknown>>
+): void {
+  const requestedAt = Date.now();
+  for (const node of nodes) {
+    const num = node.number as number;
+    if (!num) continue;
+    const cacheKey = `${owner}/${repo}:${num}`;
+    const existing = issueTooltipWrittenAt.get(cacheKey);
+    if (existing !== undefined && requestedAt < existing) continue;
+    const author = node.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = node.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    issueTooltipCache.set(cacheKey, {
+      number: num,
+      title: node.title as string,
+      bodyExcerpt: truncateBody(node.bodyText as string | null),
+      state: node.state as "OPEN" | "CLOSED",
+      createdAt: node.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    });
+    issueTooltipWrittenAt.set(cacheKey, requestedAt);
   }
 }
 
@@ -369,13 +477,16 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_ISSUES_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+        const filteredNodes = nodes.filter(Boolean);
+
+        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
 
         result = {
-          items: nodes.filter(Boolean).map(parseIssueNode),
+          items: filteredNodes.map(parseIssueNode),
           pageInfo: {
             hasNextPage: search?.pageInfo?.hasNextPage ?? false,
             endCursor: search?.pageInfo?.endCursor ?? null,
@@ -394,14 +505,17 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "LIST_ISSUES_QUERY");
 
         const issues = response?.repository?.issues;
         const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (issues?.totalCount as number) ?? undefined;
+        const filteredNodes = nodes.filter(Boolean);
+
+        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
 
         result = {
-          items: nodes.filter(Boolean).map(parseIssueNode),
+          items: filteredNodes.map(parseIssueNode),
           pageInfo: {
             hasNextPage: issues?.pageInfo?.hasNextPage ?? false,
             endCursor: issues?.pageInfo?.endCursor ?? null,
@@ -458,7 +572,7 @@ export async function getIssueByNumber(
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
       const issue = response?.repository?.issue;
       if (!issue) {
@@ -474,6 +588,55 @@ export async function getIssueByNumber(
     }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}
+
+export async function getIssuesByNumbers(
+  cwd: string,
+  numbers: number[]
+): Promise<Array<GitHubIssue | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  try {
+    return await withRepoContextRetry(cwd, async (context) => {
+      const results: Array<GitHubIssue | null> = [];
+
+      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+        const query = buildBatchIssuesQuery(context.owner, context.repo, chunk);
+        if (!query) continue;
+
+        const response = (await client(query, {
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
+
+        gitHubRateLimitService.updateFromGraphQL(response);
+
+        const repo = response?.repository as Record<string, unknown> | undefined;
+        for (const num of chunk) {
+          const alias = `i${num}`;
+          const node = repo?.[alias] as Record<string, unknown> | null;
+          results.push(node ? parseIssueNode(node) : null);
+        }
+      }
+
+      return results;
+    });
+  } catch (error) {
+    const message = formatErrorMessage(error, "Failed to fetch GitHub issues");
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return [];
     }
     throw new Error(parseGitHubError(error));
   }

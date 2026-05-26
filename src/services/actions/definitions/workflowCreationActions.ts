@@ -7,7 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
 
@@ -70,6 +70,7 @@ export function registerWorkflowCreationActions(
               "Assign the linked issue to the current user. Omit to use the user's persisted 'Assign issue to me' preference (mirrors the new-worktree dialog checkbox)."
             ),
           spawnedBy: TerminalSpawnSourceSchema.optional(),
+          focusPolicy: AddPanelFocusPolicySchema.optional(),
         })
         .refine((d) => !(d.issueNumber !== undefined && d.pullRequestNumber !== undefined), {
           message: "issueNumber and pullRequestNumber are mutually exclusive",
@@ -92,6 +93,7 @@ export function registerWorkflowCreationActions(
         pullRequestNumber,
         assignToSelf,
         spawnedBy,
+        focusPolicy,
       }) => {
         if (issueNumber !== undefined && pullRequestNumber !== undefined) {
           throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
@@ -187,11 +189,12 @@ export function registerWorkflowCreationActions(
               issueNumber,
               prNumber: pullRequestNumber,
             };
-            if (spawnedBy === undefined) {
+            if (spawnedBy === undefined && focusPolicy === undefined) {
               await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext);
             } else {
               await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext, {
                 spawnedBy,
+                focusPolicy,
               });
             }
             recipeLaunched = true;
@@ -284,6 +287,7 @@ export function registerWorkflowCreationActions(
           .optional()
           .describe("Inject worktree context into the launched terminal (default: true)"),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),
       resultSchema: z.object({
         issueNumber: z.number(),
@@ -307,6 +311,7 @@ export function registerWorkflowCreationActions(
         assignToSelf,
         injectContext,
         spawnedBy,
+        focusPolicy,
       }) => {
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
@@ -373,14 +378,17 @@ export function registerWorkflowCreationActions(
               branchName: availableBranch,
               issueNumber: issue.number,
             };
-            if (spawnedBy === undefined) {
+            if (spawnedBy === undefined && focusPolicy === undefined) {
               await useRecipeStore
                 .getState()
                 .runRecipe(recipeId, worktreePath, worktreeId, recipeContext);
             } else {
               await useRecipeStore
                 .getState()
-                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext, { spawnedBy });
+                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext, {
+                  spawnedBy,
+                  focusPolicy,
+                });
             }
             recipeLaunched = true;
           } catch (err) {
@@ -413,6 +421,7 @@ export function registerWorkflowCreationActions(
                 worktreeId,
                 activateDockOnCreate: false,
                 spawnedBy,
+                focusPolicy,
               })
             )?.terminalId ?? null;
         } catch (err) {

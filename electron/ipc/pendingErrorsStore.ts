@@ -1,3 +1,4 @@
+// eager-import-allow: reads the pending-errors queue via store.get synchronously at module scope
 import { store } from "../store.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
 

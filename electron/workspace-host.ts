@@ -32,7 +32,7 @@ import type { RateLimitInfo } from "../shared/types/forge.js";
 import type { GitHubRateLimitPayload } from "../shared/types/ipc/github.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
-import { gitHubRateLimitService } from "./services/github/index.js";
+import { gitHubRateLimitService } from "./services/github/GitHubRateLimitService.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
@@ -342,6 +342,7 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
       limit: payload.limit ?? null,
       remaining: payload.remaining ?? null,
       resetAt: null,
+      throttleMultiplier: payload.throttleMultiplier,
     };
   }
   // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
@@ -352,6 +353,7 @@ function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
     remaining: 0,
     resetAt: payload.resetAt ?? null,
     ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
+    throttleMultiplier: payload.throttleMultiplier,
   };
 }
 
@@ -757,6 +759,12 @@ port.on("message", async (rawMsg: any) => {
       // raw envelope across.
       case "forge:rpc-result":
         forgeBridge.handleResult(request);
+        break;
+
+      // Inbound poll-lease decision from main (#9055). Routes to the pending
+      // `acquirePollLease()` promise keyed by `requestId`.
+      case "forge:poll-lease-result":
+        forgeBridge.handleLeaseResult(request);
         break;
 
       default:

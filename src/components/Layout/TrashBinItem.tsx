@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -18,7 +19,7 @@ import { cn } from "@/lib/utils";
 const COUNTDOWN_CRITICAL_SECONDS = 5;
 
 interface TrashBinItemProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   trashedInfo: TrashedTerminal;
   worktreeName?: string;
 }
@@ -50,14 +51,16 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   }, [removePanel, terminal.id]);
 
   const terminalName = (() => {
-    const observed = terminal.lastObservedTitle;
-    if (observed && !isUselessTitle(observed)) return observed;
-    // Launch-intent only: trash labels should read the stable launch identity
-    // so a terminal's name doesn't change as runtime detection flips after trashing.
-    if (terminal.launchAgentId) {
-      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
-      return agentConfig?.name ?? terminal.launchAgentId;
+    if (isPtyPanel(terminal)) {
+      const observed = terminal.lastObservedTitle;
+      if (observed && !isUselessTitle(observed)) return observed;
+      // Launch-intent only: trash labels should read the stable launch identity
+      // so a terminal's name doesn't change as runtime detection flips after trashing.
+      if (terminal.launchAgentId) {
+        if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+        const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
+        return agentConfig?.name ?? terminal.launchAgentId;
+      }
     }
     return terminal.title || "Terminal";
   })();

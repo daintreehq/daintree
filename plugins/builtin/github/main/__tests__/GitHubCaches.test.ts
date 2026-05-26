@@ -2,18 +2,24 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   prETagCache,
   branchListETagCache,
+  repoPRListETagCache,
   getETagCacheVersion,
   clearGitHubCaches,
   clearPRCaches,
   velocityCache,
-  repoActivityProbeCache,
+  repoEventsETagCache,
+  repoEventsNoChangeCount,
+  repoEventsLastProbeAt,
   repoStatsAndPageSnapshotCache,
+  MAX_REVIEW_THREAD_PAGES,
+  REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
 
 describe("GitHubCaches ETag caches", () => {
   beforeEach(() => {
     prETagCache.clear();
     branchListETagCache.clear();
+    repoPRListETagCache.clear();
   });
 
   it("are Cache instances, not plain Maps", () => {
@@ -25,14 +31,21 @@ describe("GitHubCaches ETag caches", () => {
     expect(branchListETagCache.get).toBeInstanceOf(Function);
     expect(branchListETagCache.set).toBeInstanceOf(Function);
     expect(branchListETagCache.invalidate).toBeInstanceOf(Function);
+
+    expect(repoPRListETagCache.get).toBeInstanceOf(Function);
+    expect(repoPRListETagCache.set).toBeInstanceOf(Function);
+    expect(repoPRListETagCache.invalidate).toBeInstanceOf(Function);
   });
 
-  it("set and get work for both caches", () => {
+  it("set and get work for all caches", () => {
     prETagCache.set("owner/repo#42", '"abc123"');
     expect(prETagCache.get("owner/repo#42")).toBe('"abc123"');
 
     branchListETagCache.set("owner/repo@main", '"def456"');
     expect(branchListETagCache.get("owner/repo@main")).toBe('"def456"');
+
+    repoPRListETagCache.set("owner/repo", 'W/"ghi789"');
+    expect(repoPRListETagCache.get("owner/repo")).toBe('W/"ghi789"');
   });
 
   it("invalidate removes entries", () => {
@@ -57,22 +70,27 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
   beforeEach(() => {
     prETagCache.clear();
     branchListETagCache.clear();
+    repoPRListETagCache.clear();
   });
 
-  it("clearGitHubCaches clears both ETag caches", () => {
+  it("clearGitHubCaches clears all ETag caches", () => {
     prETagCache.set("k1", '"v1"');
     branchListETagCache.set("k2", '"v2"');
+    repoPRListETagCache.set("k3", 'W/"v3"');
     clearGitHubCaches();
     expect(prETagCache.get("k1")).toBeUndefined();
     expect(branchListETagCache.get("k2")).toBeUndefined();
+    expect(repoPRListETagCache.get("k3")).toBeUndefined();
   });
 
-  it("clearPRCaches clears both ETag caches (previously skipped them)", () => {
+  it("clearPRCaches clears all ETag caches (previously skipped them)", () => {
     prETagCache.set("k1", '"v1"');
     branchListETagCache.set("k2", '"v2"');
+    repoPRListETagCache.set("k3", 'W/"v3"');
     clearPRCaches();
     expect(prETagCache.get("k1")).toBeUndefined();
     expect(branchListETagCache.get("k2")).toBeUndefined();
+    expect(repoPRListETagCache.get("k3")).toBeUndefined();
   });
 
   it("clearPRCaches increments ETag cache version", () => {
@@ -88,20 +106,20 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
   });
 });
 
-describe("polling-optimization caches (issue #8757)", () => {
+describe("polling-optimization caches (issues #8757, #9041)", () => {
   beforeEach(() => {
     velocityCache.clear();
-    repoActivityProbeCache.clear();
+    repoEventsETagCache.clear();
+    repoEventsNoChangeCount.clear();
+    repoEventsLastProbeAt.clear();
     repoStatsAndPageSnapshotCache.clear();
   });
 
   function seedAll(): void {
     velocityCache.set("owner/repo::velocity::2026-05-20", { 60: 1, 120: 2, 180: 3 });
-    repoActivityProbeCache.set("owner/repo", {
-      pushedAt: "2026-05-20T00:00:00Z",
-      issueUpdatedAt: "2026-05-20T00:00:00Z",
-      prUpdatedAt: "2026-05-20T00:00:00Z",
-    });
+    repoEventsETagCache.set("owner/repo", '"events-etag"');
+    repoEventsNoChangeCount.set("owner/repo", 3);
+    repoEventsLastProbeAt.set("owner/repo", Date.now());
     repoStatsAndPageSnapshotCache.set("owner/repo", {
       stats: { issueCount: 4, prCount: 5, lastUpdated: 1 },
       issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 4 },
@@ -109,18 +127,22 @@ describe("polling-optimization caches (issue #8757)", () => {
     });
   }
 
-  it("clearGitHubCaches clears the velocity, probe, and snapshot caches", () => {
+  it("clearGitHubCaches clears the velocity, events-ETag, and snapshot caches", () => {
     seedAll();
     clearGitHubCaches();
     expect(velocityCache.get("owner/repo::velocity::2026-05-20")).toBeUndefined();
-    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 
-  it("clearPRCaches drops the probe + snapshot caches (they can serve a stale PR list)", () => {
+  it("clearPRCaches drops the events ETag + snapshot and resets the backoff state", () => {
     seedAll();
     clearPRCaches();
-    expect(repoActivityProbeCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsETagCache.get("owner/repo")).toBeUndefined();
+    expect(repoEventsNoChangeCount.get("owner/repo")).toBeUndefined();
+    expect(repoEventsLastProbeAt.get("owner/repo")).toBeUndefined();
     expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
   });
 
@@ -132,5 +154,15 @@ describe("polling-optimization caches (issue #8757)", () => {
       120: 2,
       180: 3,
     });
+  });
+});
+
+describe("review thread pagination constants", () => {
+  it("MAX_REVIEW_THREAD_PAGES is 5", () => {
+    expect(MAX_REVIEW_THREAD_PAGES).toBe(5);
+  });
+
+  it("REVIEW_THREADS_PER_PAGE is 100", () => {
+    expect(REVIEW_THREADS_PER_PAGE).toBe(100);
   });
 });

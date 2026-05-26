@@ -31,6 +31,7 @@ import { getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 
 interface WelcomeScreenProps {
@@ -67,6 +68,44 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
     []
   );
 
+  const quickActions = useMemo(
+    () => [
+      {
+        id: "open-folder",
+        icon: FolderOpen,
+        title: "Open folder",
+        description: "Open an existing project on your machine",
+        onClick: () => void addProject(),
+        primary: true,
+      },
+      {
+        id: "create-project",
+        icon: FolderPlus,
+        title: "Create project",
+        description: "Start fresh in a new folder",
+        onClick: openCreateFolderDialog,
+        primary: false,
+      },
+      {
+        id: "clone-repository",
+        icon: GitBranch,
+        title: "Clone repository",
+        description: "Pull a repo from a Git URL",
+        onClick: openCloneRepoDialog,
+        primary: false,
+      },
+      {
+        id: "launch-agent",
+        icon: Rocket,
+        title: "Launch agent",
+        description: "Open the panel palette to start an agent",
+        onClick: () => void actionService.dispatch("panel.palette", undefined, { source: "user" }),
+        primary: false,
+      },
+    ],
+    [addProject, openCreateFolderDialog, openCloneRepoDialog]
+  );
+
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
   const allDone = checklist ? Object.values(checklist.items).every(Boolean) : false;
   const showChecklist = gettingStarted.visible && checklist && !checklist.dismissed && !allDone;
@@ -100,31 +139,59 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
         {/* Quick Actions */}
         <div className="w-full">
-          <div className="flex flex-wrap gap-3 justify-center">
-            <Button size="lg" onClick={() => void addProject()}>
-              <FolderOpen />
-              Open Folder
-            </Button>
-            <Button size="lg" variant="outline" onClick={openCreateFolderDialog}>
-              <FolderPlus />
-              Create Project
-            </Button>
-            <Button size="lg" variant="outline" onClick={openCloneRepoDialog}>
-              <GitBranch />
-              Clone Repository
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              onClick={() =>
-                void actionService.dispatch("panel.palette", undefined, {
-                  source: "user",
-                })
-              }
+          {hasProjects && (
+            <h3
+              id="quick-actions-heading"
+              className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3"
             >
-              <Rocket />
-              Launch Agent
-            </Button>
+              Quick actions
+            </h3>
+          )}
+          <div
+            role="group"
+            aria-label={hasProjects ? undefined : "Quick actions"}
+            aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
+            data-testid="quick-actions"
+            className="grid grid-cols-2 gap-3"
+          >
+            {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
+              // Subtle surface lift marks the recommended first step for new
+              // users only; once recents exist the list owns the primary path,
+              // so every card drops to equal, demoted weight. Not the accent
+              // color — that load-bearing signal is owned by the checklist.
+              const lifted = primary && !hasProjects;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={onClick}
+                  // Title is the accessible name; the description is announced
+                  // once via aria-describedby. aria-label keeps the name clean
+                  // so the in-button description text isn't double-announced.
+                  aria-label={title}
+                  aria-describedby={`qa-desc-${id}`}
+                  className={cn(
+                    "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left",
+                    "transition-colors duration-150",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    lifted
+                      ? "ring-1 ring-border-strong bg-surface-panel-elevated/95 hover:bg-surface-panel-elevated"
+                      : "ring-1 ring-border-strong/40 hover:bg-overlay-soft"
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-daintree-text">
+                    <Icon className="h-4 w-4 shrink-0 text-daintree-text/70" />
+                    {title}
+                  </span>
+                  <span
+                    id={`qa-desc-${id}`}
+                    className="text-xs text-daintree-text/50 leading-relaxed"
+                  >
+                    {description}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -174,6 +241,27 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   );
 }
 
+/* ---------- Shared helpers ---------- */
+
+export function isAgentWelcomeCardEligible({
+  agentSettings,
+  hasRealData,
+  welcomeCardDismissed,
+  availability,
+}: {
+  agentSettings: { agents?: Record<string, { pinned?: boolean }> } | null;
+  hasRealData: boolean;
+  welcomeCardDismissed: boolean;
+  availability: Record<string, AgentAvailabilityState> | null;
+}): boolean {
+  if (!agentSettings) return false;
+  if (!hasRealData || welcomeCardDismissed) return false;
+  const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
+  if (!hasReady) return false;
+  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  return !hasPinned;
+}
+
 /* ---------- Sub-sections ---------- */
 
 function NudgeSequencer({
@@ -196,12 +284,12 @@ function NudgeSequencer({
   // return null (no launchable agents, or any built-in already pinned) we
   // fall through to the checklist instead of silently suppressing it.
   const welcomeCardEligible = useMemo(() => {
-    if (!agentSettings) return false;
-    if (!hasRealData || welcomeCardDismissed) return false;
-    const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
-    if (!hasReady) return false;
-    const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings?.agents?.[id]));
-    return !hasPinned;
+    return isAgentWelcomeCardEligible({
+      agentSettings,
+      hasRealData,
+      welcomeCardDismissed,
+      availability,
+    });
   }, [hasRealData, welcomeCardDismissed, availability, agentSettings]);
 
   // Wait for hydration so we don't briefly render setup banner before its
@@ -357,14 +445,11 @@ function AgentWelcomeCard() {
     return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
   }, [availability]);
 
-  const hasNoPinnedAgents = useMemo(() => {
-    if (!agentSettings?.agents) return true;
-    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents[id]));
-  }, [agentSettings]);
-
-  if (!hasRealData || !loaded) return null;
-  if (welcomeCardDismissed) return null;
-  if (readyAgentIds.length === 0 || !hasNoPinnedAgents) return null;
+  if (!loaded) return null;
+  if (
+    !isAgentWelcomeCardEligible({ agentSettings, hasRealData, welcomeCardDismissed, availability })
+  )
+    return null;
 
   const handlePinAll = async () => {
     if (busy) return;

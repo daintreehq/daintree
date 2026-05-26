@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import { useEffect } from "react";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 
 const trashPanelMock = vi.fn();
@@ -235,6 +235,8 @@ vi.mock("@dnd-kit/modifiers", () => ({
 vi.mock("framer-motion", () => ({
   LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   LazyMotion: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  m: { div: ({ children }: { children: React.ReactNode }) => <>{children}</> },
   domMax: {},
 }));
 
@@ -246,14 +248,17 @@ import { DockedTabGroup } from "../DockedTabGroup";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 
-function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t-1",
     title: "Terminal",
     location: "dock",
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function makeGroup(panelIds: string[], activeTabId = panelIds[0]!): TabGroup {
@@ -371,7 +376,10 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
 
   it("does not focus an MCP-created active dock tab from Radix open autofocus", () => {
     mockActiveDockTerminalId = "t-1";
-    const panels = [makePanel({ id: "t-1", spawnedBy: "mcp" }), makePanel({ id: "t-2" })];
+    const panels = [
+      makePanel({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" }),
+      makePanel({ id: "t-2" }),
+    ];
     render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />);
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 

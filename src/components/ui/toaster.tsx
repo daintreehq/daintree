@@ -64,7 +64,9 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
 /**
  * Hard cap on total visible time for any toast, regardless of how many
  * coalesced updates restart its timer. Bounds chatty same-entity bursts
- * (e.g. agent state churn under #5863).
+ * (e.g. agent state churn under #5863). With severity defaults now at 5–8s,
+ * a single tick never approaches this ceiling — it's a safety net for
+ * coalesced bursts and over-length explicit durations, not a routine clamp.
  */
 const MAX_VISIBLE_DURATION_MS = 15000;
 const VISIBLE_DURATION_MULTIPLIER = 3;

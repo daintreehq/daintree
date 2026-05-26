@@ -1,3 +1,4 @@
+// eager-import-allow: reads worktree settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";

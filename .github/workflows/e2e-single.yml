@@ -166,13 +166,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: runner.os != 'Windows'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Build app
         run: npm run build
@@ -214,6 +214,7 @@ jobs:
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
         run: node scripts/ci/run-single-e2e.mjs
 
       - name: Run single e2e test (Linux)
@@ -225,6 +226,7 @@ jobs:
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
         run: xvfb-run --auto-servernum node scripts/ci/run-single-e2e.mjs
 
       - name: Run single e2e test (Windows)
@@ -236,6 +238,7 @@ jobs:
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           ELECTRON_ENABLE_LOGGING: "1"
         run: node scripts/ci/run-single-e2e.mjs
 

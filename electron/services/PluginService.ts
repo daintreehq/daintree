@@ -1,3 +1,4 @@
+// eager-import-allow: reads plugin settings via store.get synchronously during service init
 import fs from "fs/promises";
 import path from "path";
 import os from "os";

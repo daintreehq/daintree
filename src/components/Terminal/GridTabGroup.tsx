@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -34,8 +36,8 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const panels = usePanelStore(
     useShallow((state) =>
       group.panelIds
-        .map((id) => state.panelsById[id])
-        .filter((p): p is TerminalInstance => p !== undefined)
+        .map((id) => getNarrowPanel(state.panelsById, id))
+        .filter((p): p is PanelInstance => p !== undefined)
     )
   );
 
@@ -94,47 +96,48 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     ]);
 
     return panels.map((p) => {
-      let presetColor = p.agentPresetColor;
+      const pty = isPtyPanel(p) ? p : null;
+      let presetColor = pty?.agentPresetColor;
       let fallbackTooltip: string | undefined;
-      if (p.launchAgentId && p.agentPresetId) {
+      if (pty?.launchAgentId && pty.agentPresetId) {
         const presets = getMergedPresets(
-          p.launchAgentId,
-          agentSettings?.agents?.[p.launchAgentId]?.customPresets,
-          ccrPresetsByAgent[p.launchAgentId],
-          projectPresetsByAgent[p.launchAgentId]
+          pty.launchAgentId,
+          agentSettings?.agents?.[pty.launchAgentId]?.customPresets,
+          ccrPresetsByAgent[pty.launchAgentId],
+          projectPresetsByAgent[pty.launchAgentId]
         );
-        const live = presets.find((f) => f.id === p.agentPresetId);
+        const live = presets.find((f) => f.id === pty.agentPresetId);
         if (live) presetColor = live.color ?? presetColor;
-        if (p.isUsingFallback && p.originalPresetId) {
-          const original = presets.find((f) => f.id === p.originalPresetId);
-          const originalName = original?.name ?? p.originalPresetId;
-          const activeName = live?.name ?? p.agentPresetId;
+        if (pty.isUsingFallback && pty.originalPresetId) {
+          const original = presets.find((f) => f.id === pty.originalPresetId);
+          const originalName = original?.name ?? pty.originalPresetId;
+          const activeName = live?.name ?? pty.agentPresetId;
           fallbackTooltip = `Using fallback "${activeName}" — "${originalName}" unavailable`;
         }
       }
 
       const hasDangerousFlags =
-        p.agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
+        pty?.agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
 
       return {
         id: p.id,
         title: p.title,
         chrome: deriveTerminalChrome({
           kind: p.kind,
-          launchAgentId: p.launchAgentId,
-          runtimeIdentity: p.runtimeIdentity,
-          detectedAgentId: p.detectedAgentId,
-          detectedProcessId: p.detectedProcessId,
-          agentState: p.agentState,
-          runtimeStatus: p.runtimeStatus,
-          exitCode: p.exitCode,
+          launchAgentId: pty?.launchAgentId,
+          runtimeIdentity: pty?.runtimeIdentity,
+          detectedAgentId: pty?.detectedAgentId,
+          detectedProcessId: pty?.detectedProcessId,
+          agentState: pty?.agentState,
+          runtimeStatus: pty?.runtimeStatus,
+          exitCode: pty?.exitCode,
           presetColor,
         }),
         kind: p.kind ?? "terminal",
-        agentState: p.agentState,
+        agentState: pty?.agentState,
         isActive: p.id === activeTabId,
         presetColor,
-        isUsingFallback: p.isUsingFallback,
+        isUsingFallback: pty?.isUsingFallback,
         fallbackTooltip,
         hasDangerousFlags,
       };
@@ -146,7 +149,13 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   // Compute highest-urgency agent state across all tabs so the group container
   // reflects blocked/working state even when the blocking tab is not active.
-  const groupAmbientState = useMemo(() => getGroupAmbientAgentState(panels), [panels]);
+  // Filter to PTY panels because getGroupAmbientAgentState expects agent-state
+  // fields only present on PtyPanelData; browser/dev-preview panels contribute
+  // nothing to ambient state anyway.
+  const groupAmbientState = useMemo(
+    () => getGroupAmbientAgentState(panels.filter(isPtyPanel)),
+    [panels]
+  );
 
   // Restore focus to the destination tab when switching tabs within a focused
   // group. The registry handler routes to either xterm or the hybrid input

@@ -1,3 +1,4 @@
+// eager-import-allow: reads persisted window state via store.get synchronously when creating the window
 import {
   app,
   BrowserWindow,

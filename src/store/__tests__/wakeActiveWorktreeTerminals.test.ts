@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { TerminalInstance } from "@shared/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 const fullWakeMock = vi.fn();
 const isFocusedMock = vi.fn();
@@ -18,7 +18,7 @@ vi.mock("@/utils/logger", () => ({
 
 let mockActiveWorktreeId: string | null = null;
 let mockPanelIds: string[] = [];
-let mockPanelsById: Record<string, TerminalInstance> = {};
+let mockPanelsById: Record<string, PanelInstance> = {};
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
@@ -34,13 +34,14 @@ vi.mock("@/store/panelStore", () => ({
 
 const { wakeActiveWorktreeTerminals } = await import("@/store/wakeActiveWorktreeTerminals");
 
-function panel(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function panel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
     id,
     title: id,
+    kind: "terminal",
     location: "grid",
     ...overrides,
-  } as TerminalInstance;
+  } as PanelInstance;
 }
 
 beforeEach(() => {
@@ -219,7 +220,7 @@ describe("wakeActiveWorktreeTerminals", () => {
     mockPanelIds = ids;
     mockPanelsById = Object.fromEntries(
       ids.map((id) => [id, panel(id, { worktreeId: "wt-1" })])
-    ) as Record<string, TerminalInstance>;
+    ) as Record<string, PanelInstance>;
 
     let inFlight = 0;
     let maxInFlight = 0;

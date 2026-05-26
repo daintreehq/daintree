@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { AgentState } from "@shared/types/agent";
+import { isPtyPanel } from "@shared/types/panel";
 
 interface TerminalStateSnapshot {
   agentState?: AgentState;
@@ -19,6 +20,8 @@ function getAgentStateMessage(
       return { msg: `${title} is waiting for input`, priority: "polite" };
     case "completed":
       return { msg: `${title} finished`, priority: "polite" };
+    case "exited":
+      return { msg: `${title} exited`, priority: "polite" };
     default:
       return null;
   }
@@ -55,7 +58,7 @@ export function useAccessibilityAnnouncements() {
 
     for (const id of panelIds) {
       const terminal = panelsById[id];
-      if (!terminal) continue;
+      if (!terminal || !isPtyPanel(terminal)) continue;
       if (!terminal.agentState) continue;
 
       const prev = prevStates.get(terminal.id);
@@ -95,6 +98,17 @@ export function useAccessibilityAnnouncements() {
         debounceTimersRef.current.delete(terminal.id);
       }, 300);
       debounceTimersRef.current.set(terminal.id, timer);
+    }
+
+    // Cancel pending debounce timers for panels that have left panelIds.
+    // Without this, a state-change timer scheduled just before removal would
+    // fire 300ms later and announce "${title} exited" for a panel that is
+    // no longer in the store.
+    for (const [id, timer] of debounceTimersRef.current) {
+      if (!newStates.has(id)) {
+        clearTimeout(timer);
+        debounceTimersRef.current.delete(id);
+      }
     }
 
     previousStatesRef.current = newStates;

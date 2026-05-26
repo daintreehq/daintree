@@ -294,6 +294,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       return element;
     }) as typeof document.createElement;
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: [],
@@ -373,6 +374,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("binds loading listeners when webview mounts after initial waiting state", async () => {
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: [],
@@ -487,6 +489,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   describe("viewport device emulation", () => {
     const withPreset = (preset: string | undefined) => {
       terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
         id: "dev-preview-panel-1",
         browserHistory: { past: [], present: "http://localhost:5173/", future: [] },
         browserZoom: 1.4,
@@ -1117,6 +1120,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         })
     );
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: ["http://localhost:3000/old"],
@@ -1215,7 +1219,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   });
 
   describe("slow-load and timeout escalation", () => {
-    it("shows phase label and Still working hint after loading threshold", () => {
+    it("shows the phase label and escalation hint after the loading threshold", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -1231,12 +1235,18 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).toContain("Loading preview");
+      // The escalation hint stays hidden until the first threshold (8s).
+      expect(container.querySelector(".animate-hint-fade-in")).toBeNull();
 
       act(() => {
-        vi.advanceTimersByTime(6000);
+        vi.advanceTimersByTime(8000);
       });
 
-      expect(container.textContent).toContain("Still working");
+      // The hint surfaces and names the current phase via its message prop,
+      // rather than the generic "Still working…" copy.
+      const hint = container.querySelector(".animate-hint-fade-in");
+      expect(hint).not.toBeNull();
+      expect(hint?.textContent).toContain("Loading preview");
     });
 
     it("Cancel appears after action threshold and stops the webview", () => {

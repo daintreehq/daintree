@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const mockSubmit = vi.fn().mockResolvedValue(undefined);
 const mockGracefulKill = vi.fn().mockResolvedValue(null);
@@ -47,6 +48,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
     suppressNextExit: vi.fn(),
     get: vi.fn().mockReturnValue({ terminal: { cols: 80, rows: 24 } }),
@@ -233,7 +235,7 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     }
 
     // Check that agentSessionId was cleared
-    const terminal = usePanelStore.getState().panelsById["test-1"];
+    const terminal = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(terminal?.agentSessionId).toBeUndefined();
   });
 

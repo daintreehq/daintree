@@ -1,3 +1,4 @@
+// eager-import-allow: reads shortcut-hint state via store.get synchronously at module scope
 import { store } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { SHORTCUT_HINTS_METHOD_CHANNELS } from "./shortcutHints.preload.js";

@@ -73,12 +73,14 @@ const LazyHybridInputBar = lazy(() =>
 );
 import {
   getTerminalFocusTarget,
+  isLikelyAtSynthesizedPointer,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { isPtyPanel } from "@shared/types/panel";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -349,8 +351,9 @@ function TerminalPaneComponent({
   };
 
   const handleRunAnyway = () => {
-    const panel = usePanelStore.getState().panelsById[id];
-    if (!panel || !agentId) return;
+    const _panel = usePanelStore.getState().panelsById[id];
+    if (!_panel || !agentId || !isPtyPanel(_panel)) return;
+    const panel = _panel;
 
     const presetEnv = panel.extensionState?.presetEnv as Record<string, string> | undefined;
 
@@ -390,13 +393,14 @@ function TerminalPaneComponent({
   const terminalState = usePanelStore(
     useShallow((state) => {
       const terminal = state.panelsById[id];
+      const pty = terminal && isPtyPanel(terminal) ? terminal : undefined;
       return {
-        isInputLocked: terminal?.isInputLocked ?? false,
-        stateChangeTrigger: terminal?.stateChangeTrigger,
-        isRestarting: terminal?.isRestarting ?? false,
-        exitBehavior: terminal?.exitBehavior,
+        isInputLocked: pty?.isInputLocked ?? false,
+        stateChangeTrigger: pty?.stateChangeTrigger,
+        isRestarting: pty?.isRestarting ?? false,
+        exitBehavior: pty?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
-        spawnStatus: terminal?.spawnStatus,
+        spawnStatus: pty?.spawnStatus,
       };
     })
   );
@@ -760,6 +764,15 @@ function TerminalPaneComponent({
     setFocused(id);
   };
 
+  // Timestamp of the last pointermove over the xterm wrapper, used to tell a
+  // physical click (preceded by movement) from an AT-synthesized routing event
+  // (a bare pointerdown). Uses the event `timeStamp` clock for monotonicity.
+  const lastXtermPointerMoveAtRef = useRef<number | null>(null);
+
+  const handleXtermPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    lastXtermPointerMoveAtRef.current = e.timeStamp;
+  };
+
   const handleXtermPointerDownCapture = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
 
@@ -767,9 +780,22 @@ function TerminalPaneComponent({
     const xtermElement = target?.closest(".xterm");
     if (!xtermElement) return;
 
-    // Clicking xterm is an explicit "I want the terminal" gesture — record it
-    // so subsequent Cmd-Opt-Arrow navigation stays on xterm across panes.
-    setPreferredTerminalFocusTarget("xterm");
+    // A bare pointerdown with no recent pointermove is likely screen reader
+    // cursor routing (VoiceOver/NVDA), not a physical click. AT routing events
+    // are indistinguishable from real clicks by their properties, so we infer
+    // it from the absence of preceding movement.
+    const isAtSynthesized = isLikelyAtSynthesizedPointer(
+      lastXtermPointerMoveAtRef.current,
+      e.timeStamp
+    );
+
+    // A physical click on xterm is an explicit "I want the terminal" gesture —
+    // record it so subsequent Cmd-Opt-Arrow navigation stays on xterm across
+    // panes. Skip for AT routing so a screen reader reaching terminal output
+    // doesn't silently clobber the user's hybrid-input focus preference.
+    if (!isAtSynthesized) {
+      setPreferredTerminalFocusTarget("xterm");
+    }
 
     const shouldSuppress = shouldSuppressUnfocusedClick({
       location,
@@ -782,6 +808,14 @@ function TerminalPaneComponent({
       // Already-focused panes: let the click through so xterm selection,
       // cursor positioning, and mouse reporting work natively. The xterm
       // focus listener (TerminalInstanceService) records the focus event.
+      return;
+    }
+
+    if (isAtSynthesized) {
+      // Activate the pane but let the event reach xterm — preventDefault /
+      // stopPropagation / setPointerCapture would swallow the routing event and
+      // break cursor positioning for screen reader users.
+      setFocused(id);
       return;
     }
 
@@ -838,23 +872,21 @@ function TerminalPaneComponent({
     });
 
     if (focusTarget === "hybridInput") {
-      let cancelled = false;
-      let innerRafId: number | undefined;
-      const outerRafId = requestAnimationFrame(() => {
-        if (cancelled) return;
-        innerRafId = requestAnimationFrame(() => {
-          if (cancelled) return;
-          // xterm v6 clears selection on blur. Don't steal focus from
-          // xterm when the user has an active text selection.
-          const managed = terminalInstanceService.get(id);
-          if (managed?.terminal.hasSelection()) return;
-          inputBarRef.current?.focusWithCursorAtEnd();
-        });
+      // xterm v6 clears selection on blur, so read selection state
+      // synchronously here — before any focus handoff. Don't steal focus from
+      // xterm when the user has an active text selection. Checking up front
+      // (rather than inside a deferred double-RAF) also avoids focus briefly
+      // landing on the ContentPanel container, which made screen readers
+      // announce the container instead of the input bar. A RAF then defers the
+      // handoff until the pane has painted; focus never lands on the container.
+      const managed = terminalInstanceService.get(id);
+      if (managed?.terminal.hasSelection()) return;
+
+      const rafId = requestAnimationFrame(() => {
+        inputBarRef.current?.focusWithCursorAtEnd();
       });
       return () => {
-        cancelled = true;
-        cancelAnimationFrame(outerRafId);
-        if (innerRafId !== undefined) cancelAnimationFrame(innerRafId);
+        cancelAnimationFrame(rafId);
         inputBarRef.current?.cancelPendingFocus();
       };
     }
@@ -955,12 +987,16 @@ function TerminalPaneComponent({
   // and is idle/waiting — writing into a working or directing agent would
   // corrupt its input mid-stream.
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
-  const helpAgentState = usePanelStore((s) =>
-    helpTerminalId ? s.panelsById[helpTerminalId]?.agentState : undefined
-  );
-  const helpInputLocked = usePanelStore((s) =>
-    helpTerminalId ? s.panelsById[helpTerminalId]?.isInputLocked === true : false
-  );
+  const helpAgentState = usePanelStore((s) => {
+    if (!helpTerminalId) return undefined;
+    const p = s.panelsById[helpTerminalId];
+    return p && isPtyPanel(p) ? p.agentState : undefined;
+  });
+  const helpInputLocked = usePanelStore((s) => {
+    if (!helpTerminalId) return false;
+    const p = s.panelsById[helpTerminalId];
+    return p && isPtyPanel(p) ? p.isInputLocked === true : false;
+  });
   const assistantAvailable =
     !!helpTerminalId &&
     helpTerminalId !== id &&
@@ -978,7 +1014,7 @@ function TerminalPaneComponent({
         t.location !== "trash" &&
         t.location !== "background" &&
         (t.kind ? panelKindHasPty(t.kind) : true) &&
-        t.hasPty !== false
+        (!isPtyPanel(t) || t.hasPty !== false)
       );
     })
   );
@@ -989,7 +1025,8 @@ function TerminalPaneComponent({
     if (!helpTid || helpTid === id) return;
     const state = terminalInstanceService.getAgentState(helpTid);
     if (state !== "idle" && state !== "waiting") return;
-    if (usePanelStore.getState().panelsById[helpTid]?.isInputLocked === true) return;
+    const _helpPanel = usePanelStore.getState().panelsById[helpTid];
+    if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
     const text = terminalInstanceService.captureBufferText(id, 20000);
     if (!text) return;
 
@@ -1223,7 +1260,7 @@ function TerminalPaneComponent({
                   (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
                 )}
                 onPointerDownCapture={handleXtermPointerDownCapture}
-                onPointerMove={handleXtermPointerNoop}
+                onPointerMove={handleXtermPointerMove}
                 onPointerUp={handleXtermPointerNoop}
               >
                 <Suspense fallback={null}>

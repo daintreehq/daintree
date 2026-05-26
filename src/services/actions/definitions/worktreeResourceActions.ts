@@ -6,7 +6,7 @@ import { worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { TerminalSpawnSourceSchema } from "./schemas";
+import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 
 function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
   const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
@@ -232,6 +232,7 @@ export function registerWorktreeResourceActions(
         .object({
           worktreeId: z.string().optional(),
           spawnedBy: TerminalSpawnSourceSchema.optional(),
+          focusPolicy: AddPanelFocusPolicySchema.optional(),
         })
         .optional(),
       isEnabled: (ctx: ActionContext) => {
@@ -251,6 +252,7 @@ export function registerWorktreeResourceActions(
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const spawnedBy = args?.spawnedBy;
+        const focusPolicy = args?.focusPolicy;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) throw new Error("No worktree selected");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
@@ -267,6 +269,7 @@ export function registerWorktreeResourceActions(
           location: "grid",
           worktreeId: targetWorktreeId,
           spawnedBy,
+          focusPolicy,
         });
       },
     })

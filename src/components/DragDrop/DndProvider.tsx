@@ -35,8 +35,9 @@ import {
   type ScreenReaderInstructions,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { usePanelStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
-
+import { usePanelStore, useWorktreeSelectionStore } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -69,6 +70,8 @@ import {
   getUiAnimationDuration,
 } from "@/lib/animationUtils";
 
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
 
@@ -79,7 +82,7 @@ export const TRASH_DROPPABLE_ID = "__trash-droppable__";
 interface DndPlaceholderContextValue {
   placeholderIndex: number | null;
   sourceContainer: "grid" | "dock" | null;
-  activeTerminal: TerminalInstance | null;
+  activeTerminal: PanelInstance | null;
   isDragging: boolean;
   isWorktreeSortDragging: boolean;
   /** If dragging a tab group, the group ID */
@@ -160,7 +163,7 @@ interface DndProviderProps {
 }
 
 export interface DragData {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   sourceLocation: "grid" | "dock";
   sourceIndex: number;
   /** If panel is part of a tab group, the group ID */
@@ -282,6 +285,16 @@ export function createDragAnnouncements(
       return `Dropped ${label}`;
     },
     onDragCancel({ active }) {
+      // Worktree-sort drags are cancel-announced by the sidebar's own
+      // assertive live region (SidebarContent's useDndMonitor.onDragCancel).
+      // dnd-kit's announcer also fires onDragCancel for every drag, so without
+      // this guard a worktree-sort Escape/cancel speaks the cancellation twice
+      // — the real "two announcers competing" case behind issue #8942. Returning
+      // undefined is a safe no-op (useAnnouncement ignores nullish values) and
+      // leaves dnd-kit's announcements intact for all other drag types.
+      if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+        return undefined;
+      }
       const label = resolveActiveLabel(active);
       return `Drag cancelled. ${label} returned to its original position`;
     },
@@ -358,7 +371,7 @@ function DragOverlayWithCursorTracking({
   groupTabCount,
   isCancelDrop,
 }: {
-  activeTerminal: TerminalInstance | null;
+  activeTerminal: PanelInstance | null;
   activeWorktree: WorktreeSnapshot | null;
   groupTabCount?: number;
   isCancelDrop: boolean;
@@ -556,12 +569,12 @@ export function DndProvider({ children }: DndProviderProps) {
   const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
-  const activeTerminal = useMemo(() => {
+  const activeTerminal = useMemo((): PanelInstance | null => {
     if (!activeId && !activeData) return null;
     if (activeData?.terminal) return activeData.terminal;
     // Parse accordion IDs to get actual terminal ID
     const terminalId = parseAccordionDragId(activeId!) ?? activeId;
-    return (terminalId ? panelsById[terminalId] : null) ?? null;
+    return (terminalId ? getNarrowPanel(panelsById, terminalId) : null) ?? null;
   }, [activeId, activeData, panelsById]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -796,7 +809,7 @@ export function DndProvider({ children }: DndProviderProps) {
         const overTerminal = freshTerminalsById[actualOverId];
 
         if (overTerminal && actualDraggedId !== actualOverId) {
-          const containerTerminals: TerminalInstance[] = [];
+          const containerTerminals: CarrierPanel[] = [];
           for (const tid of freshTerminalIds) {
             const t = freshTerminalsById[tid];
             if (!t || (t.worktreeId ?? null) !== (accordionWorktreeId ?? null)) continue;
@@ -988,7 +1001,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
         // Only stabilize grid terminals in the ACTIVE worktree
         // Use nullish coalescing to handle null/undefined mismatch (matches ContentGrid filter)
-        const gridTerminalsList: TerminalInstance[] = [];
+        const gridTerminalsList: CarrierPanel[] = [];
         for (const tid of storeState.panelIds) {
           const t = storeState.panelsById[tid];
           if (

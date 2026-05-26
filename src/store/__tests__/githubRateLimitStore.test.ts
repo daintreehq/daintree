@@ -14,6 +14,7 @@ describe("githubRateLimitStore", () => {
     expect(state.blocked).toBe(false);
     expect(state.kind).toBeNull();
     expect(state.resetAt).toBeNull();
+    expect(state.throttleMultiplier).toBe(1);
   });
 
   it("applies a primary-block payload with all fields", () => {
@@ -49,18 +50,20 @@ describe("githubRateLimitStore", () => {
     expect(useGitHubRateLimitStore.getState().resetAt).toBeNull();
   });
 
-  it("clears kind and resetAt when an unblocked payload arrives", () => {
+  it("clears kind and resetAt but preserves throttleMultiplier when an unblocked payload arrives", () => {
     useGitHubRateLimitStore.getState().apply({
       blocked: true,
       kind: "primary",
       resetAt: 1_700_000_000_000,
+      throttleMultiplier: 5,
     });
-    useGitHubRateLimitStore.getState().apply({ blocked: false, kind: null });
+    useGitHubRateLimitStore.getState().apply({ blocked: false, kind: null, throttleMultiplier: 3 });
 
     const state = useGitHubRateLimitStore.getState();
     expect(state.blocked).toBe(false);
     expect(state.kind).toBeNull();
     expect(state.resetAt).toBeNull();
+    expect(state.throttleMultiplier).toBe(3);
   });
 
   it("delegates .setState through to the backing keyed store", () => {
@@ -94,5 +97,47 @@ describe("githubRateLimitStore", () => {
     const state = useGitHubRateLimitStore.getState();
     expect(state.kind).toBe("secondary");
     expect(state.resetAt).toBe(1_700_000_500_000);
+  });
+
+  it("forwards throttleMultiplier through apply() to the backing forge store", () => {
+    useGitHubRateLimitStore.getState().apply({
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 7,
+    });
+
+    const state = useGitHubRateLimitStore.getState();
+    expect(state.throttleMultiplier).toBe(7);
+    expect(state.blocked).toBe(false);
+
+    const slice = useForgeProviderHealthStore.getState().providers["daintree.github.github"];
+    expect(slice?.rateLimitMultiplier).toBe(7);
+  });
+
+  it("defaults throttleMultiplier to 1 when payload omits it", () => {
+    useGitHubRateLimitStore.getState().apply({ blocked: false, kind: null });
+
+    const state = useGitHubRateLimitStore.getState();
+    expect(state.throttleMultiplier).toBe(1);
+  });
+
+  it("clamps non-finite throttleMultiplier to 1", () => {
+    useGitHubRateLimitStore.getState().apply({
+      blocked: false,
+      kind: null,
+      throttleMultiplier: NaN,
+    });
+
+    expect(useGitHubRateLimitStore.getState().throttleMultiplier).toBe(1);
+  });
+
+  it("clamps throttleMultiplier below 1 to 1", () => {
+    useGitHubRateLimitStore.getState().apply({
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 0,
+    });
+
+    expect(useGitHubRateLimitStore.getState().throttleMultiplier).toBe(1);
   });
 });

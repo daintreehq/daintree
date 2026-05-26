@@ -13,6 +13,7 @@ import {
   buildLaunchCommandFromFlags,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { isAbsolute } from "@shared/utils/path";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -176,6 +177,11 @@ export function resolveAgentId(
 }
 
 export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
+
+function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): string {
+  if (savedCwd && isAbsolute(savedCwd)) return savedCwd;
+  return projectRoot || "";
+}
 
 /**
  * Normalize a kind value for hydration builders. Legacy `"agent"` values
@@ -468,7 +474,7 @@ export function buildArgsForNonPtyRecreation(
   const base: AddTerminalArgs = {
     kind,
     title: saved.title,
-    cwd: saved.cwd || projectRoot || "",
+    cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId: saved.worktreeId,
     location,
     requestedId: saved.id,

@@ -8,7 +8,7 @@ import {
   WorktreeTerminalSection,
   type WorktreeTerminalSectionProps,
 } from "../WorktreeTerminalSection";
-import type { TerminalInstance } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
@@ -52,7 +52,7 @@ vi.mock("@/config/agents", () => ({
 
 let terminalCounter = 0;
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: `term-${++terminalCounter}`,
     pid: 1234,
@@ -61,8 +61,11 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     location: "grid",
     worktreeId: "wt-1",
     lastActivityTimestamp: Date.now(),
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 const baseCounts: WorktreeTerminalSectionProps["counts"] = {

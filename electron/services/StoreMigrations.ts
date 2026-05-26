@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes store data via sync fs and store.get while migrating the store
 import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import { tightenFilePermissions } from "../store.js";

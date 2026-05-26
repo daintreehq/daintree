@@ -5,6 +5,7 @@ import { Check, AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
+import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { GitInitOptions, GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 
@@ -29,7 +30,7 @@ const TEMPLATE_OPTIONS: Array<{ value: GitignoreTemplate; label: string; descrip
 export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: GitInitDialogProps) {
   const [gitignoreTemplate, setGitignoreTemplate] = useState<GitignoreTemplate>("node");
   const [createInitialCommit, setCreateInitialCommit] = useState(true);
-  const [initialCommitMessage, setInitialCommitMessage] = useState("Initial commit");
+  const [initialCommitMessage, setInitialCommitMessage] = useState("");
   const [progressEvents, setProgressEvents] = useState<GitInitProgressEvent[]>([]);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     if (!isOpen) {
       setGitignoreTemplate("node");
       setCreateInitialCommit(true);
-      setInitialCommitMessage("Initial commit");
+      setInitialCommitMessage("");
       setProgressEvents([]);
       setIsInitializing(false);
       setError(null);
@@ -105,7 +106,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
       await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit,
-        initialCommitMessage: trimmedMessage || "Initial commit",
+        initialCommitMessage: trimmedMessage,
         createGitignore: gitignoreTemplate !== "none",
         gitignoreTemplate,
       });
@@ -157,7 +158,8 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     return null;
   };
 
-  const showProgress = isInitializing || progressEvents.length > 0;
+  const showConnecting = useDohertyGate(isInitializing && progressEvents.length === 0);
+  const showProgress = showConnecting || progressEvents.length > 0;
   const configDisabled = isInitializing || isComplete;
   const trimmedMessage = initialCommitMessage.trim();
   const canStart = !createInitialCommit || trimmedMessage !== "";

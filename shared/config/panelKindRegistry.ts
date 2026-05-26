@@ -15,6 +15,69 @@ export const BUILT_IN_PANEL_KINDS = ["terminal", "browser", "dev-preview", "revi
 export type BuiltInPanelKind = (typeof BUILT_IN_PANEL_KINDS)[number];
 
 /**
+ * Where the focus fallback should look when the focused panel is removed
+ * (trashed, moved to dock). `"first-grid"` is today's behavior — pick the
+ * first remaining grid panel of the active worktree. `"previous-focused"`
+ * restores focus to whatever `previousFocusedId` points at (if still a valid
+ * grid panel), falling back to first-grid otherwise.
+ *
+ * Open union — extensions may register custom fallback strategies; unknown
+ * values are treated as `"first-grid"` so a misconfigured plugin can't strand
+ * focus.
+ */
+export type PanelKindDockFallbackTarget = "first-grid" | "previous-focused" | (string & {});
+
+/**
+ * Type stub for a future field that will control what happens when a panel is
+ * closed (trashed vs. moved to dock). Wired into `PanelKindPolicy` so the
+ * shape is forward-compatible; no behavioral wiring exists yet.
+ */
+export type PanelKindCloseBehavior = "trash" | "dock" | (string & {});
+
+/**
+ * Per-kind dock/focus policy. All fields are optional — kinds that omit a
+ * field fall back to the matching `DEFAULT_PANEL_KIND_POLICY` value, which
+ * encodes today's behavior. Kinds that omit the whole `policy` block are
+ * indistinguishable from kinds that set `policy: {}`.
+ */
+export interface PanelKindPolicy {
+  /**
+   * Where focus lands when this kind's panel was focused and is then removed
+   * from the grid (trashed, moved to dock). Default: `"first-grid"`.
+   */
+  dockFallbackTarget?: PanelKindDockFallbackTarget;
+  /**
+   * Whether spawning this kind into the grid should steal keyboard focus to
+   * the new panel. Used as the default when no caller-supplied override is
+   * provided. Default: `true` (today's behavior — newly added grid panels
+   * become focused).
+   */
+  defaultFocusOnCreate?: boolean;
+  /**
+   * Whether spawning this kind into the dock with `activateDockOnCreate`
+   * should open the dock popover (mount the panel UI and steal focus to it).
+   * Mirrors the MCP suppression path. Default: `true`.
+   */
+  dockPopoverOnSpawn?: boolean;
+  /**
+   * Stubbed for forward-compatibility. Not wired yet. Default: `"trash"`.
+   */
+  closeBehavior?: PanelKindCloseBehavior;
+}
+
+/**
+ * Default policy values applied when a kind omits a `policy` field (or omits
+ * the whole `policy` block). Captures today's universal behavior so the
+ * additive policy descriptor is a strict superset.
+ */
+export const DEFAULT_PANEL_KIND_POLICY: Required<PanelKindPolicy> = {
+  dockFallbackTarget: "first-grid",
+  defaultFocusOnCreate: true,
+  dockPopoverOnSpawn: true,
+  closeBehavior: "trash",
+};
+
+/**
  * Configuration for a panel kind.
  * Extensions can register new panel kinds with custom configurations.
  */
@@ -37,6 +100,21 @@ export interface PanelKindConfig {
   usesTerminalUi?: boolean;
   /** Whether this panel kind should keep its runtime alive across project switches */
   keepAliveOnProjectSwitch?: boolean;
+  /**
+   * Whether this panel kind's lazy chunk loads on the first-render path — i.e.
+   * a persisted panel of this kind restores synchronously from session state,
+   * pulling its `React.lazy()` chunk into the first-paint download. Drives the
+   * first-render chunk budget seed list (see `getFirstRenderSeeds`).
+   */
+  firstRenderRestore?: boolean;
+  /**
+   * Root-relative source path of this kind's lazy boundary, in the exact form
+   * Vite/Rolldown emits as a manifest key (e.g. `"src/panels/review/ReviewPane.tsx"`).
+   * Required when `firstRenderRestore` is true so the budget script can resolve
+   * the chunk in `dist/.vite/manifest.json`. Must match the manifest key — a
+   * file-relative path like `"./review/ReviewPane"` will silently miss.
+   */
+  lazyImportPath?: string;
   /** Whether this panel kind should appear in the panel palette (⌘⇧P). Set to false for panels with dedicated spawn actions (terminal, agent). Defaults to true for extension panels if not specified. */
   showInPalette?: boolean;
   /** Extension ID if this is an extension-provided panel kind */
@@ -54,6 +132,12 @@ export interface PanelKindConfig {
    * Optional: unregistered/extension kinds fall back to getExtensionFallbackDefaults.
    */
   createDefaults?: (options: AddPanelOptions) => Partial<TerminalInstance>;
+  /**
+   * Per-kind dock/focus policy. See `PanelKindPolicy` for fields. Omitting
+   * this (or setting it to `{}`) preserves the universal default behavior
+   * encoded in `DEFAULT_PANEL_KIND_POLICY`.
+   */
+  policy?: PanelKindPolicy;
 }
 
 /**
@@ -86,6 +170,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/components/Browser/BrowserPane.tsx",
   },
   "dev-preview": {
     id: "dev-preview",
@@ -99,6 +185,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["localhost", "server", "preview", "port"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/components/DevPreview/DevPreviewPane.tsx",
   },
   review: {
     id: "review",
@@ -112,6 +200,12 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["diff", "commit", "stage", "git"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/review/ReviewPane.tsx",
+    // Review is a reading surface: when the user moves it to the dock or
+    // trashes it, send focus back to whatever they were last reading rather
+    // than handing focus to the first grid terminal in the worktree.
+    policy: { dockFallbackTarget: "previous-focused" },
   },
 };
 
@@ -259,6 +353,25 @@ export function getPanelKindConfig(kind: PanelKind): PanelKindConfig | undefined
 }
 
 /**
+ * Resolve a panel kind's policy, layering its declared `policy` block over
+ * `DEFAULT_PANEL_KIND_POLICY`. Returns a fully-populated `Required<PanelKindPolicy>`
+ * so callers can read fields without an undefined check.
+ *
+ * Pass either a `PanelKindConfig` (skip the registry lookup when the caller
+ * already has the entry) or a `PanelKind` (does the lookup). An unknown kind
+ * resolves to the default policy.
+ *
+ * Sync, side-effect free, and safe to call from inside Zustand `set()`
+ * updaters — the registry is a module-level synchronous map.
+ */
+export function resolvePanelKindPolicy(
+  source: PanelKindConfig | PanelKind | undefined
+): Required<PanelKindPolicy> {
+  const config = typeof source === "string" ? getPanelKindConfig(source) : (source ?? undefined);
+  return { ...DEFAULT_PANEL_KIND_POLICY, ...(config?.policy ?? {}) };
+}
+
+/**
  * Get all registered panel kind IDs.
  *
  * @returns Array of registered panel kind IDs
@@ -398,6 +511,36 @@ export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
  */
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
   return [...BUILT_IN_PANEL_KINDS];
+}
+
+/**
+ * Source paths of every panel kind whose lazy chunk loads on the first-render
+ * path (`firstRenderRestore === true`). This is the single source of truth for
+ * the first-render chunk budget seed list — a build-time Vite plugin emits the
+ * result to `dist/.vite/first-render-seeds.json`, which the budget script reads
+ * (it can't import this TS module directly from plain Node ESM).
+ *
+ * Only built-in kinds are eligible: plugin-registered panels are runtime-async
+ * (their chunks are never part of the first-paint download) and are excluded by
+ * design. A misconfigured built-in — `firstRenderRestore: true` with a missing
+ * or empty `lazyImportPath` — throws rather than silently dropping the seed,
+ * since a dropped seed is exactly the budget drift this guard exists to catch.
+ *
+ * @returns Root-relative source paths matching Vite manifest keys
+ */
+export function getFirstRenderSeeds(): string[] {
+  const seeds: string[] = [];
+  for (const config of Object.values(PANEL_KIND_REGISTRY)) {
+    if (config.firstRenderRestore !== true) continue;
+    if (config.extensionId !== undefined) continue;
+    if (typeof config.lazyImportPath !== "string" || config.lazyImportPath.length === 0) {
+      throw new Error(
+        `[panelKindRegistry] panel kind "${config.id}" sets firstRenderRestore but is missing lazyImportPath`
+      );
+    }
+    seeds.push(config.lazyImportPath);
+  }
+  return seeds;
 }
 
 /**

@@ -1,3 +1,4 @@
+// eager-import-allow: performs sync fs checks during database maintenance
 import { powerMonitor } from "electron";
 import fs from "node:fs";
 import {

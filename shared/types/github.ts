@@ -1,5 +1,7 @@
 // Core GitHub Types
 
+import type { NormalizedReviewDecision } from "./forge.js";
+
 /** GitHub user */
 export interface GitHubUser {
   /** GitHub username */
@@ -24,6 +26,12 @@ export interface LinkedPRInfo {
   state: "OPEN" | "CLOSED" | "MERGED";
   /** PR URL */
   url: string;
+  /** Last updated timestamp, when selected by a query that includes it */
+  updatedAt?: string;
+  /** CI status rollup from the latest commit, when selected by the linked-PR query */
+  ciStatus?: GitHubPRCIStatus;
+  /** Required-check summary, when selected by a hydrated linked-PR query */
+  ciSummary?: GitHubPRCISummary;
 }
 
 /** GitHub issue representation */
@@ -62,6 +70,18 @@ export interface GitHubPRCISummary {
   requiredPending: number;
 }
 
+/** Global (non-required-filtered) CI aggregate summary from in-band statusCheckRollup.contexts */
+export interface GitHubPRGlobalCISummary {
+  /** Total check runs across all states */
+  checkRunCount: number;
+  /** Total status contexts across all states */
+  statusContextCount: number;
+  /** Failing check runs + status contexts (global, not required-filtered) */
+  failingCount: number;
+  /** Pending check runs + status contexts (global, not required-filtered) */
+  pendingCount: number;
+}
+
 /** GitHub pull request representation */
 export interface GitHubPR {
   /** PR number */
@@ -78,8 +98,9 @@ export interface GitHubPR {
   updatedAt: string;
   /** PR author */
   author: GitHubUser;
-  /** Number of reviews */
-  reviewCount?: number;
+  /** Aggregate review decision — drives the approval badge without an N+1 fetch.
+   *  `null` when the repo doesn't gate on reviews, `undefined` when not reported. */
+  reviewDecision?: NormalizedReviewDecision;
   /** Head branch name (short ref, e.g. "feature/my-branch") */
   headRefName?: string;
   /** Whether this PR originates from a fork repository */
@@ -92,6 +113,22 @@ export interface GitHubPR {
    *  was truncated, or when the repository has no required checks configured (in which case
    *  ciStatus reflects the raw rollup). */
   ciSummary?: GitHubPRCISummary;
+  /** Merge state status from the PR. UNKNOWN on freshly-opened PRs that GitHub hasn't backgrounded yet. */
+  mergeStateStatus?:
+    | "BEHIND"
+    | "BLOCKED"
+    | "CLEAN"
+    | "DIRTY"
+    | "HAS_HOOKS"
+    | "UNKNOWN"
+    | "UNSTABLE";
+  /** Global CI status derived from in-band statusCheckRollup.contexts aggregates (not required-filtered) */
+  globalCIStatus?: GitHubPRCIStatus;
+  /** Global CI aggregate counts from in-band statusCheckRollup.contexts (not required-filtered) */
+  globalCISummary?: GitHubPRGlobalCISummary;
+  /** Plain-text PR body. Used to body-parse closing-issue references (`Closes #N`)
+   *  when capturing the source PR at worktree-create time. */
+  bodyText?: string;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */

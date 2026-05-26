@@ -3,12 +3,12 @@ import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/lib/animationUtils";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { DragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
 
 interface SortableDockItemProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   sourceIndex: number;
   children: React.ReactNode;
   /** If this panel is part of a tab group, the group ID */

@@ -42,10 +42,10 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
             nodes {
               ... on CrossReferencedEvent {
-                source { ... on PullRequest { number state merged url } }
+                source { ... on PullRequest { number state merged url updatedAt } }
               }
               ... on ConnectedEvent {
-                subject { ... on PullRequest { number state merged url } }
+                subject { ... on PullRequest { number state merged url updatedAt } }
               }
             }
           }
@@ -63,15 +63,30 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           updatedAt
           merged
           headRefName
+          reviewDecision
+          mergeStateStatus
           headRepository { nameWithOwner }
           baseRepository { nameWithOwner }
           author { login avatarUrl }
-          reviews(first: 1) { totalCount }
           comments { totalCount }
           commits(last: 1) {
             nodes {
               commit {
-                statusCheckRollup { state }
+                statusCheckRollup {
+                  state
+                  contexts {
+                    checkRunCount
+                    statusContextCount
+                    checkRunCountsByState {
+                      state
+                      count
+                    }
+                    statusContextCountsByState {
+                      state
+                      count
+                    }
+                  }
+                }
               }
             }
           }
@@ -145,33 +160,6 @@ export const MERGE_VELOCITY_QUERY = `
   }
 `;
 
-// Cheap (~3 rate-limit points) change probe. `getRepoStatsAndPage` runs this
-// before the expensive REPO_STATS_AND_PAGE_QUERY (~6+ points): if all three
-// timestamps match the previous probe, nothing the stats query observes can
-// have changed, so the expensive fetch is skipped and the cached snapshot is
-// returned. `repository.updatedAt` is intentionally NOT used — it only
-// advances on repo-metadata edits, not on issue/PR activity. The two
-// `first: 1` connections are ordered by UPDATED_AT and span every state so a
-// close/merge advances the probe just like an open.
-export const REPO_ACTIVITY_PROBE_QUERY = `
-  query GetRepoActivityProbe($owner: String!, $repo: String!) {
-    repository(owner: $owner, name: $repo) {
-      pushedAt
-      issues(first: 1, states: [OPEN, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes { updatedAt }
-      }
-      pullRequests(first: 1, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes { updatedAt }
-      }
-    }
-    rateLimit {
-      cost
-      remaining
-      resetAt
-    }
-  }
-`;
-
 export const LIST_ISSUES_QUERY = `
   query GetIssues($owner: String!, $repo: String!, $states: [IssueState!], $cursor: String, $limit: Int = 20, $orderBy: IssueOrder) {
     repository(owner: $owner, name: $repo) {
@@ -218,6 +206,7 @@ export const LIST_ISSUES_QUERY = `
                     state
                     merged
                     url
+                    updatedAt
                   }
                 }
               }
@@ -228,6 +217,7 @@ export const LIST_ISSUES_QUERY = `
                     state
                     merged
                     url
+                    updatedAt
                   }
                 }
               }
@@ -268,6 +258,8 @@ export const LIST_PRS_QUERY = `
           merged
           baseRefName
           headRefName
+          reviewDecision
+          mergeStateStatus
           headRepository {
             nameWithOwner
           }
@@ -278,8 +270,17 @@ export const LIST_PRS_QUERY = `
             login
             avatarUrl
           }
-          reviews(first: 1) {
-            totalCount
+          assignees(first: 10) {
+            nodes {
+              login
+              avatarUrl
+            }
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
           }
           comments {
             totalCount
@@ -289,6 +290,18 @@ export const LIST_PRS_QUERY = `
               commit {
                 statusCheckRollup {
                   state
+                  contexts {
+                    checkRunCount
+                    statusContextCount
+                    checkRunCountsByState {
+                      state
+                      count
+                    }
+                    statusContextCountsByState {
+                      state
+                      count
+                    }
+                  }
                 }
               }
             }
@@ -355,6 +368,7 @@ export const SEARCH_QUERY = `
           closedAt
           mergedAt
           merged
+          reviewDecision
           baseRefName
           headRefName
           headRepository {
@@ -367,8 +381,17 @@ export const SEARCH_QUERY = `
             login
             avatarUrl
           }
-          reviews(first: 1) {
-            totalCount
+          assignees(first: 10) {
+            nodes {
+              login
+              avatarUrl
+            }
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
           }
           comments {
             totalCount
@@ -434,6 +457,7 @@ export const GET_ISSUE_QUERY = `
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -444,6 +468,7 @@ export const GET_ISSUE_QUERY = `
                   state
                   merged
                   url
+                  updatedAt
                 }
               }
             }
@@ -497,6 +522,7 @@ export const GET_PR_QUERY = `
         state
         isDraft
         merged
+        reviewDecision
         createdAt
         updatedAt
         closedAt
@@ -524,9 +550,6 @@ export const GET_PR_QUERY = `
             name
             color
           }
-        }
-        reviews(first: 1) {
-          totalCount
         }
         comments {
           totalCount
@@ -625,6 +648,7 @@ export function buildBatchPRQuery(
                       merged
                       bodyText
                       createdAt
+                      updatedAt
                       author { login avatarUrl }
                       assignees(first: 10) { nodes { login avatarUrl } }
                       labels(first: 10) { nodes { name color } }
@@ -643,6 +667,7 @@ export function buildBatchPRQuery(
                       merged
                       bodyText
                       createdAt
+                      updatedAt
                       author { login avatarUrl }
                       assignees(first: 10) { nodes { login avatarUrl } }
                       labels(first: 10) { nodes { name color } }
@@ -673,6 +698,7 @@ export function buildBatchPRQuery(
               merged
               bodyText
               createdAt
+              updatedAt
               author { login avatarUrl }
               assignees(first: 10) { nodes { login avatarUrl } }
               labels(first: 10) { nodes { name color } }
@@ -715,6 +741,8 @@ export const BATCH_BRANCH_CHUNK_SIZE = 20;
  * Field shape matches the per-branch `SEARCH_QUERY` PR fragment subset that
  * `toForgePR` reads: number, title, bodyText, url, state, isDraft, merged,
  * baseRefName, headRefName, createdAt, updatedAt, closedAt, mergedAt, author.
+ * Also carries `assignees`/`labels` so `findPRsByBranches` can pre-warm the PR
+ * tooltip cache with complete hover data (parity with `buildBatchPRQuery`).
  */
 export function buildBatchBranchPRQuery(owner: string, repo: string, branches: string[]): string {
   if (branches.length === 0) return "";
@@ -741,6 +769,8 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
             closedAt
             mergedAt
             author { login avatarUrl }
+            assignees(first: 10) { nodes { login avatarUrl } }
+            labels(first: 10) { nodes { name color } }
           }
         }
       }
@@ -756,6 +786,178 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
  * as an integer literal per alias — GraphQL variables are global to an operation and
  * cannot differ per-alias.
  */
+/**
+ * Per-chunk cap for aliased GraphQL batch queries. Reuses the empirically
+ * safe ceiling from {@link BATCH_BRANCH_CHUNK_SIZE} — 20 aliases per request
+ * stays well under GitHub's node-limit ceiling.
+ */
+export const GRAPHQL_BATCH_CHUNK_SIZE = BATCH_BRANCH_CHUNK_SIZE;
+
+/**
+ * Build a batched GraphQL query that fetches multiple issues by number in a
+ * single round-trip. Uses a single `repository` block with field-level
+ * `i{num}: issue(number: {num})` aliases so the GraphQL engine resolves the
+ * repository object once instead of N times.
+ *
+ * Returns an empty string when `numbers` contains no valid positive integers
+ * so the caller can skip the request entirely.
+ *
+ * Field shape matches {@link GET_ISSUE_QUERY} so {@link parseIssueNode} works
+ * unchanged on each per-alias result node.
+ */
+export function buildBatchIssuesQuery(owner: string, repo: string, numbers: number[]): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
+  const validNumbers = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (validNumbers.length === 0) return "";
+
+  const parts = validNumbers.map(
+    (num) => `
+      i${num}: issue(number: ${num}) {
+        number
+        title
+        bodyText
+        url
+        state
+        createdAt
+        updatedAt
+        closedAt
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        comments {
+          totalCount
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+        timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
+          nodes {
+            ... on CrossReferencedEvent {
+              source {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                  updatedAt
+                }
+              }
+            }
+            ... on ConnectedEvent {
+              subject {
+                ... on PullRequest {
+                  number
+                  state
+                  merged
+                  url
+                  updatedAt
+                }
+              }
+            }
+          }
+        }
+      }
+    `
+  );
+
+  return `query {
+  repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+    ${parts.join("\n    ")}
+  }
+  rateLimit { cost remaining resetAt limit }
+}`;
+}
+
+/**
+ * Build a batched GraphQL query that fetches multiple PRs by number in a
+ * single round-trip. Uses a single `repository` block with field-level
+ * `p{num}: pullRequest(number: {num})` aliases.
+ *
+ * Returns an empty string when `numbers` contains no valid positive integers
+ * so the caller can skip the request entirely.
+ *
+ * Field shape matches {@link GET_PR_QUERY} so {@link parsePRNode} works
+ * unchanged on each per-alias result node.
+ */
+export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[]): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
+  const validNumbers = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (validNumbers.length === 0) return "";
+
+  const parts = validNumbers.map(
+    (num) => `
+      p${num}: pullRequest(number: ${num}) {
+        number
+        title
+        bodyText
+        url
+        state
+        isDraft
+        merged
+        createdAt
+        updatedAt
+        closedAt
+        mergedAt
+        baseRefName
+        headRefName
+        headRepository {
+          nameWithOwner
+        }
+        baseRepository {
+          nameWithOwner
+        }
+        author {
+          login
+          avatarUrl
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            avatarUrl
+          }
+        }
+        comments {
+          totalCount
+        }
+        labels(first: 10) {
+          nodes {
+            name
+            color
+          }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+              }
+            }
+          }
+        }
+      }
+    `
+  );
+
+  return `query {
+  repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+    ${parts.join("\n    ")}
+  }
+  rateLimit { cost remaining resetAt limit }
+}`;
+}
+
 export function buildBatchRequiredChecksQuery(
   owner: string,
   repo: string,

@@ -1,3 +1,4 @@
+// eager-import-allow: reads telemetry consent/config via store.get synchronously
 import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { store } from "../store.js";

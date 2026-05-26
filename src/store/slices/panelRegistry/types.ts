@@ -1,6 +1,5 @@
 import type { StoreApi } from "zustand";
 import type {
-  TerminalInstance as TerminalInstanceType,
   AgentState,
   AgentStateChangeTrigger,
   PersistableFlowStatus,
@@ -13,8 +12,8 @@ import type {
   BrowserHistory,
   AddPanelOptions,
 } from "@/types";
+import type { PanelInstance } from "@shared/types/panel";
 
-export type TerminalInstance = TerminalInstanceType;
 export type { AddPanelOptions };
 
 /**
@@ -48,7 +47,7 @@ export interface TrashedTerminal {
   originalLocation: "dock" | "grid";
   /** Shared ID for panels trashed together as a group */
   groupRestoreId?: string;
-  /** Present on the "anchor" panel of a trashed group, holds metadata for recreation */
+  /** Replicated on every member of a trashed group, holds metadata for recreation */
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
@@ -57,7 +56,7 @@ export interface BackgroundedTerminal {
   originalLocation: "dock" | "grid";
   /** Shared ID for panels backgrounded together as a group */
   groupRestoreId?: string;
-  /** Present on the "anchor" panel of a backgrounded group, holds metadata for recreation */
+  /** Replicated on every member of a backgrounded group, holds metadata for recreation */
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
@@ -69,7 +68,7 @@ export interface BackgroundedTerminal {
 export type HydrationBatchToken = symbol;
 
 export interface PanelRegistrySlice {
-  panelsById: Record<string, TerminalInstance>;
+  panelsById: Record<string, PanelInstance>;
   panelIds: string[];
   /**
    * Per-worktree panel id buckets, maintained at write time (add/remove/transfer)
@@ -96,6 +95,7 @@ export interface PanelRegistrySlice {
   /** Apply all panels collected since `beginHydrationBatch` in a single `set()` call. */
   flushHydrationBatch: (token: HydrationBatchToken) => void;
   removePanel: (id: string) => void;
+  emptyTrash: (ids: string[]) => void;
   updateTitle: (id: string, newTitle: string) => void;
   updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
@@ -126,7 +126,7 @@ export interface PanelRegistrySlice {
    * to the priority tier. Idempotent on missing panels.
    */
   stampLastActive: (id: string) => void;
-  getTerminal: (id: string) => TerminalInstance | undefined;
+  getTerminal: (id: string) => PanelInstance | undefined;
 
   moveTerminalToDock: (id: string) => void;
   moveTerminalToGrid: (id: string) => boolean;
@@ -217,7 +217,7 @@ export interface PanelRegistrySlice {
 
   // Tab grouping methods - TabGroup is the single source of truth
   /** Get all panels in a group, ordered by group's panelIds array. Location param is deprecated. */
-  getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => TerminalInstance[];
+  getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => PanelInstance[];
   /** Get all tab groups for a location/worktree */
   getTabGroups: (location: TabGroupLocation, worktreeId?: string) => TabGroup[];
   /** Get the group a panel belongs to, if any */
@@ -267,7 +267,7 @@ export type PanelRegistryMiddleware = {
     id: string,
     removedIndex: number,
     remainingIds: string[],
-    removedTerminal: TerminalInstance | undefined
+    removedTerminal: PanelInstance | undefined
   ) => void;
 };
 

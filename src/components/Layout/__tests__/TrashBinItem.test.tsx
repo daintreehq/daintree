@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import { TrashBinItem } from "../TrashBinItem";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
 
 vi.mock("@/store", () => ({
@@ -54,15 +54,18 @@ vi.mock("@shared/config/agentRegistry", () => ({
     agentId === "claude" ? { name: "Claude" } : undefined,
 }));
 
-function makeAgentTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgentTerminal(overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
     id: "t1",
     kind: "terminal",
     launchAgentId: "claude",
     title: "claude",
     location: "trash",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PanelInstance;
 }
 
 describe("TrashBinItem", () => {
@@ -118,7 +121,10 @@ describe("TrashBinItem", () => {
         kind: "terminal" as const,
         title: "my dev shell",
         location: "trash" as const,
-      } as TerminalInstance;
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+      } as PanelInstance;
       const trashedInfo: TrashedTerminal = {
         id: "t2",
         expiresAt: Date.now() + 20000,

@@ -307,6 +307,217 @@ describe("AppDialog focus trapping", () => {
     document.body.removeChild(root);
   });
 
+  describe("restoreFocusTo logical successor", () => {
+    type FocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+
+    function setupTriggerAndRoot() {
+      const root = document.createElement("div");
+      root.id = "root";
+      const fallbackButton = document.createElement("button");
+      fallbackButton.textContent = "Fallback";
+      root.appendChild(fallbackButton);
+      document.body.appendChild(root);
+
+      const trigger = document.createElement("button");
+      trigger.textContent = "Trigger";
+      document.body.appendChild(trigger);
+      trigger.focus();
+
+      return { root, fallbackButton, trigger };
+    }
+
+    async function openCloseWith(restoreFocusTo: FocusTarget, trigger: HTMLButtonElement) {
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={restoreFocusTo}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      // The trigger is removed by the action that ran inside the dialog.
+      document.body.removeChild(trigger);
+
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={restoreFocusTo}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+    }
+
+    it("focuses a connected ref target instead of the #root fallback", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(successor);
+      expect(document.activeElement).not.toBe(fallbackButton);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to the #root fallback when the ref target is disconnected", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      // Never appended to the document — disconnected.
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+
+    it("focuses the element returned by a function target", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith(() => successor, trigger);
+
+      expect(document.activeElement).toBe(successor);
+      expect(document.activeElement).not.toBe(fallbackButton);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to the #root fallback when the function returns null", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+
+      await openCloseWith(() => null, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+
+    it("ignores restoreFocusTo when the trigger is still connected", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={{ current: successor }}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      // Trigger stays mounted — focus must return to it, not the successor.
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={{ current: successor }}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+
+      expect(document.activeElement).toBe(trigger);
+      expect(document.activeElement).not.toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(trigger);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to #root when the connected target cannot take focus", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+      // A connected but non-focusable element: focus() is a no-op.
+      const successor = document.createElement("div");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      await openCloseWith({ current: successor }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      expect(document.activeElement).not.toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+
+    it("falls through to #root when the function target throws", async () => {
+      const { root, fallbackButton, trigger } = setupTriggerAndRoot();
+
+      await openCloseWith(() => {
+        throw new Error("boom");
+      }, trigger);
+
+      expect(document.activeElement).toBe(fallbackButton);
+      document.body.removeChild(root);
+    });
+
+    it("does not restore focus prematurely when restoreFocusTo identity changes while open", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const successor = document.createElement("button");
+      successor.textContent = "Successor";
+      document.body.appendChild(successor);
+
+      const { rerender } = render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+      const innerButton = screen.getByText("Inner");
+      expect(document.activeElement).toBe(innerButton);
+
+      // Parent re-renders while the dialog is open, passing a fresh inline
+      // function. Focus must stay inside the dialog — no premature restore.
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      expect(document.activeElement).toBe(innerButton);
+
+      // The real close still restores to the successor once the trigger is gone.
+      document.body.removeChild(trigger);
+      rerender(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={false} onClose={() => {}} restoreFocusTo={() => successor}>
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      expect(document.activeElement).toBe(successor);
+      document.body.removeChild(successor);
+      document.body.removeChild(root);
+    });
+  });
+
   describe("AppDialog Footer a11y", () => {
     it("sets aria-busy on primary button when loading", async () => {
       render(

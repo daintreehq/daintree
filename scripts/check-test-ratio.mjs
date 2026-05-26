@@ -20,6 +20,7 @@ import {
   compareToBaseline,
   formatBaseline,
   formatMarkdown,
+  wilsonLowerBound,
 } from "./test-ratio-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -137,9 +138,19 @@ function writeBaseline(report, { force }) {
     }
   }
 
+  if (!report.windowCompleted) {
+    console.warn(
+      `::warning::writing baseline from an incomplete window (${report.totalCount}/${report.rollingWindowSize} eligible PRs) — stored Wilson lower bounds will be wider than a full window's.`
+    );
+  }
+
+  // Precompute the Wilson lower bounds at write time so the gate reads a
+  // self-documenting threshold from the baseline rather than recomputing it.
   const formatted = formatBaseline({
     ...report,
     updatedAt: new Date().toISOString(),
+    fixWithTestLowerBound: wilsonLowerBound(report.fixWithTestCount, report.fixCount),
+    allWithTestLowerBound: wilsonLowerBound(report.allWithTestCount, report.totalCount),
   });
 
   writeFileSync(BASELINE_FILE, JSON.stringify(formatted, null, 2) + "\n");

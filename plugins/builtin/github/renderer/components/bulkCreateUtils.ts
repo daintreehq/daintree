@@ -16,6 +16,11 @@ export const MAX_AUTO_RETRIES = 2;
 export const QUEUE_CONCURRENCY = 3;
 export const BACKOFF_BASE_MS = 3000;
 export const BACKOFF_CAP_MS = 30000;
+// Assignment hits POST /assignees, which downstream fans out to notifications and
+// is a common trigger for GitHub's secondary rate limit. GitHub's guidance is to
+// wait at least 60s when no Retry-After header is supplied, so the assignment
+// retry loop uses its own cap instead of the shared 30s value.
+export const ASSIGNMENT_BACKOFF_CAP_MS = 60000;
 export const VERIFICATION_SETTLE_MS = 800;
 
 // IPC strips structured error fields (lesson #3769), so renderer-side classification
@@ -38,10 +43,10 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function nextBackoffDelay(prevDelay: number): number {
+export function nextBackoffDelay(prevDelay: number, cap: number = BACKOFF_CAP_MS): number {
   const min = BACKOFF_BASE_MS;
   const max = prevDelay * 3;
-  return Math.min(BACKOFF_CAP_MS, min + Math.random() * (max - min));
+  return Math.min(cap, min + Math.random() * (max - min));
 }
 
 export function planIssueWorktrees(

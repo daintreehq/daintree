@@ -37,6 +37,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
   },
 }));
@@ -79,6 +80,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -87,6 +89,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -95,6 +98,7 @@ describe("unified active tab tracking", () => {
           "term-3": {
             id: "term-3",
             title: "Shell 3",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -121,6 +125,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -153,6 +158,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -161,6 +167,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -169,6 +176,7 @@ describe("unified active tab tracking", () => {
           "term-3": {
             id: "term-3",
             title: "Shell 3",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -202,6 +210,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -210,6 +219,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -253,6 +263,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -261,6 +272,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -281,6 +293,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -319,6 +332,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -327,6 +341,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -348,6 +363,7 @@ describe("unified active tab tracking", () => {
           "term-bg": {
             id: "term-bg",
             title: "Background",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -370,6 +386,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -378,6 +395,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -386,6 +404,7 @@ describe("unified active tab tracking", () => {
           "term-3": {
             id: "term-3",
             title: "Shell 3",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -394,6 +413,7 @@ describe("unified active tab tracking", () => {
           "term-4": {
             id: "term-4",
             title: "Shell 4",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -439,6 +459,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -475,6 +496,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -483,6 +505,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -517,6 +540,7 @@ describe("unified active tab tracking", () => {
           "term-1": {
             id: "term-1",
             title: "Shell 1",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,
@@ -525,6 +549,7 @@ describe("unified active tab tracking", () => {
           "term-2": {
             id: "term-2",
             title: "Shell 2",
+            kind: "terminal" as const,
             cwd: "/test",
             cols: 80,
             rows: 24,

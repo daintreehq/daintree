@@ -1,3 +1,4 @@
+// eager-import-allow: reads pty config via store.get synchronously during client init
 /**
  * PtyClient - Main process orchestrator for terminal management.
  *

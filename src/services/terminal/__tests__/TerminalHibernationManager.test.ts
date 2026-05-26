@@ -160,6 +160,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     openLink: vi.fn(),
     getCwdProvider: vi.fn(() => undefined),
     onHibernationChanged: vi.fn(),
+    getIsBackgrounded: vi.fn(() => false),
     onBufferModeChange: vi.fn(),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
@@ -518,14 +519,16 @@ describe("TerminalHibernationManager", () => {
   describe("isHibernationEligible()", () => {
     it("rejects non-BACKGROUND tiers regardless of agent state", () => {
       managed.runtimeAgentId = undefined;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.FOCUSED, managed)).toBe(false);
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BURST, managed)).toBe(false);
-      expect(manager.isHibernationEligible(TerminalRefreshTier.VISIBLE, managed)).toBe(false);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.FOCUSED, managed, "t1")).toBe(false);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BURST, managed, "t1")).toBe(false);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.VISIBLE, managed, "t1")).toBe(false);
     });
 
     it("accepts BACKGROUND for non-agent terminals", () => {
       managed.runtimeAgentId = undefined;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        true
+      );
     });
 
     it("rejects BACKGROUND while a recently-active agent is still working/waiting/directing", () => {
@@ -534,28 +537,32 @@ describe("TerminalHibernationManager", () => {
       managed.lastWriteAt = now - 1000;
 
       managed.canonicalAgentState = "working";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        false
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
 
       managed.canonicalAgentState = "waiting";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        false
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
 
       managed.canonicalAgentState = "directing";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        false
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
     });
 
     it("accepts BACKGROUND once an agent has completed or exited", () => {
       managed.runtimeAgentId = "claude";
       managed.canonicalAgentState = "completed";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        true
+      );
 
       managed.canonicalAgentState = "exited";
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        true
+      );
     });
 
     it("treats `idle` as immediately eligible — no silence window required", () => {
@@ -563,7 +570,9 @@ describe("TerminalHibernationManager", () => {
       managed.canonicalAgentState = "idle";
       // No lastWriteAt: `idle` is a resting state, not in ACTIVE_AGENT_STATES,
       // so the silence guard doesn't apply.
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        true
+      );
     });
 
     it("accepts BACKGROUND for a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
@@ -572,9 +581,9 @@ describe("TerminalHibernationManager", () => {
       managed.canonicalAgentState = "working";
       managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS;
       managed.pendingWrites = 0;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        true
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(true);
     });
 
     it("rejects BACKGROUND one millisecond shy of the silence boundary", () => {
@@ -583,9 +592,9 @@ describe("TerminalHibernationManager", () => {
       managed.canonicalAgentState = "waiting";
       managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS + 1;
       managed.pendingWrites = 0;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        false
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
     });
 
     it("rejects BACKGROUND when an idle-eligible active agent still has pending writes", () => {
@@ -594,9 +603,9 @@ describe("TerminalHibernationManager", () => {
       managed.canonicalAgentState = "working";
       managed.lastWriteAt = now - AGENT_IDLE_SILENCE_MS - 10_000;
       managed.pendingWrites = 1;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, now)).toBe(
-        false
-      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
     });
 
     it("accepts BACKGROUND for an active agent that has no recorded lastWriteAt", () => {
@@ -607,7 +616,63 @@ describe("TerminalHibernationManager", () => {
       managed.canonicalAgentState = "waiting";
       managed.pendingWrites = 0;
       managed.lastWriteAt = undefined;
-      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed)).toBe(true);
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        true
+      );
+    });
+
+    it("bypasses the silence window for a user-backgrounded active agent with no pending writes", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - 1000; // well inside the 5-min silence window
+      managed.pendingWrites = 0;
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(true);
+    });
+
+    it("still rejects a user-backgrounded terminal that has pending writes (burst guard holds)", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - 1000;
+      managed.pendingWrites = 1;
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
+    });
+
+    it("preserves the silence window for a non-backgrounded active agent (no bypass)", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - 1000;
+      managed.pendingWrites = 0;
+      // getIsBackgrounded defaults to false — silence window must still apply.
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
+    });
+
+    it("scopes the bypass to the queried id — backgrounding another panel doesn't leak", () => {
+      const now = Date.now();
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = now - 1000;
+      managed.pendingWrites = 0;
+      // Only "t2" is backgrounded; "t1" must keep its silence window.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockImplementation(
+        (queriedId: string) => queriedId === "t2"
+      );
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1", now)
+      ).toBe(false);
+      expect(
+        manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t2", now)
+      ).toBe(true);
     });
   });
 
@@ -713,6 +778,56 @@ describe("TerminalHibernationManager", () => {
       // Cross the silence boundary — re-check fires, schedules the
       // normal 30s timer, then advance through that to hibernate.
       vi.advanceTimersByTime(1);
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.advanceTimersByTime(30_000);
+      expect(managed.isHibernated).toBe(true);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("skips the eligibility re-check and arms the hibernation timer for a backgrounded active agent", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0; // would normally arm the re-check timer
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      manager.scheduleHibernation("t1", managed);
+
+      // Backgrounded: re-check timer skipped, normal hibernation timer armed.
+      expect(managed.hibernationEligibilityTimer).toBeUndefined();
+      expect(managed.hibernationTimer).toBeDefined();
+
+      vi.advanceTimersByTime(30_000);
+      expect(managed.isHibernated).toBe(true);
+
+      vi.setSystemTime(new Date());
+    });
+
+    it("cancel + reschedule swaps a pending eligibility timer for the normal timer once backgrounded", () => {
+      vi.setSystemTime(0);
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.isVisible = false;
+      managed.pendingWrites = 0;
+      managed.lastWriteAt = 0;
+
+      // Active agent inside the silence window → eligibility re-check armed.
+      manager.scheduleHibernation("t1", managed);
+      expect(managed.hibernationEligibilityTimer).toBeDefined();
+      expect(managed.hibernationTimer).toBeUndefined();
+
+      // User backgrounds the panel — the onPanelBackgrounded path cancels the
+      // pending timer and reschedules. With the bypass now live, the normal
+      // hibernation timer is armed instead of waiting out the silence window.
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      manager.cancelHibernation(managed);
+      manager.scheduleHibernation("t1", managed);
+
       expect(managed.hibernationEligibilityTimer).toBeUndefined();
       expect(managed.hibernationTimer).toBeDefined();
 

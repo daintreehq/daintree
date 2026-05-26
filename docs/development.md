@@ -163,9 +163,16 @@ npm run compiler-budget:critical  # Triage: re-runs compiler with severity:"Erro
 npm run compiler-budget:update    # Accept: refreshes baseline after intentional regressions
 ```
 
-The **budget gate** (`compiler-budget:check`) records every `CompileError` event in `compiler-bailout-baseline.json` — cosmetic `Todo` diagnostics and load-bearing `Error` diagnostics alike — so no bailout can sneak past code review. The **critical-errors script** (`compiler-budget:critical`) re-runs the React Compiler directly on `src/` and filters to `severity: "Error"`, isolating the small subset of diagnostics that actually affect optimization. Run it when the budget gate fires to determine whether the new bailout is cosmetic noise or needs attention.
+The **budget gate** (`compiler-budget:check`) is severity-aware. Severity is derived dynamically from the plugin's exported `LintRules` registry (1 `Hint` category `Todo`, 2 `Warning`, 23 `Error` as of `babel-plugin-react-compiler` 1.0.0), so a plugin upgrade that recategorizes a rule reflows the gate automatically. Per `CompileError` event, the gate buckets by severity:
+
+- **`Hint` (cosmetic `Todo` noise — try/catch lowering, dynamic-import arrows):** collapsed to a single per-file `hintCount`, not stored verbatim. This keeps `compiler-bailout-baseline.json` compact — a shifting Todo count is a one-line diff instead of dozens of repeated reason strings. Gated only by a **global Hint budget**: per-file churn moves freely (a refactor shifting noise between files nets to zero), but the whole-repo total may not grow.
+- **`Error` + `Warning` (load-bearing rule-of-React violations):** tracked verbatim in `errorBailouts` (with `category`, `severity`, `reason`) and protected by a **strict zero-regression gate** — any per-file increase, any new file with a strict bailout, or any growth in the whole-repo strict total fails CI.
+
+The raw `error` count is kept per file for diagnostics but no longer gates directly. The **critical-errors script** (`compiler-budget:critical`) re-runs the React Compiler directly on `src/` and filters to `severity: "Error"`, isolating the small subset of diagnostics that actually affect optimization. Run it when the budget gate fires to determine whether the new bailout is cosmetic noise or needs attention.
 
 Both tools use `panicThreshold: "none"` — the signal lives in the report and the triage script, never in build crashes.
+
+Refresh the baseline with `npm run compiler-budget:update` when a regression is intentional. The 10% shrinkage guard counts file keys (not entry shape), so the one-time severity-aware reformat doesn't trip it; `--force` is only needed if the file count genuinely drops by more than 10%.
 
 ## Code Patterns
 

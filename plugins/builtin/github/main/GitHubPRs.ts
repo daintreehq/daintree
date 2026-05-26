@@ -6,6 +6,8 @@ import {
   GET_PR_QUERY,
   GET_PR_REVIEW_THREADS_QUERY,
   buildBatchRequiredChecksQuery,
+  buildBatchPRsQuery,
+  GRAPHQL_BATCH_CHUNK_SIZE,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
@@ -18,11 +20,17 @@ import {
   reviewThreadsCache,
   prRequiredStatusCache,
   truncateBody,
+  MAX_REVIEW_THREAD_PAGES,
+  REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
-import { deriveRequiredCIStatus, normalizeRawState } from "./prRequiredCIStatus.js";
-import type { RollupContextNode } from "./prRequiredCIStatus.js";
+import {
+  deriveRequiredCIStatus,
+  deriveGlobalCIStatus,
+  normalizeRawState,
+} from "./prRequiredCIStatus.js";
+import type { RollupContextNode, GlobalCIDeriveInput } from "./prRequiredCIStatus.js";
 import type {
   GitHubPR,
   GitHubListOptions,
@@ -71,7 +79,6 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
 
 export function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
-  const reviewsData = node.reviews as { totalCount?: number };
   const commentsData = node.comments as { totalCount?: number };
   const merged = node.merged as boolean;
   const rawState = node.state as string;
@@ -88,9 +95,49 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const isFork = headName && baseName ? headName !== baseName : undefined;
 
   const commitsData = node.commits as
-    | { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } | null } | null }> }
+    | {
+        nodes?: Array<{
+          commit?: {
+            statusCheckRollup?: { state?: string; contexts?: Record<string, unknown> } | null;
+          } | null;
+        }>;
+      }
     | undefined;
   const ciStatus = normalizeRawState(commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.state);
+
+  const reviewDecisionRaw = node.reviewDecision as string | null | undefined;
+  const reviewDecision =
+    reviewDecisionRaw === "APPROVED" ||
+    reviewDecisionRaw === "CHANGES_REQUESTED" ||
+    reviewDecisionRaw === "REVIEW_REQUIRED"
+      ? reviewDecisionRaw
+      : undefined;
+
+  const mergeStateStatusRaw = node.mergeStateStatus as string | null | undefined;
+  const validMergeStates = new Set([
+    "BEHIND",
+    "BLOCKED",
+    "CLEAN",
+    "DIRTY",
+    "HAS_HOOKS",
+    "UNKNOWN",
+    "UNSTABLE",
+  ]);
+  const mergeStateStatus =
+    mergeStateStatusRaw && validMergeStates.has(mergeStateStatusRaw.toUpperCase())
+      ? (mergeStateStatusRaw.toUpperCase() as GitHubPR["mergeStateStatus"])
+      : undefined;
+
+  const rollupContexts = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.contexts as
+    | GlobalCIDeriveInput
+    | undefined;
+  const globalDerived = deriveGlobalCIStatus({
+    checkRunCountsByState: rollupContexts?.checkRunCountsByState,
+    statusContextCountsByState: rollupContexts?.statusContextCountsByState,
+    checkRunCount: rollupContexts?.checkRunCount,
+    statusContextCount: rollupContexts?.statusContextCount,
+    mergeStateStatus,
+  });
 
   return {
     number: node.number as number,
@@ -103,11 +150,15 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
       login: author?.login ?? "unknown",
       avatarUrl: author?.avatarUrl ?? "",
     },
-    reviewCount: reviewsData?.totalCount,
     commentCount: commentsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
     ciStatus,
+    reviewDecision,
+    mergeStateStatus,
+    globalCIStatus: globalDerived.ciStatus,
+    globalCISummary: globalDerived.ciSummary,
+    bodyText: (node.bodyText as string) || undefined,
   };
 }
 
@@ -118,6 +169,8 @@ export function mapPRStates(state?: string): string[] {
   if (state === "all") return ["OPEN", "CLOSED", "MERGED"];
   return ["OPEN"];
 }
+
+const inFlightPRTooltips = new Map<string, Promise<PRTooltipData | null>>();
 
 export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
   const client = GitHubAuth.createClient();
@@ -133,61 +186,78 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         return cached;
       }
 
+      const inFlight = inFlightPRTooltips.get(cacheKey);
+      if (inFlight) return inFlight;
+
       const requestedAt = Date.now();
-      const response = (await client(GET_PR_QUERY, {
-        owner: context.owner,
-        repo: context.repo,
-        number: prNumber,
-        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-      })) as GraphQlQueryResponseData;
+      const promise = (async () => {
+        const response = (await client(GET_PR_QUERY, {
+          owner: context.owner,
+          repo: context.repo,
+          number: prNumber,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
 
-      const pr = response?.repository?.pullRequest;
-      if (!pr) {
-        return null;
-      }
+        const pr = response?.repository?.pullRequest;
+        if (!pr) {
+          return null;
+        }
 
-      const author = pr.author as { login?: string; avatarUrl?: string } | null;
-      const assigneesData = pr.assignees as {
-        nodes?: Array<{ login?: string; avatarUrl?: string }>;
-      };
-      const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
-      const merged = pr.merged as boolean;
-      const rawState = pr.state as string;
+        const author = pr.author as { login?: string; avatarUrl?: string } | null;
+        const assigneesData = pr.assignees as {
+          nodes?: Array<{ login?: string; avatarUrl?: string }>;
+        };
+        const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+        const merged = pr.merged as boolean;
+        const rawState = pr.state as string;
 
-      let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-      if (merged) {
-        state = "MERGED";
-      }
+        let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+        if (merged) {
+          state = "MERGED";
+        }
 
-      const tooltipData: PRTooltipData = {
-        number: pr.number as number,
-        title: pr.title as string,
-        bodyExcerpt: truncateBody(pr.bodyText as string | null),
-        state,
-        isDraft: (pr.isDraft as boolean) ?? false,
-        createdAt: pr.createdAt as string,
-        author: {
-          login: author?.login ?? "unknown",
-          avatarUrl: author?.avatarUrl ?? "",
+        const tooltipData: PRTooltipData = {
+          number: pr.number as number,
+          title: pr.title as string,
+          bodyExcerpt: truncateBody(pr.bodyText as string | null),
+          state,
+          isDraft: (pr.isDraft as boolean) ?? false,
+          createdAt: pr.createdAt as string,
+          author: {
+            login: author?.login ?? "unknown",
+            avatarUrl: author?.avatarUrl ?? "",
+          },
+          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+            login: a.login ?? "unknown",
+            avatarUrl: a.avatarUrl ?? "",
+          })),
+          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+            name: l.name ?? "",
+            color: l.color ?? "",
+          })),
+        };
+
+        const existing = prTooltipWrittenAt.get(cacheKey);
+        if (existing === undefined || requestedAt >= existing) {
+          prTooltipCache.set(cacheKey, tooltipData);
+          prTooltipWrittenAt.set(cacheKey, requestedAt);
+        }
+        return tooltipData;
+      })();
+
+      inFlightPRTooltips.set(cacheKey, promise);
+      promise.then(
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
         },
-        assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-          login: a.login ?? "unknown",
-          avatarUrl: a.avatarUrl ?? "",
-        })),
-        labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-          name: l.name ?? "",
-          color: l.color ?? "",
-        })),
-      };
+        () => {
+          inFlightPRTooltips.delete(cacheKey);
+        }
+      );
 
-      const existing = prTooltipWrittenAt.get(cacheKey);
-      if (existing === undefined || requestedAt >= existing) {
-        prTooltipCache.set(cacheKey, tooltipData);
-        prTooltipWrittenAt.set(cacheKey, requestedAt);
-      }
-      return tooltipData;
+      return promise;
     });
   } catch {
     return null;
@@ -226,7 +296,7 @@ async function enrichPRsWithRequiredStatus(
         const response = (await client(query, {
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as Record<string, unknown>;
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "BATCH_REQUIRED_CHECKS_QUERY");
         fetched = parseBatchRequiredChecksResponse(response, numbersToFetch);
         for (const [num, entry] of fetched) {
           prRequiredStatusCache.set(cacheKeyFor(num), entry);
@@ -248,7 +318,7 @@ async function enrichPRsWithRequiredStatus(
   });
 }
 
-function parseBatchRequiredChecksResponse(
+export function parseBatchRequiredChecksResponse(
   data: Record<string, unknown>,
   prNumbers: number[]
 ): Map<number, PRRequiredStatusEntry> {
@@ -284,6 +354,51 @@ function parseBatchRequiredChecksResponse(
     out.set(num, { ciStatus: derived.ciStatus, ciSummary: derived.ciSummary });
   }
   return out;
+}
+
+function prewarmPRTooltips(
+  owner: string,
+  repo: string,
+  nodes: Array<Record<string, unknown>>
+): void {
+  const requestedAt = Date.now();
+  for (const node of nodes) {
+    const num = node.number as number;
+    if (!num) continue;
+    const cacheKey = `${owner}/${repo}:${num}`;
+    const existing = prTooltipWrittenAt.get(cacheKey);
+    if (existing !== undefined && requestedAt < existing) continue;
+    const author = node.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = node.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const merged = node.merged as boolean;
+    const rawState = node.state as string;
+    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
+    if (merged) state = "MERGED";
+    prTooltipCache.set(cacheKey, {
+      number: num,
+      title: node.title as string,
+      bodyExcerpt: truncateBody(node.bodyText as string | null),
+      state,
+      isDraft: (node.isDraft as boolean) ?? false,
+      createdAt: node.createdAt as string,
+      author: {
+        login: author?.login ?? "unknown",
+        avatarUrl: author?.avatarUrl ?? "",
+      },
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
+        login: a.login ?? "unknown",
+        avatarUrl: a.avatarUrl ?? "",
+      })),
+      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
+        name: l.name ?? "",
+        color: l.color ?? "",
+      })),
+    });
+    prTooltipWrittenAt.set(cacheKey, requestedAt);
+  }
 }
 
 export async function listPullRequests(
@@ -338,12 +453,15 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_PRS_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
+        const filteredNodes = nodes.filter(Boolean);
 
-        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+
+        const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
           context,
           parsedItems,
@@ -370,7 +488,7 @@ export async function listPullRequests(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "LIST_PRS_QUERY");
 
         if (!response?.repository) {
           throw new Error("Repository not found or token lacks access.");
@@ -379,8 +497,11 @@ export async function listPullRequests(
         const pullRequests = response?.repository?.pullRequests;
         const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (pullRequests?.totalCount as number) ?? undefined;
+        const filteredNodes = nodes.filter(Boolean);
 
-        const parsedItems = nodes.filter(Boolean).map(parsePRNode);
+        prewarmPRTooltips(context.owner, context.repo, filteredNodes);
+
+        const parsedItems = filteredNodes.map(parsePRNode);
         const enrichedItems = await enrichPRsWithRequiredStatus(
           context,
           parsedItems,
@@ -442,7 +563,7 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response);
+      gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
 
       const pr = response?.repository?.pullRequest;
       if (!pr) {
@@ -458,6 +579,55 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
     }
     if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
       return null;
+    }
+    throw new Error(parseGitHubError(error));
+  }
+}
+
+export async function getPRsByNumbers(
+  cwd: string,
+  numbers: number[]
+): Promise<Array<GitHubPR | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  try {
+    return await withRepoContextRetry(cwd, async (context) => {
+      const results: Array<GitHubPR | null> = [];
+
+      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+        const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
+        if (!query) continue;
+
+        const response = (await client(query, {
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+        })) as GraphQlQueryResponseData;
+
+        gitHubRateLimitService.updateFromGraphQL(response);
+
+        const repo = response?.repository as Record<string, unknown> | undefined;
+        for (const num of chunk) {
+          const alias = `p${num}`;
+          const node = repo?.[alias] as Record<string, unknown> | null;
+          results.push(node ? parsePRNode(node) : null);
+        }
+      }
+
+      return results;
+    });
+  } catch (error) {
+    const message = (error as Error).message || "";
+    if (message === "Not a GitHub repository") {
+      throw error;
+    }
+    if (message.includes("Could not resolve to") || message.includes("Could not resolve")) {
+      return [];
     }
     throw new Error(parseGitHubError(error));
   }
@@ -483,6 +653,7 @@ export async function getPRReviewThreads(
       const allThreads: Array<{ path: string; isResolved: boolean; isOutdated: boolean }> = [];
       let cursor: string | null = null;
       let hasNextPage = true;
+      let pageCount = 0;
 
       while (hasNextPage) {
         const response = (await client(GET_PR_REVIEW_THREADS_QUERY, {
@@ -493,7 +664,7 @@ export async function getPRReviewThreads(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response);
+        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_REVIEW_THREADS_QUERY");
 
         const threads = response?.repository?.pullRequest?.reviewThreads;
         const nodes = (threads?.nodes ?? []) as Array<{
@@ -512,15 +683,24 @@ export async function getPRReviewThreads(
           }
         }
 
-        hasNextPage = threads?.pageInfo?.hasNextPage ?? false;
+        pageCount++;
+        hasNextPage = !!(threads?.pageInfo?.hasNextPage && threads?.pageInfo?.endCursor);
         cursor = threads?.pageInfo?.endCursor ?? null;
+
+        if (pageCount >= MAX_REVIEW_THREAD_PAGES) {
+          break;
+        }
       }
 
-      const counts: Record<string, number> = {};
+      const counts: Record<string, number> = Object.create(null);
       for (const thread of allThreads) {
         if (!thread.isResolved && !thread.isOutdated) {
           counts[thread.path] = (counts[thread.path] ?? 0) + 1;
         }
+      }
+
+      if (pageCount >= MAX_REVIEW_THREAD_PAGES && hasNextPage) {
+        counts.__clampedAt = MAX_REVIEW_THREAD_PAGES * REVIEW_THREADS_PER_PAGE;
       }
 
       reviewThreadsCache.set(cacheKey, counts);

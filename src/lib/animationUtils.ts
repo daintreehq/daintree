@@ -45,17 +45,39 @@ export const UI_PALETTE_EXIT_DURATION = DURATION_100;
 // Tooltip hover/skip delays consumed by the Radix `TooltipProvider` at the app
 // root. These are wait times before a tooltip opens, not animation durations.
 /** UX anti-flicker gate: sub-400ms work should show nothing (Doherty threshold).
- *  Used by palette loading bar and stale-result dimming to prevent flashes on
- *  fast renders. Not an animation token — a perceptual floor.
+ *  Used by discrete-action stale surfaces (e.g. Review/Commit modal background
+ *  refresh via `.surface-stale`) and the `.animate-pulse-delayed` skeleton.
+ *  Not an animation token — a perceptual floor.
  *  CSS counterpart: `--anti-flicker-delay` in src/index.css `:root`. The
- *  drift-contract test in animationUtils.test.ts enforces parity. */
+ *  drift-contract test in animationUtils.test.ts enforces parity.
+ *  See `UI_PALETTE_STALE_DELAY` for the typed-input counterpart. */
 export const UI_DOHERTY_THRESHOLD = 400;
+
+/** UX anti-flicker gate for palette typed-input stale dimming. Shorter than
+ *  Doherty's 400ms because keystrokes arrive every ~200ms at normal typing
+ *  speed — a 400ms gate would almost never fire before being reset by the next
+ *  keystroke, leaving stale state unacknowledged. Industry convention (Algolia
+ *  `stalledSearchDelay`, React `useDeferredValue` examples) is 200ms.
+ *  CSS counterpart: `--anti-flicker-delay-palette` in src/index.css `:root`.
+ *  Consumed by `.palette-results-stale` and the palette loading bar. */
+export const UI_PALETTE_STALE_DELAY = DURATION_200;
 
 /** UX anti-flicker gate for skeleton components using the `immediate` prop.
  *  Sub-200ms work should show no pulse — warm-cache Suspense falls through this.
  *  Consumed by `useSkeletonGate` in `src/hooks/useDeferredLoading.ts`.
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
+
+/** Minimum on-screen dwell once a skeleton has crossed its onset gate. The
+ *  onset gates (`useSkeletonGate`, `useDohertyGate`) only suppress *early*
+ *  display; nothing stops a skeleton that just appeared from tearing down in
+ *  the same frame when the underlying work resolves moments later. That
+ *  same-frame flash reads as a glitch. `useSkeletonDisplayFloor` holds the
+ *  placeholder visible for this floor once shown. 250ms sits at the just-
+ *  noticeable-difference threshold — long enough to kill the flash, short
+ *  enough to never feel sluggish in an IDE where data usually resolves fast.
+ *  Not an animation token — a perceptual floor, same family as the gates. */
+export const UI_SKELETON_FLOOR_MS = DURATION_250;
 
 /** Feedback-hint window for direct user actions (e.g. `Button`'s `loading`
  *  state). Distinct in role from the skeleton/Doherty gates: those *delay*

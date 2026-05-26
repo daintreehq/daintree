@@ -245,7 +245,7 @@ export function createDaintreeTokens(
     "scrollbar-thumb-hover":
       tokens["scrollbar-thumb-hover"] ??
       `color-mix(in oklab, ${tokens["activity-idle"]} 85%, ${tokens["text-primary"]})`,
-    "scrollbar-track": tokens["scrollbar-track"] ?? "transparent",
+    "scrollbar-track": tokens["scrollbar-track"] ?? withAlpha(tokens["text-primary"], 0.03),
     "panel-state-edge-width": tokens["panel-state-edge-width"] ?? (dark ? "0px" : "2px"),
     "panel-state-edge-inset-block": tokens["panel-state-edge-inset-block"] ?? "4px",
     "panel-state-edge-radius": tokens["panel-state-edge-radius"] ?? "2px",

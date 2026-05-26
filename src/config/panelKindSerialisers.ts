@@ -1,4 +1,4 @@
-import type { PanelKind, ViewportPresetId } from "@/types";
+import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
@@ -6,17 +6,25 @@ type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalAr
 
 /** Coerce a persisted viewport-preset string to a known id, dropping stale values. */
 function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | undefined {
-  return value !== undefined && value in VIEWPORT_PRESETS ? (value as ViewportPresetId) : undefined;
+  return value !== undefined && Object.hasOwn(VIEWPORT_PRESETS, value)
+    ? (value as ViewportPresetId)
+    : undefined;
 }
 
-const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
+/**
+ * Built-in deserializer table ratcheted against `BuiltInPanelKind` so adding
+ * a new built-in kind without an entry fails at compile time. `null` marks an
+ * intentionally absent deserializer (terminal restores through the PTY backend;
+ * review has no kind-specific state).
+ */
+const BUILT_IN_DESERIALIZERS = {
+  terminal: null,
   browser: (saved) => ({
     browserUrl: saved.browserUrl,
     browserHistory: saved.browserHistory,
     browserZoom: saved.browserZoom,
     browserConsoleOpen: saved.browserConsoleOpen,
   }),
-
   "dev-preview": (saved) => {
     const devCommandCandidate = saved.devCommand?.trim();
     const devCommand = devCommandCandidate || saved.command?.trim() || undefined;
@@ -35,12 +43,28 @@ const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
       createdAt: saved.createdAt,
     };
   },
-};
+  review: null,
+} as const satisfies Record<BuiltInPanelKind, PanelKindDeserializer | null>;
+
+/** Runtime registry seeded from the built-in table, dropping `null` entries. */
+const DESERIALIZERS: Record<string, PanelKindDeserializer> = {};
+for (const [kind, fn] of Object.entries(BUILT_IN_DESERIALIZERS)) {
+  if (fn !== null) {
+    DESERIALIZERS[kind] = fn as PanelKindDeserializer;
+  }
+}
 
 export function getDeserializer(kind: PanelKind): PanelKindDeserializer | undefined {
-  return DESERIALIZERS[kind];
+  return Object.hasOwn(DESERIALIZERS, kind) ? DESERIALIZERS[kind] : undefined;
 }
 
 export function registerDeserializer(kind: PanelKind, deserializer: PanelKindDeserializer): void {
+  if (kind in BUILT_IN_DESERIALIZERS) {
+    console.warn(
+      `[panelKindSerialisers] Refusing to overwrite built-in deserializer for "${kind}". ` +
+        `Built-in kinds have their deserializers defined in BUILT_IN_DESERIALIZERS.`
+    );
+    return;
+  }
   DESERIALIZERS[kind] = deserializer;
 }

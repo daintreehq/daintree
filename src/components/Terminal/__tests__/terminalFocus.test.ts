@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   getTerminalFocusTarget,
+  isLikelyAtSynthesizedPointer,
+  resolveTerminalTabEscape,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "../terminalFocus";
@@ -159,5 +161,63 @@ describe("shouldSuppressUnfocusedClick", () => {
         isShiftKey: true,
       })
     ).toBe(false);
+  });
+});
+
+describe("isLikelyAtSynthesizedPointer", () => {
+  it("treats a pointerdown with no recorded move as AT-synthesized", () => {
+    expect(isLikelyAtSynthesizedPointer(null, 1000)).toBe(true);
+  });
+
+  it("treats a click shortly after a move as a physical pointer", () => {
+    expect(isLikelyAtSynthesizedPointer(1000, 1050)).toBe(false);
+  });
+
+  it("treats a move exactly at the threshold as physical (boundary, inclusive)", () => {
+    expect(isLikelyAtSynthesizedPointer(1000, 1100)).toBe(false);
+  });
+
+  it("treats a click more than the threshold after the last move as AT-synthesized", () => {
+    expect(isLikelyAtSynthesizedPointer(1000, 1101)).toBe(true);
+  });
+
+  it("honors a custom threshold", () => {
+    expect(isLikelyAtSynthesizedPointer(1000, 1030, 20)).toBe(true);
+    expect(isLikelyAtSynthesizedPointer(1000, 1010, 20)).toBe(false);
+  });
+});
+
+describe("resolveTerminalTabEscape", () => {
+  const base = {
+    key: "Tab",
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    isComposing: false,
+    keyCode: 9,
+  };
+
+  it("moves to the next region on plain Tab", () => {
+    expect(resolveTerminalTabEscape(base)).toBe("next");
+  });
+
+  it("moves to the previous region on Shift+Tab", () => {
+    expect(resolveTerminalTabEscape({ ...base, shiftKey: true })).toBe("prev");
+  });
+
+  it("ignores non-Tab keys", () => {
+    expect(resolveTerminalTabEscape({ ...base, key: "Enter" })).toBeNull();
+  });
+
+  it("ignores Tab during IME composition", () => {
+    expect(resolveTerminalTabEscape({ ...base, isComposing: true })).toBeNull();
+    expect(resolveTerminalTabEscape({ ...base, keyCode: 229 })).toBeNull();
+  });
+
+  it("ignores Tab combined with Ctrl/Alt/Meta so the TUI or global keybindings handle it", () => {
+    expect(resolveTerminalTabEscape({ ...base, ctrlKey: true })).toBeNull();
+    expect(resolveTerminalTabEscape({ ...base, altKey: true })).toBeNull();
+    expect(resolveTerminalTabEscape({ ...base, metaKey: true })).toBeNull();
   });
 });

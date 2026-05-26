@@ -15,7 +15,9 @@ import {
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -147,7 +149,7 @@ function OverviewWorktreeCard({
  * The wrapper is the actual rendered box (the card's chrome). Selection
  * styling uses `bg-overlay-subtle` + a neutral inset ring per CLAUDE.md's
  * accent-color restraint — accent is reserved for one load-bearing signal
- * per view and is never used as a multi-select indicator.
+ * per active focus region and is never used as a multi-select indicator.
  */
 function OverviewGridCell(props: OverviewWorktreeCardProps) {
   const cellId = getWorktreeOverviewCellId(props.worktreeId);
@@ -277,6 +279,7 @@ export function WorktreeOverviewModal({
           continue;
         terminalCount++;
         if (!isAgentTerminal(t)) continue;
+        if (!isPtyPanel(t)) continue;
         if (t.agentState === "working") hasWorkingAgent = true;
         if (t.agentState === "waiting") {
           hasWaitingAgent = true;
@@ -608,12 +611,18 @@ export function WorktreeOverviewModal({
 
   const handleCloseSessionsConfirm = useCallback(() => {
     const state = usePanelStore.getState();
+    const count = closeSessionsIdsRef.current.length;
     for (const id of closeSessionsIdsRef.current) {
       state.bulkCloseByWorktree(id);
     }
     closeSessionsIdsRef.current = [];
     setIsCloseSessionsConfirmOpen(false);
     clearSelection();
+    useAnnouncerStore
+      .getState()
+      .announce(
+        count === 1 ? "Closed sessions for 1 worktree" : `Closed sessions for ${count} worktrees`
+      );
   }, [clearSelection]);
 
   const handleCloseSessionsCancel = useCallback(() => {

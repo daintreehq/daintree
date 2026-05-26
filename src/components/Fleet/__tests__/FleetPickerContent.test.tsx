@@ -12,9 +12,10 @@ import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { _resetForTests as resetEscapeStack, dispatchEscape } from "@/lib/escapeStack";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
-import type { TerminalInstance, WorktreeSnapshot } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { WorktreeSnapshot } from "@shared/types";
 
-function makeTerminal(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
@@ -25,11 +26,11 @@ function makeTerminal(id: string, overrides: Partial<TerminalInstance> = {}): Te
     agentState: "idle",
     runtimeStatus: "running",
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedTerminals(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedTerminals(terminals: PtyPanelData[]): void {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -549,7 +550,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       renderHarness([], { mode: "cold-start", onCommit: () => {} });
       await act(async () => {});
-      expect(screen.getByRole("status").textContent).toContain("No terminals available");
+      expect(screen.getByText("No terminals available")).toBeTruthy();
     });
 
     it("renders 'No terminals match' when the search filters out all eligibles", async () => {
@@ -568,7 +569,7 @@ describe("FleetPickerContent + useFleetPicker", () => {
         fireEvent.change(search, { target: { value: "zzz-no-match" } });
       });
       await act(async () => {});
-      expect(screen.getByRole("status").textContent).toContain("No terminals match");
+      expect(screen.getByText("No terminals match")).toBeTruthy();
       expect(screen.queryAllByRole("option")).toHaveLength(0);
     });
   });

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   BATCH_BRANCH_CHUNK_SIZE,
+  GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
   buildBatchPRQuery,
   buildBatchRequiredChecksQuery,
+  buildBatchIssuesQuery,
+  buildBatchPRsQuery,
   REPO_STATS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
-  REPO_ACTIVITY_PROBE_QUERY,
   SEARCH_QUERY,
   GET_PR_QUERY,
   PROJECT_HEALTH_QUERY,
@@ -81,32 +83,6 @@ describe("MERGE_VELOCITY_QUERY", () => {
   });
 });
 
-describe("REPO_ACTIVITY_PROBE_QUERY", () => {
-  it("fetches the three activity timestamps used as the change sentinel", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("pushedAt");
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("updatedAt");
-  });
-
-  it("orders both connections by UPDATED_AT desc so the freshest node is first", () => {
-    const matches = REPO_ACTIVITY_PROBE_QUERY.match(
-      /orderBy: \{field: UPDATED_AT, direction: DESC\}/g
-    );
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
-  });
-
-  it("spans every issue and PR state so closes and merges advance the probe", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("issues(first: 1, states: [OPEN, CLOSED]");
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain(
-      "pullRequests(first: 1, states: [OPEN, CLOSED, MERGED]"
-    );
-  });
-
-  it("includes rateLimit so the probe keeps rate-limit state in sync", () => {
-    expect(REPO_ACTIVITY_PROBE_QUERY).toContain("rateLimit {");
-  });
-});
-
 describe("REPO_STATS_AND_PAGE_QUERY", () => {
   it("fetches the first 20 open issues sorted by created-desc", () => {
     expect(REPO_STATS_AND_PAGE_QUERY).toContain(
@@ -152,6 +128,32 @@ describe("REPO_STATS_AND_PAGE_QUERY", () => {
     expect(REPO_STATS_AND_PAGE_QUERY).toContain("statusCheckRollup");
   });
 
+  it("includes reviewDecision and mergeStateStatus on the PR fragment", () => {
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("reviewDecision");
+    expect(prsBlock).toContain("mergeStateStatus");
+  });
+
+  it("includes statusCheckRollup.contexts aggregate scalars on the PR fragment", () => {
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("contexts {");
+    expect(prsBlock).toContain("checkRunCount");
+    expect(prsBlock).toContain("statusContextCount");
+    expect(prsBlock).toContain("checkRunCountsByState {");
+    expect(prsBlock).toContain("statusContextCountsByState {");
+    // Must not include first: or last: on the contexts connection
+    const contextsLine = prsBlock.slice(
+      prsBlock.indexOf("contexts {"),
+      prsBlock.indexOf("contexts {") + 50
+    );
+    expect(contextsLine).not.toMatch(/\bfirst\b/);
+    expect(contextsLine).not.toMatch(/\blast\b/);
+  });
+
   it("returns the issue fields the disk-cache validator (isIssueLike) requires", () => {
     // GitHubFirstPageCache.isIssueLike rejects items missing author{login,
     // avatarUrl} or assignees. Drop one of these from the query and the
@@ -185,6 +187,43 @@ describe("LIST_PRS_QUERY", () => {
     expect(LIST_PRS_QUERY).toContain("comments");
     expect(LIST_PRS_QUERY).toContain("totalCount");
   });
+
+  it("fetches reviewDecision and mergeStateStatus at the PR node level", () => {
+    expect(LIST_PRS_QUERY).toContain("reviewDecision");
+    expect(LIST_PRS_QUERY).toContain("mergeStateStatus");
+  });
+
+  it("selects reviewDecision as a bare scalar (zero-cost approval badge)", () => {
+    expect(LIST_PRS_QUERY).toContain("reviewDecision");
+    // Bare scalar — no connection arguments that would add query cost.
+    expect(LIST_PRS_QUERY).not.toContain("reviewDecision(");
+  });
+
+  it("fetches statusCheckRollup.contexts aggregate scalars without first/last args", () => {
+    // contexts must NOT use first: or last: — aggregate scalars are
+    // available on the connection type itself without pagination args.
+    const rollupSection = LIST_PRS_QUERY.slice(LIST_PRS_QUERY.indexOf("statusCheckRollup {"));
+    expect(rollupSection).toContain("contexts {");
+    expect(rollupSection).toContain("checkRunCount");
+    expect(rollupSection).toContain("statusContextCount");
+    expect(rollupSection).toContain("checkRunCountsByState {");
+    expect(rollupSection).toContain("statusContextCountsByState {");
+    expect(rollupSection).toContain("state");
+    expect(rollupSection).toContain("count");
+
+    // Must not include first: or last: on the contexts connection
+    const contextsLine = rollupSection.slice(
+      rollupSection.indexOf("contexts {"),
+      rollupSection.indexOf("contexts {") + 50
+    );
+    expect(contextsLine).not.toMatch(/\bfirst\b/);
+    expect(contextsLine).not.toMatch(/\blast\b/);
+  });
+
+  it("retains the raw statusCheckRollup.state field", () => {
+    expect(LIST_PRS_QUERY).toContain("statusCheckRollup {");
+    expect(LIST_PRS_QUERY).toContain("state");
+  });
 });
 
 describe("SEARCH_QUERY", () => {
@@ -192,11 +231,20 @@ describe("SEARCH_QUERY", () => {
     const prFragment = SEARCH_QUERY.slice(SEARCH_QUERY.indexOf("... on PullRequest"));
     expect(prFragment).toContain("comments");
   });
+
+  it("selects reviewDecision in the PR fragment so searched PRs carry the badge", () => {
+    const prFragment = SEARCH_QUERY.slice(SEARCH_QUERY.indexOf("... on PullRequest"));
+    expect(prFragment).toContain("reviewDecision");
+  });
 });
 
 describe("GET_PR_QUERY", () => {
   it("fetches comments totalCount", () => {
     expect(GET_PR_QUERY).toContain("comments");
+  });
+
+  it("selects reviewDecision so getPR matches listPRs", () => {
+    expect(GET_PR_QUERY).toContain("reviewDecision");
   });
 });
 
@@ -223,6 +271,11 @@ describe("buildBatchPRQuery — statusCheckRollup", () => {
     const matches = query.match(/statusCheckRollup \{ state \}/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("requests updatedAt on issue-timeline PR fragments for latest-linked-PR selection", () => {
+    const query = buildBatchPRQuery("owner", "repo", [{ worktreeId: "wt-1", issueNumber: 42 }]);
+    expect(query).toContain("updatedAt");
   });
 });
 
@@ -483,5 +536,162 @@ describe("buildBatchBranchPRQuery", () => {
 
   it("exports BATCH_BRANCH_CHUNK_SIZE as 20 (per-chunk cap)", () => {
     expect(BATCH_BRANCH_CHUNK_SIZE).toBe(20);
+  });
+});
+
+describe("GRAPHQL_BATCH_CHUNK_SIZE", () => {
+  it("equals BATCH_BRANCH_CHUNK_SIZE", () => {
+    expect(GRAPHQL_BATCH_CHUNK_SIZE).toBe(BATCH_BRANCH_CHUNK_SIZE);
+  });
+});
+
+describe("buildBatchIssuesQuery", () => {
+  it("returns empty string for empty array", () => {
+    expect(buildBatchIssuesQuery("owner", "repo", [])).toBe("");
+  });
+
+  it("returns empty string when all numbers are invalid", () => {
+    expect(buildBatchIssuesQuery("owner", "repo", [-1, 0, 1.5])).toBe("");
+  });
+
+  it("filters out negative, zero, and non-integer numbers", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [-1, 0, 1.5, 5]);
+    expect(query).toContain("i5: issue(number: 5)");
+    expect(query).not.toContain("i-1");
+    expect(query).not.toContain("i0");
+    expect(query).not.toContain("i1.5");
+  });
+
+  it("uses a single repository block with field-level aliases", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1, 2, 3]);
+    // Exactly one "repository(owner:" block
+    const repoMatches = query.match(/repository\(owner:/g);
+    expect(repoMatches?.length).toBe(1);
+    expect(query).toContain("i1: issue");
+    expect(query).toContain("i2: issue");
+    expect(query).toContain("i3: issue");
+  });
+
+  it("aliases use i{num} prefix", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [42]);
+    expect(query).toContain("i42: issue(number: 42)");
+  });
+
+  it("includes the full field set from GET_ISSUE_QUERY", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1]);
+    expect(query).toContain("number");
+    expect(query).toContain("title");
+    expect(query).toContain("bodyText");
+    expect(query).toContain("url");
+    expect(query).toContain("state");
+    expect(query).toContain("createdAt");
+    expect(query).toContain("updatedAt");
+    expect(query).toContain("closedAt");
+    expect(query).toContain("author {");
+    expect(query).toContain("assignees(first: 10)");
+    expect(query).toContain("comments {");
+    expect(query).toContain("labels(first: 10)");
+    expect(query).toContain("timelineItems");
+    expect(query).toContain("CROSS_REFERENCED_EVENT");
+    expect(query).toContain("CONNECTED_EVENT");
+  });
+
+  it("includes rateLimit at operation root", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1]);
+    expect(query).toContain("rateLimit {");
+    expect(query).toContain("cost");
+    expect(query).toContain("remaining");
+    expect(query).toContain("resetAt");
+  });
+
+  it("escapes owner and repo with special characters", () => {
+    const query = buildBatchIssuesQuery('my"owner', "repo\\name", [1]);
+    expect(query).toContain('owner: "my\\"owner"');
+    expect(query).toContain('name: "repo\\\\name"');
+  });
+
+  it("does not declare $query variable", () => {
+    const query = buildBatchIssuesQuery("owner", "repo", [1, 2]);
+    expect(query).not.toContain("$query");
+  });
+});
+
+describe("buildBatchPRsQuery", () => {
+  it("returns empty string for empty array", () => {
+    expect(buildBatchPRsQuery("owner", "repo", [])).toBe("");
+  });
+
+  it("returns empty string when all numbers are invalid", () => {
+    expect(buildBatchPRsQuery("owner", "repo", [-1, 0, 1.5])).toBe("");
+  });
+
+  it("filters out negative, zero, and non-integer numbers", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [-1, 0, 1.5, 10]);
+    expect(query).toContain("p10: pullRequest(number: 10)");
+    expect(query).not.toContain("p-1");
+    expect(query).not.toContain("p0");
+    expect(query).not.toContain("p1.5");
+  });
+
+  it("uses a single repository block with field-level aliases", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [10, 11]);
+    const repoMatches = query.match(/repository\(owner:/g);
+    expect(repoMatches?.length).toBe(1);
+    expect(query).toContain("p10: pullRequest");
+    expect(query).toContain("p11: pullRequest");
+  });
+
+  it("aliases use p{num} prefix", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [99]);
+    expect(query).toContain("p99: pullRequest(number: 99)");
+  });
+
+  it("includes the full field set from GET_PR_QUERY", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).toContain("number");
+    expect(query).toContain("title");
+    expect(query).toContain("bodyText");
+    expect(query).toContain("url");
+    expect(query).toContain("state");
+    expect(query).toContain("isDraft");
+    expect(query).toContain("merged");
+    expect(query).toContain("createdAt");
+    expect(query).toContain("updatedAt");
+    expect(query).toContain("closedAt");
+    expect(query).toContain("mergedAt");
+    expect(query).toContain("baseRefName");
+    expect(query).toContain("headRefName");
+    expect(query).toContain("headRepository");
+    expect(query).toContain("baseRepository");
+    expect(query).toContain("author {");
+    expect(query).toContain("assignees(first: 10)");
+    expect(query).toContain("comments {");
+    expect(query).toContain("labels(first: 10)");
+    expect(query).toContain("commits(last: 1)");
+    expect(query).toContain("statusCheckRollup");
+  });
+
+  it("does not include unused review-count fields", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).not.toContain("reviews(first: 1)");
+  });
+
+  it("includes rateLimit at operation root", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1]);
+    expect(query).toContain("rateLimit {");
+    expect(query).toContain("cost");
+    expect(query).toContain("remaining");
+    expect(query).toContain("resetAt");
+  });
+
+  it("escapes owner and repo with special characters", () => {
+    const query = buildBatchPRsQuery('my"owner', "repo\\name", [1]);
+    expect(query).toContain('owner: "my\\"owner"');
+    expect(query).toContain('name: "repo\\\\name"');
+  });
+
+  it("does not declare $query variable", () => {
+    const query = buildBatchPRsQuery("owner", "repo", [1, 2]);
+    expect(query).not.toContain("$query");
   });
 });

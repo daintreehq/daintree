@@ -1,6 +1,11 @@
 import type React from "react";
 import { useEffect, useLayoutEffect, useState } from "react";
-import { AppDialog, type DialogInitialFocus, type DialogZIndex } from "@/components/ui/AppDialog";
+import {
+  AppDialog,
+  type DialogInitialFocus,
+  type DialogZIndex,
+  type RestoreFocusTarget,
+} from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 
 const DESTRUCTIVE_CONFIRM_LABEL_RE =
@@ -64,6 +69,13 @@ type ConfirmDialogBaseProps = {
   cooldownKey?: string | number;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
+  /**
+   * Forwarded to {@link AppDialog.restoreFocusTo}: a logical successor to
+   * receive focus when the trigger has unmounted before close (e.g. the row a
+   * destructive confirm just deleted). Falls back to the app shell when absent
+   * or disconnected.
+   */
+  restoreFocusTo?: RestoreFocusTarget;
 };
 
 export type ConfirmDialogProps =
@@ -93,6 +105,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     variant,
     zIndex,
     initialFocus,
+    restoreFocusTo,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -184,6 +197,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       variant={variant}
       zIndex={zIndex}
       initialFocus={initialFocus}
+      restoreFocusTo={restoreFocusTo}
     >
       <AppDialog.Header>
         <AppDialog.Title>{title}</AppDialog.Title>

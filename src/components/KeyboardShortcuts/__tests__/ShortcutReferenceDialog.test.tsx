@@ -306,13 +306,108 @@ describe("ShortcutReferenceDialog", () => {
     expect(unboundCell.tagName.toLowerCase()).toBe("span");
   });
 
-  it("uses dl/dt/dd semantics for shortcut rows", () => {
+  it("uses list/listitem roles for shortcut rows", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    const dl = document.querySelector("dl");
-    expect(dl).toBeTruthy();
-    expect(document.querySelectorAll("dt").length).toBeGreaterThan(0);
-    expect(document.querySelectorAll("dd").length).toBeGreaterThan(0);
+    const lists = screen.getAllByRole("list");
+    expect(lists.length).toBeGreaterThan(0);
+    const listItems = screen.getAllByRole("listitem");
+    expect(listItems.length).toBeGreaterThan(0);
+  });
+
+  it("search input has aria-controls linking to results container", () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const input = screen.getByLabelText("Search shortcuts");
+    const controlsId = input.getAttribute("aria-controls");
+    expect(controlsId).toBeTruthy();
+    const results = document.getElementById(controlsId!);
+    expect(results).toBeTruthy();
+  });
+
+  it("includes sr-only live region for result count announcements", () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const statusRegions = screen.getAllByRole("status");
+    const countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
+    expect(countRegion).toBeTruthy();
+    expect(countRegion!.getAttribute("aria-live")).toBe("polite");
+    expect(countRegion!.getAttribute("aria-atomic")).toBe("true");
+  });
+
+  it("empty state container has status role for screen reader announcement", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "nonexistent" } });
+
+    await waitFor(() => {
+      const emptyDiv = screen.getByText('No shortcuts found matching "nonexistent"');
+      expect(emptyDiv.closest('[role="status"]')).toBeTruthy();
+      expect(emptyDiv.closest('[aria-live="polite"]')).toBeTruthy();
+    });
+  });
+
+  it("sr-only count updates when search filters results", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const countRegion = screen
+      .getAllByRole("status")
+      .find((el) => el.textContent?.includes("shortcut"));
+    expect(countRegion?.textContent).toBe("6 shortcuts");
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "stash" } });
+
+    await waitFor(() => {
+      const updated = screen
+        .getAllByRole("status")
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(updated?.textContent).toBe('1 shortcut found for "stash"');
+    });
+  });
+
+  it("sr-only count region is always mounted", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    // Should exist when results are shown
+    let statusRegions = screen.getAllByRole("status");
+    let countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
+    expect(countRegion).toBeTruthy();
+
+    // Should still exist when search yields no results
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "nonexistent" } });
+
+    await waitFor(() => {
+      statusRegions = screen.getAllByRole("status");
+      countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
+      expect(countRegion).toBeTruthy();
+    });
+  });
+
+  it("sr-only announcement changes when same-count but different results", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+
+    // settings → 1 result
+    fireEvent.change(searchInput, { target: { value: "settings" } });
+    await waitFor(() => {
+      const region = screen
+        .getAllByRole("status")
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(region?.textContent).toBe('1 shortcut found for "settings"');
+    });
+
+    // stash → also 1 result, but different text → re-announces
+    fireEvent.change(searchInput, { target: { value: "stash" } });
+    await waitFor(() => {
+      const region = screen
+        .getAllByRole("status")
+        .find((el) => el.textContent?.includes("shortcut"));
+      expect(region?.textContent).toBe('1 shortcut found for "stash"');
+    });
   });
 
   it("footer renders Esc inside a kbd element", () => {

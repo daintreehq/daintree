@@ -201,10 +201,24 @@ const PopoverContent = React.forwardRef<
 >(({ className, align = "center", sideOffset = 4, collisionBoundary, style, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const [boundary, setBoundary] = React.useState<HTMLElement | null>(null);
+  // Floating UI's autoUpdate observes the reference/floating elements but not the
+  // collision boundary. The portal boundary's width tracks --right-obstruction-offset,
+  // which changes when the right native panel toggles — so an open popover would keep a
+  // stale position. Observe the boundary and bump a tick to re-run Radix's positioning.
+  const [repositionTick, setRepositionTick] = React.useState(0);
 
   React.useEffect(() => {
-    setBoundary(getPortalBoundary());
-  }, []);
+    const element = getPortalBoundary();
+    setBoundary(element);
+
+    // When a caller supplies their own boundary the portal boundary is unused, so there
+    // is nothing to observe.
+    if (collisionBoundary || !element || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => setRepositionTick((tick) => tick + 1));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [collisionBoundary]);
 
   if (!radix) return null;
   const Portal = radix.PopoverPrimitive.Portal;
@@ -219,10 +233,12 @@ const PopoverContent = React.forwardRef<
         style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
         className={cn(
           "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-[120ms] data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className
         )}
         {...props}
+        // Internal reposition trigger must win over any caller-supplied value.
+        data-reposition-tick={repositionTick}
       />
     </Portal>
   );

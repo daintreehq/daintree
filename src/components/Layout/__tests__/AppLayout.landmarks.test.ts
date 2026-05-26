@@ -45,8 +45,9 @@ describe("ARIA page landmarks — issue #5416", () => {
       source = await fs.readFile(SIDEBAR_PATH, "utf-8");
     });
 
-    it("uses an <aside> landmark with an accessible name", () => {
-      expect(source).toMatch(/<aside[^>]*aria-label="Sidebar"/);
+    it("uses an <aside> region landmark with an accessible name", () => {
+      expect(source).toMatch(/<aside[\s\S]*?aria-label="Sidebar"/);
+      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
     });
   });
 
@@ -56,9 +57,9 @@ describe("ARIA page landmarks — issue #5416", () => {
       source = await fs.readFile(TERMINAL_DOCK_PATH, "utf-8");
     });
 
-    it("uses an <aside> complementary landmark with an accessible name", () => {
+    it("uses an <aside> region landmark with an accessible name", () => {
       expect(source).toMatch(/<aside[\s\S]*?aria-label="Dock"/);
-      expect(source).not.toMatch(/role="region"/);
+      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
     });
 
     it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
@@ -69,8 +70,17 @@ describe("ARIA page landmarks — issue #5416", () => {
       // The dock always renders interactive content (Help Agent button,
       // status containers), so aria-hidden would trap focusable controls
       // beneath aria-hidden=true and fail axe's aria-hidden-focus rule.
+      // `inert` is used instead — see test below.
       expect(source).not.toMatch(/aria-hidden=\{[^}]*hasDocked[^}]*\}/);
       expect(source).not.toMatch(/aria-hidden="true"/);
+    });
+
+    it("uses `inert` only when the dock has no interactive descendants", () => {
+      // When no panels are docked and no status affordances are visible, the
+      // aside is a dead-end landmark. Trash/waiting status controls must keep
+      // the dock interactive so pointer and keyboard users can restore panels.
+      expect(source).toMatch(/const shouldInertDock = !hasDocked && !hasStatus;/);
+      expect(source).toMatch(/inert=\{shouldInertDock \|\| undefined\}/);
     });
   });
 
@@ -80,9 +90,9 @@ describe("ARIA page landmarks — issue #5416", () => {
       source = await fs.readFile(PORTAL_DOCK_PATH, "utf-8");
     });
 
-    it("uses an <aside> complementary landmark with an accessible name", () => {
+    it("uses an <aside> region landmark with an accessible name", () => {
       expect(source).toMatch(/<aside[\s\S]*?aria-label="Portal"/);
-      expect(source).not.toMatch(/role="region"/);
+      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
     });
 
     it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {

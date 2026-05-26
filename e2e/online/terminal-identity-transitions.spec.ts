@@ -489,7 +489,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
       diagnostics = createIdentityDiagnostics(ctx);
       const { app, window } = ctx;
       await mockOpenDialog(app, fixtureDir);
-      await window.getByRole("button", { name: "Open Folder" }).click();
+      await window.getByRole("button", { name: "Open folder" }).click();
     });
 
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);

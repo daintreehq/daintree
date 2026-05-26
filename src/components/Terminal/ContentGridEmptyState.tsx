@@ -7,6 +7,7 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncate } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
@@ -50,9 +51,8 @@ export function ContentGridEmptyState({
   const hasEverLaunchedAgent = usePanelStore((state) =>
     state.panelIds.some((id) => {
       const p = state.panelsById[id];
-      return (
-        Boolean(p?.launchAgentId) || Boolean(p?.detectedAgentId) || p?.everDetectedAgent === true
-      );
+      if (!p || !isPtyPanel(p)) return false;
+      return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
     })
   );
   // Suppress RecipeRunner until the recipe store has settled for the current

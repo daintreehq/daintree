@@ -2,9 +2,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { ErrorsContainer } from "../ErrorsContainer";
-import type { TerminalInstance } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
-const mockErrored: TerminalInstance[] = [
+const mockErrored: PtyPanelData[] = [
   {
     id: "t1",
     title: "Agent 1",
@@ -14,7 +14,10 @@ const mockErrored: TerminalInstance[] = [
     location: "grid",
     agentState: "exited",
     exitCode: 1,
-  } as TerminalInstance,
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
+  } as PtyPanelData,
 ];
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({

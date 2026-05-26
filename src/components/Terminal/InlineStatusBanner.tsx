@@ -113,7 +113,11 @@ export function InlineStatusBanner({
   autoDismissAfter,
 }: InlineStatusBannerProps) {
   const prefersReducedMotion =
-    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    typeof window !== "undefined" &&
+    (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      (typeof document !== "undefined" &&
+        (document.body.getAttribute("data-reduce-animations") === "true" ||
+          document.body.getAttribute("data-performance-mode") === "true")));
   const shouldAnimate = animated && !prefersReducedMotion;
 
   const [isVisible, setIsVisible] = useState(!shouldAnimate);

@@ -7,7 +7,7 @@ import type {
   DevPreviewPanelData,
   ReviewPanelData,
 } from "@shared/types/panel";
-import { isBuiltInPanelKind } from "@shared/types/panel";
+import { isBuiltInPanelKind, type BuiltInPanelKind } from "@shared/types/panel";
 import type {
   TerminalPanelOptions,
   BrowserPanelOptions,
@@ -142,15 +142,8 @@ const BUILT_IN_SERIALIZE_DEFAULTS = {
 export function initBuiltInPanelKinds(): void {
   for (const [kindId, hooks] of Object.entries(BUILT_IN_SERIALIZE_DEFAULTS)) {
     const existing = requirePanelKindConfig(kindId);
-    // Narrow per-kind hooks are widened to the shared PanelKindConfig contract
-    // here — this is the single seam between the typed registry map above and
-    // the extension-friendly wide interface. Function parameter contravariance
-    // makes this cast necessary; it is intentionally isolated to this function.
-    // Do NOT change PanelKindConfig.serialize / createDefaults to method syntax
-    // (`serialize(panel: …): …`). Method syntax is bivariant under
-    // strictFunctionTypes and would silently accept the unsafe widening this
-    // cast deliberately isolates — the property-syntax form is what makes the
-    // cast meaningful instead of redundant.
+    // Narrow per-kind hooks widened to PanelKindConfig — property-syntax
+    // invariant enforced by @typescript-eslint/method-signature-style.
     const serialize = hooks.serialize as PanelKindConfig["serialize"];
     const createDefaults = hooks.createDefaults as PanelKindConfig["createDefaults"];
     if (existing.serialize !== serialize || existing.createDefaults !== createDefaults) {
@@ -168,15 +161,16 @@ function requirePanelKindConfig(kind: string): PanelKindConfig {
   return config;
 }
 
-// `Record<string, …>` is intentional: registerPanelKindDefinition mutates this
-// object by dynamic id, which requires the index signature. `satisfies` would
-// strip it from the inferred type and break the mutation site.
+// `Record<string, …>` stays for registerPanelKindDefinition runtime mutation
+// (dynamic string keys). `satisfies Record<BuiltInPanelKind, …>` on the
+// initializer below catches a missing built-in kind at compile time without
+// stripping the index signature from the declared type.
 const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPane },
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
   review: { ...requirePanelKindConfig("review"), component: ReviewPaneWrapper },
-};
+} satisfies Record<BuiltInPanelKind, PanelKindDefinition>;
 
 /**
  * Reactive snapshot for `useSyncExternalStore`. Replaced (not mutated) on

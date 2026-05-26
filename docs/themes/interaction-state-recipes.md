@@ -238,7 +238,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 Accent color is a scarce resource, not a default. These are the only contexts where accent is permitted:
 
 - **Focus rings** — Every interactive element. `focus-visible:outline-daintree-accent` on buttons, inputs, list items, tree nodes.
-- **Primary view anchor** — The single load-bearing signal per view: armed terminal, focused worktree card, primary CTA button.
+- **Primary view anchor** — The single load-bearing signal per active focus region: armed terminal, focused worktree card, primary CTA button.
 - **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css` line 97.)
 - **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).
 - **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitch.tsx` `COLOR_SCHEMES`).

@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the GitHub stats cache via sync fs
 import { readFileSync, existsSync, mkdirSync } from "fs";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { getWritesSuppressed } from "./diskPressureState.js";

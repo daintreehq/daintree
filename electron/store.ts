@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the electron-store JSON file via sync fs (it is the synchronous store itself)
 import Store from "electron-store";
 import fs from "fs";
 import path from "path";

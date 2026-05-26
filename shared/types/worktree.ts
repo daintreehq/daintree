@@ -193,6 +193,13 @@ export interface Worktree {
    */
   branchDerivedTitle?: string;
 
+  /**
+   * PR number this worktree was created from via the GitHub PR dropdown (#8888).
+   * When set, the card shows the PR title as the primary headline with the linked
+   * issue underneath, inverting the default issue-first display.
+   */
+  sourcePrNumber?: number;
+
   /** Timestamp when the issue title was last updated by the workspace-host */
   issueLastUpdatedAt?: number;
 

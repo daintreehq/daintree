@@ -175,6 +175,31 @@ describe("createDragAnnouncements — global DndProvider factory", () => {
     ).toBe("Drag cancelled. Claude Agent returned to its original position");
   });
 
+  it("onDragCancel stays silent for worktree-sort drags so it doesn't double-announce — issue #8942", () => {
+    // The sidebar's own assertive live region announces worktree-sort cancels
+    // (SidebarContent's useDndMonitor.onDragCancel). dnd-kit's announcer also
+    // fires onDragCancel for every drag, so without this guard a worktree-sort
+    // Escape speaks the cancellation twice. Returning undefined is a safe no-op
+    // (useAnnouncement ignores nullish values).
+    const announcements = createDragAnnouncements(makeRefs(), resolveActive, resolveOver);
+    expect(
+      announcements.onDragCancel!({
+        active: makeActive({ type: "worktree-sort", worktreeId: "wt-1" }),
+        over: null,
+      })
+    ).toBeUndefined();
+  });
+
+  it("onDragCancel still announces for non-worktree-sort drags", () => {
+    const announcements = createDragAnnouncements(makeRefs(), resolveActive, resolveOver);
+    expect(
+      announcements.onDragCancel!({
+        active: makeActive({ type: "panel", terminal: { title: "Claude Agent" } }),
+        over: null,
+      })
+    ).toBe("Drag cancelled. Claude Agent returned to its original position");
+  });
+
   it("position string still resolves even when refs survive past the drop event", () => {
     // Regression: the monitor clears refs at the *next* onDragStart, not at
     // onDragEnd, because dnd-kit dispatches listeners in insertion order and

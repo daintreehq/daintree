@@ -8,6 +8,7 @@ import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
@@ -84,7 +85,8 @@ export function FleetCountChip({
     useShallow((state) => {
       const out: Record<string, AgentState | undefined> = {};
       for (const id of armOrder) {
-        out[id] = state.panelsById[id]?.agentState;
+        const p = state.panelsById[id];
+        out[id] = p && isPtyPanel(p) ? p.agentState : undefined;
       }
       return out;
     })

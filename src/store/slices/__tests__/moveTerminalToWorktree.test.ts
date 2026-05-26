@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
-import { type TerminalInstance } from "../panelRegistrySlice";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -15,6 +15,7 @@ vi.mock("@/clients", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     applyRendererPolicy: vi.fn(),
+    onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
   },
 }));
@@ -32,7 +33,7 @@ const { usePanelStore } = await import("../../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { panelPersistence } = await import("../../persistence/panelPersistence");
 
-function setTerminals(terminals: TerminalInstance[]) {
+function setTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),
@@ -43,10 +44,11 @@ function createMockTerminal(
   id: string,
   worktreeId: string,
   location: "grid" | "dock" | "trash" = "grid"
-): TerminalInstance {
+): PtyPanelData {
   return {
     id,
     title: `Terminal ${id}`,
+    kind: "terminal" as const,
     cwd: "/test",
     cols: 80,
     rows: 24,

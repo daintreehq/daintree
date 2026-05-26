@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
@@ -24,14 +26,14 @@ interface BackgroundContainerProps {
 
 interface BackgroundDisplaySingle {
   type: "single";
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
 }
 
 interface BackgroundDisplayGroup {
   type: "group";
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
-  terminals: TerminalInstance[];
+  terminals: PtyPanelData[];
 }
 
 type BackgroundDisplayItem = BackgroundDisplaySingle | BackgroundDisplayGroup;
@@ -93,10 +95,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       string,
       {
         metadata: TrashedTerminalGroupMetadata | undefined;
-        terminals: TerminalInstance[];
+        terminals: PtyPanelData[];
       }
     >();
-    const singles: TerminalInstance[] = [];
+    const singles: PtyPanelData[] = [];
 
     for (const terminal of terminals) {
       const bgInfo = backgroundedTerminals.get(terminal.id);
@@ -143,7 +145,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   }, [terminals, backgroundedTerminals]);
 
   const handleRestoreSingle = useCallback(
-    (terminal: TerminalInstance) => {
+    (terminal: PtyPanelData) => {
       const worktreeId = terminal.worktreeId?.trim();
       if (worktreeId && worktreeId !== activeWorktreeId) {
         trackTerminalFocus(worktreeId, terminal.id);
@@ -192,7 +194,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   );
 
   const handleWatchToggle = useCallback(
-    (terminal: TerminalInstance) => {
+    (terminal: PtyPanelData) => {
       const id = terminal.id;
       if (watchedPanels.has(id)) {
         unwatchPanel(id);
@@ -218,10 +220,19 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
 
   const handleKillConfirm = useCallback(() => {
     if (killConfirmId) {
+      const target = terminals.find((t) => t.id === killConfirmId);
       removePanel(killConfirmId);
+      // Close the confirm dialog first so the announce reaches AT after focus
+      // returns to the main tree (VoiceOver suppresses live-region updates
+      // from outside the active modal subtree).
+      setKillConfirmId(null);
+      useAnnouncerStore
+        .getState()
+        .announce(target?.title ? `${target.title} killed` : "Terminal killed");
+      return;
     }
     setKillConfirmId(null);
-  }, [killConfirmId, removePanel]);
+  }, [killConfirmId, removePanel, terminals]);
 
   if (terminals.length === 0) return null;
 
@@ -363,11 +374,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
 }
 
 interface BackgroundSingleItemProps {
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
   worktreeName: string | undefined;
   isWatched: boolean;
-  onRestore: (terminal: TerminalInstance) => void;
-  onWatchToggle: (terminal: TerminalInstance) => void;
+  onRestore: (terminal: PtyPanelData) => void;
+  onWatchToggle: (terminal: PtyPanelData) => void;
   onKill: (terminalId: string) => void;
   compact?: boolean;
 }
@@ -522,12 +533,12 @@ function BackgroundGroupItem({
 }: {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
-  terminals: TerminalInstance[];
+  terminals: PtyPanelData[];
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
   watchedPanels: Set<string>;
   onRestoreGroup: (groupRestoreId: string, metadata: TrashedTerminalGroupMetadata) => void;
-  onRestoreSingle: (terminal: TerminalInstance) => void;
-  onWatchToggle: (terminal: TerminalInstance) => void;
+  onRestoreSingle: (terminal: PtyPanelData) => void;
+  onWatchToggle: (terminal: PtyPanelData) => void;
   onKill: (terminalId: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);

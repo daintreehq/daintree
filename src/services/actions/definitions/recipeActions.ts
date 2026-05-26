@@ -4,7 +4,11 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { TerminalSpawnSourceSchema, RecipeSummarySchema } from "./schemas";
+import {
+  TerminalSpawnSourceSchema,
+  RecipeSummarySchema,
+  AddPanelFocusPolicySchema,
+} from "./schemas";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () =>
@@ -58,8 +62,9 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         recipeId: z.string(),
         worktreeId: z.string().optional(),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),
-      run: async ({ recipeId, worktreeId, spawnedBy }, ctx: ActionContext) => {
+      run: async ({ recipeId, worktreeId, spawnedBy, focusPolicy }, ctx: ActionContext) => {
         const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;
         const worktree = targetWorktreeId
           ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
@@ -76,14 +81,17 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
-        if (spawnedBy === undefined) {
+        if (spawnedBy !== undefined || focusPolicy !== undefined) {
           await useRecipeStore
             .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext);
+            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
+              spawnedBy,
+              focusPolicy,
+            });
         } else {
           await useRecipeStore
             .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, { spawnedBy });
+            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext);
         }
       },
     })

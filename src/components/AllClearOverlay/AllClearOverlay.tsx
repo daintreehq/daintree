@@ -8,6 +8,7 @@ export function AllClearOverlay() {
   useEffect(() => {
     const cleanup = window.electron.terminal.onAllAgentsClear(() => {
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      if (document.body.getAttribute("data-reduce-animations") === "true") return;
       if (document.body.getAttribute("data-performance-mode") === "true") return;
 
       setVisible(true);

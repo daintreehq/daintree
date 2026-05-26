@@ -17,7 +17,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore, type FleetPickerOwner } from "@/store/fleetPickerSessionStore";
-import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
+import type { SemanticSearchMatch } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 // Fallback empty worktree store for hosts that mount the picker without a
 // `WorktreeStoreContext.Provider` (e.g. legacy ribbon tests, places where the
@@ -43,7 +44,7 @@ export interface PickerTerminal {
   id: string;
   title: string;
   worktreeId: string;
-  agentState: TerminalInstance["agentState"];
+  agentState: PtyPanelData["agentState"];
 }
 
 export interface PickerWorktreeGroup {

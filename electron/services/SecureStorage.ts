@@ -1,3 +1,4 @@
+// eager-import-allow: reads the secure-storage map via store.get synchronously at module scope
 import { store, type StoreSchema } from "../store.js";
 
 export type SecureKey = "userConfig.githubToken";

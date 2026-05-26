@@ -2,6 +2,15 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
+import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+
+function readBrowserUrl(id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  const panel = usePanelStore.getState().panelsById[id];
+  if (!panel) return undefined;
+  if (isBrowserPanel(panel) || isDevPreviewPanel(panel)) return panel.browserUrl;
+  return undefined;
+}
 
 export function registerBrowserActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("browser.reload", () => ({
@@ -93,8 +102,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     run: async (args: unknown) => {
       const { terminalId, url } = (args as { terminalId?: string; url?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId ?? undefined;
-      const derivedUrl =
-        url ?? (targetId ? usePanelStore.getState().panelsById[targetId]?.browserUrl : undefined);
+      const derivedUrl = url ?? readBrowserUrl(targetId);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to open externally");
@@ -118,8 +126,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     run: async (args: unknown) => {
       const { terminalId, url } = (args as { terminalId?: string; url?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId ?? undefined;
-      const derivedUrl =
-        url ?? (targetId ? usePanelStore.getState().panelsById[targetId]?.browserUrl : undefined);
+      const derivedUrl = url ?? readBrowserUrl(targetId);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to copy");

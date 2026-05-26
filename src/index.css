@@ -661,11 +661,18 @@ code.hljs {
   --terminal-animation-duration: 50ms;
   --focus-transition-duration: 150ms;
   --focus-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
-  /* Anti-flicker (Doherty) gate — single source of truth for the 400ms
-   * perceptual floor below which loading affordances should stay hidden.
+  /* Anti-flicker (Doherty) gate — 400ms perceptual floor below which loading
+   * affordances should stay hidden. Used by `.animate-pulse-delayed` skeletons
+   * and discrete-action stale surfaces (`.surface-stale`).
    * Mirror of UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts; the contract
    * test in src/lib/__tests__/animationUtils.test.ts enforces parity. */
   --anti-flicker-delay: 400ms;
+  /* Palette typed-input stale-dim gate — 200ms. Shorter than Doherty because
+   * keystrokes arrive every ~200ms at normal typing speed, so a 400ms gate
+   * would almost never fire before being reset. Industry convention (Algolia
+   * `stalledSearchDelay`, React `useDeferredValue` examples) is 200ms.
+   * Mirror of UI_PALETTE_STALE_DELAY in src/lib/animationUtils.ts. */
+  --anti-flicker-delay-palette: 200ms;
   --background: var(--theme-surface-canvas);
   --foreground: var(--theme-text-primary);
   --card: var(--theme-surface-panel);
@@ -697,7 +704,7 @@ code.hljs {
   --sidebar-accent: var(--theme-overlay-soft);
   --sidebar-accent-foreground: var(--theme-text-primary);
   --sidebar-border: var(--theme-border-default);
-  --sidebar-ring: var(--theme-focus-ring);
+  --sidebar-ring: var(--theme-accent-primary);
 }
 
 /* Compact density mode for dock - reduced padding and heights */
@@ -1093,24 +1100,6 @@ body,
   will-change: transform, opacity;
 }
 
-/* Voice recording: rotating conic border ring */
-@keyframes voice-ring-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Subtle opacity pulse for voice recording indicator */
-@keyframes voice-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
 /* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {
@@ -1156,19 +1145,28 @@ body,
   will-change: opacity;
 }
 
-/* Stale-dim for surfaces during a deferred refresh or filter pass.
- * `palette-results-stale` is the original palette-listbox callsite (driven by
- * `useSearchablePalette`'s `isStale` flag); `surface-stale` is the generic
- * alias used by larger surfaces (e.g., the Review and Commit modal during a
- * background `git status` refresh). The 400ms transition-delay matches the
- * Doherty anti-flicker gate: if the deferred work resolves in under one frame
- * (typical for ~258 actions on fast hardware), the dim never starts. On a
- * genuinely overloaded render the surface fades to half opacity as a "still
- * working" cue.
- * The 400ms gate lives in the --anti-flicker-delay token in :root above; the
- * UI_DOHERTY_THRESHOLD constant in src/lib/animationUtils.ts mirrors it for
- * JS consumers. */
-.palette-results-stale,
+/* Stale-dim for surfaces during a deferred refresh or filter pass. Two flavors:
+ *
+ * `.palette-results-stale` — palette listbox driven by `useSearchablePalette`'s
+ * `isStale` flag. Typed-input feedback, so it uses the shorter 200ms
+ * `--anti-flicker-delay-palette` gate (keystrokes arrive every ~200ms; a 400ms
+ * gate almost never fires). Opacity floor is 0.6 — less aggressive than the
+ * discrete-action 0.5 so the text stays legible while users keep typing or
+ * arrow-key through results.
+ *
+ * `.surface-stale` — generic discrete-action stale alias used by larger
+ * surfaces (e.g., the Review and Commit modal during a background `git status`
+ * refresh). Stays on the 400ms `--anti-flicker-delay` Doherty gate at 0.5
+ * opacity because the trigger is a background refresh, not live typing.
+ *
+ * Both tokens live in `:root` above. Their JS counterparts (UI_PALETTE_STALE_DELAY,
+ * UI_DOHERTY_THRESHOLD) are in src/lib/animationUtils.ts and parity is
+ * enforced by the drift-contract test in animationUtils.test.ts. */
+.palette-results-stale {
+  opacity: 0.6;
+  transition: opacity 150ms ease-out var(--anti-flicker-delay-palette);
+}
+
 .surface-stale {
   opacity: 0.5;
   transition: opacity 150ms ease-out var(--anti-flicker-delay);
@@ -1551,6 +1549,42 @@ body,
   z-index: 2;
 }
 
+/* Fleet preview enter cue — a one-shot tint flash on the title bar that
+ * fires when a pane enters the preview set. Distinguishes the transient
+ * hover-preview state from the durable multi-select state, which share
+ * neutral surface tints and would otherwise read identically. Kinetic-only
+ * cue: the static `bg-tint/[0.05]` tint persists; this overlay just
+ * announces the entry. Mounted on a span keyed by a per-pane generation
+ * counter so each false→true transition re-fires the animation cleanly
+ * without forced reflow.
+ */
+@keyframes fleet-preview-enter {
+  0% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.fleet-preview-enter-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  /* opacity: 0 rest state — the keyframe drives the pulse, and this keeps the
+   * overlay invisible when the animation is killed (data-performance-mode
+   * wildcard sets `animation: none`), avoiding a frozen static tint. */
+  opacity: 0;
+  background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
+  animation: fleet-preview-enter 150ms cubic-bezier(0.4, 0, 0.2, 1) 1 both;
+  will-change: opacity;
+  z-index: 2;
+}
+
 /* FileChangeList row-recency cue — a transient left-edge gutter bar that
  * acknowledges rows freshly arrived between renders. The 2000ms duration is a
  * semantic exception to Tier 1 (150ms): the decay IS the "newness" signal,
@@ -1622,9 +1656,10 @@ body,
     will-change: auto;
   }
 
-  /* The global `transition: none` rules below would strip the 400ms delay,
-   * letting any sub-frame stale flip flash the surface to half opacity. Keep
-   * stale surfaces at full opacity instead. WCAG 2.3.3. */
+  /* The global `transition: none` rules below would strip the anti-flicker
+   * delay (200ms for palette, 400ms for surface), letting any sub-frame stale
+   * flip flash the surface to a dim opacity. Keep stale surfaces at full
+   * opacity instead. WCAG 2.3.3. */
   .palette-results-stale,
   .surface-stale {
     opacity: 1 !important;
@@ -1657,6 +1692,12 @@ body,
   }
 
   .fleet-exit-pulse-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  .fleet-preview-enter-overlay {
     animation: none;
     opacity: 0;
     will-change: auto;
@@ -1791,9 +1832,8 @@ body,
   }
 }
 
-/* Diagnostics dock — 200ms height transition (semantic exception per CLAUDE.md):
- * height encodes open/close state. Suppressed during active drag and under
- * reduced-motion to mirror the .terminal-restoring peer pattern. */
+/* Diagnostics dock — 200ms height transition.
+ * Suppressed during active drag and under reduced-motion. */
 .diagnostics-dock {
   transition: height 200ms ease-out;
 }
@@ -1820,6 +1860,19 @@ body,
 /* Ensure header separator uses overlay token for consistency */
 .terminal-selected > div:first-child {
   border-bottom-color: var(--border-overlay);
+}
+
+/* Daintree Assistant focus state — anchors the active-surface affordance on
+   the aside edge (border-left + 1px rings) while the surface-lift fill lives
+   on the header only (`HelpPanelHeader` uses `bg-overlay-subtle` when
+   focused). Filling the whole aside floods the launching skeleton, the empty
+   state, and any future no-terminal content with the lift, so the chrome is
+   scoped here to edges only. */
+.assistant-focused {
+  border-left-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
+  box-shadow:
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong);
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */
@@ -2485,12 +2538,12 @@ body[data-performance-mode="true"] .animate-hint-fade-in {
   opacity: 1 !important;
 }
 
-/* Stale surfaces use a 150ms opacity transition with a 400ms delay (see
- * `.palette-results-stale` definition). The narrowed perf-mode wildcard
- * preserves the `opacity` transition-property, so the delay would still
- * apply — `opacity: 1 !important` alone would wait 400ms before resetting.
- * Kill the transition outright on this scoped selector so the reset is
- * instant when performance mode kicks in mid-stale. */
+/* Stale surfaces use a 150ms opacity transition with an anti-flicker delay
+ * (200ms for `.palette-results-stale`, 400ms for `.surface-stale`). The
+ * narrowed perf-mode wildcard preserves the `opacity` transition-property, so
+ * the delay would still apply — `opacity: 1 !important` alone would wait for
+ * the delay before resetting. Kill the transition outright on these scoped
+ * selectors so the reset is instant when performance mode kicks in mid-stale. */
 body[data-performance-mode="true"] .palette-results-stale,
 body[data-performance-mode="true"] .surface-stale {
   opacity: 1 !important;
@@ -2535,7 +2588,8 @@ body[data-performance-mode="true"] .settings-section-header {
 
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
-body[data-performance-mode="true"] .terminal-focused {
+body[data-performance-mode="true"] .terminal-focused,
+body[data-performance-mode="true"] .assistant-focused {
   box-shadow: inset 0 0 0 1px var(--theme-overlay-medium) !important;
 }
 
@@ -2571,6 +2625,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Highlight;
   }
 
+  .assistant-focused {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-left-color: Highlight;
+  }
+
   .panel-state-waiting {
     border-color: Highlight;
     outline: 2px solid Highlight;
@@ -2604,6 +2664,24 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
+  /* The active panel tab marks itself with a background tint plus a
+     framer-motion underline (both background-color based, stripped here).
+     Fall back to a system-color bottom border so the active tab stays visible.
+     Scoped to [data-tab-id] (the panel TabButton) so the rule doesn't add a
+     directionally-wrong bottom border to the vertical Settings nav or the
+     rounded-pill Portal tabs, which use different selectors. */
+  [role="tab"][aria-selected="true"][data-tab-id] {
+    border-bottom: 2px solid SelectedItem;
+  }
+
+  /* Radix submenu triggers signal their open state with a background tint via
+     data-state="open"; that is stripped here. Scope to [role="menuitem"] so the
+     fallback doesn't collide with dialog/popover/combobox open states. */
+  [role="menuitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
   button,
   [role="button"],
   [type="button"],
@@ -2617,13 +2695,50 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   textarea {
     border: 1px solid FieldText;
   }
+
+  /* ActivityLight: the active state paints via an inline background-color the
+     UA forces to Canvas (invisible), while the idle ring's border survives as
+     ButtonText — inverting the meaning. Repaint the active dot with CanvasText.
+     !important is required to beat the inline author style under forced colors;
+     this is the only place in this block that needs it. */
+  [data-activity-active="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* SettingsSwitch (Radix Switch). The track's unchecked border is already
+     covered by the global button/[role="button"] rule above. Add the checked
+     fill plus thumb contrast so on/off is distinguishable beyond thumb position.
+     Scoped to a [data-state] parent so the two non-Radix custom role="switch"
+     buttons (plain <span> children, no data-state) are not matched. */
+  [role="switch"][data-state="checked"] {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
+  [role="switch"][data-state] span[data-state="checked"] {
+    background-color: HighlightText;
+  }
+
+  [role="switch"][data-state] span[data-state="unchecked"] {
+    background-color: ButtonText;
+  }
 }
 
-/* Increased contrast mode — heavier borders for visibility */
+/* Increased contrast mode — heavier borders for visibility.
+ *
+ * macOS "Increase Contrast" fires prefers-contrast: more but NOT
+ * forced-colors: active, so this block is the sole high-contrast surface
+ * for Mac users. Mirrors the structural intent of the forced-colors block
+ * above but keeps theme colors (the user wants more contrast, not a
+ * system-color repaint). */
 @media (prefers-contrast: more) {
   .terminal-selected,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  .assistant-focused {
+    border-left-width: 2px;
   }
 
   .panel-state-waiting,
@@ -2634,6 +2749,28 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   *:focus-visible {
     outline-width: 3px;
+  }
+
+  /* Native form controls have border-width:0 from Preflight; restoring a
+   * visible 2px border (with the theme's own color) anchors the click target. */
+  button,
+  [role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"],
+  input,
+  select,
+  textarea {
+    border-width: 2px;
+  }
+
+  /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the
+   * class attribute and bakes the alpha into `color-mix()` on the color
+   * property — `opacity: 1` cannot recover the lost contrast. Forcing the
+   * solid token restores it. !important is required because the Tailwind
+   * utility rule has equal specificity (0,1,0) and wins on source order. */
+  [class*="text-daintree-text/"] {
+    color: var(--color-daintree-text) !important;
   }
 }
 
@@ -2646,6 +2783,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     -webkit-backdrop-filter: blur(var(--theme-material-blur))
       saturate(var(--theme-material-saturation));
     backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+  }
+
+  /* High-contrast users want solid chrome behind text; drop the frosted-glass
+   * material. Same shape as the prefers-reduced-transparency fallbacks in
+   * toolbar.css and panels.css. Inside @layer utilities so the layer
+   * specificity matches the base rule above. */
+  @media (prefers-contrast: more) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
   }
 
   .control-hover:hover {

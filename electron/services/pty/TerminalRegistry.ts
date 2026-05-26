@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the terminal registry via sync fs
 import { createHash } from "crypto";
 import fs from "node:fs";
 import path from "node:path";

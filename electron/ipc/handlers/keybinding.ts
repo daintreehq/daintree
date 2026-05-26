@@ -1,3 +1,4 @@
+// eager-import-allow: reads persisted keybindings via store.get synchronously at module scope
 import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";

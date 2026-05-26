@@ -1,4 +1,11 @@
-import { useCallback, useDeferredValue, useEffect, useRef, type CSSProperties } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -19,7 +26,7 @@ import {
   UI_PALETTE_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
-  UI_DOHERTY_THRESHOLD,
+  UI_PALETTE_STALE_DELAY,
   getUiPaletteTransitionDuration,
 } from "@/lib/animationUtils";
 
@@ -193,7 +200,7 @@ export function AppPaletteDialog({
       <div
         ref={dialogRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal={isOpen ? "true" : "false"}
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
@@ -229,8 +236,8 @@ interface AppPaletteHeaderProps {
   className?: string;
   /**
    * Show an indeterminate loading bar pinned to the bottom of the header.
-   * The bar fades in after the 400ms Doherty threshold, so fast loads never
-   * flash a sweep.
+   * The bar fades in after the 200ms palette stale-delay gate
+   * (`UI_PALETTE_STALE_DELAY`), so fast loads never flash a sweep.
    */
   isLoading?: boolean;
 }
@@ -263,7 +270,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
           transitionDuration: isLoading
             ? `${UI_PALETTE_ENTER_DURATION}ms`
             : `${UI_PALETTE_EXIT_DURATION}ms`,
-          transitionDelay: isLoading ? `${UI_DOHERTY_THRESHOLD}ms` : "0ms",
+          transitionDelay: isLoading ? `${UI_PALETTE_STALE_DELAY}ms` : "0ms",
         }}
       >
         <div className="palette-loading-bar__sweep" />
@@ -461,6 +468,7 @@ interface AppPaletteEmptyProps {
 }
 
 const NO_MATCH_QUERY_MAX = 40;
+const EMPTY_ANNOUNCEMENT_DEBOUNCE_MS = 600;
 
 function defaultNoMatchTitle(trimmedQuery: string) {
   // Iterate by codepoint (Array.from handles surrogate pairs) so we never
@@ -486,25 +494,68 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // the immediate `trimmedQuery` so clearing the input flips back to
   // zero-data without a stale "No matches for ..." flash.
   const deferredTrimmedQuery = useDeferredValue(trimmedQuery);
+  // When the urgent query is ahead of the deferred one, the user is mid-keystroke
+  // and the empty state is churning — suppress the fade so it doesn't strobe. The
+  // length guard keeps the crossfade when the input is cleared back to empty (the
+  // deferred value briefly lags behind "", which would otherwise read as stale).
+  const isStale = trimmedQuery !== deferredTrimmedQuery && trimmedQuery.length > 0;
+
+  // Debounced sr-only live region so screen readers announce the empty/no-match
+  // title once typing stops, rather than on every keystroke. Follows the
+  // SidebarContent trailing-debounce + clear-then-set precedent so Chromium
+  // doesn't suppress repeated identical announcements.
+  const srTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [srAnnouncement, setSrAnnouncement] = useState("");
+  const displayQuery = deferredTrimmedQuery || trimmedQuery;
+  const title = trimmedQuery ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery)) : emptyMessage;
+
+  useEffect(() => {
+    return () => {
+      if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    setSrAnnouncement("");
+    if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    srTimerRef.current = setTimeout(() => {
+      setSrAnnouncement(title);
+    }, EMPTY_ANNOUNCEMENT_DEBOUNCE_MS);
+    return () => {
+      if (srTimerRef.current !== null) clearTimeout(srTimerRef.current);
+    };
+  }, [title, trimmedQuery]);
+
   if (trimmedQuery) {
-    const displayQuery = deferredTrimmedQuery || trimmedQuery;
     return (
-      <EmptyState
-        variant="filtered-empty"
-        scale="popover"
-        title={noMatchMessage ?? defaultNoMatchTitle(displayQuery)}
-        action={noMatchContent}
-        className="px-3 py-8"
-      />
+      <>
+        <EmptyState
+          variant="filtered-empty"
+          scale="popover"
+          title={title}
+          action={noMatchContent}
+          className="px-3 py-8"
+          instant={isStale}
+        />
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {srAnnouncement}
+        </div>
+      </>
     );
   }
   return (
-    <EmptyState
-      variant="zero-data"
-      scale="popover"
-      title={emptyMessage}
-      action={children}
-      className="px-3 py-8"
-    />
+    <>
+      <EmptyState
+        variant="zero-data"
+        scale="popover"
+        title={title}
+        action={children}
+        className="px-3 py-8"
+        instant={isStale}
+      />
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {srAnnouncement}
+      </div>
+    </>
   );
 };

@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import { resolve as pathResolve } from "path";
 import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+
+const TEST_WORKTREE_PATH = pathResolve("/test/worktree");
 
 const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.hoisted(() => {
   const callbacks: Array<(err: Error | null, events: unknown[]) => void> = [];
@@ -159,13 +162,13 @@ vi.mock("child_process", () => ({
 
 function createTestWorktree(overrides: Partial<Worktree> = {}): Worktree {
   return {
-    id: "/test/worktree",
-    path: "/test/worktree",
+    id: TEST_WORKTREE_PATH,
+    path: TEST_WORKTREE_PATH,
     name: "feature/test",
     branch: "feature/test",
     isCurrent: false,
     isMainWorktree: false,
-    gitDir: "/test/worktree/.git",
+    gitDir: `${TEST_WORKTREE_PATH}/.git`,
     ...overrides,
   };
 }
@@ -217,7 +220,7 @@ describe("WorkspaceService external worktree removal", () => {
   describe("discoverAndSyncWorktrees() prune-before-list (#6669)", () => {
     it("prunes before listing so externally-deleted worktrees clear from the sidebar", async () => {
       createAndRegisterMonitor();
-      expect(service["monitors"].has("/test/worktree")).toBe(true);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
 
       const callOrder: string[] = [];
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
@@ -246,11 +249,11 @@ describe("WorkspaceService external worktree removal", () => {
       expect(listIdx).toBeGreaterThanOrEqual(0);
       expect(pruneIdx).toBeLessThan(listIdx);
 
-      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
       expect(mockSendEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "worktree-removed",
-          worktreeId: "/test/worktree",
+          worktreeId: TEST_WORKTREE_PATH,
         })
       );
     });
@@ -287,7 +290,7 @@ describe("WorkspaceService external worktree removal", () => {
 
       await expect(service["discoverAndSyncWorktrees"]()).resolves.not.toThrow();
       expect(listCalled).toBe(true);
-      expect(service["monitors"].has("/test/worktree")).toBe(true);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
     });
   });
 
@@ -295,23 +298,23 @@ describe("WorkspaceService external worktree removal", () => {
     it("removes non-main worktree and emits removal event", () => {
       createAndRegisterMonitor();
 
-      service["handleExternalWorktreeRemoval"]("/test/worktree");
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH);
 
       expect(mockSendEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "worktree-removed",
-          worktreeId: "/test/worktree",
+          worktreeId: TEST_WORKTREE_PATH,
         })
       );
-      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
     });
 
     it("does not remove main worktree", () => {
       createAndRegisterMonitor({ isMainWorktree: true });
 
-      service["handleExternalWorktreeRemoval"]("/test/worktree");
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH);
 
-      expect(service["monitors"].has("/test/worktree")).toBe(true);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
       expect(mockSendEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "worktree-removed" })
       );
@@ -712,7 +715,7 @@ describe("WorkspaceService external worktree removal", () => {
 
     it("clears a phantom monitor end-to-end when the interval fires", async () => {
       createAndRegisterMonitor();
-      expect(service["monitors"].has("/test/worktree")).toBe(true);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
 
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
         if (args[0] === "worktree" && args[1] === "list") {
@@ -732,9 +735,9 @@ describe("WorkspaceService external worktree removal", () => {
       service["startPeriodicSafetyTimer"]();
       await vi.advanceTimersByTimeAsync(90_000);
 
-      expect(service["monitors"].has("/test/worktree")).toBe(false);
+      expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
       expect(mockSendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "worktree-removed", worktreeId: "/test/worktree" })
+        expect.objectContaining({ type: "worktree-removed", worktreeId: TEST_WORKTREE_PATH })
       );
 
       vi.useRealTimers();

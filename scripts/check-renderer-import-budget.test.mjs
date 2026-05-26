@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   collectEagerChunks,
   compareReport,
+  parseArgs,
   shrinkageGuardError,
   stableChunkId,
 } from "./check-renderer-import-budget.mjs";
@@ -272,5 +273,174 @@ describe("compareReport", () => {
       expect(result.grewBytes).toBe(true);
       expect(result.shrank).toBe(true); // count shrank but bytes regressed
     });
+  });
+
+  describe("module-set gate (#8890)", () => {
+    const base = { eagerChunkCount: 3, eagerChunks: ["a", "b", "vendor-react"] };
+
+    it("ignores module sets when the baseline has no chunkModules (back-compat)", () => {
+      const report = { ...base, chunkModules: { "vendor-react": ["node_modules/react/x.js"] } };
+      const result = compareReport(report, { ...base });
+      expect(result.ok).toBe(true);
+      expect(result.moduleSetChanged).toBeUndefined();
+      expect(result.staleBuild).toBeUndefined();
+    });
+
+    it("passes when module sets are identical", () => {
+      const mods = { "vendor-react": ["node_modules/react/a.js", "node_modules/react/b.js"] };
+      const report = { ...base, chunkModules: mods };
+      const baseline = { ...base, chunkModules: mods };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(true);
+      expect(result.moduleSetChanged).toBeUndefined();
+    });
+
+    it("fails when a module migrates between T0 chunks (stable count + bytes)", () => {
+      const baseline = {
+        ...base,
+        chunkModules: {
+          "vendor-react": ["node_modules/react/a.js", "node_modules/react/b.js"],
+        },
+      };
+      const report = {
+        ...base,
+        chunkModules: {
+          // b.js left vendor-react, c.js arrived — composition changed.
+          "vendor-react": ["node_modules/react/a.js", "node_modules/react/c.js"],
+        },
+      };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(false);
+      expect(result.moduleSetChanged).toBe(true);
+      expect(result.moduleDiffs).toEqual([
+        {
+          chunk: "vendor-react",
+          added: ["node_modules/react/c.js"],
+          removed: ["node_modules/react/b.js"],
+        },
+      ]);
+    });
+
+    it("reports diffs in both chunks when a module migrates across T0 chunks", () => {
+      const baseline = {
+        ...base,
+        chunkModules: {
+          "vendor-react": ["node_modules/react/a.js", "node_modules/shared/x.js"],
+          "vendor-xterm": ["node_modules/xterm/y.js"],
+        },
+      };
+      const report = {
+        ...base,
+        chunkModules: {
+          // shared/x.js hopped from vendor-react into vendor-xterm — net count
+          // across the two chunks is unchanged, but composition shifted.
+          "vendor-react": ["node_modules/react/a.js"],
+          "vendor-xterm": ["node_modules/shared/x.js", "node_modules/xterm/y.js"],
+        },
+      };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(false);
+      expect(result.moduleSetChanged).toBe(true);
+      expect(result.moduleDiffs).toEqual([
+        { chunk: "vendor-react", added: [], removed: ["node_modules/shared/x.js"] },
+        { chunk: "vendor-xterm", added: ["node_modules/shared/x.js"], removed: [] },
+      ]);
+    });
+
+    it("flags staleBuild when the baseline has module sets but the report has none", () => {
+      const baseline = { ...base, chunkModules: { "vendor-react": ["node_modules/react/a.js"] } };
+      // Report lacks chunkModules entirely — sidecar missing on a stale dist/.
+      const report = { ...base };
+      const result = compareReport(report, baseline);
+      expect(result.ok).toBe(false);
+      expect(result.staleBuild).toBe(true);
+    });
+  });
+
+  describe("per-T0 byte gate (#8890)", () => {
+    const base = { eagerChunkCount: 2, eagerChunks: ["vendor-react", "vendor-xterm"] };
+
+    it("ignores per-chunk bytes when the baseline has no chunkGzip (back-compat)", () => {
+      const report = { ...base, chunkGzip: { "vendor-react": 999999 } };
+      const result = compareReport(report, { ...base });
+      expect(result.ok).toBe(true);
+      expect(result.t0ByteFailures).toBeUndefined();
+    });
+
+    it("passes when each gated chunk is within the threshold", () => {
+      const report = { ...base, chunkGzip: { "vendor-react": 1040, "vendor-xterm": 500 } };
+      const baseline = { ...base, chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 } };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(true);
+      expect(result.t0ByteFailures).toBeUndefined();
+    });
+
+    it("fails when one gated chunk exceeds the threshold even if the aggregate holds", () => {
+      const report = { ...base, chunkGzip: { "vendor-react": 2000, "vendor-xterm": 500 } };
+      const baseline = { ...base, chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 } };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.t0ByteFailures).toHaveLength(1);
+      expect(result.t0ByteFailures[0].chunk).toBe("vendor-react");
+      expect(result.t0ByteFailures[0].ratio).toBeCloseTo(1.0);
+    });
+
+    it("catches a T0 chunk doubling even when the aggregate gzip shrinks (the #8890 bug class)", () => {
+      // This is the exact escape path the per-T0 gate exists to close: the
+      // aggregate eagerGzip is *down* (well within budget), yet vendor-react
+      // doubled — a compensating shrink elsewhere masked it from the aggregate.
+      const report = {
+        ...base,
+        eagerGzip: 900,
+        chunkGzip: { "vendor-react": 2000, "vendor-xterm": 500 },
+      };
+      const baseline = {
+        ...base,
+        eagerGzip: 1000,
+        chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 },
+      };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.grewBytes).toBeUndefined(); // aggregate gate stayed green
+      expect(result.t0ByteFailures).toHaveLength(1);
+      expect(result.t0ByteFailures[0].chunk).toBe("vendor-react");
+    });
+
+    it("flags t0Missing when a gated chunk left the eager set", () => {
+      const report = {
+        eagerChunkCount: 1,
+        eagerChunks: ["vendor-xterm"],
+        chunkGzip: { "vendor-xterm": 500 },
+      };
+      const baseline = { ...base, chunkGzip: { "vendor-react": 1000, "vendor-xterm": 500 } };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(false);
+      expect(result.t0Missing).toEqual(["vendor-react"]);
+    });
+
+    it("ignores baseline entries with non-positive byte values", () => {
+      const report = { ...base, chunkGzip: { "vendor-react": 1040, "vendor-xterm": 500 } };
+      const baseline = { ...base, chunkGzip: { "vendor-react": 0, "vendor-xterm": 500 } };
+      const result = compareReport(report, baseline, 0.05);
+      expect(result.ok).toBe(true);
+    });
+  });
+});
+
+describe("parseArgs", () => {
+  it("defaults threshold to 0.05 and flags off", () => {
+    const args = parseArgs(["node", "script.mjs"]);
+    expect(args).toEqual({ isUpdate: false, force: false, threshold: 0.05 });
+  });
+
+  it("parses --update and --force", () => {
+    const args = parseArgs(["node", "script.mjs", "--update", "--force"]);
+    expect(args.isUpdate).toBe(true);
+    expect(args.force).toBe(true);
+  });
+
+  it("parses --threshold with its value", () => {
+    const args = parseArgs(["node", "script.mjs", "--threshold", "0.1"]);
+    expect(args.threshold).toBeCloseTo(0.1);
   });
 });

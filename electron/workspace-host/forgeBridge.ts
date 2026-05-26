@@ -1,9 +1,14 @@
+import { configure } from "safe-stable-stringify";
 import type {
   WorkspaceHostEvent,
   ForgeRpcMethod,
   ForgeResolveProviderResult,
 } from "../../shared/types/workspace-host.js";
 import type { CIStatus, Issue, PR, RateLimitInfo, RepoRef } from "../../shared/types/forge.js";
+
+// Deterministic stringify so identical arg shapes coalesce regardless of
+// property order.
+const stringifyArgs = configure({ bigint: false });
 
 type SendEvent = (event: WorkspaceHostEvent) => void;
 
@@ -14,9 +19,20 @@ interface PendingCall {
   method: ForgeRpcMethod;
 }
 
+interface PendingLeaseCall {
+  resolve: (acquired: boolean) => void;
+  timer: NodeJS.Timeout;
+}
+
 // Slow PR polls can run a few seconds under load; 30s gives real network
 // latency room while still surfacing a stuck call before a poller backs up.
 const FORGE_RPC_TIMEOUT_MS = 30_000;
+
+// Lease acquire is a same-process round-trip in practice — main answers from
+// an in-memory Map. 5s is generous and exists only so a lost message can't
+// stall the poller indefinitely; on timeout we fail open and proceed (the
+// singleflight in main still coalesces the actual GraphQL calls).
+const FORGE_LEASE_TIMEOUT_MS = 5_000;
 
 /**
  * IPC client for forge provider impls that live in the main process. The
@@ -33,6 +49,14 @@ const FORGE_RPC_TIMEOUT_MS = 30_000;
 export class ForgeBridge {
   private pending = new Map<string, PendingCall>();
   private counter = 0;
+  // Strict singleflight at the IPC boundary: concurrent identical calls join
+  // one in-flight promise instead of crossing the process boundary twice.
+  // Evicted on settlement (not TTL-cached) — the 60s response cache in
+  // `forgeProvider.runQuery` absorbs staggered bursts on the main-process side.
+  private inFlightByArgs = new Map<string, Promise<unknown>>();
+
+  private pendingLeases = new Map<string, PendingLeaseCall>();
+  private leaseCounter = 0;
 
   constructor(private readonly sendEvent: SendEvent) {}
 
@@ -59,6 +83,25 @@ export class ForgeBridge {
     ]);
   }
 
+  /**
+   * Optional batch variant of {@link getPR}. Returns `null` when the provider
+   * does not implement `batchLookups.findPRsByNumbers`; the host-side
+   * `BatchLoader` then falls back to per-number {@link getPR} calls. A returned
+   * `Map` is keyed by PR number — an omitted key means the provider could not
+   * resolve that number in the batch (transient), distinct from an explicit
+   * `null` value (confirmed not found).
+   */
+  findPRsByNumbers(
+    namespacedId: string,
+    repo: RepoRef,
+    prNumbers: number[]
+  ): Promise<Map<number, PR | null> | null> {
+    return this.invoke<Map<number, PR | null> | null>("findPRsByNumbers", namespacedId, [
+      repo,
+      prNumbers,
+    ]);
+  }
+
   getPR(namespacedId: string, repo: RepoRef, prNumber: number): Promise<PR | null> {
     return this.invoke<PR | null>("getPR", namespacedId, [repo, prNumber]);
   }
@@ -72,11 +115,32 @@ export class ForgeBridge {
   }
 
   /**
+   * Optional batch variant of {@link getCIStatus}. Returns `null` when the
+   * provider does not implement `batchLookups.getCIStatuses`; the host-side
+   * `BatchLoader` then falls back to per-number {@link getCIStatus} calls. A
+   * returned `Map` is keyed by PR number.
+   */
+  getCIStatuses(
+    namespacedId: string,
+    repo: RepoRef,
+    prNumbers: number[]
+  ): Promise<Map<number, CIStatus | null> | null> {
+    return this.invoke<Map<number, CIStatus | null> | null>("getCIStatuses", namespacedId, [
+      repo,
+      prNumbers,
+    ]);
+  }
+
+  /**
    * Returns `null` when the provider does not implement `getRateLimit`. Mirrors
    * the capability-as-optional-method shape in `ForgeProviderImpl`.
    */
   getRateLimit(namespacedId: string): Promise<RateLimitInfo | null> {
     return this.invoke<RateLimitInfo | null>("getRateLimit", namespacedId, []);
+  }
+
+  clearPullRequestCaches(namespacedId: string): Promise<void> {
+    return this.invoke<null>("clearPullRequestCaches", namespacedId, []).then(() => undefined);
   }
 
   /**
@@ -102,6 +166,46 @@ export class ForgeBridge {
     }
   }
 
+  /**
+   * Acquire (or renew) this workspace-host's per-project poll lease. Resolves
+   * `true` when this host should run the poll cycle, `false` when a sibling
+   * window already holds the lease. Fails open on IPC timeout (returns `true`)
+   * so a lost lease message can't wedge polling — the cross-window singleflight
+   * in `forgeRpcServer.dispatchForgeRpc` still coalesces duplicate GraphQL
+   * calls in that fallback path. See #9055.
+   */
+  acquirePollLease(): Promise<boolean> {
+    const requestId = `lease-${++this.leaseCounter}`;
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingLeases.has(requestId)) return;
+        this.pendingLeases.delete(requestId);
+        resolve(true);
+      }, FORGE_LEASE_TIMEOUT_MS);
+
+      this.pendingLeases.set(requestId, { resolve, timer });
+      this.sendEvent({ type: "forge:poll-lease-acquire", requestId });
+    });
+  }
+
+  /** Fire-and-forget cooperative release. Lease also drops on host dispose. */
+  releasePollLease(): void {
+    this.sendEvent({ type: "forge:poll-lease-release" });
+  }
+
+  /**
+   * Called by the workspace-host's port message handler whenever a
+   * `forge:poll-lease-result` arrives. Resolves the pending lease promise.
+   * Unknown ids are silently dropped (timeout already fired).
+   */
+  handleLeaseResult(result: { requestId: string; acquired: boolean }): void {
+    const pending = this.pendingLeases.get(result.requestId);
+    if (!pending) return;
+    this.pendingLeases.delete(result.requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(result.acquired);
+  }
+
   /** Cancel every pending call. Used on workspace-host shutdown. */
   dispose(): void {
     for (const pending of this.pending.values()) {
@@ -109,9 +213,41 @@ export class ForgeBridge {
       pending.reject(new Error(`Forge bridge disposed (pending ${pending.method})`));
     }
     this.pending.clear();
+    this.inFlightByArgs.clear();
+    for (const pending of this.pendingLeases.values()) {
+      clearTimeout(pending.timer);
+      // Fail open on dispose so any awaiting caller resolves cleanly rather
+      // than dangling — they're about to be torn down anyway.
+      pending.resolve(true);
+    }
+    this.pendingLeases.clear();
+  }
+
+  private buildInvokeKey(
+    method: ForgeRpcMethod,
+    namespacedId: string | undefined,
+    args: unknown[]
+  ): string {
+    return `${method}\0${namespacedId ?? ""}\0${stringifyArgs(args) ?? ""}`;
   }
 
   private invoke<T>(
+    method: ForgeRpcMethod,
+    namespacedId: string | undefined,
+    args: unknown[]
+  ): Promise<T> {
+    const key = this.buildInvokeKey(method, namespacedId, args);
+    const existing = this.inFlightByArgs.get(key);
+    if (existing !== undefined) return existing as Promise<T>;
+
+    const request = this.dispatch<T>(method, namespacedId, args).finally(() => {
+      this.inFlightByArgs.delete(key);
+    });
+    this.inFlightByArgs.set(key, request);
+    return request;
+  }
+
+  private dispatch<T>(
     method: ForgeRpcMethod,
     namespacedId: string | undefined,
     args: unknown[]

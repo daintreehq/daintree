@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the project list via sync fs during startup
 import type {
   Project,
   ProjectState,

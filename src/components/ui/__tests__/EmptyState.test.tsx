@@ -236,18 +236,36 @@ describe("EmptyState", () => {
       );
       expect(element).toBeTruthy();
     });
+
+    it("rejects popover scale on user-cleared", () => {
+      const element = (
+        // @ts-expect-error user-cleared does not allow popover scale
+        <EmptyState variant="user-cleared" scale="popover" title="You're all caught up" />
+      );
+      expect(element).toBeTruthy();
+    });
+
+    it("accepts sidebar scale on user-cleared", () => {
+      const element = (
+        <EmptyState variant="user-cleared" scale="sidebar" title="You're all caught up" />
+      );
+      expect(element).toBeTruthy();
+    });
   });
 
   describe("accessibility", () => {
-    it('uses role="status" on the container', () => {
-      render(<EmptyState variant="zero-data" scale="canvas" title="No items" />);
-      expect(screen.getByRole("status")).toBeTruthy();
+    it("does not expose role=status on the container (live region is caller-owned)", () => {
+      const { container } = render(
+        <EmptyState variant="zero-data" scale="canvas" title="No items" />
+      );
+      expect(container.querySelector('[role="status"]')).toBeNull();
     });
 
-    it('sets aria-live="polite"', () => {
-      render(<EmptyState variant="zero-data" scale="canvas" title="No items" />);
-      const status = screen.getByRole("status");
-      expect(status.getAttribute("aria-live")).toBe("polite");
+    it("does not set aria-live on the container (live region is caller-owned)", () => {
+      const { container } = render(
+        <EmptyState variant="zero-data" scale="canvas" title="No items" />
+      );
+      expect(container.querySelector("[aria-live]")).toBeNull();
     });
 
     it("hides icon decoration from assistive tech", () => {
@@ -265,7 +283,7 @@ describe("EmptyState", () => {
     });
 
     it("wires aria-describedby to the description when one is present", () => {
-      render(
+      const { container } = render(
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -273,17 +291,19 @@ describe("EmptyState", () => {
           description="Add one to get started"
         />
       );
-      const status = screen.getByRole("status");
-      const describedById = status.getAttribute("aria-describedby");
+      const wrapper = container.querySelector("[aria-describedby]");
+      const describedById = wrapper?.getAttribute("aria-describedby");
       expect(describedById).toBeTruthy();
       const description = document.getElementById(describedById!);
       expect(description?.textContent).toBe("Add one to get started");
     });
 
     it("does not set aria-describedby when no description is present", () => {
-      render(<EmptyState variant="zero-data" scale="canvas" title="No items" />);
-      const status = screen.getByRole("status");
-      expect(status.getAttribute("aria-describedby")).toBeNull();
+      const { container } = render(
+        <EmptyState variant="zero-data" scale="canvas" title="No items" />
+      );
+      const wrapper = container.querySelector<HTMLElement>('[class*="@container"]');
+      expect(wrapper?.getAttribute("aria-describedby")).toBeNull();
     });
   });
 
@@ -483,8 +503,8 @@ describe("EmptyState", () => {
       const { container } = render(
         <EmptyState variant="zero-data" scale="canvas" title="No items" />
       );
-      const status = container.querySelector('[role="status"]');
-      expect(status?.className).toContain("@container/empty-state");
+      const wrapper = container.querySelector<HTMLElement>('[class*="@container"]');
+      expect(wrapper?.className).toContain("@container/empty-state");
     });
 
     it("ships compact-density variants on a descendant of the named container", () => {
@@ -501,10 +521,10 @@ describe("EmptyState", () => {
           icon={<svg data-testid="icon" />}
         />
       );
-      const status = container.querySelector('[role="status"]');
+      const wrapper = container.querySelector<HTMLElement>('[class*="@container"]');
       // The container element itself cannot respond to its own queries, so we
       // assert the rule is NOT here — placing it here would be a silent no-op.
-      expect(status?.className).not.toContain("@max-[280px]/empty-state:py-");
+      expect(wrapper?.className).not.toContain("@max-[280px]/empty-state:py-");
       const iconWrap = container.querySelector('[aria-hidden="true"]');
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:h-4");
       expect(iconWrap?.className).toContain("@max-[280px]/empty-state:[&_svg]:w-4");
@@ -513,7 +533,7 @@ describe("EmptyState", () => {
 
   describe("className passthrough", () => {
     it("merges custom className on the container", () => {
-      render(
+      const { container } = render(
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -521,8 +541,8 @@ describe("EmptyState", () => {
           className="my-custom-class"
         />
       );
-      const status = screen.getByRole("status");
-      expect(status.className).toContain("my-custom-class");
+      const wrapper = container.querySelector<HTMLElement>('[class*="@container"]');
+      expect(wrapper?.className).toContain("my-custom-class");
     });
   });
 

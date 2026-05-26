@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { NavigationDirection } from "../useGridNavigation";
 import { buildFleetPanels } from "@/components/Terminal/contentGridFleetPanels";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 
 interface GridPosition {
   terminalId: string;
@@ -473,12 +473,16 @@ describe("Grid Navigation Logic", () => {
   });
 
   describe("buildFleetPanels filter", () => {
-    const makePanel = (id: string, location: TerminalInstance["location"]): TerminalInstance =>
+    const makePanel = (id: string, location: PtyPanelData["location"]): PtyPanelData =>
       ({
         id,
         title: id,
+        kind: "terminal",
         location,
-      }) as TerminalInstance;
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+      }) as PtyPanelData;
 
     it("returns panels in armOrder", () => {
       const panelsById = {

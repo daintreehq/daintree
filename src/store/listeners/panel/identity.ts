@@ -72,11 +72,13 @@ export function setupIdentityListeners(): DisposableStore {
 
         const clampedConfidence = Math.max(0, Math.min(1, confidence || 0));
 
-        const terminal = usePanelStore.getState().panelsById[terminalId];
+        const _terminalRaw = usePanelStore.getState().panelsById[terminalId];
 
-        if (!terminal) {
+        if (!_terminalRaw || !isPtyPanel(_terminalRaw)) {
           return;
         }
+
+        const terminal = _terminalRaw;
 
         if (terminal.isRestarting) {
           return;

@@ -315,7 +315,7 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     const keyInput = window.locator('input[placeholder="Enter new key to replace"]');
     await expect(keyInput).toBeVisible({ timeout: T_SHORT });
     await expect(window.getByText("Configured", { exact: true })).toBeVisible();
-    const clearButton = window.locator('button:has-text("Clear")').first();
+    const clearButton = window.getByRole("button", { name: "Clear", exact: true });
     await expect(clearButton).toBeVisible();
 
     // Close + reopen — key must still be configured.

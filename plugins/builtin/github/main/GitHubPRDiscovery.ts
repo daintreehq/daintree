@@ -7,10 +7,10 @@ import {
   repoContextCache,
   prETagCache,
   branchListETagCache,
-  prTooltipCache,
-  prTooltipWrittenAt,
+  repoPRListETagCache,
   truncateBody,
   getETagCacheVersion,
+  writePRTooltip,
 } from "./GitHubCaches.js";
 import type { GitHubPRCIStatus, PRTooltipData } from "../../../../shared/types/github.js";
 import type { PRCheckCandidate, PRCheckResult, BatchPRCheckResult, LinkedPR } from "./types.js";
@@ -30,6 +30,7 @@ interface BatchPRRawNode extends BatchPRTooltipFields {
   state?: string;
   isDraft?: boolean;
   merged?: boolean;
+  updatedAt?: string;
   commits?: {
     nodes?: Array<{
       commit?: {
@@ -37,6 +38,19 @@ interface BatchPRRawNode extends BatchPRTooltipFields {
       } | null;
     }>;
   } | null;
+}
+
+function compareLinkedPRFreshness(
+  a: { pr: LinkedPR; raw: BatchPRRawNode },
+  b: { pr: LinkedPR; raw: BatchPRRawNode }
+): number {
+  const aUpdatedAt = typeof a.raw.updatedAt === "string" ? Date.parse(a.raw.updatedAt) : 0;
+  const bUpdatedAt = typeof b.raw.updatedAt === "string" ? Date.parse(b.raw.updatedAt) : 0;
+  const aTime = Number.isFinite(aUpdatedAt) ? aUpdatedAt : 0;
+  const bTime = Number.isFinite(bUpdatedAt) ? bUpdatedAt : 0;
+  if (aTime !== bTime) return bTime - aTime;
+
+  return (b.pr.number ?? 0) - (a.pr.number ?? 0);
 }
 
 const CI_STATUS_VALUES = new Set<GitHubPRCIStatus>([
@@ -137,18 +151,7 @@ function parseBatchPRResponse(
         }
       }
 
-      const openPRs = prs.filter((entry) => entry.pr.state === "open");
-      const mergedPRs = prs.filter((entry) => entry.pr.state === "merged");
-      const closedPRs = prs.filter((entry) => entry.pr.state === "closed");
-
-      let chosen: { pr: LinkedPR; raw: BatchPRRawNode } | undefined;
-      if (openPRs.length > 0) {
-        chosen = openPRs[openPRs.length - 1];
-      } else if (mergedPRs.length > 0) {
-        chosen = mergedPRs[mergedPRs.length - 1];
-      } else if (closedPRs.length > 0) {
-        chosen = closedPRs[closedPRs.length - 1];
-      }
+      const chosen = prs.sort(compareLinkedPRFreshness)[0];
       if (chosen) {
         foundPR = chosen.pr;
         foundTooltip = buildTooltipDataFromBatchNode(chosen.raw);
@@ -230,6 +233,66 @@ async function mapWithConcurrency<T, R>(
   const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
   await Promise.all(workers);
   return results;
+}
+
+/**
+ * Repo-wide conditional probe against the pulls list endpoint. A `304` means no
+ * PR in the repo changed since the last probe, so `batchCheckLinkedPRs` can skip
+ * all per-PR/per-branch probing and the GraphQL batch at zero rate-limit cost
+ * (304s on an authenticated conditional GET don't consume rate-limit points).
+ *
+ * On a cold cache (no prior ETag) a `200` only seeds the cache and returns
+ * `"unknown"` — never `"changed"` — so the first cycle still falls through to
+ * the second-tier prefilters instead of forcing a spurious full fetch. The
+ * `versionAtStart` guard mirrors {@link probePRChange}: a concurrent cache
+ * invalidation between request start and response prevents a stale write.
+ */
+export async function probeRepoPRListChange(
+  owner: string,
+  repo: string,
+  token: string
+): Promise<"changed" | "unchanged" | "unknown"> {
+  const cacheKey = `${owner}/${repo}`;
+  const cachedETag = repoPRListETagCache.get(cacheKey);
+  const versionAtStart = getETagCacheVersion();
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?per_page=1&state=all&sort=updated&direction=desc`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (cachedETag) {
+    headers["If-None-Match"] = cachedETag;
+  }
+
+  try {
+    const response = await rateLimitAwareFetch(url, {
+      headers,
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+
+    if (response.status === 304 && getETagCacheVersion() === versionAtStart) {
+      return "unchanged";
+    }
+    if (response.status === 200 && getETagCacheVersion() === versionAtStart) {
+      const etag = response.headers.get("etag");
+      if (!etag) {
+        // No ETag to cache means we can't establish state for the next cycle;
+        // don't claim a definitive "changed" — report "unknown" and fall through.
+        repoPRListETagCache.invalidate(cacheKey);
+        return "unknown";
+      }
+      repoPRListETagCache.set(cacheKey, etag);
+      // Cold cache: a 200 only seeds the cache, it is not a change signal, so
+      // report "unknown" to avoid a spurious first-cycle bypass of the prefilters.
+      // An unchanged ETag on a 200 (shouldn't happen per HTTP semantics, but is
+      // cheap to guard) is likewise not a change.
+      return cachedETag && cachedETag !== etag ? "changed" : "unknown";
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 async function probePRChange(
@@ -353,12 +416,7 @@ function prewarmPRTooltipCache(
     const prNumber = result.pr?.number;
     const tooltipData = result.tooltipData;
     if (typeof prNumber !== "number" || !tooltipData) continue;
-    const cacheKey = `${owner}/${repo}:${prNumber}`;
-    const existing = prTooltipWrittenAt.get(cacheKey);
-    if (existing === undefined || requestedAt >= existing) {
-      prTooltipCache.set(cacheKey, tooltipData);
-      prTooltipWrittenAt.set(cacheKey, requestedAt);
-    }
+    writePRTooltip(owner, repo, prNumber, tooltipData, requestedAt);
   }
 }
 
@@ -390,6 +448,28 @@ export async function batchCheckLinkedPRs(
   }
 
   const token = GitHubAuth.getToken();
+
+  // Repo-level ETag probe: a single conditional GET against the pulls list. A
+  // 304 means nothing changed across the whole repo, so the entire batch is
+  // skipped before the (more expensive) per-PR / per-branch prefilters run.
+  if (token !== undefined) {
+    const repoProbe = await probeRepoPRListChange(context.owner, context.repo, token);
+    if (repoProbe === "unchanged") {
+      return { results: new Map() };
+    }
+    // The probe hits the `core` REST bucket (not `graphql`); a 200 that consumed
+    // a point may have tripped a block, so re-check that bucket before any
+    // further work.
+    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest("core");
+    if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
+      return {
+        results: new Map(),
+        error: rateLimitMessage(postProbeBlock.reason, postProbeBlock.resumeAt),
+        rateLimit: { kind: postProbeBlock.reason, resumeAt: postProbeBlock.resumeAt },
+      };
+    }
+  }
+
   const allRevalidation =
     token !== undefined && candidates.every((c) => typeof c.knownPRNumber === "number");
   if (allRevalidation) {
@@ -459,7 +539,7 @@ export async function batchCheckLinkedPRs(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as Record<string, unknown>;
 
-    gitHubRateLimitService.updateFromGraphQL(response);
+    gitHubRateLimitService.updateFromGraphQL(response, "BATCH_DISCOVERY_PR_QUERY");
 
     const results = parseBatchPRResponse(response, candidatesForGraphQL);
     prewarmPRTooltipCache(context.owner, context.repo, results, requestedAt);
@@ -482,7 +562,7 @@ export async function batchCheckLinkedPRs(
           const retryResponse = (await client(retryQuery, {
             request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
           })) as Record<string, unknown>;
-          gitHubRateLimitService.updateFromGraphQL(retryResponse);
+          gitHubRateLimitService.updateFromGraphQL(retryResponse, "BATCH_DISCOVERY_PR_RETRY");
           const retryResults = parseBatchPRResponse(retryResponse, candidatesForGraphQL);
           prewarmPRTooltipCache(
             freshContext.owner,

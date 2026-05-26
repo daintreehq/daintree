@@ -1,5 +1,7 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
@@ -833,6 +835,26 @@ class VoiceRecordingService {
 
   async toggleFocusedPanel(): Promise<void> {
     this.initialize();
+
+    // Assistant focus is tracked by macroFocusStore, not panelStore.focusedId,
+    // so check it synchronously (before any await — #6959) and route dictation
+    // to the assistant when its input owns focus. Otherwise the last-active grid
+    // terminal would steal the dictation (#8887).
+    if (isAssistantFocused()) {
+      const assistantTarget = this.getAssistantTarget();
+      if (!assistantTarget) {
+        useVoiceRecordingStore
+          .getState()
+          .setError("Daintree Assistant is starting — try again in a moment.");
+        useVoiceRecordingStore
+          .getState()
+          .announce("Daintree Assistant is starting. Try dictation again in a moment.");
+        return;
+      }
+      await this.toggle(assistantTarget);
+      return;
+    }
+
     const target = this.getFocusedPanelTarget();
     if (!target) {
       useVoiceRecordingStore.getState().setError("No focused terminal is available for dictation.");
@@ -843,6 +865,34 @@ class VoiceRecordingService {
     }
 
     await this.toggle(target);
+  }
+
+  /**
+   * Toggle dictation directly into the Daintree Assistant input, regardless of
+   * which panel currently owns focus (#8887). Opens the assistant if it's
+   * closed; if no assistant session has launched yet (`terminalId` is null) it
+   * surfaces a toast rather than silently doing nothing.
+   */
+  async toggleAssistant(): Promise<void> {
+    this.initialize();
+
+    const helpState = useHelpPanelStore.getState();
+    if (!helpState.isOpen) {
+      helpState.setOpen(true);
+      helpState.requestFocus();
+    }
+
+    // setOpen only flips the visibility flag — the assistant terminal is spawned
+    // on render, so terminalId may still be null here. Don't re-read it; guide
+    // the user to retry once the session exists.
+    const assistantTarget = this.getAssistantTarget();
+    if (!assistantTarget) {
+      useVoiceRecordingStore.getState().setError("Start the Daintree Assistant before dictating.");
+      useVoiceRecordingStore.getState().announce("Start the Daintree Assistant before dictating.");
+      return;
+    }
+
+    await this.toggle(assistantTarget);
   }
 
   async focusActiveTarget(): Promise<boolean> {
@@ -895,6 +945,26 @@ class VoiceRecordingService {
       projectName: currentProject?.name,
       worktreeId: panel.worktreeId,
       worktreeLabel: worktree?.isMainWorktree ? worktree?.name : worktree?.branch || worktree?.name,
+    };
+  }
+
+  private getAssistantTarget(): VoiceRecordingTarget | null {
+    const terminalId = useHelpPanelStore.getState().terminalId;
+    if (!terminalId) return null;
+
+    // Guard the brief window where the assistant terminal has been trashed (or
+    // not yet committed to panelStore) but helpPanelStore.terminalId is still
+    // set — mirrors getFocusedPanelTarget(). A missing/trashed panel means the
+    // assistant is starting or tearing down, so dictation must not target it.
+    const panelEntry = usePanelStore.getState().panelsById[terminalId];
+    if (!panelEntry || panelEntry.location === "trash") return null;
+
+    const currentProject = useProjectStore.getState().currentProject;
+    return {
+      panelId: terminalId,
+      panelTitle: "Daintree Assistant",
+      projectId: currentProject?.id,
+      projectName: currentProject?.name,
     };
   }
 

@@ -1,3 +1,4 @@
+// eager-import-allow: reads MCP server config via store.get synchronously during lifecycle setup
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { BrowserPanelOptions, DevPreviewPanelOptions } from "@shared/types/addPanelOptions";
 
@@ -59,7 +59,7 @@ vi.mock("@/store/projectPresetsStore", () => ({
   },
 }));
 
-function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makePanel(overrides: Partial<PtyPanelData> | Partial<PanelInstance> = {}): PanelInstance {
   return {
     id: "panel-1",
     title: "Test Panel",
@@ -67,11 +67,11 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
     kind: "terminal",
     cwd: "/home/user",
     ...overrides,
-  } as TerminalInstance;
+  } as PanelInstance;
 }
 
 describe("buildPanelSnapshotOptions", () => {
-  let buildPanelSnapshotOptions: (panel: TerminalInstance) => AddPanelOptions | null;
+  let buildPanelSnapshotOptions: (panel: PanelInstance) => AddPanelOptions | null;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -102,7 +102,7 @@ describe("buildPanelSnapshotOptions", () => {
     });
     // agentLaunchFlags should be a new array (deep copy)
     expect(result!.agentLaunchFlags).toEqual(["--flag"]);
-    expect(result!.agentLaunchFlags).not.toBe(panel.agentLaunchFlags);
+    expect(result!.agentLaunchFlags).not.toBe((panel as PtyPanelData).agentLaunchFlags);
   });
 
   it("copies title to the snapshot", () => {
@@ -235,7 +235,7 @@ describe("buildPanelSnapshotOptions", () => {
 
 describe("panelDuplicationService", () => {
   let buildPanelDuplicateOptions: (
-    panel: TerminalInstance,
+    panel: PanelInstance,
     location: "grid" | "dock"
   ) => Promise<AddPanelOptions>;
 
@@ -326,7 +326,7 @@ describe("panelDuplicationService", () => {
       devCommand: "npm run dev",
       browserUrl: "http://localhost:3000",
       devPreviewConsoleOpen: true,
-    } as Partial<TerminalInstance>);
+    } as Partial<PanelInstance>);
 
     const result = (await buildPanelDuplicateOptions(panel, "grid")) as DevPreviewPanelOptions;
 
@@ -580,7 +580,7 @@ describe("panelDuplicationService", () => {
 
 describe("adversarial: behavioral overrides flow to generateAgentCommand in duplication", () => {
   let buildPanelDuplicateOptions: (
-    panel: TerminalInstance,
+    panel: PanelInstance,
     location: "grid" | "dock"
   ) => Promise<AddPanelOptions>;
 

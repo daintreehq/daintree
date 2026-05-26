@@ -728,6 +728,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       issueNumber: number
     ): Promise<import("../github.js").GitHubIssue | null>;
     getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
+    getIssuesByNumbers(
+      cwd: string,
+      numbers: number[]
+    ): Promise<Array<import("../github.js").GitHubIssue | null>>;
+    getPRsByNumbers(
+      cwd: string,
+      numbers: number[]
+    ): Promise<Array<import("../github.js").GitHubPR | null>>;
     getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
     /** @deprecated Use `project.listRemotes` instead (#8456). */
     listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;

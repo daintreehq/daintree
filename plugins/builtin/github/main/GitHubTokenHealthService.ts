@@ -47,7 +47,6 @@ class GitHubTokenHealthServiceImpl {
   private status: GitHubTokenHealthStatus = "unknown";
   private lastCheckedAt = 0;
   private tokenVersionAtLastCheck = -1;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
   private pendingCheck: Promise<void> | null = null;
   private readonly listeners = new Set<StateChangeListener>();
 
@@ -85,22 +84,19 @@ class GitHubTokenHealthServiceImpl {
    * Begin polling. Safe to call multiple times — subsequent calls are no-ops.
    * Fires an immediate probe asynchronously so the first result is available
    * soon after startup without blocking the caller.
+   *
+   * The recurring interval timer previously installed here was removed (#9054):
+   * cold-start, focus, and wake probes cover token-revocation detection, and
+   * GitHub guidance is to use response headers rather than polling `/rate_limit`.
    */
   start(): void {
-    if (this.pollTimer) return;
-    this.pollTimer = setInterval(() => {
-      void this.runCheck({ reason: "interval" });
-    }, HEALTH_CHECK_INTERVAL_MS);
-    this.pollTimer?.unref?.();
     void this.runCheck({ reason: "start" });
   }
 
   /** Stop polling and tear down listeners. Safe to call multiple times. */
   stop(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+    // No recurring timer to clear; kept for API compatibility. The `dispose()`
+    // alias still clears listeners and resets state.
   }
 
   /** Alias for {@link stop} — matches the lifecycle naming used elsewhere. */

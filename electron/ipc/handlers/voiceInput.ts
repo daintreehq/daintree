@@ -1,3 +1,4 @@
+// eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
 import { ipcMain, systemPreferences, shell } from "electron";
 import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";

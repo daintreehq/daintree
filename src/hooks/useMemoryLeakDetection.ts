@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { DEFAULT_AUTO_RESTART_THRESHOLD_MB } from "@/store/memoryLeakConfigStore";
+import { isPtyPanel } from "@shared/types/panel";
 
 export const MEMORY_HISTORY_SIZE = 30;
 export const STARTUP_SKIP_SAMPLES = 30;
@@ -189,7 +190,12 @@ export function useMemoryLeakDetection(
           !leakState.dismissed
         ) {
           const terminal = usePanelStore.getState().panelsById[id];
-          if (terminal && terminal.agentState !== "waiting" && !terminal.isInputLocked) {
+          if (
+            terminal &&
+            isPtyPanel(terminal) &&
+            terminal.agentState !== "waiting" &&
+            !terminal.isInputLocked
+          ) {
             leakState.dismissed = true;
             usePanelStore.getState().restartTerminal(id);
             notify({

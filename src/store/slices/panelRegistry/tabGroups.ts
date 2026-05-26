@@ -1,17 +1,23 @@
 import type { TabGroup, TabGroupLocation } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import { type PanelInstance, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus } from "./helpers";
+import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
-function getPanelTabGroupLocation(panel: TerminalInstance | undefined): TabGroupLocation | null {
+function getPanelTabGroupLocation(
+  panel: PanelInstance | CarrierPanel | undefined
+): TabGroupLocation | null {
   if (!panel || panel.location === "trash" || panel.location === "background") return null;
   return panel.location === "dock" ? "dock" : "grid";
 }
@@ -149,36 +155,14 @@ export const createTabGroupActions = (
 
   removePanelFromGroup: (panelId) => {
     set((state) => {
-      let groupToUpdate: TabGroup | undefined;
-      for (const group of state.tabGroups.values()) {
-        if (group.panelIds.includes(panelId)) {
-          groupToUpdate = group;
-          break;
-        }
+      const { tabGroups: newTabGroups, dissolved } = dissolvePanelFromGroup(
+        state.tabGroups,
+        panelId
+      );
+      if (dissolved) {
+        saveTabGroups(newTabGroups);
       }
-
-      if (!groupToUpdate) return state;
-
-      const newPanelIds = groupToUpdate.panelIds.filter((id) => id !== panelId);
-      const newTabGroups = new Map(state.tabGroups);
-
-      if (newPanelIds.length <= 1) {
-        newTabGroups.delete(groupToUpdate.id);
-      } else {
-        const newActiveTabId =
-          groupToUpdate.activeTabId === panelId
-            ? (newPanelIds[0] ?? "")
-            : groupToUpdate.activeTabId;
-        const newGroup: TabGroup = {
-          ...groupToUpdate,
-          panelIds: newPanelIds,
-          activeTabId: newActiveTabId,
-        };
-        newTabGroups.set(groupToUpdate.id, newGroup);
-      }
-
-      saveTabGroups(newTabGroups);
-      return { tabGroups: newTabGroups };
+      return dissolved ? { tabGroups: newTabGroups } : state;
     });
   },
 
@@ -225,7 +209,7 @@ export const createTabGroupActions = (
       return group.panelIds
         .map((id) => state.panelsById[id])
         .filter(
-          (t): t is TerminalInstance =>
+          (t): t is CarrierPanel =>
             t !== undefined &&
             getPanelTabGroupLocation(t) !== null &&
             (location === undefined || getPanelTabGroupLocation(t) === location) &&
@@ -234,7 +218,7 @@ export const createTabGroupActions = (
     }
 
     // Not an explicit group - check if it's a single ungrouped panel
-    const panel = state.panelsById[groupId];
+    const panel: CarrierPanel | undefined = state.panelsById[groupId];
     if (
       panel &&
       getPanelTabGroupLocation(panel) !== null &&
@@ -288,7 +272,7 @@ export const createTabGroupActions = (
     }
 
     // Find ungrouped panels
-    const ungroupedPanels: TerminalInstance[] = [];
+    const ungroupedPanels: CarrierPanel[] = [];
     for (const tid of state.panelIds) {
       const t = state.panelsById[tid];
       if (!t) continue;
@@ -343,12 +327,17 @@ export const createTabGroupActions = (
         const t = newById[pid];
         if (!t) continue;
         if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        const ptyT = isPtyPanel(t) ? t : undefined;
         newById[pid] = {
           ...t,
           location,
           isVisible: location === "grid",
-          runtimeStatus: deriveRuntimeStatus(location === "grid", t.flowStatus, t.runtimeStatus),
-        };
+          runtimeStatus: deriveRuntimeStatus(
+            location === "grid",
+            ptyT?.flowStatus,
+            ptyT?.runtimeStatus
+          ),
+        } as PanelInstance;
       }
 
       saveNormalized(newById, state.panelIds);
@@ -396,6 +385,7 @@ export const createTabGroupActions = (
         const t = newById[pid];
         if (!t) continue;
         if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        const ptyT2 = isPtyPanel(t) ? t : undefined;
         newById[pid] = {
           ...t,
           worktreeId,
@@ -403,10 +393,10 @@ export const createTabGroupActions = (
           isVisible: targetLocation === "grid",
           runtimeStatus: deriveRuntimeStatus(
             targetLocation === "grid",
-            t.flowStatus,
-            t.runtimeStatus
+            ptyT2?.flowStatus,
+            ptyT2?.runtimeStatus
           ),
-        };
+        } as PanelInstance;
         newIndex = transferBetweenWorktreeIndex(newIndex, t.worktreeId, worktreeId, pid);
       }
 
@@ -451,7 +441,7 @@ export const createTabGroupActions = (
       reorderedGroups.splice(toGroupIndex, 0, movedGroup);
 
       // Build new panelIds with the reordered groups
-      const matchesLocation = (t: TerminalInstance) =>
+      const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";
@@ -654,6 +644,7 @@ export const createTabGroupActions = (
                   tid
                 );
               }
+              const ptyT3 = isPtyPanel(t) ? t : undefined;
               newById[tid] = {
                 ...t,
                 location: effectiveLocation,
@@ -661,10 +652,10 @@ export const createTabGroupActions = (
                 isVisible: effectiveLocation === "grid",
                 runtimeStatus: deriveRuntimeStatus(
                   effectiveLocation === "grid",
-                  t.flowStatus,
-                  t.runtimeStatus
+                  ptyT3?.flowStatus,
+                  ptyT3?.runtimeStatus
                 ),
-              };
+              } as PanelInstance;
             }
             break;
           }

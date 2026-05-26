@@ -1,3 +1,4 @@
+// eager-import-allow: reads workspace-host config via store.get synchronously during pool setup
 import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";

@@ -1,10 +1,19 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import {
+  stopDevPreviewByPanelId,
+  dissolvePanelFromGroup,
+  computeRestoredTabGroup,
+} from "./helpers";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -24,6 +33,10 @@ export const createBackgroundActions = (
     const terminal = get().panelsById[id];
     if (!terminal) return;
     if (terminal.location === "trash" || terminal.location === "background") return;
+
+    if (isDevPreviewPanel(terminal)) {
+      stopDevPreviewByPanelId(id);
+    }
 
     const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
 
@@ -45,7 +58,7 @@ export const createBackgroundActions = (
     set((state) => {
       const existing = state.panelsById[id];
       if (!existing) return state;
-      const newById: Record<string, TerminalInstance> = {
+      const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
         [id]: { ...existing, location: "background" as const },
       };
@@ -57,26 +70,10 @@ export const createBackgroundActions = (
         ...(groupMetadata && { groupMetadata }),
       });
 
-      // Remove panel from tab group (same dissolve logic as trashPanel)
-      let newTabGroups = state.tabGroups;
-      for (const g of state.tabGroups.values()) {
-        if (g.panelIds.includes(id)) {
-          newTabGroups = new Map(state.tabGroups);
-          const newPanelIds = g.panelIds.filter((pid) => pid !== id);
-
-          if (newPanelIds.length <= 1) {
-            newTabGroups.delete(g.id);
-          } else {
-            const newActiveTabId = g.activeTabId === id ? (newPanelIds[0] ?? "") : g.activeTabId;
-            newTabGroups.set(g.id, {
-              ...g,
-              panelIds: newPanelIds,
-              activeTabId: newActiveTabId,
-            });
-          }
-          saveTabGroups(newTabGroups);
-          break;
-        }
+      const dissolved = dissolvePanelFromGroup(state.tabGroups, id);
+      const newTabGroups = dissolved.tabGroups;
+      if (dissolved.dissolved) {
+        saveTabGroups(newTabGroups);
       }
 
       saveNormalized(newById, state.panelIds);
@@ -89,6 +86,11 @@ export const createBackgroundActions = (
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      // Re-arm hibernation now that the panel is user-backgrounded: a panel
+      // already at BACKGROUND tier gets a no-op above, so without this the
+      // backgrounded bypass wouldn't take effect until the silence window
+      // expired.
+      terminalInstanceService.onPanelBackgrounded(id);
     }
   },
 
@@ -131,22 +133,22 @@ export const createBackgroundActions = (
         }
       }
 
+      // Store groupMetadata on every member, not just an anchor. If any single
+      // member is removed before restore (individual deletion, hydration loss),
+      // the surviving members still carry the full restore metadata so ordering
+      // and the active tab are preserved. See issue #8944.
       const newBackgrounded = new Map(s.backgroundedTerminals);
-      for (let i = 0; i < bgPanelIds.length; i++) {
-        const bid = bgPanelIds[i]!;
-        const isAnchor = i === 0;
+      for (const bid of bgPanelIds) {
         newBackgrounded.set(bid, {
           id: bid,
           originalLocation,
           groupRestoreId,
-          ...(isAnchor && {
-            groupMetadata: {
-              panelIds: bgPanelIds,
-              activeTabId: resolvedActiveTabId,
-              location: group.location,
-              worktreeId,
-            },
-          }),
+          groupMetadata: {
+            panelIds: [...bgPanelIds],
+            activeTabId: resolvedActiveTabId,
+            location: group.location,
+            worktreeId,
+          },
         });
       }
 
@@ -164,8 +166,15 @@ export const createBackgroundActions = (
 
     for (const bid of bgPanelIds) {
       const terminal = state.panelsById[bid];
+      if (terminal && isDevPreviewPanel(terminal)) {
+        stopDevPreviewByPanelId(bid);
+        continue;
+      }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND);
+        // See backgroundTerminal: re-arm hibernation for panels already at
+        // BACKGROUND tier (non-active group tabs) so the bypass applies now.
+        terminalInstanceService.onPanelBackgrounded(bid);
       }
     }
   },
@@ -231,7 +240,9 @@ export const createBackgroundActions = (
     for (const [id, backgrounded] of backgroundedTerminals.entries()) {
       if (backgrounded.groupRestoreId === groupRestoreId) {
         groupPanels.push({ id, backgrounded });
-        if (backgrounded.groupMetadata) {
+        // Metadata is replicated identically across all members (#8944); take
+        // the first one found so the restore source is deterministic.
+        if (!anchorPanel && backgrounded.groupMetadata) {
           anchorPanel = backgrounded;
         }
       }
@@ -283,31 +294,14 @@ export const createBackgroundActions = (
     const existingIds = new Set(get().panelIds);
     const validPanelIds = restoredPanelIds.filter((id) => existingIds.has(id));
 
-    if (validPanelIds.length > 1) {
-      let orderedPanelIds = validPanelIds;
-      let activeTabId = validPanelIds[0];
-
-      if (anchorPanel?.groupMetadata) {
-        const { panelIds, activeTabId: metadataActiveTabId } = anchorPanel.groupMetadata;
-        orderedPanelIds = panelIds.filter((id) => validPanelIds.includes(id));
-        for (const id of validPanelIds) {
-          if (!orderedPanelIds.includes(id)) {
-            orderedPanelIds.push(id);
-          }
-        }
-        activeTabId = orderedPanelIds.includes(metadataActiveTabId)
-          ? metadataActiveTabId
-          : orderedPanelIds[0];
-      }
-
-      if (orderedPanelIds.length > 1) {
-        get().createTabGroup(
-          restoreLocation as "dock" | "grid",
-          worktreeId,
-          orderedPanelIds,
-          activeTabId
-        );
-      }
+    const groupResult = computeRestoredTabGroup(validPanelIds, anchorPanel?.groupMetadata);
+    if (groupResult) {
+      get().createTabGroup(
+        restoreLocation as "dock" | "grid",
+        worktreeId,
+        groupResult.orderedPanelIds,
+        groupResult.activeTabId
+      );
     }
 
     for (const { id } of groupPanels) {

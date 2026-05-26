@@ -1,3 +1,4 @@
+// eager-import-allow: reads git config via store.get synchronously while servicing git-write IPC
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { realpath } from "node:fs/promises";

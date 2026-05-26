@@ -1,3 +1,4 @@
+// eager-import-allow: reads the persisted theme via store.get synchronously so the IPC reply is immediate
 import { dialog, BrowserWindow, nativeTheme } from "electron";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";

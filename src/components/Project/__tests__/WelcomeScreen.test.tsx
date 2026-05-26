@@ -6,11 +6,13 @@ const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(() => Promise.resolve()),
 }));
 
-const { addProjectMock, openCreateFolderDialogMock, switchProjectMock } = vi.hoisted(() => ({
-  addProjectMock: vi.fn(() => Promise.resolve()),
-  openCreateFolderDialogMock: vi.fn(),
-  switchProjectMock: vi.fn(() => Promise.resolve()),
-}));
+const { addProjectMock, openCreateFolderDialogMock, openCloneRepoDialogMock, switchProjectMock } =
+  vi.hoisted(() => ({
+    addProjectMock: vi.fn(() => Promise.resolve()),
+    openCreateFolderDialogMock: vi.fn(),
+    openCloneRepoDialogMock: vi.fn(),
+    switchProjectMock: vi.fn(() => Promise.resolve()),
+  }));
 
 const { getDisplayComboMock } = vi.hoisted(() => ({
   getDisplayComboMock: vi.fn((actionId: string) => {
@@ -175,6 +177,7 @@ let storeState = {
   isLoading: false,
   addProject: addProjectMock,
   openCreateFolderDialog: openCreateFolderDialogMock,
+  openCloneRepoDialog: openCloneRepoDialogMock,
   switchProject: switchProjectMock,
 };
 
@@ -190,7 +193,7 @@ Object.defineProperty(window, "electron", {
   writable: true,
 });
 
-import { WelcomeScreen } from "../WelcomeScreen";
+import { WelcomeScreen, isAgentWelcomeCardEligible } from "../WelcomeScreen";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 import type { ChecklistState } from "@shared/types/ipc/maps";
 
@@ -273,6 +276,7 @@ describe("WelcomeScreen", () => {
       isLoading: false,
       addProject: addProjectMock,
       openCreateFolderDialog: openCreateFolderDialogMock,
+      openCloneRepoDialog: openCloneRepoDialogMock,
       switchProject: switchProjectMock,
     };
     agentDiscoveryState.loaded = true;
@@ -648,46 +652,109 @@ describe("WelcomeScreen", () => {
 
   // --- Quick Actions ---
 
-  it("renders quick action buttons", () => {
+  it("renders quick action cards with sentence-case labels and descriptions", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Open Folder")).toBeTruthy();
-    expect(screen.getByText("Create Project")).toBeTruthy();
-    expect(screen.getByText("Launch Agent")).toBeTruthy();
+    expect(screen.getByText("Open folder")).toBeTruthy();
+    expect(screen.getByText("Create project")).toBeTruthy();
+    expect(screen.getByText("Clone repository")).toBeTruthy();
+    expect(screen.getByText("Launch agent")).toBeTruthy();
+
+    // Each secondary action carries a short description to tell them apart.
+    expect(screen.getByText("Open an existing project on your machine")).toBeTruthy();
+    expect(screen.getByText("Start fresh in a new folder")).toBeTruthy();
+    expect(screen.getByText("Pull a repo from a Git URL")).toBeTruthy();
+    expect(screen.getByText("Open the panel palette to start an agent")).toBeTruthy();
   });
 
-  it("calls addProject when Open Folder is clicked", () => {
+  it("groups quick actions in an accessible region with described cards", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    fireEvent.click(screen.getByText("Open Folder"));
+    const group = screen.getByTestId("quick-actions");
+    expect(group.getAttribute("role")).toBe("group");
+
+    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const describedBy = openFolder.getAttribute("aria-describedby");
+    expect(describedBy).toBe("qa-desc-open-folder");
+    expect(document.getElementById(describedBy!)?.textContent).toBe(
+      "Open an existing project on your machine"
+    );
+  });
+
+  it("calls addProject when Open folder is clicked", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    fireEvent.click(screen.getByText("Open folder"));
     expect(addProjectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("calls openCreateFolderDialog when Create Project is clicked", () => {
+  it("calls openCreateFolderDialog when Create project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    fireEvent.click(screen.getByText("Create Project"));
+    fireEvent.click(screen.getByText("Create project"));
     expect(openCreateFolderDialogMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls openCloneRepoDialog when Clone repository is clicked", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    fireEvent.click(screen.getByText("Clone repository"));
+    expect(openCloneRepoDialogMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not disable quick action buttons when isLoading is true", () => {
     storeState = { ...storeState, isLoading: true };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    const openFolder = screen.getByText("Open Folder").closest("button")!;
-    const createProject = screen.getByText("Create Project").closest("button")!;
-    const launchAgent = screen.getByText("Launch Agent").closest("button")!;
+    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const createProject = screen.getByText("Create project").closest("button")!;
+    const cloneRepository = screen.getByText("Clone repository").closest("button")!;
+    const launchAgent = screen.getByText("Launch agent").closest("button")!;
 
     expect(openFolder.disabled).toBe(false);
     expect(createProject.disabled).toBe(false);
+    expect(cloneRepository.disabled).toBe(false);
     expect(launchAgent.disabled).toBe(false);
   });
 
-  it("dispatches panel.palette when Launch Agent is clicked", () => {
+  it("dispatches panel.palette when Launch agent is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    fireEvent.click(screen.getByText("Launch Agent"));
+    fireEvent.click(screen.getByText("Launch agent"));
     expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
+  });
+
+  it("lifts the Open folder card and hides the heading for first-time users", () => {
+    storeState = { ...storeState, projects: [] };
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    // No "Quick actions" heading competes with the hero copy for new users.
+    expect(screen.queryByText("Quick actions")).toBeNull();
+
+    const group = screen.getByTestId("quick-actions");
+    expect(group.getAttribute("aria-label")).toBe("Quick actions");
+
+    const openFolder = screen.getByText("Open folder").closest("button")!;
+    expect(openFolder.className).toContain("bg-surface-panel-elevated/95");
+
+    // Only the primary card is lifted — the three secondary cards are not.
+    for (const label of ["Create project", "Clone repository", "Launch agent"]) {
+      const card = screen.getByText(label).closest("button")!;
+      expect(card.className).not.toContain("bg-surface-panel-elevated/95");
+    }
+  });
+
+  it("adds a muted heading and demotes the Open folder card for returning users", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    expect(screen.getByText("Quick actions")).toBeTruthy();
+
+    const group = screen.getByTestId("quick-actions");
+    expect(group.getAttribute("aria-labelledby")).toBe("quick-actions-heading");
+
+    // With recents present the list owns the primary path — no card lift.
+    const openFolder = screen.getByText("Open folder").closest("button")!;
+    expect(openFolder.className).not.toContain("bg-surface-panel-elevated/95");
   });
 
   // --- Keyboard Shortcuts ---
@@ -995,6 +1062,107 @@ describe("WelcomeScreen", () => {
       expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
       expect(screen.queryByText("Getting Started")).toBeNull();
+    });
+  });
+
+  describe("isAgentWelcomeCardEligible", () => {
+    it("returns false when agentSettings is null", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: null,
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when hasRealData is false", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: false,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when welcomeCardDismissed is true", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: true,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when no built-in agent is launchable", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "missing", codex: "missing" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when a built-in agent is already pinned", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: { claude: { pinned: true } } },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(false);
+    });
+
+    it("returns true when ready agents exist and none are pinned", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready", codex: "ready" },
+        })
+      ).toBe(true);
+    });
+
+    it("returns true for unauthenticated agent (launchable)", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "unauthenticated" },
+        })
+      ).toBe(true);
+    });
+
+    it("returns false for blocked agent (not launchable)", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: {} },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "blocked" },
+        })
+      ).toBe(false);
+    });
+
+    it("ignores custom agent pins when checking built-in eligibility", () => {
+      expect(
+        isAgentWelcomeCardEligible({
+          agentSettings: { agents: { "my-custom-agent": { pinned: true } } },
+          hasRealData: true,
+          welcomeCardDismissed: false,
+          availability: { claude: "ready" },
+        })
+      ).toBe(true);
     });
   });
 });

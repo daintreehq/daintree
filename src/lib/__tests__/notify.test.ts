@@ -4,6 +4,10 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   notify,
   TOAST_DURATION,
+  EVENT_POLICY,
+  EVENT_KIND_LABEL,
+  EVENT_KIND_TO_SETTING_KEY,
+  type NotificationEventKind,
   _resetCoalesceMap,
   _resetEscalationTrackers,
   _resetRateLimitBuckets,
@@ -18,7 +22,10 @@ import {
   _resetPendingSuppressedForTest,
 } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
-import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
 
 const mockShowNative = vi.fn();
@@ -684,20 +691,20 @@ describe("notify()", () => {
   });
 
   describe("default duration — severity-based defaults", () => {
-    it("applies a 12s default for error notifications", () => {
+    it("applies an 8s default for error notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({ type: "error", message: "Something failed" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(8000);
       expect(notification!.duration).toBe(TOAST_DURATION.error);
     });
 
-    it("applies a 12s default for warning notifications", () => {
+    it("applies an 8s default for warning notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "warning", message: "Heads up" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(8000);
       expect(notification!.duration).toBe(TOAST_DURATION.warning);
     });
 
@@ -709,11 +716,11 @@ describe("notify()", () => {
       expect(notification!.duration).toBe(TOAST_DURATION.success);
     });
 
-    it("applies an 8s default for info notifications", () => {
+    it("applies a 6s default for info notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "FYI" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(8000);
+      expect(notification!.duration).toBe(6000);
       expect(notification!.duration).toBe(TOAST_DURATION.info);
     });
 
@@ -2604,5 +2611,331 @@ describe("per-source rate-limit", () => {
       .getState()
       .entries.find((e) => e.message.includes("more event"));
     expect(summary?.context).toBeUndefined();
+  });
+});
+
+describe("notify() — thread re-promotion (#9008)", () => {
+  let entrySeq = 0;
+
+  function seedEntry(
+    overrides: Partial<NotificationHistoryEntry> & Pick<NotificationHistoryEntry, "type">
+  ): NotificationHistoryEntry {
+    return {
+      id: `seed-${entrySeq++}`,
+      type: overrides.type,
+      title: overrides.title,
+      message: overrides.message ?? "seeded",
+      timestamp: overrides.timestamp ?? Date.now() - 1000,
+      correlationId: overrides.correlationId,
+      seenAsToast: overrides.seenAsToast ?? true,
+      summarized: overrides.summarized ?? false,
+      countable: overrides.countable ?? true,
+      archivedAt: overrides.archivedAt ?? null,
+      supersedeKey: overrides.supersedeKey,
+      context: overrides.context,
+      actions: overrides.actions,
+    };
+  }
+
+  function seedThread(entries: NotificationHistoryEntry[]): void {
+    useNotificationHistoryStore.setState({
+      entries,
+      unreadCount: entries.filter((e) => !e.seenAsToast && e.countable && !e.archivedAt).length,
+    });
+  }
+
+  beforeEach(() => {
+    entrySeq = 0;
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    _resetCoalesceMap();
+    _resetRateLimitBuckets();
+    _setQuietUntil(0);
+    // priority "low" routes inbox-only by default, so re-promotion is the only
+    // path to a toast — isolates the predicate from focus/origin logic.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("re-toasts when severity escalates above the thread's worst (info → warning)", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({ type: "warning", correlationId: "build", message: "Build degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("re-toasts on escalation to error (warning → error)", () => {
+    seedThread([seedEntry({ type: "warning", correlationId: "build" })]);
+    notify({ type: "error", correlationId: "build", message: "Build failed", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("re-toasts at the success → info boundary (weight 0 → 1)", () => {
+    seedThread([seedEntry({ type: "success", correlationId: "build" })]);
+    notify({ type: "info", correlationId: "build", message: "Rebuilding", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("stays inbox-only on same severity (info → info)", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({ type: "info", correlationId: "build", message: "Still building", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    // but the inbox row is still written
+    expect(useNotificationHistoryStore.getState().entries).toHaveLength(2);
+  });
+
+  it("stays inbox-only on de-escalation (error → warning)", () => {
+    seedThread([seedEntry({ type: "error", correlationId: "build" })]);
+    notify({ type: "warning", correlationId: "build", message: "Recovering", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("re-toasts when the entire thread is archived (un-snooze)", () => {
+    seedThread([
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 4000 }),
+    ]);
+    notify({ type: "info", correlationId: "build", message: "New activity", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("does not re-toast a partially-archived thread on same severity", () => {
+    seedThread([
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    notify({ type: "info", correlationId: "build", message: "Still active", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("leaves the standard toast gate untouched when no thread exists", () => {
+    notify({ type: "warning", correlationId: "fresh", message: "First", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("re-toasts an urgent same-severity thread child", () => {
+    seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+    notify({
+      type: "info",
+      correlationId: "build",
+      message: "Urgent update",
+      priority: "low",
+      urgent: true,
+    });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("excludes archived entries from the escalation baseline", () => {
+    // Active worst is "info"; an old archived "error" must not block escalation.
+    seedThread([
+      seedEntry({ type: "error", correlationId: "build", archivedAt: Date.now() - 5000 }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    notify({ type: "warning", correlationId: "build", message: "Degraded", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("compares against the worst active entry in a mixed-severity thread", () => {
+    seedThread([
+      seedEntry({ type: "warning", correlationId: "build", archivedAt: null }),
+      seedEntry({ type: "info", correlationId: "build", archivedAt: null }),
+    ]);
+    // Same as active worst → no re-toast.
+    notify({ type: "warning", correlationId: "build", message: "Still warning", priority: "low" });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it("escalation re-toast still consumes the rate-limit bucket", () => {
+    // Drain the per-source bucket with toasting notifications first.
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "error", message: `m${i}`, rateLimitKey: "thread-rl" });
+    }
+    const toastsBefore = useNotificationStore.getState().notifications.length;
+    seedThread([seedEntry({ type: "info", correlationId: "rl" })]);
+    notify({
+      type: "warning",
+      correlationId: "rl",
+      message: "escalated",
+      priority: "low",
+      rateLimitKey: "thread-rl",
+    });
+    // The bucket is exhausted, so the re-promoted toast is suppressed (routed
+    // to the summary row) rather than bypassing the rate limiter.
+    expect(useNotificationStore.getState().notifications.length).toBe(toastsBefore);
+  });
+});
+
+describe("EVENT_POLICY manifest routing", () => {
+  const ALL_EVENT_KINDS: NotificationEventKind[] = [
+    "completed",
+    "waiting",
+    "workingPulse",
+    "uiFeedback",
+    "agent",
+    "git",
+    "host",
+    "recovery",
+    "settings",
+    "connectivity",
+  ];
+
+  beforeEach(() => {
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    _resetCoalesceMap();
+    _resetRateLimitBuckets();
+    _setQuietUntil(0);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("completeness", () => {
+    it("defines a policy and label for every event kind", () => {
+      for (const kind of ALL_EVENT_KINDS) {
+        expect(EVENT_POLICY[kind]).toBeDefined();
+        expect(EVENT_KIND_LABEL[kind]).toBeTruthy();
+      }
+    });
+
+    it("maps only the silenceable kinds to a settings key", () => {
+      expect(EVENT_KIND_TO_SETTING_KEY.completed).toBe("completedEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.waiting).toBe("waitingEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.workingPulse).toBe("workingPulseEnabled");
+      expect(EVENT_KIND_TO_SETTING_KEY.uiFeedback).toBe("uiFeedbackSoundEnabled");
+      // Routing-only kinds have no persisted silence toggle.
+      expect(EVENT_KIND_TO_SETTING_KEY.host).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.git).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.recovery).toBeUndefined();
+      expect(EVENT_KIND_TO_SETTING_KEY.connectivity).toBeUndefined();
+    });
+  });
+
+  describe("priority resolution", () => {
+    it("resolves an active kind to a high-priority toast when none supplied", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      const active = useNotificationStore.getState().notifications;
+      expect(active).toHaveLength(1);
+      expect(active[0]!.priority).toBe("high");
+    });
+
+    it("resolves a passive kind to inbox-only (low priority)", () => {
+      notify({ type: "info", message: "Setting saved", context: { eventKind: "settings" } });
+      // Low priority routes to the inbox only — no active toast.
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+    });
+
+    it.each(["workingPulse", "uiFeedback"] as const)(
+      "keeps passive sound kind %s inbox-only when no priority supplied",
+      (eventKind) => {
+        // Guards against a passive→active regression that would start toasting.
+        notify({ type: "info", message: "x", context: { eventKind } });
+        expect(useNotificationStore.getState().notifications).toHaveLength(0);
+        expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      }
+    );
+
+    it("lets an explicit caller priority win over the policy default", () => {
+      // git policy → high, but the caller pins low, so it must route to inbox only.
+      notify({
+        type: "info",
+        message: "Quiet git note",
+        priority: "low",
+        context: { eventKind: "git" },
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+    });
+  });
+
+  describe("urgent / quiet-gate resolution", () => {
+    it("bypasses the quiet gate for a time-sensitive kind", () => {
+      _setQuietUntil(Date.now() + 60_000);
+      notify({ type: "warning", message: "Disk low", context: { eventKind: "host" } });
+      // host → time-sensitive → urgent, so the toast fires despite quiet.
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("suppresses a non-time-sensitive kind during quiet", () => {
+      _setQuietUntil(Date.now() + 60_000);
+      notify({ type: "info", message: "Git note", context: { eventKind: "git" } });
+      // git → active (no urgent), so quiet suppresses the toast.
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+  });
+
+  describe("duration resolution", () => {
+    it("applies a policy defaultDurationMs when the caller omits duration", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      const active = useNotificationStore.getState().notifications;
+      expect(active[0]!.duration).toBe(EVENT_POLICY.git.defaultDurationMs);
+    });
+
+    it("lets an explicit caller duration win over the policy default", () => {
+      notify({
+        type: "info",
+        message: "Git push done",
+        duration: 9999,
+        context: { eventKind: "git" },
+      });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(9999);
+    });
+
+    it("keeps action-bearing toasts sticky over the policy default", () => {
+      notify({
+        type: "info",
+        message: "Git push done",
+        context: { eventKind: "git" },
+        action: { label: "View", onClick: () => {} },
+      });
+      // Sticky-action default (0) must win over git's defaultDurationMs.
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(0);
+    });
+
+    it("falls through to the per-type default for kinds without a policy duration", () => {
+      // recovery has no defaultDurationMs → per-type warning default applies.
+      notify({ type: "warning", message: "Settings reset", context: { eventKind: "recovery" } });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(
+        TOAST_DURATION.warning
+      );
+    });
+  });
+
+  describe("placement resolution", () => {
+    it("leaves placement unset for auto-surface kinds", () => {
+      notify({ type: "info", message: "Git push done", context: { eventKind: "git" } });
+      expect(useNotificationStore.getState().notifications[0]!.placement).toBeUndefined();
+    });
+  });
+
+  describe("no eventKind is unchanged", () => {
+    it("uses the legacy defaults when no eventKind is present", () => {
+      notify({ type: "info", message: "Plain note" });
+      const active = useNotificationStore.getState().notifications;
+      expect(active).toHaveLength(1);
+      expect(active[0]!.priority).toBe("high");
+      expect(active[0]!.duration).toBe(TOAST_DURATION.info);
+    });
   });
 });

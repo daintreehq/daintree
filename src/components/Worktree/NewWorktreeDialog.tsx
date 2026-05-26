@@ -13,7 +13,9 @@ import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore"
 import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
+import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
@@ -42,6 +44,18 @@ import {
 } from "./views";
 
 type BranchMode = "new" | "existing";
+
+/** Map the GitHub uppercase PR state to the workspace-host lowercase form. */
+function normalizeSourcePrState(state: GitHubPR["state"]): "open" | "closed" | "merged" {
+  switch (state) {
+    case "MERGED":
+      return "merged";
+    case "CLOSED":
+      return "closed";
+    default:
+      return "open";
+  }
+}
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -527,6 +541,18 @@ export function NewWorktreeDialog({
           useExistingBranch,
           provisionResource: snapWorktreeMode !== "local" || undefined,
           worktreeMode: snapWorktreeMode,
+          // #8888: when created from the PR dropdown, capture the source PR so
+          // the host seeds the worktree's linked PR (and closing issue) eagerly
+          // instead of waiting for branch-name polling to rediscover it.
+          ...(snapInitialPR
+            ? {
+                sourcePrNumber: snapInitialPR.number,
+                sourcePrTitle: snapInitialPR.title,
+                sourcePrUrl: snapInitialPR.url,
+                sourcePrState: normalizeSourcePrState(snapInitialPR.state),
+                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.bodyText),
+              }
+            : {}),
         };
 
         const actionResult = await actionService.dispatch(
@@ -616,6 +642,7 @@ export function NewWorktreeDialog({
         }
 
         onWorktreeCreated?.(worktreeId);
+        useAnnouncerStore.getState().announce(`Created worktree ${fullBranchName}`);
       } catch (err: unknown) {
         const message = formatErrorMessage(err, "Failed to create worktree");
         if (placeholderPath) {
@@ -632,6 +659,7 @@ export function NewWorktreeDialog({
             message,
           });
         }
+        useAnnouncerStore.getState().announce("Couldn't create worktree", "assertive");
       } finally {
         isCreatingRef.current = false;
       }

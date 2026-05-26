@@ -78,7 +78,7 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     // The Assistant must remain a structural flex sibling that reserves
     // horizontal space instead of reverting to an overlay on top of terminals.
     expect(source).toContain('"relative h-full shrink-0 overflow-hidden"');
-    expect(source).toContain("style={{ width: effectiveAssistantWidth }}");
+    expect(source).toContain("width: effectiveAssistantWidth");
     expect(source).not.toMatch(/"absolute top-0 right-0 bottom-0 z-30"/);
   });
 
@@ -289,5 +289,48 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     expect(source).toMatch(
       /\{layout\.portalOpen &&\s*\n\s*createPortal\([\s\S]+?isThemeBrowserOpen \? \{ inert: true \} : \{\}[\s\S]+?<PortalDock \/>/
     );
+  });
+});
+
+describe("AppLayout CSS layout containment — issue #9014", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("applies contain: layout paint to the resizable sidebar wrapper", () => {
+    // The sidebar column wrapper carries dynamic inline width and is the direct
+    // drag-resize target. `contain: layout paint` isolates child layout/paint
+    // recalc to this subtree during continuous resize instead of invalidating
+    // the whole page. `layout paint` (not `strict`/`size`) is deliberate — size
+    // containment would break the flex column sizing.
+    expect(source).toMatch(/width:\s*effectiveSidebarWidth,[\s\S]{0,160}contain:\s*"layout paint"/);
+    // Size containment (strict/size) would collapse the flex column to 0×0.
+    expect(source).not.toContain('contain: "strict"');
+    expect(source).not.toMatch(/contain:\s*"[^"]*size/);
+  });
+
+  it("gives the contained sidebar wrapper a z-index so the resize handle stays visible", () => {
+    // The contain boundary turns the sidebar wrapper into a stacking context.
+    // Its resize handle overhangs the right edge by 6px (-right-1.5, z-50);
+    // without an explicit z-index the wrapper paints below the later <main>
+    // sibling (both z-index auto, DOM order wins) and <main>'s opaque
+    // background occludes the handle overhang.
+    expect(source).toMatch(/contain:\s*"layout paint",[\s\S]{0,400}zIndex:\s*1/);
+  });
+
+  it("preserves the sidebar wrapper's overflow-clip-margin alongside containment", () => {
+    // `contain: paint` converts overflow:visible to overflow:clip at used-value
+    // time and honors overflow-clip-margin per spec — the existing 6px margin
+    // must stay intact so the sidebar's edge decorations aren't clipped tight.
+    expect(source).toContain('overflowClipMargin: "6px"');
+    expect(source).toMatch(
+      /overflowClipMargin:\s*"6px",[\s\S]{0,40}contain:\s*"layout paint"|contain:\s*"layout paint",[\s\S]{0,40}overflowClipMargin:\s*"6px"/
+    );
+  });
+
+  it("applies contain: layout paint to the resizable assistant wrapper", () => {
+    expect(source).toMatch(/width:\s*effectiveAssistantWidth,\s*contain:\s*"layout paint"/);
   });
 });
