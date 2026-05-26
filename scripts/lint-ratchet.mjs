@@ -136,6 +136,14 @@ function main() {
       encoding: "utf-8",
       maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large output
       stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        // ESLint loading the whole tree + the typescript-eslint parser routinely
+        // approaches Node's default ~2 GB old-space ceiling and OOMs on the macOS
+        // nightly runner. Bump headroom so JSON formatter has room for the full
+        // result graph. Appended so any caller-provided NODE_OPTIONS wins on tie.
+        NODE_OPTIONS: `--max-old-space-size=4096 ${process.env.NODE_OPTIONS ?? ""}`.trim(),
+      },
     });
   } catch (error) {
     // ESLint exits with code 1 when there are warnings/errors
