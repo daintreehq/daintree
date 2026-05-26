@@ -466,11 +466,11 @@ export function useDevServer({
     ensureLatestConfig,
   ]);
 
-  // Staged stuck-start escalation (#8276). Replaces the old silent
-  // auto-restart: instead of firing `devPreview.restart()` once at 10s
-  // (which wiped the logs explaining the stall), we advance `stuckTier`
-  // at 6s/12s/25s so the UI can surface a user-driven signal. The user
-  // now drives any recovery explicitly via the banner actions.
+  // Staged stuck-start escalation (#8276, retuned #9099). Replaces the
+  // old silent auto-restart: instead of firing `devPreview.restart()`
+  // once at 10s (which wiped the logs explaining the stall), we advance
+  // `stuckTier` at 6s/20s/45s so the UI can surface a user-driven signal.
+  // The user now drives any recovery explicitly via the banner actions.
   useEffect(() => {
     if (status !== "starting" || !currentProjectId || !terminalId || url || isRestarting) {
       // `installing` and every other non-starting state falls through here,
