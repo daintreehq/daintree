@@ -259,11 +259,6 @@ export function XtermAdapter({
           return true;
         }
 
-        // Skip repeat events
-        if (event.repeat) {
-          return true;
-        }
-
         // Get normalized key for modifier-only detection
         const normalizedKey = keybindingService.normalizeKeyForBinding(event);
         const isModifierOnly = ["Meta", "Control", "Alt", "Shift"].includes(normalizedKey);
@@ -277,6 +272,27 @@ export function XtermAdapter({
         // full lifecycle (composed text + \r). keyCode 229 is Chromium's "Process"
         // key signal during active composition where isComposing may not yet be set.
         if (event.isComposing || event.keyCode === 229) {
+          return true;
+        }
+
+        // Plain Tab and Shift+Tab are terminal input. xterm v6 intentionally
+        // leaves key events uncanceled in screen-reader mode, which lets
+        // Chromium's native focus traversal run after xterm accepts Tab.
+        // Cancel only the DOM/default path; return true so xterm still emits
+        // HT for Tab and CSI Z for Shift+Tab.
+        if (
+          (event.key === "Tab" || event.code === "Tab" || event.keyCode === 9) &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+
+        // Skip repeat events
+        if (event.repeat) {
           return true;
         }
 

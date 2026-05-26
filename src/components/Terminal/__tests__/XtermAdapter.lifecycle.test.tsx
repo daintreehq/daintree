@@ -290,7 +290,7 @@ describe("XtermAdapter lifecycle", () => {
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
   });
 
-  it("passes Tab and Shift+Tab through to the PTY without dispatching focus-region actions (#9082)", async () => {
+  it("keeps Tab and Shift+Tab as xterm-owned input without dispatching focus-region actions (#9082)", async () => {
     renderAdapter();
     await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
 
@@ -304,33 +304,41 @@ describe("XtermAdapter lifecycle", () => {
       cancelable: true,
     });
     const preventDefaultSpy = vi.spyOn(tabEvent, "preventDefault");
+    const stopPropagationSpy = vi.spyOn(tabEvent, "stopPropagation");
     const tabResult = keyHandler?.(tabEvent);
     expect(tabResult).toBe(true);
-    expect(preventDefaultSpy).not.toHaveBeenCalled();
+    expect(preventDefaultSpy).toHaveBeenCalled();
+    expect(stopPropagationSpy).toHaveBeenCalled();
 
-    const shiftTabResult = keyHandler?.(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        code: "Tab",
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
+    const shiftTabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const shiftTabPreventDefaultSpy = vi.spyOn(shiftTabEvent, "preventDefault");
+    const shiftTabStopPropagationSpy = vi.spyOn(shiftTabEvent, "stopPropagation");
+    const shiftTabResult = keyHandler?.(shiftTabEvent);
     expect(shiftTabResult).toBe(true);
+    expect(shiftTabPreventDefaultSpy).toHaveBeenCalled();
+    expect(shiftTabStopPropagationSpy).toHaveBeenCalled();
 
     // Held Tab (key-repeat) must also pass through — shell autocomplete and
     // many TUIs rely on sustained Tab presses.
-    const repeatedTabResult = keyHandler?.(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        code: "Tab",
-        repeat: true,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
+    const repeatedTabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const repeatedTabPreventDefaultSpy = vi.spyOn(repeatedTabEvent, "preventDefault");
+    const repeatedTabStopPropagationSpy = vi.spyOn(repeatedTabEvent, "stopPropagation");
+    const repeatedTabResult = keyHandler?.(repeatedTabEvent);
     expect(repeatedTabResult).toBe(true);
+    expect(repeatedTabPreventDefaultSpy).toHaveBeenCalled();
+    expect(repeatedTabStopPropagationSpy).toHaveBeenCalled();
 
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });

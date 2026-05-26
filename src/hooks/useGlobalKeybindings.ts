@@ -110,8 +110,21 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // below in resolveKeybinding → canExecute.
       const hasModifier = e.metaKey || e.ctrlKey;
       const isFocusRegion = isFocusRegionEvent(e);
+      const isTerminalTabInput =
+        isInTerminal &&
+        (e.key === "Tab" || e.code === "Tab" || e.keyCode === 9) &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey;
 
       if (isEditable && !hasModifier && !pendingChord && !isFocusRegion) {
+        return;
+      }
+
+      // Tab and Shift+Tab are xterm-owned input for completion/TUI navigation.
+      // Do not let focus-region rebinds or native focus traversal steal them
+      // before xterm's key handler has a chance to emit the terminal sequence.
+      if (isTerminalTabInput && !pendingChord) {
         return;
       }
 

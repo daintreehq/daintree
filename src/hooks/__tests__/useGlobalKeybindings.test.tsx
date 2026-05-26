@@ -545,6 +545,46 @@ describe("useGlobalKeybindings — region focus key bypass (issue #7303)", () =>
       xterm.remove();
     }
   });
+
+  it("does not let focus-region Tab rebinds steal xterm input", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
+      if (id === "nav.focusRegion.next") return "Tab";
+      if (id === "nav.focusRegion.prev") return "Shift+Tab";
+      return undefined;
+    });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "nav.focusRegion.next" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      render(<Host />);
+
+      const tabEvent = dispatchKey("Tab", xterm);
+      expect(tabEvent.defaultPrevented).toBe(false);
+
+      const shiftTabEvent = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        xterm.dispatchEvent(shiftTabEvent);
+      });
+      expect(shiftTabEvent.defaultPrevented).toBe(false);
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      xterm.remove();
+    }
+  });
 });
 
 describe("useGlobalKeybindings — IME composition guard", () => {
