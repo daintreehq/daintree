@@ -297,10 +297,16 @@ describe("XtermAdapter lifecycle", () => {
     const keyHandler = mocks.getKeyHandler();
     expect(keyHandler).toBeTruthy();
 
-    const tabResult = keyHandler?.(
-      new KeyboardEvent("keydown", { key: "Tab", code: "Tab", bubbles: true, cancelable: true })
-    );
+    const tabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(tabEvent, "preventDefault");
+    const tabResult = keyHandler?.(tabEvent);
     expect(tabResult).toBe(true);
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
 
     const shiftTabResult = keyHandler?.(
       new KeyboardEvent("keydown", {
@@ -312,6 +318,19 @@ describe("XtermAdapter lifecycle", () => {
       })
     );
     expect(shiftTabResult).toBe(true);
+
+    // Held Tab (key-repeat) must also pass through — shell autocomplete and
+    // many TUIs rely on sustained Tab presses.
+    const repeatedTabResult = keyHandler?.(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        code: "Tab",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    expect(repeatedTabResult).toBe(true);
 
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
