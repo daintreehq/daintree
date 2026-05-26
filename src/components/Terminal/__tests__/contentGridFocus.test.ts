@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { getMaximizedGroupFocusTarget } from "../contentGridFocus";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 
-function createTerminal(id: string): TerminalInstance {
+function createTerminal(id: string): PtyPanelData {
   return {
     id,
     title: id,
+    kind: "terminal",
     cwd: "/project",
     cols: 80,
     rows: 24,
     location: "grid",
-  };
+  } as PtyPanelData;
 }
 
 describe("getMaximizedGroupFocusTarget", () => {

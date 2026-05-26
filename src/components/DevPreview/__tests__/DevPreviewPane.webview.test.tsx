@@ -294,6 +294,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       return element;
     }) as typeof document.createElement;
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: [],
@@ -373,6 +374,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   it("binds loading listeners when webview mounts after initial waiting state", async () => {
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: [],
@@ -487,6 +489,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   describe("viewport device emulation", () => {
     const withPreset = (preset: string | undefined) => {
       terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
         id: "dev-preview-panel-1",
         browserHistory: { past: [], present: "http://localhost:5173/", future: [] },
         browserZoom: 1.4,
@@ -1117,6 +1120,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         })
     );
     terminalStoreState.getTerminal.mockImplementation(() => ({
+      kind: "dev-preview",
       id: "dev-preview-panel-1",
       browserHistory: {
         past: ["http://localhost:3000/old"],

@@ -10,7 +10,7 @@ import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
@@ -36,11 +36,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
@@ -48,11 +51,11 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PanelInstance[]): void {
+  const panelsById: Record<string, PanelInstance> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -577,7 +580,12 @@ describe("buildFleetTargetPreviews", () => {
     // cast which silently coerced any shape into the eligible branch.
     seedPanels([
       makeAgent("terminal-1"),
-      makeAgent("browser-1", { kind: "browser", title: "Browser pane", hasPty: undefined }),
+      {
+        id: "browser-1",
+        kind: "browser",
+        title: "Browser pane",
+        location: "grid",
+      } as PanelInstance,
     ]);
     useFleetArmingStore.getState().armIds(["terminal-1", "browser-1"]);
     const previews = buildFleetTargetPreviews("hi");

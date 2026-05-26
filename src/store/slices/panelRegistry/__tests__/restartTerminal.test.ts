@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
@@ -244,7 +245,9 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
       SHARED: "preset",
       PRESET_ONLY: "preset",
     });
-    expect(usePanelStore.getState().panelsById["test-1"]?.agentPresetColor).toBe("#3366ff");
+    expect(
+      (usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined)?.agentPresetColor
+    ).toBe("#3366ff");
   });
 
   it("reapplies runtime settings env on demoted shell restart without relaunching the agent", async () => {
@@ -301,7 +304,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    const after = usePanelStore.getState().panelsById["test-1"];
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(after?.launchAgentId).toBe("claude");
   });
 
@@ -317,7 +320,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    const afterFirst = usePanelStore.getState().panelsById["test-1"];
+    const afterFirst = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(afterFirst?.agentState).toBe("exited");
 
     await usePanelStore.getState().restartTerminal("test-1");
@@ -343,7 +346,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    const after = usePanelStore.getState().panelsById["test-1"];
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(after?.command).toBeUndefined();
   });
 });
@@ -438,7 +441,7 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
     // Launch identity on the panel is preserved for future deliberate
     // restart-as-agent flows; agentState stays "exited" to keep demotion
     // sticky across repeat restarts (#5764).
-    const after = usePanelStore.getState().panelsById["test-1"];
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(after?.launchAgentId).toBe("claude");
     expect(after?.agentState).toBe("exited");
   });

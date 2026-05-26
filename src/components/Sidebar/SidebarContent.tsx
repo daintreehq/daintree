@@ -78,6 +78,7 @@ import { useRecipeDialogState } from "./useRecipeDialogState";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { isPtyPanel } from "@shared/types/panel";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { logError } from "@/utils/logger";
@@ -609,7 +610,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         if (!t) continue;
         if (!isTerminalVisible(t, isInTrash, worktreeIds)) continue;
         terminalCount++;
-        if (!isAgentTerminal(t)) continue;
+        if (!isAgentTerminal(t) || !isPtyPanel(t)) continue;
         if (t.agentState === "working") hasWorkingAgent = true;
         if (t.agentState === "waiting") {
           hasWaitingAgent = true;

@@ -2,7 +2,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const { useWorktreeStoreMock } = vi.hoisted(() => ({
   useWorktreeStoreMock: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 import { useAgentClusters } from "../useAgentClusters";
 import { _resetWorktreeIdCacheForTests } from "../useTerminalSelectors";
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
@@ -26,11 +26,11 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PtyPanelData[]): void {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;

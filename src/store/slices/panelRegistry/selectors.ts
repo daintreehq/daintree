@@ -5,43 +5,36 @@ import {
   isReviewPanel,
   type PanelInstance,
 } from "@shared/types/panel";
-import type { TerminalInstance } from "./types";
 
-let _prevById: Record<string, TerminalInstance> | null = null;
+let _prevById: Record<string, PanelInstance> | null = null;
 let _prevIds: string[] | null = null;
-let _prevResult: TerminalInstance[] | null = null;
+let _prevResult: PanelInstance[] | null = null;
 
 export function selectOrderedTerminals(
-  panelsById: Record<string, TerminalInstance>,
+  panelsById: Record<string, PanelInstance>,
   panelIds: string[]
-): TerminalInstance[] {
+): PanelInstance[] {
   if (panelsById === _prevById && panelIds === _prevIds && _prevResult) {
     return _prevResult;
   }
   _prevById = panelsById;
   _prevIds = panelIds;
-  _prevResult = panelIds
-    .map((id) => panelsById[id])
-    .filter((t): t is TerminalInstance => Boolean(t));
+  _prevResult = panelIds.map((id) => panelsById[id]).filter((t): t is PanelInstance => Boolean(t));
   return _prevResult;
 }
 
 /**
  * Adapter selector: narrow a single carrier entry to the `PanelInstance`
- * discriminated union. The carrier is still typed `Record<string, TerminalInstance>`
- * (#8957 drains that incrementally); this is the sanctioned read path for new
- * code that wants the narrow union instead of the kitchen-sink interface.
- *
- * Uses the existing kind type guards (which default a missing `kind` to
- * "terminal"), so a no-`kind` legacy record narrows to `PtyPanelData` — no
- * blanket `as unknown as PanelInstance` cast.
+ * discriminated union. Since the carrier now is `Record<string, PanelInstance>`
+ * the narrowing is mostly a passthrough — kept around as the sanctioned read
+ * path for callers that want to drop carrier entries with extension/plugin
+ * `kind` values that aren't part of the built-in `PanelInstance` union.
  *
  * Returns `undefined` for an absent id and for any panel whose `kind` is
- * outside the built-in union (e.g. an extension/plugin kind); such panels are
- * intentionally not representable by `PanelInstance` and are dropped here.
+ * outside the built-in union (e.g. an extension/plugin kind).
  */
 export function getNarrowPanel(
-  panelsById: Record<string, TerminalInstance>,
+  panelsById: Record<string, PanelInstance>,
   id: string
 ): PanelInstance | undefined {
   const panel = panelsById[id];
@@ -49,20 +42,11 @@ export function getNarrowPanel(
   if (isBrowserPanel(panel)) return panel;
   if (isDevPreviewPanel(panel)) return panel;
   if (isReviewPanel(panel)) return panel;
-  if (isPtyPanel(panel)) {
-    // The guard defaults an absent `kind` to "terminal", so a legacy no-`kind`
-    // record lands here. Backfill the literal discriminant when it's missing so
-    // the returned `PtyPanelData` is sound for downstream `switch (kind)`;
-    // preserve object identity when the panel already carries it.
-    if ("kind" in panel && panel.kind) {
-      return panel;
-    }
-    return { ...panel, kind: "terminal" };
-  }
+  if (isPtyPanel(panel)) return panel;
   return undefined;
 }
 
-let _prevNarrowById: Record<string, TerminalInstance> | null = null;
+let _prevNarrowById: Record<string, PanelInstance> | null = null;
 let _prevNarrowIds: string[] | null = null;
 let _prevNarrowResult: PanelInstance[] | null = null;
 
@@ -73,7 +57,7 @@ let _prevNarrowResult: PanelInstance[] | null = null;
  * so repeated calls in React render paths return a stable array reference.
  */
 export function getNarrowPanels(
-  panelsById: Record<string, TerminalInstance>,
+  panelsById: Record<string, PanelInstance>,
   panelIds: string[]
 ): PanelInstance[] {
   if (panelsById === _prevNarrowById && panelIds === _prevNarrowIds && _prevNarrowResult) {

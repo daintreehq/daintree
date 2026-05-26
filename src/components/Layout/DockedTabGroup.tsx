@@ -24,12 +24,8 @@ import {
 import { cn, getBaseTitle } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
-import {
-  useTerminalInputStore,
-  usePanelStore,
-  useFocusStore,
-  type TerminalInstance,
-} from "@/store";
+import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -68,7 +64,7 @@ const TERMINAL_FOCUS_DELAY_MS = 50;
 
 interface DockedTabGroupProps {
   group: TabGroup;
-  panels: TerminalInstance[];
+  panels: PtyPanelData[];
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {

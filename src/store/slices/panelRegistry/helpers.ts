@@ -7,7 +7,10 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { logError } from "@/utils/logger";
-import type { TerminalInstance } from "./types";
+import { isPtyPanel } from "@shared/types/panel";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 /**
  * Count grid-visible panels currently in `agentState === "working"`. O(N) over
@@ -18,12 +21,12 @@ import type { TerminalInstance } from "./types";
  * write-time because many listeners (`onAgentExited`, identity reducers,
  * restart paths) bypass `updateAgentState` and silently desync a counter.
  */
-export function computeWorkingGridAgentCount(panelsById: Record<string, TerminalInstance>): number {
+export function computeWorkingGridAgentCount(panelsById: Record<string, CarrierPanel>): number {
   let count = 0;
   for (const id in panelsById) {
     const t = panelsById[id];
     if (!t) continue;
-    if (t.agentState !== "working") continue;
+    if (!isPtyPanel(t) || t.agentState !== "working") continue;
     const location = t.location ?? "grid";
     if (location !== "grid") continue;
     if (t.isVisible === false) continue;

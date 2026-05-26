@@ -9,7 +9,7 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/panel";
+import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -132,9 +132,11 @@ export function TerminalContextMenu({
     [terminalId]
   );
 
+  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
+  const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
   const isPaused =
-    terminal?.flowStatus === "paused-backpressure" ||
-    terminal?.flowStatus === "paused-resource-governor";
+    terminalPty?.flowStatus === "paused-backpressure" ||
+    terminalPty?.flowStatus === "paused-resource-governor";
 
   const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
@@ -336,26 +338,26 @@ export function TerminalContextMenu({
           );
           break;
         case "open-external":
-          if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
+          if (terminalBrowser?.browserUrl && isValidBrowserUrl(terminalBrowser.browserUrl)) {
             void actionService.dispatch(
               "browser.openExternal",
-              { url: terminal.browserUrl },
+              { url: terminalBrowser.browserUrl },
               { source: sourceRef.current }
             );
           }
           break;
         case "copy-url":
-          if (terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl)) {
+          if (terminalBrowser?.browserUrl && isValidBrowserUrl(terminalBrowser.browserUrl)) {
             void actionService.dispatch(
               "browser.copyUrl",
-              { url: terminal.browserUrl },
+              { url: terminalBrowser.browserUrl },
               { source: sourceRef.current }
             );
           }
           break;
       }
     },
-    [terminal, terminalId]
+    [terminal, terminalId, terminalPty, terminalBrowser]
   );
 
   const handleCloseAutoFocus = useCallback((event: Event) => {
@@ -433,7 +435,7 @@ export function TerminalContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {terminal.launchAgentId && (
+      {terminalPty?.launchAgentId && (
         <ContextMenuItem
           onSelect={() =>
             void actionService.dispatch(

@@ -52,7 +52,7 @@ const { terminalInstanceService } = await import("@/services/TerminalInstanceSer
 function seedTerminals() {
   const t1 = {
     id: "term-1",
-    type: "terminal" as const,
+    kind: "terminal" as const,
     title: "Shell 1",
     cwd: "/test",
     cols: 80,
@@ -61,7 +61,7 @@ function seedTerminals() {
   };
   const t2 = {
     id: "term-2",
-    type: "terminal" as const,
+    kind: "terminal" as const,
     title: "Shell 2",
     cwd: "/test",
     cols: 80,

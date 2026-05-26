@@ -5,14 +5,15 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { TerminalInstance, AgentState } from "../../types";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { AgentState } from "../../types";
 import { aggregateAgentStates } from "../useWorktreeTerminals";
 
 /**
  * Helper function that implements the core logic of useWorktreeTerminals
  * This allows testing without React hooks infrastructure
  */
-function calculateWorktreeCounts(terminals: TerminalInstance[], worktreeId: string) {
+function calculateWorktreeCounts(terminals: PtyPanelData[], worktreeId: string) {
   const worktreeTerminals = terminals.filter((t) => t.worktreeId === worktreeId);
 
   const byState: Record<AgentState, number> = {
@@ -55,9 +56,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("filters terminals by worktreeId", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell 1",
         cwd: "/path/1",
@@ -67,6 +69,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-2",
         title: "Shell 2",
         cwd: "/path/2",
@@ -76,6 +79,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-3",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Claude",
         cwd: "/path/1",
@@ -93,9 +97,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("counts terminals without agentState as idle", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell",
         cwd: "/path/1",
@@ -106,6 +111,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell 2",
         cwd: "/path/1",
@@ -124,9 +130,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("aggregates terminals by agent state", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Claude 1",
         cwd: "/path/1",
@@ -137,6 +144,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Claude 2",
         cwd: "/path/1",
@@ -147,6 +155,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-3",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Gemini",
         cwd: "/path/1",
@@ -157,6 +166,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-4",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Claude 3",
         cwd: "/path/1",
@@ -177,9 +187,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("handles terminals without worktreeId", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         title: "Shell",
         cwd: "/path/1",
         cols: 80,
@@ -189,6 +200,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell 2",
         cwd: "/path/1",
@@ -206,9 +218,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("handles mixed agent states", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Claude",
         cwd: "/path/1",
@@ -219,6 +232,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell",
         cwd: "/path/1",
@@ -229,6 +243,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-3",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Gemini",
         cwd: "/path/1",
@@ -248,9 +263,10 @@ describe("useWorktreeTerminals logic", () => {
   });
 
   it("counts shell terminals with mixed agent states", () => {
-    const terminals: TerminalInstance[] = [
+    const terminals: PtyPanelData[] = [
       {
         id: "term-1",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell",
         cwd: "/path/1",
@@ -261,6 +277,7 @@ describe("useWorktreeTerminals logic", () => {
       },
       {
         id: "term-2",
+        kind: "terminal" as const,
         worktreeId: "worktree-1",
         title: "Shell 2",
         cwd: "/path/1",
@@ -283,9 +300,10 @@ describe("useWorktreeTerminals logic", () => {
 // even when agent identity hasn't committed yet, so collapsed worktree badges
 // surface live progress instead of staying idle until detection lands.
 describe("aggregateAgentStates (#6650)", () => {
-  function term(overrides: Partial<TerminalInstance>): TerminalInstance {
+  function term(overrides: Partial<PtyPanelData>): PtyPanelData {
     return {
       id: "t-" + Math.random().toString(36).slice(2),
+      kind: "terminal" as const,
       worktreeId: "wt-1",
       title: "T",
       cwd: "/x",
@@ -293,7 +311,7 @@ describe("aggregateAgentStates (#6650)", () => {
       rows: 24,
       location: "grid",
       ...overrides,
-    } as TerminalInstance;
+    } as PtyPanelData;
   }
 
   it("counts a working terminal toward byState.working even with no agent identity", () => {

@@ -1,10 +1,14 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export type ClusterType = "waiting" | "error" | "completion";
 
@@ -58,7 +62,7 @@ interface BucketMember {
 
 interface DeriveParams {
   panelIds: string[];
-  panelsById: Record<string, TerminalInstance | undefined>;
+  panelsById: Record<string, CarrierPanel | undefined>;
   isInTrash: (id: string) => boolean;
   worktreeIds: Set<string>;
   now: number;
@@ -81,8 +85,10 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
   };
 
   for (const id of panelIds) {
-    const t = panelsById[id];
-    if (!t) continue;
+    const raw = panelsById[id];
+    if (!raw) continue;
+    if (!isPtyPanel(raw)) continue;
+    const t = raw;
     if (!isTerminalVisible(t, isInTrash, worktreeIds)) continue;
 
     const lsc =

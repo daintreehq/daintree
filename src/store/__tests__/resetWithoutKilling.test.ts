@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabGroup } from "@/types";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -48,14 +48,11 @@ const { usePanelStore } = await import("../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { terminalClient } = await import("@/clients");
 
-type MockTerminal = Partial<TerminalInstance> & { id: string };
+type MockTerminal = Partial<PtyPanelData> & { id: string };
 
 function setTerminals(terminals: MockTerminal[]) {
   usePanelStore.setState({
-    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
-      string,
-      TerminalInstance
-    >,
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<string, PtyPanelData>,
     panelIds: terminals.map((t) => t.id),
   });
 }

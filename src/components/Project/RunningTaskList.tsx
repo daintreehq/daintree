@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Eye, RotateCw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
@@ -12,7 +14,7 @@ const AUTO_CLEAR_DELAY = 3000;
 
 type TaskStatus = "running" | "success" | "failed" | "restarting";
 
-function deriveTaskStatus(t: TerminalInstance): TaskStatus {
+function deriveTaskStatus(t: PtyPanelData): TaskStatus {
   if (t.isRestarting) return "restarting";
   if (t.runtimeStatus === "exited") {
     return t.exitCode === 0 ? "success" : "failed";
@@ -34,16 +36,17 @@ interface RunningTaskListProps {
 export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const quickRunTerminals = usePanelStore(
     useShallow((state) => {
-      const result: TerminalInstance[] = [];
+      const result: PtyPanelData[] = [];
       for (const id of state.panelIds) {
-        const t = state.panelsById[id];
+        const panel = getNarrowPanel(state.panelsById, id);
         if (
-          t &&
-          t.spawnedBy === "quickrun" &&
-          t.worktreeId === worktreeId &&
-          t.location !== "trash"
+          panel &&
+          isPtyPanel(panel) &&
+          panel.spawnedBy === "quickrun" &&
+          panel.worktreeId === worktreeId &&
+          panel.location !== "trash"
         ) {
-          result.push(t);
+          result.push(panel);
         }
       }
       return result;
@@ -175,7 +178,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
 }
 
 interface TaskRowProps {
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
   status: TaskStatus;
   now: number;
   onStop: (id: string) => void;

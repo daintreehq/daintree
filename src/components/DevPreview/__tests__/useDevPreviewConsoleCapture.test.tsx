@@ -7,7 +7,7 @@ import { useDevPreviewConsoleCapture } from "../useDevPreviewConsoleCapture";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { usePanelStore } from "@/store";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
-import type { TerminalInstance } from "@/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const PANE_ID = "pane-1";
 const WC_ID = 42;
@@ -187,7 +187,7 @@ describe("useDevPreviewConsoleCapture", () => {
     // Panel is still registered: unmount is a tab-switch deactivation, not a
     // deletion, so captured rows must survive until the user switches back.
     usePanelStore.setState({
-      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as TerminalInstance },
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
     });
     const webview = makeWebviewElement();
     const { unmount } = renderHook(() =>

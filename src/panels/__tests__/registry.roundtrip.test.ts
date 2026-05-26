@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect } from "vitest";
 import { fc, test } from "@fast-check/vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type { PanelInstance, TerminalInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { initBuiltInPanelKinds } from "../registry";
@@ -121,7 +121,7 @@ const devPreviewArb = fc.record(devPreviewArbSpec);
 
 function basePanel(
   kind: PanelInstance["kind"]
-): Pick<TerminalInstance, "id" | "title" | "location" | "kind"> {
+): Pick<PanelInstance, "id" | "title" | "location" | "kind"> {
   return { id: "panel-id", title: "Panel", location: "grid", kind };
 }
 
@@ -132,7 +132,7 @@ describe("panel serializer round-trip (property tests)", () => {
     // agent session resume and model-selection logic outside this file's scope.
     // Property test the serializer's output shape and trimming/omission rules.
     test.prop([ptyArb])("serializer output matches input under trim & omit rules", (fields) => {
-      const input: TerminalInstance = { ...basePanel("terminal"), ...fields };
+      const input: PtyData = { ...basePanel("terminal"), cols: 80, rows: 24, ...fields } as PtyData;
       const result = getPanelKindConfig("terminal")!.serialize!(input);
 
       expect(result.launchAgentId).toBe(fields.launchAgentId);
@@ -182,7 +182,7 @@ describe("panel serializer round-trip (property tests)", () => {
     test.prop([browserArb])(
       "deserialize(serialize(x)) preserves all persisted fields",
       (fields) => {
-        const input: TerminalInstance = { ...basePanel("browser"), ...fields };
+        const input: BrowserData = { ...basePanel("browser"), ...fields } as BrowserData;
         const saved = getPanelKindConfig("browser")!.serialize!(input) as SavedTerminalData;
         const restored = getDeserializer("browser")!(saved);
 
@@ -198,10 +198,10 @@ describe("panel serializer round-trip (property tests)", () => {
     test.prop([devPreviewArb])(
       "deserialize(serialize(x)) preserves fields through devCommand↔command rename",
       (fields) => {
-        const input: TerminalInstance = {
+        const input: DevPreviewData = {
           ...basePanel("dev-preview"),
           ...fields,
-        };
+        } as DevPreviewData;
         const saved = getPanelKindConfig("dev-preview")!.serialize!(input) as SavedTerminalData;
         const restored = getDeserializer("dev-preview")!(saved);
 

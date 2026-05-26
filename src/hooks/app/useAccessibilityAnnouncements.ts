@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { AgentState } from "@shared/types/agent";
+import { isPtyPanel } from "@shared/types/panel";
 
 interface TerminalStateSnapshot {
   agentState?: AgentState;
@@ -57,7 +58,7 @@ export function useAccessibilityAnnouncements() {
 
     for (const id of panelIds) {
       const terminal = panelsById[id];
-      if (!terminal) continue;
+      if (!terminal || !isPtyPanel(terminal)) continue;
       if (!terminal.agentState) continue;
 
       const prev = prevStates.get(terminal.id);

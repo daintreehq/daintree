@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 
 const watchPanelMock = vi.fn();
@@ -14,7 +14,7 @@ const fireWatchNotificationMock = vi.fn();
 const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
-let mockTerminals: TerminalInstance[] = [];
+let mockTerminals: PtyPanelData[] = [];
 let mockBackgroundedTerminals = new Map<string, { groupRestoreId?: string }>();
 let mockWatchedPanels = new Set<string>();
 
@@ -171,7 +171,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 
 import { BackgroundContainer } from "../BackgroundContainer";
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t1",
     kind: "terminal",
@@ -180,8 +180,11 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     worktreeId: "wt-1",
     agentState: "idle" as AgentState,
     lastStateChange: 1700000000000,
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 beforeEach(() => {

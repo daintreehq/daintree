@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -269,7 +270,7 @@ describe("hydration batch (#5196)", () => {
           lastStateChange: 1234,
           exitBehavior: "restart",
           extensionState: { foo: "bar" },
-        } as import("../types").TerminalInstance,
+        } as unknown as PtyPanelData,
       },
       panelIds: [...state.panelIds, "term-1"],
     }));
@@ -287,7 +288,7 @@ describe("hydration batch (#5196)", () => {
     });
     flushHydrationBatch(token);
 
-    const result = usePanelStore.getState().panelsById["term-1"];
+    const result = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
     expect(result?.agentState).toBe("working");
     expect(result?.lastStateChange).toBe(1234);
     expect(result?.exitBehavior).toBe("restart");
@@ -315,13 +316,13 @@ describe("hydration batch (#5196)", () => {
     updateAgentState("term-1", "waiting");
     updateActivity("term-1", "writing code", "working", "interactive", 100);
 
-    const mid = usePanelStore.getState().panelsById["term-1"];
+    const mid = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
     expect(mid?.agentState).toBe("waiting");
     expect(mid?.activityHeadline).toBe("writing code");
 
     flushHydrationBatch(token);
 
-    const after = usePanelStore.getState().panelsById["term-1"];
+    const after = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
     expect(after?.agentState).toBe("waiting");
     expect(after?.activityHeadline).toBe("writing code");
   });

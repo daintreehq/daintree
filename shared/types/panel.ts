@@ -209,6 +209,14 @@ interface BasePanelData {
    * when its registration is gone.
    */
   pluginId?: string;
+  /** Persisted creation timestamp (milliseconds since epoch). */
+  createdAt?: number;
+  /**
+   * Timestamp (ms) of the last user-initiated focus on this panel. Used by
+   * panel restore to promote the most-recently-active panel per worktree to
+   * the priority restore tier.
+   */
+  lastActiveAt?: number;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
@@ -554,20 +562,8 @@ export interface TerminalInstance {
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
   devPreviewConsoleTab?: "output" | "console";
-  /** Active viewport preset for dev-preview responsive emulation (undefined = fill) */
-  viewportPreset?: ViewportPresetId;
-  /** Whether the active dev-preview viewport preset is rotated to landscape */
-  viewportRotated?: boolean;
-  /** Device-pixel-ratio override for the active dev-preview viewport preset */
-  viewportDpr?: 1 | 2 | 3;
-  /** Whether the dev-preview viewport is scaled to fit the available pane */
-  viewportFit?: boolean;
-  /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
-  devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
-  /** Legacy persisted creation timestamp (milliseconds since epoch) */
-  createdAt?: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
@@ -628,6 +624,8 @@ export interface TerminalInstance {
    * when its registration is gone.
    */
   pluginId?: string;
+  /** Legacy persisted creation timestamp (milliseconds since epoch). */
+  createdAt?: number;
   /**
    * Timestamp (ms) of the last user-initiated focus on this panel. Used by
    * panel restore to promote the most-recently-active panel per worktree to

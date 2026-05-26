@@ -14,7 +14,7 @@ import {
 } from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
 import { useWorktreeSelectionStore } from "../worktreeStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 function resetStore() {
   useFleetArmingStore.setState({
@@ -27,10 +27,7 @@ function resetStore() {
   });
 }
 
-function makeAgentTerminal(
-  id: string,
-  overrides: Partial<TerminalInstance> = {}
-): TerminalInstance {
+function makeAgentTerminal(id: string, overrides: Record<string, unknown> = {}): PanelInstance {
   return {
     id,
     title: id,
@@ -41,12 +38,12 @@ function makeAgentTerminal(
     location: "grid",
     agentState: "idle",
     hasPty: true,
-    ...(overrides as object),
-  } as TerminalInstance;
+    ...overrides,
+  } as PanelInstance;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PanelInstance[]): void {
+  const panelsById: Record<string, PanelInstance> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -738,8 +735,12 @@ describe("fleetArmingStore", () => {
       });
       expect(resolveFleetAgentCapabilityId(exAgent)).toBeUndefined();
       expect(isAgentFleetActionEligible(exAgent)).toBe(false);
-      expect(isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" })).toBe(false);
-      expect(isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" })).toBe(false);
+      expect(
+        isFleetWaitingAgentEligible({ ...exAgent, agentState: "waiting" } as PanelInstance)
+      ).toBe(false);
+      expect(
+        isFleetInterruptAgentEligible({ ...exAgent, agentState: "working" } as PanelInstance)
+      ).toBe(false);
       expect(isFleetRestartAgentEligible(exAgent)).toBe(false);
     });
 

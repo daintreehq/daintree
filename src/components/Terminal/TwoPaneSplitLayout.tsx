@@ -4,7 +4,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { cn } from "@/lib/utils";
 import { useTwoPaneSplitStore } from "@/store";
 import { resolveEffectiveRatio } from "@/store/twoPaneSplitStore";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import { SortableTerminal } from "@/components/DragDrop";
 import { GridPanel } from "./GridPanel";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
@@ -17,13 +17,13 @@ import {
 } from "@/lib/layoutTransitionLock";
 
 interface TwoPaneSplitLayoutProps {
-  terminals: [TerminalInstance, TerminalInstance];
+  terminals: [PanelInstance, PanelInstance];
   focusedId: string | null;
   activeWorktreeId: string | null;
   isInTrash: (id: string) => boolean;
   // Stable panel-aware add-tab callback. GridPanel binds it to the
   // subscribed terminal internally so we never recreate inline closures here.
-  onAddTabForPanel?: (terminal: TerminalInstance) => void | Promise<void>;
+  onAddTabForPanel?: (terminal: PanelInstance) => void | Promise<void>;
 }
 
 export function TwoPaneSplitLayout({

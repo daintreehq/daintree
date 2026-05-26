@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { usePanelStore } from "./panelStore";
-import type { TabGroup, TerminalInstance } from "@shared/types";
+import type { TabGroup } from "@shared/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 const MAX_UNDO_HISTORY = 10;
 
@@ -34,7 +37,7 @@ function captureCurrentLayout(): LayoutSnapshot {
   return {
     terminals: state.panelIds
       .map((id) => state.panelsById[id])
-      .filter((t): t is TerminalInstance => Boolean(t) && t!.location !== "trash")
+      .filter((t): t is CarrierPanel => Boolean(t) && t!.location !== "trash")
       .map((t) => ({
         id: t.id,
         location: t.location,
@@ -77,12 +80,12 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
 
   // Rebuild the normalized store preserving non-layout fields. No grid-capacity
   // clamp is applied (#8805) — the scrollable grid absorbs every entry.
-  const newTerminalsById: Record<string, TerminalInstance> = {};
+  const newTerminalsById: Record<string, CarrierPanel> = {};
   const newTerminalIds: string[] = [];
   for (const entry of allEntries) {
     const current = panelsById[entry.id];
     if (!current) continue;
-    const restored: TerminalInstance = { ...current, location: entry.location };
+    const restored: CarrierPanel = { ...current, location: entry.location };
     if (entry.worktreeId !== undefined) {
       restored.worktreeId = entry.worktreeId;
     } else {

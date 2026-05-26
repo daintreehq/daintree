@@ -4,7 +4,7 @@ import { render } from "@testing-library/react";
 import { CSS } from "@dnd-kit/utilities";
 import { SortableTerminal } from "../SortableTerminal";
 import { useDragHandle } from "../DragHandleContext";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 
 let mockIsDragging = false;
 const useSortableSpy = vi.fn();
@@ -36,8 +36,9 @@ vi.mock("@dnd-kit/utilities", () => ({
   },
 }));
 
-const terminal: TerminalInstance = {
+const terminal: PanelInstance = {
   id: "t1",
+  kind: "terminal",
   title: "Terminal 1",
   cwd: "/test",
   cols: 80,
@@ -45,7 +46,7 @@ const terminal: TerminalInstance = {
   worktreeId: "wt1",
   location: "grid",
   isVisible: true,
-};
+} as PanelInstance;
 
 describe("SortableTerminal", () => {
   it("renders contain-layout and contain-style on the inner sortable div", () => {

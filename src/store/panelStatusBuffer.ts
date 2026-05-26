@@ -2,6 +2,7 @@ import type { TerminalActivityPayload } from "@shared/types";
 import type { PersistableFlowStatus } from "@shared/types";
 import { usePanelStore } from "@/store/panelStore";
 import { deriveRuntimeStatus } from "@/store/slices/panelRegistry/helpers";
+import { isPtyPanel } from "@shared/types/panel";
 
 // Shared RAF-flushed buffer for high-frequency panel-status writes. Listeners
 // in src/store/listeners/panel/ (activity, lifecycle onStatus) enqueue patches
@@ -88,7 +89,7 @@ export function flushPanelStatusBuffer(): void {
     if (activity) {
       for (const [id, patch] of activity) {
         const terminal = nextById[id];
-        if (!terminal) continue;
+        if (!terminal || !isPtyPanel(terminal)) continue;
         if (
           terminal.activityHeadline === patch.headline &&
           terminal.activityStatus === patch.status &&
@@ -113,7 +114,7 @@ export function flushPanelStatusBuffer(): void {
     if (flow) {
       for (const [id, patch] of flow) {
         const terminal = nextById[id];
-        if (!terminal) continue;
+        if (!terminal || !isPtyPanel(terminal)) continue;
 
         const prevTs = terminal.flowStatusTimestamp;
         if (prevTs !== undefined && patch.timestamp < prevTs) continue;

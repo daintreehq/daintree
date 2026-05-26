@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useEffect } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
@@ -15,7 +15,7 @@ export interface QuickSwitcherItem {
   type: QuickSwitcherItemType;
   title: string;
   subtitle?: string;
-  terminalKind?: TerminalInstance["kind"];
+  terminalKind?: PanelKind;
   chrome?: TerminalChromeDescriptor;
   worktreeId?: string;
 }
@@ -78,9 +78,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       const t = panelsById[id];
       if (!t) continue;
       if (t.location === "trash") continue;
+      if (!isPtyPanel(t)) continue;
       if (t.ephemeral === true) continue;
       if (t.hasPty === false) continue;
-      if (!isPtyPanel(t)) continue;
       const worktreeName = t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined;
       const isBackground = t.location === "background";
       const baseSubtitle = worktreeName ?? t.cwd ?? undefined;

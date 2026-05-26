@@ -9,7 +9,8 @@ import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { useIsWorktreeSortDragging } from "../DragDrop/DndProvider";
 import { GripVertical } from "lucide-react";
-import { useErrorStore, usePanelStore, type RetryAction, type TerminalInstance } from "../../store";
+import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useUIStore } from "../../store/uiStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
@@ -521,7 +522,7 @@ export function WorktreeCard({
     });
   };
 
-  const handleTerminalSelect = (terminal: TerminalInstance) => {
+  const handleTerminalSelect = (terminal: PtyPanelData) => {
     // Switch to this worktree if it isn't already active
     if (!isActive) {
       if (terminal.worktreeId) {

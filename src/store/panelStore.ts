@@ -25,7 +25,8 @@ import {
   type QueuedCommand,
   isAgentReady,
 } from "./slices";
-import type { TerminalInstance, TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
+import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -37,9 +38,20 @@ import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { clearTerminalRestartGuard } from "./restartExitSuppression";
 import { buildPanelSnapshotOptions } from "@/services/terminal/panelDuplicationService";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { resolvePanelKindPolicy, type PanelKindPolicy } from "@shared/config/panelKindRegistry";
 
-export type { TerminalInstance, AddPanelOptions, QueuedCommand, CrashType };
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name (#8957). The alias auto-resolves once
+// the carrier flips to `PanelInstance` in step 5.
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+
+export type { AddPanelOptions, QueuedCommand, CrashType };
+// Re-exported for backwards-compat with tests still typing fixtures as
+// `TerminalInstance`. The interface itself is now the persistence Tolerant
+// Reader; production code uses `PanelInstance` from `@shared/types/panel`.
+export type { TerminalInstance } from "@shared/types";
 export { isAgentReady };
 export type { TerminalMruSlice, WatchedPanelsSlice };
 
@@ -50,7 +62,7 @@ const PROJECT_SWITCH_RESIZE_SUPPRESSION_MS = 10_000;
  * panel store so the helper stays pure and easy to test in isolation.
  */
 interface FallbackFocusStateSnapshot {
-  panelsById: Record<string, TerminalInstance>;
+  panelsById: Record<string, CarrierPanel>;
   panelIds: string[];
   previousFocusedId: string | null;
 }
@@ -93,7 +105,7 @@ function pickFallbackFocusId(
   }
 
   // Default "first-grid" path (also the fallback for unknown strategies).
-  const gridTerminals: TerminalInstance[] = [];
+  const gridTerminals: CarrierPanel[] = [];
   for (const tid of state.panelIds) {
     const t = state.panelsById[tid];
     if (
@@ -112,7 +124,7 @@ function pickFallbackFocusId(
   return gridTerminals[0]?.id ?? null;
 }
 
-function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
+function isVisibleLivePtyTerminal(terminal: PtyPanelData): boolean {
   const location = terminal.location ?? "grid";
   if (location === "trash" || location === "background" || location === "dock") return false;
   if (terminal.isVisible === false) return false;
@@ -124,7 +136,7 @@ function isVisibleLivePtyTerminal(terminal: TerminalInstance): boolean {
 }
 
 export function getTerminalRefreshTier(
-  terminal: TerminalInstance | undefined,
+  terminal: CarrierPanel | undefined,
   isFocused: boolean,
   options: { isFleetArmed?: boolean } = {}
 ): TerminalRefreshTier {
@@ -144,8 +156,10 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.BACKGROUND;
   }
 
+  const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
+
   // Working agents that ARE visible get max refresh to prevent render jitter.
-  if (terminal.agentState === "working") {
+  if (ptyTerminal?.agentState === "working") {
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
@@ -154,12 +168,12 @@ export function getTerminalRefreshTier(
   // promptly instead of being parked in the background tier.
   if (
     options.isFleetArmed &&
-    terminal.hasPty !== false &&
+    ptyTerminal?.hasPty !== false &&
     terminal.location !== "trash" &&
     terminal.location !== "background" &&
     terminal.location !== "dock" &&
-    terminal.runtimeStatus !== "exited" &&
-    terminal.runtimeStatus !== "error"
+    ptyTerminal?.runtimeStatus !== "exited" &&
+    ptyTerminal?.runtimeStatus !== "error"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
@@ -169,8 +183,8 @@ export function getTerminalRefreshTier(
   // Uses runtime-detected identity so panels that have left agent mode can hibernate.
   if (
     isRuntimeAgentTerminal(terminal) &&
-    terminal.agentState !== "completed" &&
-    terminal.agentState !== "exited"
+    ptyTerminal?.agentState !== "completed" &&
+    ptyTerminal?.agentState !== "exited"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
@@ -179,7 +193,7 @@ export function getTerminalRefreshTier(
   // The previous "working" guard was too dependent on activity heuristics:
   // if a long-running process was still classified as waiting/idle, the
   // renderer moved to BACKGROUND and output stopped until focus/wake.
-  if (isVisibleLivePtyTerminal(terminal)) {
+  if (isPtyPanel(terminal) && isVisibleLivePtyTerminal(terminal)) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
@@ -459,7 +473,8 @@ export const usePanelStore = create<PanelGridState>()(
         const state = get();
         const terminalToTrash = state.panelsById[id];
         if (terminalToTrash && terminalToTrash.location !== "trash") {
-          const snapshot = buildPanelSnapshotOptions(terminalToTrash);
+          const narrowed = getNarrowPanel(state.panelsById, id);
+          const snapshot = narrowed ? buildPanelSnapshotOptions(narrowed) : null;
           if (snapshot !== null) {
             set({ lastClosedConfig: snapshot });
           }
@@ -512,7 +527,8 @@ export const usePanelStore = create<PanelGridState>()(
           group && panelIdsInGroup.includes(state.focusedId ?? "") ? state.focusedId! : panelId;
         const snapshotSource = state.panelsById[snapshotSourceId];
         if (snapshotSource && snapshotSource.location !== "trash") {
-          const snapshot = buildPanelSnapshotOptions(snapshotSource);
+          const narrowedSource = getNarrowPanel(state.panelsById, snapshotSourceId);
+          const snapshot = narrowedSource ? buildPanelSnapshotOptions(narrowedSource) : null;
           if (snapshot !== null) {
             set({ lastClosedConfig: snapshot });
           }

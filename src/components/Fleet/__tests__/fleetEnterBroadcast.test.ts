@@ -14,7 +14,7 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 
@@ -31,22 +31,25 @@ vi.mock("@/clients", async (importOriginal) => {
 
 import { cancelActiveBroadcast, tryFleetBroadcastFromEditor } from "../fleetEnterBroadcast";
 
-function makeAgent(id: string): TerminalInstance {
+function makeAgent(id: string): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",
     agentState: "idle",
     hasPty: true,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function arm(ids: string[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+  const panelsById: Record<string, PtyPanelData> = {};
   for (const id of ids) panelsById[id] = makeAgent(id);
   usePanelStore.setState({ panelsById, panelIds: ids });
   useFleetArmingStore.getState().armIds(ids);
@@ -139,7 +142,7 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     // the remaining 7 are skipped.
     const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
     const agents = ids.map((id) => makeAgent(id));
-    const panelsById: Record<string, TerminalInstance> = {};
+    const panelsById: Record<string, PtyPanelData> = {};
     for (const a of agents) panelsById[a.id] = a;
     usePanelStore.setState({ panelsById, panelIds: ids });
     useFleetArmingStore.getState().armIds(ids);
@@ -335,7 +338,7 @@ describe("tryFleetBroadcastFromEditor — confirmation gate", () => {
     usePanelStore.setState({
       panelsById: {
         a: makeAgent("a"),
-        b: { ...makeAgent("b"), location: "trash" } as TerminalInstance,
+        b: { ...makeAgent("b"), location: "trash" } as PtyPanelData,
         c: makeAgent("c"),
       },
       panelIds: ["a", "b", "c"],

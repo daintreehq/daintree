@@ -69,6 +69,7 @@ import {
 } from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
+import { isPtyPanel } from "@shared/types/panel";
 
 interface AgentTrayButtonProps {
   agentAvailability?: CliAvailability;
@@ -410,7 +411,7 @@ export function AgentTrayButton({
       // Runtime identity wins so a plain shell that starts Claude/Codex is
       // tracked under the same tray entry. Launch intent is only a boot-window
       // fallback before any detector result has committed.
-      if (!p || p.location === "trash" || p.location === "background") continue;
+      if (!p || !isPtyPanel(p) || p.location === "trash" || p.location === "background") continue;
       const agentId = getRuntimeOrBootAgentId(p);
       if (!agentId) continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;

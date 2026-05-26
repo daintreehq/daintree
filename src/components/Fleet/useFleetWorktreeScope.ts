@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useWorktreeColorMap } from "@/hooks";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 
 export interface FleetWorktreeScope {
@@ -30,7 +31,8 @@ export function useFleetWorktreeScope(): FleetWorktreeScope {
     useShallow((state) => {
       const out: Record<string, AgentState | undefined> = {};
       for (const id of armOrder) {
-        out[id] = state.panelsById[id]?.agentState;
+        const p = state.panelsById[id];
+        out[id] = p && isPtyPanel(p) ? p.agentState : undefined;
       }
       return out;
     })

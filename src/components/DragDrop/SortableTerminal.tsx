@@ -3,7 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { m, type TransformProperties, type Transition } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/lib/animationUtils";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { DragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
 
@@ -17,7 +17,7 @@ export function pixelSnapTransform({ x, y }: TransformProperties): string {
 }
 
 interface SortableTerminalProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   sourceLocation: "grid" | "dock";
   sourceIndex: number;
   children: React.ReactNode;

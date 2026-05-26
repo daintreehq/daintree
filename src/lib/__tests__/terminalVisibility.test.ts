@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
-import type { TerminalInstance } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t1",
     worktreeId: "wt1",
@@ -10,7 +10,7 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     ephemeral: false,
     agentState: "working",
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 describe("isTerminalOrphaned", () => {

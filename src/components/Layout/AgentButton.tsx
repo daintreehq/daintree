@@ -56,6 +56,7 @@ import {
   agentStateDotColor,
 } from "@/components/Worktree/AgentStatusIndicator";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
+import { isPtyPanel } from "@shared/types/panel";
 
 type AgentType = BuiltInAgentId;
 
@@ -209,7 +210,7 @@ export function AgentButton({
       let firstId: string | null = null;
       for (const pid of ids) {
         const p = state.panelsById[pid];
-        if (!p) continue;
+        if (!p || !isPtyPanel(p)) continue;
         if (getRuntimeOrBootAgentId(p) !== type) continue;
         if (p.location === "trash" || p.location === "background") continue;
         if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;

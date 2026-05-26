@@ -1,19 +1,13 @@
 import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
 
-/**
- * Serializer input: `PtyPanelData` plus the legacy `createdAt` and
- * `lastActiveAt` fields, which are persisted but intentionally not declared
- * on the shared variant interface.
- */
-export type PtySerializeInput = PtyPanelData & { createdAt?: number; lastActiveAt?: number };
+export type PtySerializeInput = PtyPanelData;
 
 export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
     command: t.command?.trim() || undefined,
-    ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
@@ -28,6 +22,5 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     // indicator on the next reload (issue #5832).
     ...(t.agentState && t.agentState !== "directing" && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
-    ...(t.lastActiveAt !== undefined && { lastActiveAt: t.lastActiveAt }),
   };
 }

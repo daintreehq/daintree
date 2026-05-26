@@ -14,6 +14,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const acknowledgeWaitingMock = vi.fn();
 const acknowledgeWorkingPulseMock = vi.fn();
@@ -689,7 +690,7 @@ describe("dock watchdog hardening (#7278)", () => {
           title: "Test",
           location: "dock" as const,
           worktreeId: "wt-b",
-        },
+        } as PtyPanelData,
       },
       panelIds: [targetId],
       activeDockTerminalId: targetId,

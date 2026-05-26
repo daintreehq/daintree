@@ -29,6 +29,8 @@ const BASE_PANEL_FIELDS = [
   "location",
   "extensionState",
   "pluginId",
+  "createdAt",
+  "lastActiveAt",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
@@ -44,6 +46,8 @@ export function panelToSnapshot(
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     ...(t.pluginId !== undefined && { pluginId: t.pluginId }),
+    ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
+    ...(t.lastActiveAt !== undefined && { lastActiveAt: t.lastActiveAt }),
   };
 
   const config = getPanelKindConfig(t.kind ?? "terminal");

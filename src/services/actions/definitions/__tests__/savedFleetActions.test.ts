@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { FleetSavedScope, TerminalInstance } from "@shared/types";
+import type { FleetSavedScope } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const getSettingsMock = vi.hoisted(() => vi.fn());
 const saveSettingsMock = vi.hoisted(() => vi.fn());
@@ -64,7 +65,7 @@ type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
 >;
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
@@ -76,10 +77,10 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "waiting",
     hasPty: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
+function seedPanels(terminals: PtyPanelData[]): void {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),

@@ -13,6 +13,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -692,7 +693,7 @@ export function BulkCreateWorktreeDialog({
 
           const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
             const t = panelsById[tid];
-            return t && t.exitCode !== undefined && t.exitCode !== 0;
+            return t && isPtyPanel(t) && t.exitCode !== undefined && t.exitCode !== 0;
           }).length;
 
           if (crashedCount > 0) {

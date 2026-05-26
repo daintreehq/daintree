@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import { TrashGroupItem } from "../TrashGroupItem";
-import type { TerminalInstance } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 
 vi.mock("@shared/config/agentRegistry", () => ({
@@ -58,14 +58,17 @@ vi.mock("@/components/ui/tooltip", () => {
   };
 });
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
     id: "t1",
     kind: "terminal",
     title: "claude",
     location: "trash",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PanelInstance;
 }
 
 const groupMetadata: TrashedTerminalGroupMetadata = {

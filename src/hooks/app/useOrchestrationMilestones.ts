@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isElectronAvailable } from "../useElectron";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notify } from "@/lib/notify";
@@ -47,14 +48,20 @@ const TOAST_STAGGER = 5500;
 function checkAgentCompleted(): boolean {
   const { panelsById, panelIds } = usePanelStore.getState();
   return panelIds.some((id) => {
-    const state = panelsById[id]?.agentState;
-    return state === "completed" || state === "exited";
+    const p = panelsById[id];
+    if (!p || !isPtyPanel(p)) return false;
+    return p.agentState === "completed" || p.agentState === "exited";
   });
 }
 
 function checkConcurrentAgents(): boolean {
   const { panelsById, panelIds } = usePanelStore.getState();
-  return panelIds.filter((id) => panelsById[id]?.agentState === "working").length >= 3;
+  return (
+    panelIds.filter((id) => {
+      const p = panelsById[id];
+      return p && isPtyPanel(p) && p.agentState === "working";
+    }).length >= 3
+  );
 }
 
 function checkContextInjection(): boolean {
@@ -160,25 +167,33 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
 
         unsubs.push(
           usePanelStore.subscribe((state, prev) => {
+            const completedOrExited = (
+              byId: Record<string, PanelInstance>,
+              ids: readonly string[]
+            ): boolean =>
+              ids.some((id) => {
+                const p = byId[id];
+                if (!p || !isPtyPanel(p)) return false;
+                return p.agentState === "completed" || p.agentState === "exited";
+              });
+            const workingCount = (
+              byId: Record<string, PanelInstance>,
+              ids: readonly string[]
+            ): number =>
+              ids.filter((id) => {
+                const p = byId[id];
+                return p && isPtyPanel(p) && p.agentState === "working";
+              }).length;
+
             if (!shown["first-agent-completed"]) {
-              const had = prev.panelIds.some((id) => {
-                const s = prev.panelsById[id]?.agentState;
-                return s === "completed" || s === "exited";
-              });
-              const has = state.panelIds.some((id) => {
-                const s = state.panelsById[id]?.agentState;
-                return s === "completed" || s === "exited";
-              });
+              const had = completedOrExited(prev.panelsById, prev.panelIds);
+              const has = completedOrExited(state.panelsById, state.panelIds);
               if (!had && has) showToast("first-agent-completed");
             }
 
             if (!shown["first-concurrent-agents"]) {
-              const prevCount = prev.panelIds.filter(
-                (id) => prev.panelsById[id]?.agentState === "working"
-              ).length;
-              const curCount = state.panelIds.filter(
-                (id) => state.panelsById[id]?.agentState === "working"
-              ).length;
+              const prevCount = workingCount(prev.panelsById, prev.panelIds);
+              const curCount = workingCount(state.panelsById, state.panelIds);
               if (prevCount < 3 && curCount >= 3) showToast("first-concurrent-agents");
             }
           })

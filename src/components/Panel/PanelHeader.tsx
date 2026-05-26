@@ -67,6 +67,7 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
@@ -284,11 +285,15 @@ function PanelHeaderComponent({
   );
 
   const terminal = usePanelStore((state) => state.panelsById[id]);
-  const isInputLocked = terminal?.isInputLocked ?? false;
+  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
+  const isInputLocked = terminalPty?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 
-  // Whether the overflow "..." menu has any items to show
-  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
+  // Whether the overflow "..." menu has any items to show.
+  // Dock rendering is PTY-only (`ContentDock` / `DockPanelOffscreenContainer`
+  // filter via `isPtyPanel`); offering the move-to-dock affordance for
+  // browser/dev-preview/review panels would silently strand them.
+  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock" && hasPty;
   const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect
@@ -346,15 +351,15 @@ function PanelHeaderComponent({
     if (isWatched) {
       unwatchPanel(id);
     } else if (
-      terminal?.agentState === "completed" ||
-      terminal?.agentState === "waiting" ||
-      terminal?.agentState === "exited"
+      terminalPty?.agentState === "completed" ||
+      terminalPty?.agentState === "waiting" ||
+      terminalPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, terminal.title ?? id, terminal.agentState);
+      fireWatchNotification(id, terminal?.title ?? id, terminalPty.agentState);
     } else {
       watchPanel(id);
     }
-  }, [id, isWatched, unwatchPanel, watchPanel, terminal]);
+  }, [id, isWatched, unwatchPanel, watchPanel, terminal, terminalPty]);
 
   // Bump a generation counter on each false→true transition of
   // `isFleetPreviewed` so the enter-cue overlay (keyed by this counter)

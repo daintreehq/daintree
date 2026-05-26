@@ -18,7 +18,8 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { setCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeViewState, WorktreeViewActions } from "@/store/createWorktreeStore";
-import type { TerminalInstance, WorktreeSnapshot } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { WorktreeSnapshot } from "@shared/types";
 
 function resetStores() {
   useFleetArmingStore.setState({
@@ -30,8 +31,8 @@ function resetStores() {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
 
-function seedPanels(terminals: TerminalInstance[]): void {
-  const panelsById: Record<string, TerminalInstance> = {};
+function seedPanels(terminals: PtyPanelData[]): void {
+  const panelsById: Record<string, PtyPanelData> = {};
   const panelIds: string[] = [];
   for (const t of terminals) {
     panelsById[t.id] = t;
@@ -40,11 +41,14 @@ function seedPanels(terminals: TerminalInstance[]): void {
   usePanelStore.setState({ panelsById, panelIds });
 }
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
@@ -52,7 +56,7 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function makeWorktree(id: string, overrides: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {

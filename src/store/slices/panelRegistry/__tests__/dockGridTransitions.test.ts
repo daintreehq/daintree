@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalInstance } from "../../panelRegistrySlice";
-import type { TabGroup } from "@shared/types/panel";
+import type { PtyPanelData, TabGroup } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -46,7 +45,7 @@ vi.mock("@/store/layoutConfigStore", () => ({
 
 const { usePanelStore } = await import("../../../panelStore");
 
-function setTerminals(terminals: TerminalInstance[]) {
+function setTerminals(terminals: PtyPanelData[]) {
   usePanelStore.setState({
     panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
     panelIds: terminals.map((t) => t.id),
@@ -56,10 +55,11 @@ function setTerminals(terminals: TerminalInstance[]) {
 function createMockTerminal(
   id: string,
   location: "grid" | "dock" | "trash" = "grid"
-): TerminalInstance {
+): PtyPanelData {
   return {
     id,
     title: `Terminal ${id}`,
+    kind: "terminal" as const,
     cwd: "/test",
     cols: 80,
     rows: 24,
@@ -72,7 +72,7 @@ function createMockTerminal(
 function createGlobalMockTerminal(
   id: string,
   location: "grid" | "dock" | "trash" = "grid"
-): TerminalInstance {
+): PtyPanelData {
   const terminal = createMockTerminal(id, location);
   return { ...terminal, worktreeId: undefined };
 }
@@ -110,7 +110,7 @@ describe("dock ↔ grid transitions", () => {
 
       usePanelStore.getState().moveTerminalToDock("t1");
 
-      const updated = usePanelStore.getState().panelsById["t1"];
+      const updated = usePanelStore.getState().panelsById["t1"] as PtyPanelData | undefined;
       expect(updated!.location).toBe("dock");
       expect(updated!.isVisible).toBe(false);
       expect(updated!.runtimeStatus).toBe("background");
@@ -247,7 +247,7 @@ describe("dock ↔ grid transitions", () => {
 
       usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
 
-      const updated = usePanelStore.getState().panelsById["t1"];
+      const updated = usePanelStore.getState().panelsById["t1"] as PtyPanelData | undefined;
       expect(updated!.location).toBe("grid");
       expect(updated!.isVisible).toBe(true);
       expect(updated!.runtimeStatus).toBe("running");

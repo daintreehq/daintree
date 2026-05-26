@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { TabGroup } from "@/types";
+import type { PanelInstance } from "@shared/types/panel";
 
 const mockStopByPanel = vi.fn().mockResolvedValue(undefined);
 
@@ -98,7 +99,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-panel-1"],
     });
@@ -120,7 +121,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-panel-2"],
     });
@@ -149,7 +150,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
         "term-1": {
           id: "term-1",
           kind: "terminal",
@@ -189,7 +190,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
         "dev-panel-b": {
           id: "dev-panel-b",
           kind: "dev-preview",
@@ -199,7 +200,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "pnpm dev",
-        },
+        } as PanelInstance,
         "term-2": {
           id: "term-2",
           kind: "terminal",
@@ -233,7 +234,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
       },
       panelIds: ["dev-panel-bg"],
     });
@@ -262,7 +263,7 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
           devCommand: "npm run dev",
-        },
+        } as PanelInstance,
         "term-bg-1": {
           id: "term-bg-1",
           kind: "terminal",

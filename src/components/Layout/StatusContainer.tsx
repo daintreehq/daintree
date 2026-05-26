@@ -8,7 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import type { TerminalInstance } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -32,7 +32,7 @@ export interface StatusContainerConfig {
 
 interface StatusContainerProps {
   config: StatusContainerConfig;
-  terminals: TerminalInstance[];
+  terminals: PtyPanelData[];
   compact?: boolean;
 }
 

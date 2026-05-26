@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import { useEffect } from "react";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 
 const trashPanelMock = vi.fn();
@@ -248,14 +248,17 @@ import { DockedTabGroup } from "../DockedTabGroup";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 
-function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t-1",
     title: "Terminal",
     location: "dock",
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function makeGroup(panelIds: string[], activeTabId = panelIds[0]!): TabGroup {

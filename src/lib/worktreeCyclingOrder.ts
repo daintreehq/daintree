@@ -1,5 +1,6 @@
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
@@ -48,6 +49,7 @@ function buildDerivedMeta(
       continue;
     terminalCount++;
     if (!isAgentTerminal(t)) continue;
+    if (!isPtyPanel(t)) continue;
     if (t.agentState === "working") hasWorkingAgent = true;
     if (t.agentState === "waiting") {
       hasWaitingAgent = true;

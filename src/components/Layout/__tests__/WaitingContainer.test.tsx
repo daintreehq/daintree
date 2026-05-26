@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup, AgentState } from "@/types";
 
 const activateTerminalMock = vi.fn();
@@ -11,7 +11,7 @@ const setActiveTabMock = vi.fn();
 const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
-let mockTerminals: TerminalInstance[] = [];
+let mockTerminals: PtyPanelData[] = [];
 let mockTabGroups = new Map<string, TabGroup>();
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
@@ -159,7 +159,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 
 import { WaitingContainer } from "../WaitingContainer";
 
-function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t1",
     kind: "terminal",
@@ -168,8 +168,11 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     worktreeId: "wt-1",
     agentState: "waiting" as AgentState,
     lastStateChange: 1700000000000,
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function makeGroup(overrides: Partial<TabGroup> = {}): TabGroup {

@@ -8,6 +8,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { selectOrderedTerminals } from "@/store/slices/panelRegistry";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
+import { isPtyPanel } from "@shared/types/panel";
 
 export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
   actions.set("workflow.prepBranchForReview", () =>
@@ -136,8 +137,12 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
         const inScope = terminals.filter((t) =>
           isTerminalVisible(t, state.isInTrash, validWorktreeIds)
         );
-        const waitingCount = inScope.filter((t) => t.agentState === "waiting").length;
-        const workingCount = inScope.filter((t) => t.agentState === "working").length;
+        const waitingCount = inScope.filter(
+          (t) => isPtyPanel(t) && t.agentState === "waiting"
+        ).length;
+        const workingCount = inScope.filter(
+          (t) => isPtyPanel(t) && t.agentState === "working"
+        ).length;
 
         if (waitingCount > 0) {
           state.focusNextWaiting(state.isInTrash, validWorktreeIds);

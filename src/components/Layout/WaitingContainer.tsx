@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
@@ -23,14 +24,14 @@ interface WaitingContainerProps {
 
 interface WaitingDisplaySingle {
   type: "single";
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
   groupId: string | null;
 }
 
 interface WaitingDisplayGroup {
   type: "group";
   group: TabGroup;
-  waitingTerminals: TerminalInstance[];
+  waitingTerminals: PtyPanelData[];
 }
 
 type WaitingDisplayItem = WaitingDisplaySingle | WaitingDisplayGroup;
@@ -62,7 +63,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     // getPanelGroup so a stale group whose location no longer matches the
     // panel falls through to a single row instead of mis-routing setActiveTab.
     const panelToGroup = new Map<string, TabGroup>();
-    const waitingByPanelId = new Map<string, TerminalInstance>();
+    const waitingByPanelId = new Map<string, PtyPanelData>();
     for (const terminal of terminals) waitingByPanelId.set(terminal.id, terminal);
     for (const group of tabGroups.values()) {
       for (const panelId of group.panelIds) {
@@ -74,7 +75,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
       }
     }
 
-    const groupBuckets = new Map<string, { group: TabGroup; waitingMembers: TerminalInstance[] }>();
+    const groupBuckets = new Map<string, { group: TabGroup; waitingMembers: PtyPanelData[] }>();
     const singles: WaitingDisplaySingle[] = [];
 
     for (const terminal of terminals) {
@@ -111,7 +112,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   }, [terminals, tabGroups]);
 
   const handleActivate = useCallback(
-    (terminal: TerminalInstance, groupId: string | null) => {
+    (terminal: PtyPanelData, groupId: string | null) => {
       const worktreeId = terminal.worktreeId?.trim();
       if (worktreeId && worktreeId !== activeWorktreeId) {
         trackTerminalFocus(worktreeId, terminal.id);
@@ -270,10 +271,10 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
 }
 
 interface WaitingSingleItemProps {
-  terminal: TerminalInstance;
+  terminal: PtyPanelData;
   groupId: string | null;
   worktreeName: string | undefined;
-  onActivate: (terminal: TerminalInstance, groupId: string | null) => void;
+  onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
   compact?: boolean;
 }
@@ -389,9 +390,9 @@ function WaitingSingleItem({
 
 interface WaitingGroupItemProps {
   group: TabGroup;
-  waitingTerminals: TerminalInstance[];
+  waitingTerminals: PtyPanelData[];
   worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
-  onActivate: (terminal: TerminalInstance, groupId: string | null) => void;
+  onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
 }
 

@@ -13,7 +13,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY } from "@/config/agents";
 import type { ActionId } from "@shared/types/actions";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
     id: "agent.launch",
@@ -392,7 +392,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         // Skip ephemeral panels (e.g. the Daintree Assistant's own dock
         // terminal) for the same reason terminal.list filters them — the
         // assistant must not be able to introspect its own process.
-        if (!panel || panel.ephemeral === true) continue;
+        if (!panel || !isPtyPanel(panel) || panel.ephemeral === true) continue;
         const effectiveAgentId = panel.detectedAgentId ?? panel.launchAgentId;
         if (effectiveAgentId === agentId) {
           return {

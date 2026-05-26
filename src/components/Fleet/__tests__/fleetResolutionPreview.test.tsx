@@ -10,7 +10,7 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { usePanelStore } from "@/store/panelStore";
 import { FleetDraftingPill } from "../FleetDraftingPill";
-import type { TerminalInstance } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
   useFleetArmingStore.setState({
@@ -24,18 +24,21 @@ function resetStores() {
   __resetFleetTargetOverridesStoreForTesting();
 }
 
-function seedPanel(panel: TerminalInstance) {
+function seedPanel(panel: PtyPanelData) {
   usePanelStore.setState({
     panelsById: { [panel.id]: panel },
     panelIds: [panel.id],
   });
 }
 
-function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
+function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title: id,
     kind: "terminal",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
     detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
@@ -43,7 +46,7 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     agentState: "idle",
     hasPty: true,
     ...(overrides as object),
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 function armAgent(terminalId: string, index: number) {

@@ -1,5 +1,5 @@
 import { Layers } from "lucide-react";
-import type { TerminalInstance } from "@/store";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
@@ -10,7 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 
 interface TerminalDragPreviewProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   /** Number of tabs if dragging a multi-tab group */
   groupTabCount?: number;
 }
@@ -25,7 +25,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
   // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
   const brandColor = chrome.color;
-  const displayAgentState = getTerminalAgentDisplayState(chrome, terminal.agentState);
+  const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
+  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 

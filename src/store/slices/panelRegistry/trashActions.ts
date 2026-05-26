@@ -1,10 +1,13 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import type { TrashExpiryHelpers } from "./trash";
+import { getNarrowPanel } from "./selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isDevPreviewPanel } from "@shared/types/panel";
+import { isDevPreviewPanel, isPtyPanel } from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -45,7 +48,7 @@ export const createTrashActions = (
     // Ephemeral panels (e.g. the help-panel assistant terminal) are bound to
     // a transient UI surface and must never linger in trash for the TTL window
     // — they bypass the trash flow and are removed outright.
-    if (terminal.ephemeral === true) {
+    if (isPtyPanel(terminal) && terminal.ephemeral === true) {
       get().removePanel(id);
       return;
     }
@@ -74,7 +77,7 @@ export const createTrashActions = (
     set((state) => {
       const existing = state.panelsById[id];
       if (!existing) return state;
-      const newById: Record<string, TerminalInstance> = {
+      const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
         [id]: { ...existing, location: "trash" as const },
       };
@@ -170,7 +173,7 @@ export const createTrashActions = (
     }
 
     set((state) => {
-      const newById: Record<string, TerminalInstance> = { ...state.panelsById };
+      const newById: Record<string, CarrierPanel> = { ...state.panelsById };
       for (const tid of trashPanelIds) {
         const current = newById[tid];
         if (current) {
@@ -405,7 +408,7 @@ export const createTrashActions = (
           saveNormalized(state.panelsById, state.panelIds);
           return { trashedTerminals: newTrashed };
         }
-        const newById: Record<string, TerminalInstance> = {
+        const newById: Record<string, CarrierPanel> = {
           ...state.panelsById,
           [id]: { ...existing, location: "trash" as const },
         };

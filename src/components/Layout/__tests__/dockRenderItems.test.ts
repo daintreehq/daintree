@@ -1,18 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalInstance } from "@/store";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 import { buildDockRenderItems } from "../dockRenderItems";
 
-function terminal(id: string): TerminalInstance {
+function terminal(id: string): PtyPanelData {
   return {
     id,
     title: id,
+    kind: "terminal",
     cwd: "/test",
     cols: 80,
     rows: 24,
     location: "dock",
     isVisible: false,
-  };
+  } as PtyPanelData;
 }
 
 function group(panelIds: string[], activeTabId = panelIds[0] ?? ""): TabGroup {

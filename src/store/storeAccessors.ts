@@ -1,7 +1,14 @@
-import type { TerminalInstance, TabGroup } from "@shared/types";
+import type { TabGroup } from "@shared/types";
+import { getNarrowPanel } from "./slices/panelRegistry/selectors";
+
+// Carrier element from the legacy `panelsById` shape, sourced through
+// `getNarrowPanel`'s parameter so this file doesn't import the deprecated
+// `TerminalInstance` alias by name. The carrier itself flips to
+// `PanelInstance` in #8957 step 5; this alias auto-resolves through.
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export interface PanelStoreSnapshot {
-  panelsById: Record<string, TerminalInstance>;
+  panelsById: Record<string, CarrierPanel>;
   panelIds: string[];
   tabGroups: Map<string, TabGroup>;
 }

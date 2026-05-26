@@ -21,14 +21,20 @@ import {
   getWorktreeSelectionSnapshot,
 } from "./storeAccessors";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
-import type { TerminalInstance } from "@shared/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isPtyPanel } from "@shared/types/panel";
 
-function shouldPersistTerminal(t: TerminalInstance): boolean {
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
+
+function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
   return (
     t.location !== "trash" &&
     t.location !== "background" &&
-    t.kind !== "assistant" &&
-    t.ephemeral !== true &&
+    // The carrier's kind is the discriminated union of built-in kinds; the
+    // runtime can still hand us an assistant panel whose kind escapes the
+    // declared union, so widen to string before comparing.
+    (t.kind as string) !== "assistant" &&
+    !(isPtyPanel(t) && t.ephemeral === true) &&
     !isSmokeTestTerminalId(t.id)
   );
 }
@@ -57,7 +63,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const prevSnapshotMap = panelPersistence.getPreviousSnapshotMap(projectId);
   const terminals = panelIds
     .map((id) => panelsById[id])
-    .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
+    .filter((t): t is NonNullable<CarrierPanel> => t != null && shouldPersistTerminal(t))
     .map((t) => panelToSnapshot(t, prevSnapshotMap?.get(t.id)));
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);

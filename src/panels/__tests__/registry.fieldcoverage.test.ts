@@ -1,12 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type {
-  BrowserPanelData,
-  BuiltInPanelKind,
-  PanelExitBehavior,
-  PanelInstance,
-  TerminalInstance,
-} from "@shared/types/panel";
+import type { BrowserPanelData, BuiltInPanelKind, PanelExitBehavior } from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";
@@ -110,9 +104,10 @@ const PTY_FIELD_CLASSIFICATION = {
   ephemeral: false,
   startedAt: false,
   exitCode: false,
-  // PtySerializeInput widener fields (persisted)
-  createdAt: true,
-  lastActiveAt: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not the PTY serializer.
+  createdAt: false,
+  lastActiveAt: false,
 } as const satisfies Record<keyof PtySerializeInput, boolean>;
 
 // ── Browser field classification ─────────────────────────────────────
@@ -133,6 +128,10 @@ const BROWSER_FIELD_CLASSIFICATION = {
   browserHistory: true,
   browserZoom: true,
   browserConsoleOpen: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
 } as const satisfies Record<keyof BrowserPanelData, boolean>;
 
 // ── Dev-preview field classification ─────────────────────────────────
@@ -168,8 +167,10 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   devServerUrl: false,
   devServerError: false,
   devServerTerminalId: false,
-  // DevPreviewSerializeInput widener (persisted)
-  createdAt: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
 } as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
 
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
@@ -196,33 +197,17 @@ function persistedKeys<T extends Record<string, boolean>>(map: T): (keyof T)[] {
   return (Object.keys(map) as (keyof T)[]).filter((k) => map[k]);
 }
 
-// Compile-time carrier-boundary pin (#8957). The renderer store carrier is being
-// drained from `TerminalInstance` (kitchen-sink) to the `PanelInstance` union.
-// Every key on `TerminalInstance` must be coverable by some `PanelInstance`
-// variant plus the two carrier-only timestamps (`createdAt`/`lastActiveAt`,
-// which live on `TerminalInstance` but not `BasePanelData`). If a new field is
-// added to `TerminalInstance` without a home in the union, this assignment
-// fails with a message naming the orphaned key — forcing it onto the proper
-// variant before the carrier flip lands.
-type _KeysOfUnion<T> = T extends unknown ? keyof T : never;
-type _AllowedPanelCarrierKeys = _KeysOfUnion<PanelInstance> | "createdAt" | "lastActiveAt";
-type _OrphanedTerminalInstanceKeys = Exclude<keyof TerminalInstance, _AllowedPanelCarrierKeys>;
-const _terminalInstanceKeysCovered: [_OrphanedTerminalInstanceKeys] extends [never]
-  ? true
-  : _OrphanedTerminalInstanceKeys = true;
-void _terminalInstanceKeysCovered;
+// Carrier-boundary pin retired. The renderer carrier is now
+// `Record<string, PanelInstance>` (#8957 step 5) and the `TerminalInstance`
+// interface only exists as the persistence Tolerant Reader. New fields must be
+// added to the appropriate `PanelInstance` variant; the discriminated union
+// itself enforces coverage at every consumer.
 
 const browserHistoryFixture: BrowserHistory = {
   past: ["https://prev.example"],
   present: "https://example.com",
   future: [],
 };
-
-function baseFields(
-  kind: PanelInstance["kind"]
-): Pick<TerminalInstance, "id" | "title" | "location" | "kind"> {
-  return { id: `panel-${kind}`, title: "Panel", location: "grid", kind };
-}
 
 function assertCovers(
   label: string,
@@ -256,11 +241,16 @@ function assertCovers(
 // non-empty, non-null value so every conditional spread in the serializers
 // emits its key.
 
-const terminalFixture: TerminalInstance = {
-  ...baseFields("terminal"),
+const terminalFixture: PtySerializeInput = {
+  id: "panel-terminal",
+  title: "Panel",
+  location: "grid",
+  kind: "terminal",
   launchAgentId: "claude",
   titleMode: "default",
   cwd: "/home/project",
+  cols: 80,
+  rows: 24,
   command: "npm start",
   exitBehavior: "keep" satisfies PanelExitBehavior,
   agentSessionId: "session-abc",
@@ -277,8 +267,11 @@ const terminalFixture: TerminalInstance = {
   lastActiveAt: 1_700_000_000_001,
 };
 
-const browserFixture: TerminalInstance = {
-  ...baseFields("browser"),
+const browserFixture: BrowserPanelData = {
+  id: "panel-browser",
+  title: "Panel",
+  location: "grid",
+  kind: "browser",
   browserUrl: "https://example.com",
   browserHistory: browserHistoryFixture,
   browserZoom: 1.5,
@@ -287,8 +280,11 @@ const browserFixture: TerminalInstance = {
   browserConsoleOpen: false,
 };
 
-const devPreviewFixture: TerminalInstance = {
-  ...baseFields("dev-preview"),
+const devPreviewFixture: DevPreviewSerializeInput = {
+  id: "panel-dev-preview",
+  title: "Panel",
+  location: "grid",
+  kind: "dev-preview",
   cwd: "/home/project",
   devCommand: "npm run dev",
   browserUrl: "http://localhost:3000",

@@ -1,5 +1,7 @@
-import type { TerminalInstance } from "@/store";
 import type { TabGroup } from "@shared/types";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export interface OverDropData {
   container?: "grid" | "dock";
@@ -17,12 +19,12 @@ export function resolveContainerId(containerId: string): "grid" | "dock" | null 
 
 /** Filter terminals to those in a given container and worktree, preserving panelIds order. */
 export function filterTerminalsByContainer(
-  terminalsById: Record<string, TerminalInstance | undefined>,
+  terminalsById: Record<string, CarrierPanel | undefined>,
   panelIds: readonly string[],
   container: "grid" | "dock",
   worktreeId: string | null | undefined
-): TerminalInstance[] {
-  const result: TerminalInstance[] = [];
+): CarrierPanel[] {
+  const result: CarrierPanel[] = [];
   for (const tid of panelIds) {
     const t = terminalsById[tid];
     if (!t || (t.worktreeId ?? undefined) !== (worktreeId ?? undefined)) continue;
@@ -44,7 +46,7 @@ export function detectTargetContainer(
   overData: OverDropData | undefined,
   dropContainer: "grid" | "dock" | null,
   overId: string,
-  terminalsById: Record<string, TerminalInstance | undefined>,
+  terminalsById: Record<string, CarrierPanel | undefined>,
   skipAccordionTarget: boolean
 ): "grid" | "dock" | null {
   if (overData?.container) return overData.container;
@@ -70,7 +72,7 @@ export function detectTargetContainer(
  * Falls back: exact terminal match → sortable.index → append-to-end.
  */
 export function resolveTargetIndex(
-  terminalsById: Record<string, TerminalInstance | undefined>,
+  terminalsById: Record<string, CarrierPanel | undefined>,
   panelIds: readonly string[],
   worktreeId: string | null | undefined,
   targetContainer: "grid" | "dock",

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { usePanelStore, type TerminalInstance } from "@/store";
+import { usePanelStore } from "@/store";
+import type { PanelInstance } from "@shared/types/panel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinition,
@@ -12,7 +13,7 @@ import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 
 export interface DockedPanelProps {
-  terminal: TerminalInstance;
+  terminal: PanelInstance;
   onPopoverClose?: () => void;
   onAddTab?: () => void;
   /** Show the inline "Open in grid" header control (single-panel dock only). */

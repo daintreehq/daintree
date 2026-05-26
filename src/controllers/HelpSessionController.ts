@@ -11,6 +11,7 @@ import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore, useProjectStore } from "@/store";
+import { isPtyPanel } from "@shared/types/panel";
 import { projectClient } from "@/clients/projectClient";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -1181,7 +1182,7 @@ export class HelpSessionController {
 
     const panelState = usePanelStore.getState();
     const livePanel = panelState.panelsById[initialTerminalId];
-    if (!livePanel) return;
+    if (!livePanel || !isPtyPanel(livePanel)) return;
     const agentState = livePanel.agentState;
     if (agentState && ACTIVE_AGENT_STATES.has(agentState)) {
       // Re-check shortly without restarting the full hibernate countdown —
@@ -1205,7 +1206,7 @@ export class HelpSessionController {
     // fire — writing project A's session into project B's hibernate slot
     // would resume the wrong conversation on next open.
     const projectId = initialProjectId;
-    const cwd = livePanel.cwd ?? "";
+    const cwd = livePanel.cwd;
     const sessionToRevoke = helpState.sessionId;
     const liveAgentId = helpState.agentId ?? initialAgentId;
 

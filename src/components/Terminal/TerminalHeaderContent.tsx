@@ -15,6 +15,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
+import { isPtyPanel } from "@shared/types/panel";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
@@ -105,8 +106,8 @@ export function TerminalHeaderContent({
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
-  const isPtyPanel = kind == null || panelKindHasPty(kind);
-  const showResource = resourceEnabled && isPtyPanel && resourceState != null;
+  const hasPtyKind = kind == null || panelKindHasPty(kind);
+  const showResource = resourceEnabled && hasPtyKind && resourceState != null;
 
   const [stickySeverity, setStickySeverity] = useState<ResourceSeverity>("muted");
   const pendingCandidateRef = useRef<ResourceSeverity | null>(null);
@@ -160,14 +161,15 @@ export function TerminalHeaderContent({
   } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
+      const pty = t && isPtyPanel(t) ? t : undefined;
       return {
-        isInputLocked: t?.isInputLocked ?? false,
-        startedAt: t?.startedAt,
-        lastStateChange: t?.lastStateChange,
-        stateChangeTrigger: t?.stateChangeTrigger,
-        stateChangeConfidence: t?.stateChangeConfidence,
-        sessionCost: t?.sessionCost,
-        sessionTokens: t?.sessionTokens,
+        isInputLocked: pty?.isInputLocked ?? false,
+        startedAt: pty?.startedAt,
+        lastStateChange: pty?.lastStateChange,
+        stateChangeTrigger: pty?.stateChangeTrigger,
+        stateChangeConfidence: pty?.stateChangeConfidence,
+        sessionCost: pty?.sessionCost,
+        sessionTokens: pty?.sessionTokens,
       };
     })
   );

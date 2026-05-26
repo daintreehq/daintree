@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -46,7 +47,7 @@ function seedTerminal(id: string, worktreeId: string, location: "grid" | "dock" 
     location,
     worktreeId,
     isVisible: true,
-  } as import("../types").TerminalInstance;
+  } as unknown as PtyPanelData;
   usePanelStore.setState((state) => ({
     panelsById: { ...state.panelsById, [id]: terminal },
     panelIds: [...state.panelIds, id],

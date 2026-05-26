@@ -1,7 +1,10 @@
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./panelRegistrySlice";
+import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import { terminalClient } from "@/clients";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 export type InputOrigin = "user" | "automation";
 
@@ -34,7 +37,7 @@ export interface TerminalCommandQueueSlice {
 
 export const createTerminalCommandQueueSlice =
   (
-    getTerminal: (id: string) => TerminalInstance | undefined
+    getTerminal: (id: string) => CarrierPanel | undefined
   ): StateCreator<TerminalCommandQueueSlice, [], [], TerminalCommandQueueSlice> =>
   (set, get) => ({
     commandQueue: [],
@@ -53,7 +56,8 @@ export const createTerminalCommandQueueSlice =
         return;
       }
 
-      if (isAgentReady(terminal.agentState)) {
+      const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
+      if (isAgentReady(agentState)) {
         terminalClient.write(terminalId, payload);
         return;
       }
@@ -73,9 +77,10 @@ export const createTerminalCommandQueueSlice =
 
     processQueue: (terminalId) => {
       const terminal = getTerminal(terminalId);
-      if (!terminal || !isAgentReady(terminal.agentState)) {
+      const agentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
+      if (!terminal || !isAgentReady(agentState)) {
         console.warn(
-          `Cannot process queue: terminal ${terminalId} is not ready (state: ${terminal?.agentState})`
+          `Cannot process queue: terminal ${terminalId} is not ready (state: ${agentState})`
         );
         return;
       }

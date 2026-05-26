@@ -1,13 +1,7 @@
 import type { DevPreviewPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
 
-/**
- * Serializer input: `DevPreviewPanelData` plus the legacy `createdAt` field,
- * which is persisted but not declared on the shared variant interface.
- */
-export type DevPreviewSerializeInput = DevPreviewPanelData & {
-  createdAt?: number;
-};
+export type DevPreviewSerializeInput = DevPreviewPanelData;
 
 export function serializeDevPreview(t: DevPreviewSerializeInput): Partial<PanelSnapshot> {
   return {
@@ -29,7 +23,6 @@ export function serializeDevPreview(t: DevPreviewSerializeInput): Partial<PanelS
     ...(t.devPreviewScrollPosition !== undefined && {
       devPreviewScrollPosition: t.devPreviewScrollPosition,
     }),
-    ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
   };
 }

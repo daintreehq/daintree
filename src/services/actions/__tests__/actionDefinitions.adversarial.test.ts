@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalInstance } from "@shared/types/panel";
+import type { PtyPanelData } from "@shared/types/panel";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const mocks = vi.hoisted(() => {
@@ -316,7 +316,7 @@ function buildRegistry(
   return actions;
 }
 
-function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstance {
+function createTerminal(overrides: Record<string, unknown> = {}): PtyPanelData {
   return {
     id: "term-1",
     kind: "terminal",
@@ -329,7 +329,7 @@ function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstan
     hasPty: true,
     isVisible: true,
     ...overrides,
-  } as TerminalInstance;
+  } as PtyPanelData;
 }
 
 beforeEach(() => {
