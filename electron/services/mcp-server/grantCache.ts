@@ -143,28 +143,34 @@ export class GrantCache {
     const entry = this.grants.get(k);
     if (!entry) return { granted: false };
     const now = this.now();
-    // The hard ceiling is a stricter constraint than the sliding TTL, so it
-    // must be evaluated first: a grant refreshed moments ago can still have a
-    // future `expiresAt` while having crossed `issuedAt + maxLifetimeMs`.
-    if (now > entry.issuedAt + this.maxLifetimeMs) {
+    // The hard ceiling is a stricter constraint than the sliding TTL: a grant
+    // refreshed moments ago can still have a future `expiresAt` while having
+    // crossed `issuedAt + maxLifetimeMs`. `grant-ceiling` is reserved for that
+    // case — a grant whose sliding TTL was still valid (recently refreshed)
+    // when the hard cap cut it off. A grant that has already lapsed its TTL is
+    // a passive `grant.expired` timeout regardless of whether the ceiling has
+    // also passed, so it keeps the truthful "idled out" audit signal.
+    const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+    const pastTtl = now > entry.expiresAt;
+    if (pastCeiling || pastTtl) {
       this.grants.delete(k);
-      this.emitSafely(sessionId, {
-        type: "grant.revoked",
+      this.emitSafely(
         sessionId,
-        toolId,
-        ttlMs: entry.ttlMs,
-        revokedReason: "grant-ceiling",
-      });
-      return { granted: false };
-    }
-    if (now > entry.expiresAt) {
-      this.grants.delete(k);
-      this.emitSafely(sessionId, {
-        type: "grant.expired",
-        sessionId,
-        toolId,
-        ttlMs: entry.ttlMs,
-      });
+        pastCeiling && !pastTtl
+          ? {
+              type: "grant.revoked",
+              sessionId,
+              toolId,
+              ttlMs: entry.ttlMs,
+              revokedReason: "grant-ceiling",
+            }
+          : {
+              type: "grant.expired",
+              sessionId,
+              toolId,
+              ttlMs: entry.ttlMs,
+            }
+      );
       return { granted: false };
     }
     return { granted: true, issuedAt: entry.issuedAt, expiresAt: entry.expiresAt };
@@ -328,10 +334,13 @@ export class GrantCache {
     const now = this.now();
     for (const [k, entry] of [...this.grants]) {
       // Ceiling-expired entries can still have a future `expiresAt` (they were
-      // refreshed recently), so they survive the TTL skip below — check the
-      // hard ceiling first and emit `grant.revoked` rather than `grant.expired`.
+      // refreshed recently), so they survive the TTL skip — evict on either
+      // condition. Mirror `check()`'s audit semantics: `grant-ceiling` only
+      // when the sliding TTL was still valid (recently refreshed) at the
+      // moment the hard cap hit; an already-lapsed TTL stays `grant.expired`.
       const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
-      if (!pastCeiling && now <= entry.expiresAt) continue;
+      const pastTtl = now > entry.expiresAt;
+      if (!pastCeiling && !pastTtl) continue;
       this.grants.delete(k);
       evicted += 1;
       const colon = k.indexOf(":");
@@ -340,7 +349,7 @@ export class GrantCache {
       const toolId = k.substring(colon + 1);
       this.emitSafely(
         sessionId,
-        pastCeiling
+        pastCeiling && !pastTtl
           ? {
               type: "grant.revoked",
               sessionId,
