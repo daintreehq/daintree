@@ -215,7 +215,11 @@ export function registerForgeHandlers(): () => void {
       }
       return auditForgeCall(
         { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
-        () => impl.validateToken(token.trim())
+        () => impl.validateToken(token.trim()),
+        // A rejected credential ({ valid: false }) is a resolved call but a
+        // failed outcome — record it as an error so a burst of bad-token
+        // responses is visible to the failure-cluster detector.
+        (validation) => (validation.valid ? "success" : "error")
       );
     })
   );

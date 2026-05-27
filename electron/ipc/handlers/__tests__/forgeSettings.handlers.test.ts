@@ -474,6 +474,25 @@ describe("registerForgeSettingsHandlers", () => {
     appendSpy.mockRestore();
   });
 
+  it("setCredential audits a rejected credential ({ valid: false }) as an error result", async () => {
+    const appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: false, error: "Bad token" }),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", { token: "nope" });
+
+    // A resolved-but-rejected credential must surface as an error so bad-token
+    // bursts are visible to the failure-cluster detector, not hidden as success.
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ methodName: "validateToken", result: "error" })
+    );
+    appendSpy.mockRestore();
+  });
+
   it("setCredential audits a thrown validateToken as an error and rethrows", async () => {
     const appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
     registerGiteaProvider();

@@ -64,19 +64,33 @@ export async function auditForgeCall<T>(
   const start = Date.now();
   try {
     const value = await run();
-    forgeAuditService.appendRecord({
+    safeAppend({
       ...meta,
       durationMs: Date.now() - start,
       result: classify ? classify(value) : "success",
     });
     return value;
   } catch (err) {
-    forgeAuditService.appendRecord({
+    safeAppend({
       ...meta,
       durationMs: Date.now() - start,
       result: "error",
       errorMessage: err instanceof Error ? err.message : String(err),
     });
     throw err;
+  }
+}
+
+/**
+ * Append a record without ever surfacing an audit failure to the caller. A
+ * throw from `appendRecord` (corrupt store, disk error) must not swallow the
+ * provider's return value or replace the original error — auditing is strictly
+ * a side channel.
+ */
+function safeAppend(input: Parameters<ForgeAuditService["appendRecord"]>[0]): void {
+  try {
+    forgeAuditService.appendRecord(input);
+  } catch (err) {
+    console.error("[Forge] Failed to append audit record:", err);
   }
 }

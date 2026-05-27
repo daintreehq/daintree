@@ -184,7 +184,11 @@ export function registerForgeSettingsHandlers(): () => void {
 
         const validation = await auditForgeCall(
           { providerId, methodName: "validateToken", argsSummary: "" },
-          () => impl.validateToken(primaryValue)
+          () => impl.validateToken(primaryValue),
+          // A rejected credential is a resolved call but a failed outcome —
+          // audit it as an error so bad-token bursts surface in anomaly
+          // detection rather than hiding behind result: "success".
+          (validation) => (validation.valid ? "success" : "error")
         );
         if (!validation.valid) {
           return validation;
