@@ -115,10 +115,10 @@ test.describe.serial("Core: HybridInputBar", () => {
 
     // Agent panel requires CLI availability — skip all tests if not present
     if (!(await ensureAgentPanelReady())) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Required element or state not available in this launch",
+      });
 
       test.skip();
       return;
@@ -196,10 +196,10 @@ test.describe.serial("Core: HybridInputBar", () => {
 
     const optionCount = await options.count();
     if (optionCount < 2) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required state not available in this launch",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Required state not available in this launch",
+      });
 
       test.skip();
       return;

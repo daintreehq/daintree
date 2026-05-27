@@ -120,10 +120,10 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     const devBtn = window.locator(SEL.toolbar.openDevPreview);
     if (!(await devBtn.isVisible().catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview toolbar button not visible in this launch state",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Dev preview toolbar button not visible in this launch state",
+      });
 
       test.skip();
       return;
@@ -161,10 +161,10 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     const devBtn = window.locator(SEL.toolbar.openDevPreview);
     if (!(await devBtn.isVisible().catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview toolbar button not visible in this launch state",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Dev preview toolbar button not visible in this launch state",
+      });
 
       test.skip();
       return;
@@ -200,10 +200,10 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const { window } = ctx;
 
     if (!mainWorktreeId || !featureWorktreeId) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Required element or state not available in this launch",
+      });
 
       test.skip();
       return;
@@ -237,10 +237,10 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const { window } = ctx;
 
     if (!mainWorktreeId || !featureWorktreeId) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Required element or state not available in this launch",
+      });
 
       test.skip();
       return;
@@ -250,10 +250,10 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const panelsBefore = await getGridPanelIds(window);
     const featurePanelId = panelsBefore[panelsBefore.length - 1];
     if (!featurePanelId) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "Required element or state not available in this launch",
+      });
 
       test.skip();
       return;

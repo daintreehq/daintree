@@ -39,7 +39,8 @@ function isAnnotationPush(node) {
   if (annotationsObj.type !== "CallExpression") return false;
   const infoCallee = annotationsObj.callee;
   if (infoCallee.type !== "MemberExpression") return false;
-  if (infoCallee.property.type !== "Identifier" || infoCallee.property.name !== "info") return false;
+  if (infoCallee.property.type !== "Identifier" || infoCallee.property.name !== "info")
+    return false;
   if (infoCallee.object.type !== "Identifier" || infoCallee.object.name !== "test") return false;
 
   return true;
@@ -58,10 +59,18 @@ function extractAnnotation(node) {
   let descVal = null;
 
   for (const prop of arg.properties) {
-    if (prop.key.type === "Identifier" && prop.key.name === "type" && prop.value.type === "Literal") {
+    if (
+      prop.key.type === "Identifier" &&
+      prop.key.name === "type" &&
+      prop.value.type === "Literal"
+    ) {
       typeVal = prop.value.value;
     }
-    if (prop.key.type === "Identifier" && prop.key.name === "description" && prop.value.type === "Literal") {
+    if (
+      prop.key.type === "Identifier" &&
+      prop.key.name === "description" &&
+      prop.value.type === "Literal"
+    ) {
       descVal = prop.value.value;
     }
   }
@@ -94,11 +103,11 @@ export default {
     schema: [],
     messages: {
       missingAnnotation:
-        'test.skip() must be preceded by test.info().annotations.push({ type, description }) in the same block.',
+        "test.skip() must be preceded by test.info().annotations.push({ type, description }) in the same block.",
       invalidType:
         'Annotation type "{{actual}}" is not valid. Use one of: quarantine, platform-skip, conditional-skip.',
       quarantineMissingDate:
-        'Quarantine annotation description must start with YYYY-MM-DD (the date the test was quarantined).',
+        "Quarantine annotation description must start with YYYY-MM-DD (the date the test was quarantined).",
     },
   },
 
@@ -150,10 +159,7 @@ export default {
           ) {
             // These are the only node types that have a `.body` array of statements.
             // Continue walking up — we need the FIRST one (innermost function/block).
-            if (
-              parent.type === "BlockStatement" ||
-              parent.type === "Program"
-            ) {
+            if (parent.type === "BlockStatement" || parent.type === "Program") {
               blockBody = parent.body;
               let stmt = node.parent;
               while (stmt && stmt.parent !== parent) {

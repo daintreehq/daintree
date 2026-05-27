@@ -1016,7 +1016,9 @@ export default tseslint.config(
   {
     files: ["e2e/**/*.spec.ts"],
     plugins: {
-      "e2e-structured-skip": { rules: { "structured-test-skip-annotations": structuredTestSkipAnnotations } },
+      "e2e-structured-skip": {
+        rules: { "structured-test-skip-annotations": structuredTestSkipAnnotations },
+      },
     },
     rules: {
       "e2e-structured-skip/structured-test-skip-annotations": "error",
