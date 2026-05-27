@@ -95,8 +95,8 @@ describe("injectSkeletonProjectIdentity (#9162)", () => {
     expect(wc.executeJavaScript).not.toHaveBeenCalled();
   });
 
-  it("the generated script mutates the real skeleton DOM correctly", () => {
-    const { JSDOM } = require("jsdom") as typeof import("jsdom");
+  it("the generated script mutates the real skeleton DOM correctly", async () => {
+    const { JSDOM } = await import("jsdom");
     const dom = new JSDOM(
       `<div id="startup-skeleton"><div class="skeleton-logo-section"><div class="skeleton-title"></div></div></div>`
     );
