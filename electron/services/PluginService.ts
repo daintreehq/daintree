@@ -21,6 +21,7 @@ import type { ActionDispatchResult } from "../../shared/types/actions.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { getProjectViewManager, getWindowRegistry } from "../window/windowRef.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -933,8 +934,7 @@ export class PluginService {
           ok: false,
           error: {
             code: "EXECUTION_ERROR",
-            message:
-              err instanceof Error ? err.message : "Plugin dispatch renderer bridge unavailable",
+            message: formatErrorMessage(err, "Plugin dispatch renderer bridge unavailable"),
           },
         });
         return;
@@ -996,7 +996,7 @@ export class PluginService {
           ok: false,
           error: {
             code: "EXECUTION_ERROR",
-            message: err instanceof Error ? err.message : `Failed to dispatch action: ${actionId}`,
+            message: formatErrorMessage(err, `Failed to dispatch action: ${actionId}`),
           },
         });
       }
