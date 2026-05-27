@@ -90,6 +90,30 @@ function isSnoozedAt(
   return typeof until === "number" && until > now;
 }
 
+/**
+ * Returns a new snooze map with `correlationId` removed when no active
+ * (non-archived) entries remain for that thread, leaving the input map
+ * untouched in every other case. Called after dismiss/archive on a single
+ * entry that carried a correlationId — without this sweep the snooze map
+ * would keep keys with nothing behind them and the Snoozed tab would
+ * surface an empty ghost row.
+ */
+function clearSnoozeIfThreadGone(
+  snoozedThreads: Record<string, number>,
+  remainingEntries: NotificationHistoryEntry[],
+  correlationId: string | undefined
+): Record<string, number> {
+  if (!correlationId) return snoozedThreads;
+  if (snoozedThreads[correlationId] === undefined) return snoozedThreads;
+  const stillActive = remainingEntries.some(
+    (e) => e.correlationId === correlationId && e.archivedAt === null
+  );
+  if (stillActive) return snoozedThreads;
+  const next = { ...snoozedThreads };
+  delete next[correlationId];
+  return next;
+}
+
 function computeUnreadCount(
   entries: NotificationHistoryEntry[],
   snoozedThreads: Record<string, number>,
@@ -407,10 +431,21 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         }),
       dismissEntry: (id) =>
         set((state) => {
+          const removed = state.entries.find((e) => e.id === id);
           const entries = state.entries.filter((e) => e.id !== id);
+          // If dismissing this entry leaves no other entries with the same
+          // correlationId, drop the snooze too — otherwise the snoozed-thread
+          // map keeps a key with nothing behind it ("ghost snooze") and the
+          // Snoozed tab stays visible as an empty chip.
+          const snoozedThreads = clearSnoozeIfThreadGone(
+            state.snoozedThreads,
+            entries,
+            removed?.correlationId
+          );
           return {
             entries,
-            unreadCount: computeUnreadCount(entries, state.snoozedThreads),
+            snoozedThreads,
+            unreadCount: computeUnreadCount(entries, snoozedThreads),
           };
         }),
       dismissByCorrelationId: (correlationId) =>
@@ -435,9 +470,18 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           const entries = state.entries.map((e) =>
             e.id === id ? { ...e, archivedAt: now, seenAsToast: true } : e
           );
+          // If archiving this entry leaves no remaining active entries for
+          // its correlationId, clear the snooze so the Snoozed tab doesn't
+          // keep an empty ghost row.
+          const snoozedThreads = clearSnoozeIfThreadGone(
+            state.snoozedThreads,
+            entries,
+            entry.correlationId
+          );
           return {
             entries,
-            unreadCount: computeUnreadCount(entries, state.snoozedThreads, now),
+            snoozedThreads,
+            unreadCount: computeUnreadCount(entries, snoozedThreads, now),
           };
         }),
       archiveByCorrelationId: (correlationId) =>

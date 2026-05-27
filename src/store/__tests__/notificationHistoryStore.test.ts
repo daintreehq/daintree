@@ -1344,6 +1344,51 @@ describe("notificationHistorySlice", () => {
       expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
     });
 
+    it("dismissEntry clears the snooze when the dismissed entry was the last active one for that correlationId", () => {
+      addEntry({ correlationId: "solo", message: "only entry" });
+      const id = getState().entries[0]!.id;
+      getState().snoozeThread("solo", Date.now() + 60_000);
+      getState().dismissEntry(id);
+      expect(getState().snoozedThreads["solo"]).toBeUndefined();
+    });
+
+    it("dismissEntry keeps the snooze when other active entries share the correlationId", () => {
+      addEntry({ correlationId: "shared", message: "first" });
+      addEntry({ correlationId: "shared", message: "second" });
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("shared", until);
+      const firstId = getState().entries[1]!.id;
+      getState().dismissEntry(firstId);
+      expect(getState().snoozedThreads["shared"]).toBe(until);
+    });
+
+    it("archiveEntry clears the snooze when archiving the last active entry for that correlationId", () => {
+      addEntry({ correlationId: "solo-arch", message: "only entry" });
+      const id = getState().entries[0]!.id;
+      getState().snoozeThread("solo-arch", Date.now() + 60_000);
+      getState().archiveEntry(id);
+      expect(getState().snoozedThreads["solo-arch"]).toBeUndefined();
+    });
+
+    it("archiveEntry keeps the snooze when other active entries share the correlationId", () => {
+      addEntry({ correlationId: "shared-arch", message: "first" });
+      addEntry({ correlationId: "shared-arch", message: "second" });
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("shared-arch", until);
+      const firstId = getState().entries[1]!.id;
+      getState().archiveEntry(firstId);
+      expect(getState().snoozedThreads["shared-arch"]).toBe(until);
+    });
+
+    it("dismissEntry on an uncorrelated entry does not touch the snooze map", () => {
+      addEntry({ message: "uncorrelated" });
+      const id = getState().entries[0]!.id;
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("other", until);
+      getState().dismissEntry(id);
+      expect(getState().snoozedThreads["other"]).toBe(until);
+    });
+
     it("clearAll empties snoozedThreads", () => {
       getState().snoozeThread("thread-1", Date.now() + 60_000);
       getState().clearAll();

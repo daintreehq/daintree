@@ -877,6 +877,21 @@ export function notify(payload: NotifyPayload): string {
   const isQuiet = !payload.urgent && (Date.now() < _quietUntil || isScheduledQuietHours());
 
   if (placement === "grid-bar") {
+    // Auto-resurface: grid-bar bypasses the toast gate but still mutates
+    // history. Mirror the post-gate `clearSnooze` from the main path so an
+    // escalating/un-snoozing grid-bar entry on a snoozed thread doesn't
+    // land hidden behind a stale snooze. Same predicate as the main path so
+    // routine same-severity grid-bar updates keep the snooze intact.
+    if (correlationId && !payload.transient) {
+      const wouldRePromote = shouldReToast(
+        type,
+        getEntriesByCorrelationId(correlationId),
+        payload.urgent
+      );
+      if (wouldRePromote) {
+        useNotificationHistoryStore.getState().clearSnooze(correlationId);
+      }
+    }
     const entryId =
       historyMessage && !payload.transient
         ? useNotificationHistoryStore.getState().addEntry({

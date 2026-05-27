@@ -681,8 +681,21 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const handleMarkAllRead = () => {
     // Archived entries are already done; they must never appear in the
-    // mark-all-read undo set or the "Marked N as read" count.
-    const ids = entries.filter((e) => !e.seenAsToast && !e.archivedAt).map((e) => e.id);
+    // mark-all-read undo set or the "Marked N as read" count. Snoozed
+    // threads are explicit deferrals — silently marking them read would
+    // override the user's choice and the resurfaced row would have no
+    // unread dot when its snooze expires.
+    const now = Date.now();
+    const ids = entries
+      .filter((e) => {
+        if (e.seenAsToast || e.archivedAt) return false;
+        if (e.correlationId && snoozedThreads[e.correlationId] !== undefined) {
+          const until = snoozedThreads[e.correlationId];
+          if (typeof until === "number" && until > now) return false;
+        }
+        return true;
+      })
+      .map((e) => e.id);
     if (filter === "unread") {
       setFrozenUnreadIds(new Set(ids));
     }

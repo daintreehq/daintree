@@ -2991,6 +2991,35 @@ describe("notify() — thread re-promotion (#9008)", () => {
       notify({ type: "error", message: "Lone error", priority: "low" });
       expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeDefined();
     });
+
+    it("grid-bar path clears the snooze when the same predicate would re-promote", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({
+        type: "warning",
+        correlationId: "build",
+        message: "Inline status escalation",
+        priority: "low",
+        placement: "grid-bar",
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeUndefined();
+    });
+
+    it("grid-bar path keeps the snooze on a routine same-severity update", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      const until = Date.now() + 60_000;
+      useNotificationHistoryStore.setState({ snoozedThreads: { build: until } });
+      notify({
+        type: "info",
+        correlationId: "build",
+        message: "Inline status routine update",
+        priority: "low",
+        placement: "grid-bar",
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBe(until);
+    });
   });
 });
 
