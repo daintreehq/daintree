@@ -196,6 +196,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   const rafRef = useRef<number | null>(null);
   const stickyScopeRef = useRef<string | null>(null);
   const [stickyScope, setStickyScope] = useState<string | null>(null);
+  const [cmLineHeight, setCmLineHeight] = useState<number>(24);
 
   useImperativeHandle(
     ref,
@@ -321,6 +322,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
       viewRef.current = view;
+      setCmLineHeight(view.defaultLineHeight);
       if (initialLine === undefined || initialLine < 1) return;
       const lineNum = Math.min(initialLine, view.state.doc.lines);
 
@@ -361,8 +363,8 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
             : "border-transparent bg-transparent text-transparent"
         )}
         style={{
-          height: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
-          lineHeight: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
+          height: `${cmLineHeight}px`,
+          lineHeight: `${cmLineHeight}px`,
         }}
       >
         {stickyScope ?? " "}
