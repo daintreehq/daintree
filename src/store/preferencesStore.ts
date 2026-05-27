@@ -35,8 +35,13 @@ interface PreferencesState {
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
 }
 
-const DOCK_DENSITIES: readonly DockDensity[] = ["compact", "normal", "comfortable"];
-const DIFF_VIEW_TYPES: readonly DiffViewType[] = ["split", "unified"];
+function isDockDensity(value: unknown): value is DockDensity {
+  return value === "compact" || value === "normal" || value === "comfortable";
+}
+
+function isDiffViewType(value: unknown): value is DiffViewType {
+  return value === "split" || value === "unified";
+}
 
 /**
  * Normalise the closed-set and record-shaped fields of a persisted blob against
@@ -52,13 +57,8 @@ function sanitizePersistedPreferences(
   if (!raw || typeof raw !== "object") return {};
   const sanitized: Partial<PreferencesState> = { ...raw };
 
-  if (!DOCK_DENSITIES.includes(sanitized.dockDensity as DockDensity)) {
-    sanitized.dockDensity = "normal";
-  }
-
-  if (!DIFF_VIEW_TYPES.includes(sanitized.diffViewType as DiffViewType)) {
-    sanitized.diffViewType = "split";
-  }
+  if (!isDockDensity(sanitized.dockDensity)) sanitized.dockDensity = "normal";
+  if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;

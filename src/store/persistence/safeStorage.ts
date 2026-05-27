@@ -249,6 +249,16 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
 }
 
 /**
+ * Single sanctioned `JSON.parse` boundary for this module. `JSON.parse` returns
+ * `any`, so the cast to the caller's expected shape is inherently unchecked —
+ * centralising it here keeps that one unsafe assertion auditable in one place
+ * (callers always wrap this in try/catch and validate the result downstream).
+ */
+function parseJson<R>(raw: string): R {
+  return JSON.parse(raw) as R;
+}
+
+/**
  * Parse a JSON string safely, returning a typed fallback and logging a warning
  * with caller-supplied context (store/key) when the parse fails. Null input is
  * treated as an absent value and returns the fallback without warning —
@@ -261,7 +271,7 @@ export function safeJSONParse<T>(
 ): T {
   if (raw === null) return fallback;
   try {
-    return JSON.parse(raw) as T;
+    return parseJson<T>(raw);
   } catch (error) {
     console.warn("[safeStorage] JSON parse failed", {
       ...context,
@@ -278,7 +288,7 @@ export function safeJSONParse<T>(
 function parseBackup<T>(raw: string | null): StorageValue<T> | null {
   if (raw === null) return null;
   try {
-    return JSON.parse(raw) as StorageValue<T>;
+    return parseJson<StorageValue<T>>(raw);
   } catch {
     return null;
   }
@@ -293,7 +303,7 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
       if (value instanceof Promise) return null;
       if (value === null) return null;
       try {
-        return JSON.parse(value) as StorageValue<T>;
+        return parseJson<StorageValue<T>>(value);
       } catch (error) {
         // The live blob is corrupt but present — try the last known-good backup
         // before discarding the user's config to defaults (issue #9170).
