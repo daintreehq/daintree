@@ -189,6 +189,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.openCommits",
   "forge.openIssue",
   "forge.assignIssue",
+  "forge.unassignIssue",
   "forge.validateToken",
 
   // -- githubActions --

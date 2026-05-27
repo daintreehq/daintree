@@ -6,8 +6,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
-// eslint-disable-next-line no-restricted-imports
-import { githubClient } from "@/clients";
 import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
@@ -208,14 +206,17 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                   return;
                 }
                 if (wasAssigned && issueNumber && assignedUsername && snapRootPath) {
-                  try {
-                    await githubClient.unassignIssue(snapRootPath, issueNumber, assignedUsername);
-                  } catch (err) {
+                  const unassignResult = await actionService.dispatch(
+                    "forge.unassignIssue",
+                    { cwd: snapRootPath, issueNumber, username: assignedUsername },
+                    { source: "user" }
+                  );
+                  if (!unassignResult.ok) {
                     // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                     notify({
                       type: "warning",
                       title: "Couldn't undo assignment",
-                      message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                      message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on GitHub`,
                     });
                   }
                 }
