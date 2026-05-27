@@ -61,8 +61,10 @@ export function VoiceRecordingToolbarButton({
 
   const isConnecting = status === "connecting";
   const isRecording = status === "recording";
+  const isReconnecting = status === "reconnecting";
   const isFinishing = status === "finishing";
-  const isActive = Boolean(activeTarget) && (isConnecting || isRecording || isFinishing);
+  const isActive =
+    Boolean(activeTarget) && (isConnecting || isRecording || isReconnecting || isFinishing);
 
   // Doherty gate — under 400ms of "connecting" should never paint the orbit;
   // it would flash before the recording state arrives.
@@ -71,7 +73,7 @@ export function VoiceRecordingToolbarButton({
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the
   // RAF loop spinning on null refs.
-  const showOrbit = isActive && (isRecording || isFinishing || showConnecting);
+  const showOrbit = isActive && (isRecording || isReconnecting || isFinishing || showConnecting);
 
   // Mutable bridge: audioLevel updates ~60Hz; we read it inside the RAF tick
   // rather than re-rendering on every change. Pattern lifted from
@@ -170,11 +172,13 @@ export function VoiceRecordingToolbarButton({
     .join(" / ");
   const tooltipTitle = isConnecting
     ? "Preparing dictation..."
-    : isFinishing
-      ? "Finishing transcription..."
-      : contextLabel
-        ? `Recording: ${contextLabel}`
-        : "Recording in another panel";
+    : isReconnecting
+      ? "Reconnecting..."
+      : isFinishing
+        ? "Finishing transcription..."
+        : contextLabel
+          ? `Recording: ${contextLabel}`
+          : "Recording in another panel";
   const tooltipExtra = [
     isRecording ? formatDuration(elapsedSeconds) : null,
     shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel",

@@ -43,6 +43,7 @@ export function useVoiceWaitSubmit({
           voiceState.activeTarget?.panelId === terminalId &&
           (voiceState.status === "recording" ||
             voiceState.status === "connecting" ||
+            voiceState.status === "reconnecting" ||
             voiceState.status === "finishing");
 
         if (isSessionActive) {

@@ -17,6 +17,24 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // rather than hanging the stop.
 const DRAIN_TIMEOUT_MS = 3_000;
 const PRE_CONNECT_BUFFER_MAX = 100;
+// Hard byte ceiling for buffered-but-not-yet-sent audio (pre-connect and during
+// a reconnect window). 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s — the point
+// past which voice context is lost anyway. Caps memory if chunks are large.
+const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
+// Client-side ping/pong heartbeat. The OpenAI Realtime server sends its own
+// pings (auto-ponged by `ws`), but a half-open TCP connection on our side —
+// server alive, our socket silently dead — is only detectable by us pinging
+// and watching for the pong. On a missed pong we `terminate()` (no closing
+// handshake on a dead socket) which fires `close` and drives the reconnect.
+const HEARTBEAT_INTERVAL_MS = 20_000;
+// Automatic reconnect on an unexpected mid-session drop. Exponential backoff
+// with full jitter: delay = random() * min(CAP, INITIAL * MULTIPLIER^attempt).
+// Gentle multiplier so the first few retries are near-instant; after
+// RECONNECT_MAX_ATTEMPTS we give up and surface a fatal error.
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_INITIAL_MS = 150;
+const RECONNECT_MULTIPLIER = 1.5;
+const RECONNECT_CAP_MS = 3_000;
 // `gpt-realtime-whisper` does not support server VAD (`turn_detection` must be
 // null), so the server never auto-commits the input buffer. We drive
 // segmentation ourselves: commit the buffer on a fixed cadence so the model
@@ -73,7 +91,24 @@ export class VoiceTranscriptionService {
     null;
 
   private preConnectBuffer: ArrayBuffer[] = [];
+  private preConnectBufferBytes = 0;
   private isReady = false;
+
+  // Heartbeat (half-open detection) for the current connection. `isAlive` is
+  // set on every pong and on open; the interval terminates the socket if a full
+  // cycle elapses with no pong.
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private isAlive = false;
+
+  // Reconnect state. `reconnectAttempt` and `isReconnecting` survive across
+  // individual connection teardowns (cleanupConnection) and are only reset by
+  // cleanupPreviousSession (a full session reset) or a successful reconnect.
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private isReconnecting = false;
+  // Set on graceful/fatal teardown so the trailing `close` event isn't mistaken
+  // for an unexpected drop and doesn't trigger a reconnect.
+  private isExpectedClose = false;
 
   private drainResolve: (() => void) | null = null;
   private drainTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -156,156 +191,310 @@ export class VoiceTranscriptionService {
     this.sessionId = mySessionId;
     this.isReady = false;
     this.preConnectBuffer = [];
+    this.preConnectBufferBytes = 0;
+    this.reconnectAttempt = 0;
+    this.isReconnecting = false;
+    this.isExpectedClose = false;
     this.liveText = "";
 
     this.emit({ type: "status", status: "connecting" });
 
     return new Promise((resolve) => {
       this.pendingStart = { sessionId: mySessionId, resolve };
+      this.connect(mySessionId, settings);
+    });
+  }
 
-      let connection: WebSocket;
-      try {
-        connection = new WebSocket(OPENAI_REALTIME_URL, {
-          headers: {
-            Authorization: `Bearer ${settings.openaiApiKey}`,
-          },
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err, "Failed to open WebSocket");
-        logError(`${P} ${message}`);
+  /**
+   * Opens the WebSocket and wires every event handler for one connection
+   * attempt. Shared by `start()` (initial connect, with a pending start promise
+   * to settle) and `reconnectOnce()` (mid-session reconnect, no pending start).
+   * The reconnect path is distinguished purely by `this.isReconnecting`, so a
+   * construct/timeout failure reschedules instead of surfacing a fatal error.
+   */
+  private connect(mySessionId: number, settings: VoiceInputSettings): void {
+    let connection: WebSocket;
+    try {
+      connection = new WebSocket(OPENAI_REALTIME_URL, {
+        headers: {
+          Authorization: `Bearer ${settings.openaiApiKey}`,
+        },
+      });
+    } catch (err) {
+      const message = formatErrorMessage(err, "Failed to open WebSocket");
+      logError(`${P} ${message}`);
+      if (this.isReconnecting) {
+        this.scheduleReconnect(mySessionId, settings);
+      } else {
         this.emit({ type: "error", message });
         this.emit({ type: "status", status: "error" });
         this.settlePendingStart(mySessionId, { ok: false, error: message });
+      }
+      return;
+    }
+
+    this.connection = connection;
+    logInfo(`${P} Opening OpenAI realtime WebSocket`, {
+      url: OPENAI_REALTIME_URL,
+      model: OPENAI_TRANSCRIPTION_MODEL,
+      language: settings.language || "en",
+      customDictionaryTerms: settings.customDictionary.length,
+      reconnectAttempt: this.isReconnecting ? this.reconnectAttempt : 0,
+    });
+
+    this.connectTimeout = setTimeout(() => {
+      this.connectTimeout = null;
+      if (this.sessionId !== mySessionId) return;
+      logError(`${P} Connection timed out (${CONNECT_TIMEOUT_MS}ms)`);
+      if (this.isReconnecting) {
+        // Force the dead socket closed; the `close` handler schedules the next
+        // reconnect attempt (or gives up once attempts are exhausted).
+        try {
+          connection.terminate();
+        } catch {
+          // Ignore terminate errors
+        }
+        return;
+      }
+      try {
+        connection.close();
+      } catch {
+        // Ignore close errors
+      }
+      this.cleanupConnection();
+      this.emit({ type: "error", message: "Connection timed out" });
+      this.emit({ type: "status", status: "error" });
+      this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
+    }, CONNECT_TIMEOUT_MS);
+
+    connection.on("pong", () => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.isAlive = true;
+    });
+
+    // Open handler — same logic for initial connect and reconnect.
+    connection.on("open", () => {
+      if (this.sessionId !== mySessionId) {
+        logWarn(`${P} Session expired during connect, closing`);
+        try {
+          connection.close();
+        } catch {
+          // Ignore close errors
+        }
+        return;
+      }
+      this.startHeartbeat(connection, mySessionId);
+      logInfo(`${P} WebSocket opened, sending session.update`);
+      // TODO: pass `transcription.prompt` from settings once #7832 lands.
+      // `turn_detection` MUST be explicitly `null` for `gpt-realtime-whisper`
+      // (VAD is not supported for this model). It is not enough to omit it:
+      // when absent the server applies a default VAD that this model can't
+      // use, and then silently produces no transcription — it still acks
+      // `input_audio_buffer.committed` but emits no `conversation.item.added`
+      // / `conversation.item.done`. With it set to `null`, each manual commit
+      // yields a transcribed item. (An explicit non-null `turn_detection`
+      // block, by contrast, is hard-rejected with an error event.)
+      const sessionUpdate = {
+        type: "session.update",
+        session: {
+          type: "transcription",
+          audio: {
+            input: {
+              format: { type: "audio/pcm", rate: 24000 },
+              transcription: {
+                model: OPENAI_TRANSCRIPTION_MODEL,
+                language: settings.language || "en",
+              },
+              turn_detection: null,
+            },
+          },
+        },
+      };
+      // Log the exact payload — the session config (especially the explicit
+      // `turn_detection: null`) is the most common cause of "commits acked
+      // but no transcription items" regressions.
+      logInfo(`${P} → session.update`, { session: sessionUpdate.session });
+      try {
+        connection.send(JSON.stringify(sessionUpdate));
+      } catch (err) {
+        const message = formatErrorMessage(err, "Failed to send session.update");
+        logError(`${P} ${message}`);
+        this.handleFatalError(mySessionId, message);
+      }
+    });
+
+    connection.on("message", (data) => {
+      if (this.sessionId !== mySessionId) return;
+      const raw =
+        typeof data === "string"
+          ? data
+          : Buffer.isBuffer(data)
+            ? data.toString("utf8")
+            : Array.isArray(data)
+              ? Buffer.concat(data).toString("utf8")
+              : Buffer.from(data as ArrayBuffer).toString("utf8");
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        logWarn(`${P} Ignoring non-JSON message`, { raw: raw.slice(0, 200) });
         return;
       }
 
-      this.connection = connection;
-      logInfo(`${P} Opening OpenAI realtime WebSocket`, {
-        url: OPENAI_REALTIME_URL,
-        model: OPENAI_TRANSCRIPTION_MODEL,
-        language: settings.language || "en",
-        customDictionaryTerms: settings.customDictionary.length,
-      });
-
-      this.connectTimeout = setTimeout(() => {
-        this.connectTimeout = null;
-        logError(`${P} Connection timed out (${CONNECT_TIMEOUT_MS}ms)`);
-        if (this.sessionId === mySessionId) {
-          try {
-            connection.close();
-          } catch {
-            // Ignore close errors
-          }
-          this.cleanupConnection();
-          this.emit({ type: "error", message: "Connection timed out" });
-          this.emit({ type: "status", status: "error" });
-          this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
-        }
-      }, CONNECT_TIMEOUT_MS);
-
-      connection.on("open", () => {
-        if (this.sessionId !== mySessionId) {
-          logWarn(`${P} Session expired during connect, closing`);
-          try {
-            connection.close();
-          } catch {
-            // Ignore close errors
-          }
-          return;
-        }
-        logInfo(`${P} WebSocket opened, sending session.update`);
-        // TODO: pass `transcription.prompt` from settings once #7832 lands.
-        // `turn_detection` MUST be explicitly `null` for `gpt-realtime-whisper`
-        // (VAD is not supported for this model). It is not enough to omit it:
-        // when absent the server applies a default VAD that this model can't
-        // use, and then silently produces no transcription — it still acks
-        // `input_audio_buffer.committed` but emits no `conversation.item.added`
-        // / `conversation.item.done`. With it set to `null`, each manual commit
-        // yields a transcribed item. (An explicit non-null `turn_detection`
-        // block, by contrast, is hard-rejected with an error event.)
-        const sessionUpdate = {
-          type: "session.update",
-          session: {
-            type: "transcription",
-            audio: {
-              input: {
-                format: { type: "audio/pcm", rate: 24000 },
-                transcription: {
-                  model: OPENAI_TRANSCRIPTION_MODEL,
-                  language: settings.language || "en",
-                },
-                turn_detection: null,
-              },
-            },
-          },
-        };
-        // Log the exact payload — the session config (especially the explicit
-        // `turn_detection: null`) is the most common cause of "commits acked
-        // but no transcription items" regressions.
-        logInfo(`${P} → session.update`, { session: sessionUpdate.session });
-        try {
-          connection.send(JSON.stringify(sessionUpdate));
-        } catch (err) {
-          const message = formatErrorMessage(err, "Failed to send session.update");
-          logError(`${P} ${message}`);
-          this.handleFatalError(mySessionId, message);
-        }
-      });
-
-      connection.on("message", (data) => {
-        if (this.sessionId !== mySessionId) return;
-        const raw =
-          typeof data === "string"
-            ? data
-            : Buffer.isBuffer(data)
-              ? data.toString("utf8")
-              : Array.isArray(data)
-                ? Buffer.concat(data).toString("utf8")
-                : Buffer.from(data as ArrayBuffer).toString("utf8");
-
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          logWarn(`${P} Ignoring non-JSON message`, { raw: raw.slice(0, 200) });
-          return;
-        }
-
-        const type = typeof parsed.type === "string" ? parsed.type : "";
-        this.handleServerEvent(mySessionId, type, parsed);
-      });
-
-      connection.on("error", (err) => {
-        this.clearConnectTimeout();
-        if (this.sessionId !== mySessionId) return;
-        const message = formatErrorMessage(err, "WebSocket error");
-        logError(`${P} WebSocket error`, { message });
-        this.handleFatalError(mySessionId, message);
-      });
-
-      connection.on("close", (code, reason) => {
-        this.clearConnectTimeout();
-        if (this.sessionId !== mySessionId) return;
-        logInfo(`${P} WebSocket closed`, {
-          code,
-          reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? ""),
-          wasReady: this.isReady,
-          wasDraining: this.isDraining,
-          audioChunksStreamed: this.audioChunkCount,
-        });
-        this.cleanupConnection();
-        this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
-        if (this.isDraining) {
-          this.settleDrain("connection-closed");
-        } else {
-          this.emit({ type: "status", status: "idle" });
-        }
-      });
+      const type = typeof parsed.type === "string" ? parsed.type : "";
+      this.handleServerEvent(mySessionId, type, parsed);
     });
+
+    connection.on("error", (err) => {
+      this.clearConnectTimeout();
+      if (this.sessionId !== mySessionId) return;
+      const message = formatErrorMessage(err, "WebSocket error");
+      logError(`${P} WebSocket error`, { message });
+      // A transport error on a ready (or reconnecting) session is recoverable —
+      // `ws` always fires `close` right after `error`, and the close handler
+      // owns the reconnect decision, so just log here. A pre-ready error
+      // (auth/DNS/refused on the very first connect) is fatal: tear down now.
+      if (!this.isReady && !this.isReconnecting) {
+        this.handleFatalError(mySessionId, message);
+      }
+    });
+
+    connection.on("close", (code, reason) => {
+      this.clearConnectTimeout();
+      this.clearHeartbeat();
+      if (this.sessionId !== mySessionId) return;
+      const wasReady = this.isReady;
+      logInfo(`${P} WebSocket closed`, {
+        code,
+        reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? ""),
+        wasReady,
+        wasReconnecting: this.isReconnecting,
+        wasExpected: this.isExpectedClose,
+        wasDraining: this.isDraining,
+        audioChunksStreamed: this.audioChunkCount,
+      });
+      this.cleanupConnection();
+      if (this.isDraining) {
+        this.settleDrain("connection-closed");
+        return;
+      }
+      // An unexpected drop of a ready session (or a failed reconnect attempt
+      // while still mid-reconnect) is recoverable — schedule a retry instead of
+      // ending the session. Graceful stops and fatal errors set isExpectedClose.
+      if (!this.isExpectedClose && (wasReady || this.isReconnecting)) {
+        this.scheduleReconnect(mySessionId, settings);
+        return;
+      }
+      this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
+      this.emit({ type: "status", status: "idle" });
+    });
+  }
+
+  /**
+   * Starts the ping/pong heartbeat for one connection. `isAlive` is set true on
+   * open and on every pong; each interval tick terminates the socket if no pong
+   * arrived since the last ping, then sends a fresh ping. The session-id /
+   * socket-identity guard stops a stale interval from terminating a newer
+   * connection (lesson #4850).
+   */
+  private startHeartbeat(connection: WebSocket, mySessionId: number): void {
+    this.clearHeartbeat();
+    this.isAlive = true;
+    this.heartbeatInterval = setInterval(() => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) {
+        this.clearHeartbeat();
+        return;
+      }
+      if (!this.isAlive) {
+        logWarn(`${P} Heartbeat: no pong, terminating half-open connection`);
+        try {
+          connection.terminate();
+        } catch {
+          // Ignore terminate errors — the close handler drives reconnect.
+        }
+        return;
+      }
+      this.isAlive = false;
+      try {
+        connection.ping();
+      } catch (err) {
+        logWarn(`${P} Heartbeat ping failed`, { message: formatErrorMessage(err, "ping failed") });
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatInterval !== null) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  /**
+   * Schedules the next reconnect attempt with exponential backoff + full jitter.
+   * Gives up (fatal error) once RECONNECT_MAX_ATTEMPTS is reached. The timer
+   * callback re-checks the session id so a `stop()`/new `start()` between
+   * scheduling and firing cancels it (lessons #4850/#4851).
+   */
+  private scheduleReconnect(mySessionId: number, settings: VoiceInputSettings): void {
+    if (this.sessionId !== mySessionId) return;
+    if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+      logError(`${P} Reconnect failed after ${RECONNECT_MAX_ATTEMPTS} attempts — giving up`);
+      this.isReconnecting = false;
+      this.handleFatalError(mySessionId, "Connection lost — reconnect failed");
+      return;
+    }
+
+    this.isReconnecting = true;
+    const ceiling = Math.min(
+      RECONNECT_CAP_MS,
+      RECONNECT_INITIAL_MS * RECONNECT_MULTIPLIER ** this.reconnectAttempt
+    );
+    const delay = Math.random() * ceiling;
+    this.reconnectAttempt++;
+    logInfo(`${P} Scheduling reconnect`, {
+      attempt: this.reconnectAttempt,
+      maxAttempts: RECONNECT_MAX_ATTEMPTS,
+      delayMs: Math.round(delay),
+    });
+    this.emit({ type: "status", status: "reconnecting" });
+
+    this.clearReconnectTimer();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.sessionId !== mySessionId) return;
+      this.reconnectOnce(mySessionId, settings);
+    }, delay);
+  }
+
+  /**
+   * Tears down the dead connection (without touching the session id, reconnect
+   * counter, or buffered audio) and opens a fresh one. Audio captured during
+   * the reconnect window stays in `preConnectBuffer` and is flushed once the new
+   * connection reaches `session.updated`.
+   */
+  private reconnectOnce(mySessionId: number, settings: VoiceInputSettings): void {
+    if (this.sessionId !== mySessionId) return;
+    logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
+    this.cleanupConnection();
+    this.connect(mySessionId, settings);
   }
 
   private handleFatalError(mySessionId: number, message: string): void {
     logError(`${P} Fatal error — tearing down session`, { message });
+    // Mark the close as expected so the trailing `close` event (after the
+    // socket tears down) isn't treated as a recoverable drop.
+    this.isExpectedClose = true;
+    this.isReconnecting = false;
+    this.clearReconnectTimer();
     this.cleanupConnection();
     this.emit({ type: "error", message });
     this.emit({ type: "status", status: "error" });
@@ -334,7 +523,12 @@ export class VoiceTranscriptionService {
             this.sendAudioJson(chunk);
           }
           this.preConnectBuffer = [];
+          this.preConnectBufferBytes = 0;
         }
+        // A successful (re)connection clears the reconnect state so a later drop
+        // gets a fresh full backoff budget.
+        this.reconnectAttempt = 0;
+        this.isReconnecting = false;
         this.isReady = true;
         this.startCommitTimer();
         this.emit({ type: "status", status: "recording" });
@@ -499,15 +693,10 @@ export class VoiceTranscriptionService {
     if (this.isDraining) return;
 
     if (!this.isReady || !this.connection) {
-      if (this.connection || this.pendingStart) {
-        if (this.preConnectBuffer.length < PRE_CONNECT_BUFFER_MAX) {
-          this.preConnectBuffer.push(chunk);
-        } else if (!this.preConnectBufferOverflowWarned) {
-          this.preConnectBufferOverflowWarned = true;
-          logWarn(
-            `${P} Pre-connect buffer full (${PRE_CONNECT_BUFFER_MAX} chunks), dropping audio`
-          );
-        }
+      // Buffer while connecting (initial) or reconnecting (mid-session drop) so
+      // audio captured during the gap is flushed once the session is ready.
+      if (this.connection || this.pendingStart || this.isReconnecting) {
+        this.bufferPreConnectChunk(chunk);
       } else if (!this.staleChunkWarned) {
         this.staleChunkWarned = true;
         logWarn(`${P} sendAudioChunk called but no active session`);
@@ -524,10 +713,44 @@ export class VoiceTranscriptionService {
     this.sendAudioJson(chunk);
   }
 
+  /**
+   * Appends a chunk to the pre-connect / reconnect buffer, enforcing both a
+   * chunk-count cap and a byte cap. Oldest-wins: once either ceiling is hit the
+   * chunk is dropped (warned once) — a voice gap past ~3s is unrecoverable
+   * anyway, so there's no value in retaining unbounded audio.
+   */
+  private bufferPreConnectChunk(chunk: ArrayBuffer): void {
+    if (
+      this.preConnectBuffer.length >= PRE_CONNECT_BUFFER_MAX ||
+      this.preConnectBufferBytes + chunk.byteLength > PRE_CONNECT_BUFFER_MAX_BYTES
+    ) {
+      if (!this.preConnectBufferOverflowWarned) {
+        this.preConnectBufferOverflowWarned = true;
+        logWarn(`${P} Pre-connect buffer full, dropping audio`, {
+          chunks: this.preConnectBuffer.length,
+          bytes: this.preConnectBufferBytes,
+          maxChunks: PRE_CONNECT_BUFFER_MAX,
+          maxBytes: PRE_CONNECT_BUFFER_MAX_BYTES,
+        });
+      }
+      return;
+    }
+    this.preConnectBuffer.push(chunk);
+    this.preConnectBufferBytes += chunk.byteLength;
+  }
+
+  /**
+   * Tears down per-connection state without ending the session. Deliberately
+   * does NOT touch `sessionId`, `reconnectAttempt`, `isReconnecting`,
+   * `isExpectedClose`, or the pre-connect buffer — those survive across a
+   * reconnect. Use `cleanupPreviousSession()` for a full session reset.
+   */
   private cleanupConnection(): void {
     this.clearCommitTimer();
+    this.clearHeartbeat();
     this.connection = null;
     this.isReady = false;
+    this.isAlive = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
     this.completedItemIds.clear();
@@ -548,9 +771,16 @@ export class VoiceTranscriptionService {
     this.pendingCommits = 0;
     this.completedItemIds.clear();
     this.preConnectBuffer = [];
+    this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
     this.clearDrainTimeout();
     this.clearCommitTimer();
+    this.clearHeartbeat();
+    this.clearReconnectTimer();
+    this.reconnectAttempt = 0;
+    this.isReconnecting = false;
+    this.isExpectedClose = false;
+    this.isAlive = false;
     this.isDraining = false;
     this.liveText = "";
     if (this.drainResolve) {
@@ -661,6 +891,12 @@ export class VoiceTranscriptionService {
       return this.drainPromise;
     }
 
+    // A graceful stop is an expected close — cancel any pending reconnect and
+    // stop the close handler from retrying.
+    this.isExpectedClose = true;
+    this.isReconnecting = false;
+    this.clearReconnectTimer();
+
     if (!this.connection || !this.isReady) {
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
@@ -730,6 +966,12 @@ export class VoiceTranscriptionService {
 
   stop(): void {
     logInfo(`${P} stop() called`, { sessionId: this.sessionId, hasConnection: !!this.connection });
+    // Suppress any reconnect: this is a deliberate stop. The sessionId bump in
+    // cleanupPreviousSession is the primary guard; the flag documents intent and
+    // covers the brief window before the bump takes effect.
+    this.isExpectedClose = true;
+    this.isReconnecting = false;
+    this.clearReconnectTimer();
     this.cleanupPreviousSession();
     this.emit({ type: "status", status: "idle" });
   }

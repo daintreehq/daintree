@@ -26,6 +26,8 @@ class MockWebSocket {
   sent: string[] = [];
   closeCalls = 0;
   closeCode?: number;
+  terminateCalls = 0;
+  pingCalls = 0;
 
   private listeners: Map<string, Set<WsListener>> = new Map();
 
@@ -68,7 +70,24 @@ class MockWebSocket {
     this.readyState = MockWebSocket.CLOSED;
   }
 
+  // `ws.terminate()` destroys the socket without a closing handshake. The real
+  // package fires a `close` event afterward; mirror that so the service's
+  // close-driven reconnect path is exercised.
+  terminate(): void {
+    this.terminateCalls++;
+    this.readyState = MockWebSocket.CLOSED;
+    this.fire("close", 1006, undefined);
+  }
+
+  ping(): void {
+    this.pingCalls++;
+  }
+
   // Test helpers
+  simulatePong(): void {
+    this.fire("pong");
+  }
+
   simulateOpen(): void {
     this.readyState = MockWebSocket.OPEN;
     this.fire("open");
@@ -904,5 +923,185 @@ describe("VoiceTranscriptionService", () => {
       transcript: "after destroy",
     });
     expect(events.length).toBe(lengthAtDestroy);
+  });
+
+  // ── Heartbeat (half-open detection) ──────────────────────────────────────
+
+  it("pings on the heartbeat interval once the connection is open", async () => {
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    expect(socket.pingCalls).toBe(0);
+    vi.advanceTimersByTime(20_000);
+    expect(socket.pingCalls).toBe(1);
+
+    service.stop();
+  });
+
+  it("terminates the socket when a heartbeat ping goes unanswered", async () => {
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    // First tick: ping sent, awaiting pong.
+    vi.advanceTimersByTime(20_000);
+    expect(socket.pingCalls).toBe(1);
+    expect(socket.terminateCalls).toBe(0);
+
+    // Second tick: no pong arrived → terminate (not graceful close).
+    vi.advanceTimersByTime(20_000);
+    expect(socket.terminateCalls).toBe(1);
+    expect(socket.closeCalls).toBe(0);
+
+    service.stop();
+  });
+
+  it("a pong keeps the connection alive across heartbeat ticks", async () => {
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    vi.advanceTimersByTime(20_000);
+    expect(socket.pingCalls).toBe(1);
+    socket.simulatePong();
+
+    vi.advanceTimersByTime(20_000);
+    expect(socket.pingCalls).toBe(2);
+    expect(socket.terminateCalls).toBe(0);
+
+    service.stop();
+  });
+
+  it("a stale connection's heartbeat does not terminate a newer socket", async () => {
+    const service = new VoiceTranscriptionService();
+    const { socket: firstSocket } = await bringSessionReady(service);
+
+    // Replace the session — the first socket and its heartbeat are now stale.
+    const secondPromise = service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const secondSocket = latestInstance();
+    secondSocket.simulateOpen();
+    secondSocket.simulateMessage("session.updated");
+    await secondPromise;
+
+    // The first socket's heartbeat was torn down when the session was replaced;
+    // it must never terminate (its sessionId/socket-identity guard would also
+    // catch it). The second socket stays alive as long as it pongs.
+    vi.advanceTimersByTime(20_000);
+    secondSocket.simulatePong();
+    vi.advanceTimersByTime(20_000);
+    expect(firstSocket.terminateCalls).toBe(0);
+    expect(secondSocket.terminateCalls).toBe(0);
+
+    service.stop();
+  });
+
+  // ── Reconnection ─────────────────────────────────────────────────────────
+
+  it("reconnects after an unexpected drop and returns to recording", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    const statuses: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+
+    socket.simulateClose(1006, Buffer.from("abnormal"));
+    expect(statuses).toContain("reconnecting");
+
+    // Backoff timer fires → a fresh socket is opened.
+    vi.advanceTimersByTime(3_000);
+    const socket2 = latestInstance();
+    expect(socket2).not.toBe(socket);
+
+    socket2.simulateOpen();
+    socket2.simulateMessage("session.updated");
+    expect(statuses.at(-1)).toBe("recording");
+
+    service.stop();
+  });
+
+  it("buffers audio captured during the reconnect window and flushes it after reconnect", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    socket.simulateClose(1006);
+
+    // Audio keeps flowing while we're reconnecting — it must be buffered, not
+    // dropped (connection is null and there's no pending start at this point).
+    const chunk = new Uint8Array([7, 7, 7, 7]).buffer;
+    service.sendAudioChunk(chunk);
+
+    vi.advanceTimersByTime(3_000);
+    const socket2 = latestInstance();
+    socket2.simulateOpen();
+    socket2.simulateMessage("session.updated");
+
+    const audio = socket2
+      .sentJson()
+      .filter((p) => p.type === "input_audio_buffer.append")
+      .map((p) => p.audio as string);
+    expect(audio).toEqual([Buffer.from(chunk).toString("base64")]);
+
+    service.stop();
+  });
+
+  it("gives up and emits error after exhausting reconnect attempts", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    const statuses: string[] = [];
+    const errors: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+      if (e.type === "error") errors.push(e.message);
+    });
+
+    // Initial drop schedules attempt 1.
+    socket.simulateClose(1006);
+
+    // Each cycle: fire the backoff timer (opens a socket), then drop it again
+    // before it can reach session.updated. After RECONNECT_MAX_ATTEMPTS the
+    // service gives up.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(3_000);
+      latestInstance().simulateClose(1006);
+    }
+
+    expect(statuses).toContain("reconnecting");
+    expect(statuses).toContain("error");
+    expect(errors.some((m) => /reconnect failed/i.test(m))).toBe(true);
+  });
+
+  it("a graceful stop during the reconnect window cancels the pending retry", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    socket.simulateClose(1006);
+    const instancesBeforeStop = instances.length;
+
+    service.stop();
+
+    // The backoff timer was cleared by stop() — advancing time opens no socket.
+    vi.advanceTimersByTime(3_000);
+    expect(instances.length).toBe(instancesBeforeStop);
+  });
+
+  it("does not reconnect after a server-side fatal error", async () => {
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+    const instancesBefore = instances.length;
+
+    // A server error is fatal — the trailing close must not trigger a reconnect.
+    socket.simulateMessage("error", {
+      error: { message: "invalid_session_config", type: "invalid_request_error" },
+    });
+    socket.simulateClose(1011);
+
+    vi.advanceTimersByTime(3_000);
+    expect(instances.length).toBe(instancesBefore);
   });
 });
