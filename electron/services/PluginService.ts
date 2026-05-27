@@ -17,7 +17,6 @@ import type {
   BuiltInPluginPermission,
 } from "../../shared/types/plugin.js";
 import { pluginActionId } from "../../shared/types/plugin.js";
-import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -63,15 +62,18 @@ const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
 
 /**
  * Lazily-built lookup of built-in action ids for command-collision rejection.
- * `BUILT_IN_ACTION_IDS` is a static array; the Set is memoised on first use so
- * each `loadPlugin()` does an O(1) membership check instead of a linear scan.
+ * `actionIds.js` is imported dynamically — and only the first time a plugin
+ * with manifest commands loads — so it stays off the boot-critical eager
+ * import graph. The Set (memoised via its promise) gives O(1) membership.
  */
-let builtInActionIdSet: Set<string> | null = null;
-function getBuiltInActionIdSet(): Set<string> {
-  if (!builtInActionIdSet) {
-    builtInActionIdSet = new Set<string>(BUILT_IN_ACTION_IDS);
+let builtInActionIdSetPromise: Promise<Set<string>> | null = null;
+function getBuiltInActionIdSet(): Promise<Set<string>> {
+  if (!builtInActionIdSetPromise) {
+    builtInActionIdSetPromise = import("../../shared/config/actionIds.js").then(
+      (m) => new Set<string>(m.BUILT_IN_ACTION_IDS)
+    );
   }
-  return builtInActionIdSet;
+  return builtInActionIdSetPromise;
 }
 
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
@@ -965,7 +967,8 @@ export class PluginService {
     manifest: PluginManifest,
     pluginDir: string
   ): Promise<void> {
-    const builtins = getBuiltInActionIdSet();
+    if (manifest.contributes.commands.length === 0) return;
+    const builtins = await getBuiltInActionIdSet();
     for (const cmd of manifest.contributes.commands) {
       const actionId = pluginActionId(manifest.name, cmd.name);
       if (builtins.has(actionId)) {
