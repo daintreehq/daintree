@@ -325,7 +325,7 @@ export const createAddPanelActions = (
     const ptyKindConfig = getPanelKindConfig(kind);
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
-    const spawnStatus: "spawning" | "ready" = isReconnect ? "ready" : "spawning";
+    const spawnStatus: "spawning" | "ready" | "failed" = isReconnect ? "ready" : "spawning";
 
     const terminal = {
       id,
@@ -728,20 +728,28 @@ export const createAddPanelActions = (
         }
       } catch (error) {
         logError("[TerminalStore] Failed to spawn terminal", error);
-        // Only remove the placeholder we committed. If the id has been reused
-        // (e.g. the user closed the panel mid-spawn and a reconnect slot picked
-        // the id up) or the panel was already removed, skip the cleanup —
-        // otherwise we'd destroy someone else's panel.
         const current = get().panelsById[id];
         if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
-        try {
-          get().removePanel(id);
-        } catch (removeError) {
-          logWarn("[TerminalStore] Failed to remove panel after spawn failure", {
-            id,
-            error: removeError,
-          });
-        }
+
+        const spawnError = {
+          code: (error as { code?: string })?.code ?? "UNKNOWN",
+          message: error instanceof Error ? error.message : String(error),
+          errno: (error as { errno?: number })?.errno,
+          syscall: (error as { syscall?: string })?.syscall,
+          path: (error as { path?: string })?.path,
+        } as import("@shared/types/pty-host").SpawnError;
+
+        set((state) => {
+          const _current = state.panelsById[id];
+          if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
+            return state;
+          return {
+            panelsById: {
+              ...state.panelsById,
+              [id]: { ..._current, spawnStatus: "failed", spawnError, runtimeStatus: "error" },
+            },
+          };
+        });
       }
     });
 

@@ -199,6 +199,10 @@ export const createRestartActions = (
         spawnError: undefined,
         scrollbackRestoreError: undefined,
         isRestarting: true,
+        spawnStatus:
+          (t as import("@shared/types/panel").PtyPanelData).spawnStatus === "failed"
+            ? "spawning"
+            : (t as import("@shared/types/panel").PtyPanelData).spawnStatus,
       }))
     );
 
@@ -538,7 +542,16 @@ export const createRestartActions = (
       }
 
       unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          spawnStatus:
+            (t as import("@shared/types/panel").PtyPanelData).spawnStatus === "spawning"
+              ? "ready"
+              : (t as import("@shared/types/panel").PtyPanelData).spawnStatus,
+        }))
+      );
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to restart terminal");
       const errorCode = (error as { code?: string })?.code;

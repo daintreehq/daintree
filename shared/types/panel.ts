@@ -375,7 +375,7 @@ export interface PtyPanelData extends BasePanelData {
    * then "ready". Absent (undefined) on hydrated panels — treat as "ready".
    * Never serialized — see `serializePtyPanel`.
    */
-  spawnStatus?: "spawning" | "ready" | "missing-cli";
+  spawnStatus?: "spawning" | "ready" | "missing-cli" | "failed";
   /**
    * Original user-selected preset ID. Set on first spawn, never overwritten
    * when a fallback activates. Used to display "was {original} → {active}".
@@ -609,7 +609,7 @@ export interface TerminalInstance {
    * then "ready". Absent (undefined) on hydrated panels — treat as "ready".
    * Never serialized — see `serializePtyPanel`.
    */
-  spawnStatus?: "spawning" | "ready" | "missing-cli";
+  spawnStatus?: "spawning" | "ready" | "missing-cli" | "failed";
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */

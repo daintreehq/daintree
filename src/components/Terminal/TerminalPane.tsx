@@ -31,6 +31,7 @@ import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
+import { TerminalPaneSkeleton } from "./TerminalPaneSkeleton";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
@@ -186,15 +187,8 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
-function TerminalStartupPlaceholder({ agentId }: { agentId?: string }) {
-  return (
-    <div className="flex h-full min-h-0 items-center justify-center bg-daintree-bg text-sm text-daintree-text/60">
-      <div className="flex items-center gap-2">
-        <Spinner size="sm" className="text-daintree-text/45" />
-        <span>{agentId ? "Starting agent" : "Starting terminal"}</span>
-      </div>
-    </div>
-  );
+function TerminalStartupPlaceholder({ agentId: _agentId }: { agentId?: string }) {
+  return <TerminalPaneSkeleton />;
 }
 
 export interface ActivityState {
@@ -1251,6 +1245,10 @@ function TerminalPaneComponent({
           />
         ) : spawnStatus === "spawning" ? (
           <TerminalStartupPlaceholder agentId={agentId} />
+        ) : spawnStatus === "failed" ? (
+          <div className="flex-1 min-h-0 bg-daintree-bg flex items-center justify-center">
+            <p className="text-sm text-daintree-text/50">Terminal failed to start</p>
+          </div>
         ) : (
           <>
             <div className="flex-1 relative min-h-0">
