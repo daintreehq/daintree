@@ -15,6 +15,7 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   BuiltInPluginPermission,
+  PluginManifestScopes,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -78,6 +79,73 @@ const CONFIRM_TRIGGERING_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new
   "fs:user-data-write",
   "agent:invoke",
 ]);
+
+// ── Compound-capability lattice (issue #9247) ────────────────────────────
+// These combinations are individually benign but dangerous together. The
+// MaliciousCorgi campaign (Jan 2026) exploited exactly this gap: plugins
+// holding only agent:read + network:fetch exfiltrated developer code.
+
+/** Sensitive read sources that can feed an exfiltration sink. */
+const EXFILTRATION_READ_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
+  "agent:read",
+  "git:read",
+  "fs:project-read",
+  "fs:user-data-read",
+  "clipboard:read",
+]);
+
+/** Unconstrained sinks that can receive exfiltrated data. `shell:exec` is
+ *  already individually triggering, so this lattice rule only nets
+ *  `network:fetch`. */
+const EXFILTRATION_SINK_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
+  "network:fetch",
+]);
+
+/** Local-write permissions that, combined with an unconstrained network fetch,
+ *  enable remote-controlled mutation. All four are already individually
+ *  triggering, so this rule is effectively redundant — included for
+ *  completeness and future-proofing should the individual-trigger set change. */
+const REMOTE_CONTROLLED_MUTATION_WRITE_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
+  "fs:project-write",
+  "fs:user-data-write",
+  "git:write",
+  "shell:exec",
+]);
+
+/**
+ * Returns true when `permission` has a non-empty `allow` list in `scopes`,
+ * meaning the plugin has voluntarily narrowed that sink's attack surface.
+ */
+function isPermissionScoped(
+  permission: BuiltInPluginPermission,
+  scopes: PluginManifestScopes | undefined
+): boolean {
+  if (!scopes) return false;
+  const scope = scopes[permission as keyof PluginManifestScopes];
+  return scope !== undefined && scope.allow.length > 0;
+}
+
+/**
+ * Compound-permission lattice. Elevates when a plugin holds a benign-solo
+ * permission pair that is dangerous together. Returns `true` only for
+ * currently-uncaught pairs — permissions already individually triggering
+ * are excluded to avoid redundant work. Scoped sinks skip elevation.
+ */
+function shouldElevateForCompoundPermissions(
+  permissions: readonly BuiltInPluginPermission[],
+  scopes: PluginManifestScopes | undefined
+): boolean {
+  const hasRead = permissions.some((p) => EXFILTRATION_READ_PERMISSIONS.has(p));
+  const hasSink = permissions.some((p) => EXFILTRATION_SINK_PERMISSIONS.has(p));
+  if (hasRead && hasSink) {
+    for (const p of permissions) {
+      if (EXFILTRATION_SINK_PERMISSIONS.has(p) && !isPermissionScoped(p, scopes)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 interface LoadedPlugin {
   manifest: PluginManifest;
@@ -1125,14 +1193,21 @@ export class PluginService {
 
     // Host-authoritative danger: the plugin's self-reported `danger` is
     // advisory. Raise it to "confirm" (never lower) when the plugin holds a
-    // high-risk permission, so a plugin can't declare "safe" on a destructive
-    // action to slip past the renderer's confirm/MRU/repeatLast gates.
-    const manifestPermissions = this.plugins.get(pluginId)?.manifest.permissions ?? [];
+    // high-risk permission or a compound-permission pair, so a plugin can't
+    // declare "safe" on a destructive action to slip past the renderer's
+    // confirm/MRU/repeatLast gates.
+    const plugin = this.plugins.get(pluginId);
+    const manifestPermissions: readonly BuiltInPluginPermission[] =
+      plugin?.manifest.permissions ?? [];
+    const manifestScopes = plugin?.manifest.scopes;
     const hasHighRiskPermission = manifestPermissions.some((p) =>
       CONFIRM_TRIGGERING_PERMISSIONS.has(p)
     );
+    const hasCompoundRisk =
+      !hasHighRiskPermission &&
+      shouldElevateForCompoundPermissions(manifestPermissions, manifestScopes);
     const effectiveDanger: "safe" | "confirm" =
-      danger === "confirm" || hasHighRiskPermission ? "confirm" : "safe";
+      danger === "confirm" || hasHighRiskPermission || hasCompoundRisk ? "confirm" : "safe";
 
     const descriptor: PluginActionDescriptor = {
       pluginId,

@@ -49,6 +49,19 @@ export type BuiltInPluginPermission = (typeof BUILT_IN_PLUGIN_PERMISSIONS)[numbe
 
 export type PluginPermission = BuiltInPluginPermission;
 
+/** Permissions that support scope allowlists for lattice attenuation. */
+export type ScopedPluginPermission = "network:fetch" | "fs:project-write" | "fs:user-data-write";
+
+export interface PluginPermissionScope {
+  /** Non-empty allowlist. Each entry is a URL prefix (network:fetch) or glob pattern (fs:*-write). */
+  allow: string[];
+}
+
+/** Maps sink permissions to scope allowlists. A scoped sink skips lattice elevation. */
+export type PluginManifestScopes = {
+  [K in ScopedPluginPermission]?: PluginPermissionScope;
+};
+
 export interface MenuItemContribution {
   label: string;
   actionId: string;
@@ -97,6 +110,9 @@ export interface PluginManifest {
     daintree?: string;
   };
   permissions?: PluginPermission[];
+  /** Scope allowlists that narrow sink permissions (URL prefixes for network:fetch, globs for fs:*-write).
+   *  A scoped sink skips lattice elevation. Wildcards (`*`, `**`) rejected at schema level. */
+  scopes?: PluginManifestScopes;
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];

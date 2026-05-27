@@ -9,6 +9,9 @@ import type {
   ViewContribution,
   McpServerContribution,
   PluginPermission,
+  ScopedPluginPermission,
+  PluginPermissionScope,
+  PluginManifestScopes,
 } from "../../shared/types/plugin.js";
 import type {
   FileDecorationContribution,
@@ -115,6 +118,31 @@ export const FileDecorationContributionSchema = z
 
 export const PluginPermissionSchema = z.enum(BUILT_IN_PLUGIN_PERMISSIONS);
 
+const SCOPED_PERMISSION_KEYS: readonly ScopedPluginPermission[] = [
+  "network:fetch",
+  "fs:project-write",
+  "fs:user-data-write",
+];
+
+/** Rejects bare wildcard entries (`*`, `**`) so plugins can't claim "scoped" with unbounded sinks. */
+const PluginScopeAllowEntrySchema = z
+  .string()
+  .min(1)
+  .refine((val) => val !== "*" && val !== "**", {
+    message:
+      'Wildcard "*" or "**" as a standalone allow entry is rejected — provide concrete patterns',
+  });
+
+const PluginPermissionScopeSchema: z.ZodType<PluginPermissionScope> = z
+  .object({
+    allow: z.array(PluginScopeAllowEntrySchema).min(1, "allow list must be non-empty"),
+  })
+  .strict();
+
+const PluginManifestScopesSchema: z.ZodType<PluginManifestScopes> = z.strictObject(
+  Object.fromEntries(SCOPED_PERMISSION_KEYS.map((k) => [k, PluginPermissionScopeSchema.optional()]))
+);
+
 export const PluginManifestSchema = z
   .strictObject({
     name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
@@ -137,6 +165,7 @@ export const PluginManifestSchema = z
       })
       .optional(),
     permissions: z.array(PluginPermissionSchema).default([]),
+    scopes: PluginManifestScopesSchema.optional(),
     contributes: z
       .strictObject({
         panels: z.array(PanelContributionSchema).default([]),
