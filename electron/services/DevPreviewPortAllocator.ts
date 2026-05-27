@@ -1,5 +1,8 @@
 import net from "node:net";
 
+export const PORT_FREE_POLL_INTERVAL_MS = 200;
+export const PORT_FREE_TIMEOUT_MS = 15_000;
+
 export async function allocatePort(
   portRegistry: Map<string, number>,
   sessionKey: string
@@ -45,4 +48,83 @@ export async function allocatePort(
 
 export function releasePort(portRegistry: Map<string, number>, sessionKey: string): void {
   portRegistry.delete(sessionKey);
+}
+
+/**
+ * Wait for a TCP port to become bindable again. Returns true when free, false
+ * on timeout or abort. Primarily addresses Windows TIME_WAIT after a force-kill
+ * of a dev server — the kernel can hold the socket for up to ~240s, which
+ * causes the next allocatePort/spawn to fail with EADDRINUSE on the same port.
+ * Probes with the same listen() call allocatePort uses, so a "free" answer
+ * here implies the allocator will also succeed (TOCTOU window aside).
+ */
+export async function waitForPortFree(
+  port: number,
+  signal: AbortSignal,
+  timeoutMs = PORT_FREE_TIMEOUT_MS
+): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (signal.aborted) return false;
+    if (await probePortFree(port, signal)) return true;
+    if (signal.aborted) return false;
+    try {
+      await sleepWithAbort(PORT_FREE_POLL_INTERVAL_MS, signal);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function probePortFree(port: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let onAbort: () => void = () => {};
+    const settle = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    if (signal.aborted) {
+      settle(false);
+      return;
+    }
+    const srv = net.createServer();
+    srv.unref();
+    srv.once("error", () => settle(false));
+    onAbort = () => {
+      try {
+        srv.close();
+      } catch {
+        // server may already be closing
+      }
+      settle(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      srv.listen(port, "0.0.0.0", () => srv.close(() => settle(true)));
+    } catch {
+      settle(false);
+    }
+  });
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

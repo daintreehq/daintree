@@ -288,9 +288,12 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
 
     // The same port should be reused after restart.
     expect(second.assignedUrl).toBe(portBefore);
-    // Port was reused — allocatePort returned early from registry, no new probe.
+    // allocatePort returned early from registry (no allocation probe), but
+    // restart now also calls waitForPortFree which probes once to confirm the
+    // old PTY released the port before respawning. One additional probe call
+    // is expected; allocatePort itself still does no extra work.
     const callsAfterRestart = vi.mocked(net.createServer).mock.calls.length;
-    expect(callsAfterRestart).toBe(callsAfterEnsure);
+    expect(callsAfterRestart).toBe(callsAfterEnsure + 1);
   });
 
   // ── Positive baseline ──────────────────────────────────────────────────────
