@@ -362,10 +362,12 @@ export class PluginService {
 
   private getInstalledRecords(): Record<string, InstalledPluginRecord> {
     try {
-      const plugins = store.get("plugins") as
-        | { installed?: Record<string, InstalledPluginRecord> }
-        | undefined;
-      return plugins?.installed ?? {};
+      const plugins = store.get("plugins") as { installed?: unknown } | undefined;
+      const raw = plugins?.installed;
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        return raw as Record<string, InstalledPluginRecord>;
+      }
+      return {};
     } catch {
       return {};
     }
@@ -520,18 +522,6 @@ export class PluginService {
       return null;
     }
 
-    // Per-plugin provenance record. Built-ins don't get records — they're
-    // identified by load path. Non-builtins get one created on first encounter.
-    // Disabled-state filtering already happened upstream via `opts.disabled`
-    // (the unified `plugins.disabled` list, #9284), so we only run here when
-    // the plugin is going to load.
-    if (!opts.isBuiltin) {
-      const existing = this.getInstalledRecord(manifest.name);
-      if (!existing) {
-        this.upsertInstalledRecord(manifest.name, {});
-      }
-    }
-
     const requiredRange = manifest.engines?.daintree;
     if (requiredRange) {
       if (!semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })) {
@@ -549,6 +539,19 @@ export class PluginService {
       console.warn(
         `[PluginService] Plugin "${manifest.name}" does not declare engines.daintree — consider adding it to ensure compatibility`
       );
+    }
+
+    // Per-plugin provenance record. Built-ins don't get records — they're
+    // identified by load path. Non-builtins get one created on first encounter.
+    // Disabled-state filtering already happened upstream via `opts.disabled`
+    // (the unified `plugins.disabled` list, #9284), so we only run here when
+    // the plugin is going to load. Must run after the engine gate above so
+    // incompatible plugins don't leave zombie records in the store.
+    if (!opts.isBuiltin) {
+      const existing = this.getInstalledRecord(manifest.name);
+      if (!existing) {
+        this.upsertInstalledRecord(manifest.name, {});
+      }
     }
 
     if (manifest.capabilities.length > 0) {
