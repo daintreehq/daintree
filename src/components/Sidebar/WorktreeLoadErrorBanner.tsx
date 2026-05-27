@@ -43,18 +43,16 @@ export function WorktreeLoadErrorBanner({
     }
   }, [isRetrying, onRetry]);
 
-  const actions: BannerAction[] = [
-    {
-      id: "retry",
-      label: "Retry",
-      icon: RotateCcw,
-      variant: "primary",
-      onClick: () => void handleRetry(),
-      title: "Retry loading worktrees",
-      ariaLabel: "Retry loading worktrees",
-      loading: isRetrying,
-    },
-  ];
+  const retryAction: BannerAction = {
+    id: "retry",
+    label: "Retry",
+    icon: RotateCcw,
+    variant: "primary",
+    onClick: () => void handleRetry(),
+    title: "Retry loading worktrees",
+    ariaLabel: "Retry loading worktrees",
+    loading: isRetrying,
+  };
 
   return (
     <InlineStatusBanner
@@ -62,7 +60,7 @@ export function WorktreeLoadErrorBanner({
       title="Couldn't load worktrees"
       description={boundedErrorText(error)}
       severity="error"
-      actions={actions}
+      action={retryAction}
       className={className}
     />
   );

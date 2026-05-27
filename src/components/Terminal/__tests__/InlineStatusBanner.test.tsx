@@ -31,17 +31,38 @@ beforeAll(() => {
 describe("InlineStatusBanner", () => {
   it("defaults to role='alert' and emits no aria-live attribute", () => {
     render(
-      <InlineStatusBanner
-        icon={XCircle}
-        title="Something broke"
-        severity="error"
-        animated={false}
-        actions={[]}
-      />
+      <InlineStatusBanner icon={XCircle} title="Something broke" severity="error" animated={false} />
     );
     const region = screen.getByRole("alert");
     expect(region.hasAttribute("aria-live")).toBe(false);
     expect(region.hasAttribute("aria-atomic")).toBe(false);
+  });
+
+  it("caps an error banner at a single inline action; secondary affordances go in trailingSlot", () => {
+    render(
+      <InlineStatusBanner
+        icon={XCircle}
+        title="Couldn't start terminal"
+        severity="error"
+        animated={false}
+        action={{ id: "retry", label: "Retry", onClick: () => {} }}
+        trailingSlot={<button type="button">More options</button>}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // The single `action` renders one inline button; the rest live behind the slot.
+    expect(screen.getByRole("button", { name: "More options" })).toBeTruthy();
+
+    const _rejectsActionsOnError = (
+      // @ts-expect-error error banners forbid the multi-action `actions` prop.
+      <InlineStatusBanner
+        icon={XCircle}
+        title="Nope"
+        severity="error"
+        actions={[{ id: "a", label: "A", onClick: () => {} }]}
+      />
+    );
+    void _rejectsActionsOnError;
   });
 
   it.each([
@@ -50,18 +71,28 @@ describe("InlineStatusBanner", () => {
     ["info", Info, "--color-status-info"],
     ["success", CheckCircle2, "--color-status-success"],
   ] as const)("renders %s severity using its status token", (severity, icon, token) => {
-    render(
-      <InlineStatusBanner
-        icon={icon}
-        title={severity}
-        severity={severity}
-        animated={false}
-        actions={[]}
-      />
-    );
+    render(<InlineStatusBanner icon={icon} title={severity} severity={severity} animated={false} />);
     const region = screen.getByRole("alert");
     expect(region.style.backgroundColor).toContain(token);
     expect(region.style.borderBottom).toContain(token);
+  });
+
+  it("allows non-error banners to render multiple actions", () => {
+    render(
+      <InlineStatusBanner
+        icon={FileEdit}
+        title="3 files changed"
+        severity="neutral"
+        animated={false}
+        role="status"
+        actions={[
+          { id: "review", label: "Review", onClick: () => {} },
+          { id: "send", label: "Send to assistant", onClick: () => {} },
+        ]}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send to assistant" })).toBeTruthy();
   });
 
   it("emits aria-live='off' without aria-atomic", () => {

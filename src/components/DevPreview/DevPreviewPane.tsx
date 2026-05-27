@@ -29,6 +29,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
+import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
@@ -177,20 +178,21 @@ function DevPreviewStuckBanner({
 
   const remedyId = error?.recommendedActionId;
   const remedyLabel = remedyId ? STUCK_REMEDY_LABELS[remedyId] : undefined;
-  const actions: BannerAction[] =
-    remedyId && remedyLabel
-      ? [
-          {
-            id: `dev-preview-stuck-remedy-${remedyId}`,
-            label: remedyLabel,
-            icon: RotateCw,
-            variant: "primary",
-            disabled: isRestarting,
-            onClick: () => onRemedy(remedyId),
-          },
-          restartAction,
-        ]
-      : [restartAction];
+  // When a specific remedy is recommended it's the single primary action and
+  // the generic restart drops into the overflow menu; otherwise restart is the
+  // lone action. Keeps this error banner to one inline action.
+  const hasRemedy = !!(remedyId && remedyLabel);
+  const primaryAction: BannerAction = hasRemedy
+    ? {
+        id: `dev-preview-stuck-remedy-${remedyId}`,
+        label: remedyLabel,
+        icon: RotateCw,
+        variant: "primary",
+        disabled: isRestarting,
+        onClick: () => onRemedy(remedyId),
+      }
+    : restartAction;
+  const overflowActions: BannerAction[] = hasRemedy ? [restartAction] : [];
 
   const isLongCompile = phaseLabel === "Compiling" && !error?.message;
   const title = isLongCompile
@@ -210,7 +212,12 @@ function DevPreviewStuckBanner({
       description={description}
       role="alert"
       ariaLive="assertive"
-      actions={actions}
+      action={primaryAction}
+      trailingSlot={
+        overflowActions.length > 0 ? (
+          <BannerOverflowMenu actions={overflowActions} ariaLabel="More dev server options" />
+        ) : undefined
+      }
     />
   );
 }
@@ -1713,24 +1720,29 @@ export function DevPreviewPane({
                       }
                       severity="error"
                       animated={false}
-                      actions={[
-                        {
-                          id: "reload",
-                          label: "Reload",
-                          icon: RotateCw,
-                          variant: "dangerFilled",
-                          onClick: handleHardReload,
-                          ariaLabel: "Reload preview page",
-                        },
-                        {
-                          id: "hard-restart",
-                          label: "Hard restart",
-                          icon: RotateCw,
-                          variant: "danger",
-                          onClick: handleRestartDevServer,
-                          ariaLabel: "Hard restart preview",
-                        },
-                      ]}
+                      action={{
+                        id: "reload",
+                        label: "Reload",
+                        icon: RotateCw,
+                        variant: "dangerFilled",
+                        onClick: handleHardReload,
+                        ariaLabel: "Reload preview page",
+                      }}
+                      trailingSlot={
+                        <BannerOverflowMenu
+                          ariaLabel="More preview recovery options"
+                          actions={[
+                            {
+                              id: "hard-restart",
+                              label: "Hard restart",
+                              icon: RotateCw,
+                              variant: "danger",
+                              onClick: handleRestartDevServer,
+                              ariaLabel: "Hard restart preview",
+                            },
+                          ]}
+                        />
+                      }
                       onClose={() => {
                         setCrashState("none");
                         setCrashDetails(null);

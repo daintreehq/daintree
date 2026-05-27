@@ -64,15 +64,13 @@ export function HostCrashBanner() {
       severity="error"
       role="alert"
       animated={false}
-      actions={[
-        {
-          id: "restart",
-          label: isRestarting ? "Restarting…" : "Restart service",
-          variant: "dangerFilled",
-          onClick: handleRestart,
-          disabled: isRestarting,
-        },
-      ]}
+      action={{
+        id: "restart",
+        label: isRestarting ? "Restarting…" : "Restart service",
+        variant: "dangerFilled",
+        onClick: handleRestart,
+        disabled: isRestarting,
+      }}
     />
   );
 }

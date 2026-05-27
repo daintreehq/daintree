@@ -314,6 +314,27 @@ export function BlockedNavBanner({
       break;
   }
 
+  // Each phase contributes at most one action, so collapse to the single
+  // `action` prop. Severity is computed per phase, so branch on it to satisfy
+  // the discriminated union (error banners take a lone `action`).
+  const action = buildActions()[0];
+  const role = phase === "blocked" || phase === "oauth-started" ? "status" : "alert";
+
+  if (severity === "error") {
+    return (
+      <InlineStatusBanner
+        icon={icon}
+        title={title}
+        description={description}
+        contextLine={url}
+        severity="error"
+        action={action}
+        onClose={handleDismiss}
+        role={role}
+      />
+    );
+  }
+
   return (
     <InlineStatusBanner
       icon={icon}
@@ -321,9 +342,9 @@ export function BlockedNavBanner({
       description={description}
       contextLine={url}
       severity={severity}
-      actions={buildActions()}
+      action={action}
       onClose={handleDismiss}
-      role={phase === "blocked" || phase === "oauth-started" ? "status" : "alert"}
+      role={role}
     />
   );
 }

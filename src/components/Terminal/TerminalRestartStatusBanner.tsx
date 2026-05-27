@@ -63,17 +63,15 @@ export function TerminalRestartStatusBanner({
           title={RESTART_BANNER_COPY["exit-error"]({ exitCode: variant.exitCode }).title}
           severity="error"
           animated={false}
-          actions={[
-            {
-              id: "restart",
-              label: "Restart session",
-              icon: RotateCcw,
-              variant: "dangerFilled",
-              onClick: onRestart,
-              title: "Restart session",
-              ariaLabel: "Restart session",
-            },
-          ]}
+          action={{
+            id: "restart",
+            label: "Restart session",
+            icon: RotateCcw,
+            variant: "dangerFilled",
+            onClick: onRestart,
+            title: "Restart session",
+            ariaLabel: "Restart session",
+          }}
           onClose={onDismiss}
         />
       );

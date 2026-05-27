@@ -18,6 +18,19 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// Render the overflow popover open and in a tagged container so the inline
+// primary action (outside) can be told apart from the demoted items (inside).
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button {...props}>{children}</button>
+  ),
+  PopoverContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="overflow-content">{children}</div>
+  ),
+}));
+
 import { SpawnErrorBanner } from "../SpawnErrorBanner";
 
 beforeAll(() => {
@@ -69,12 +82,33 @@ function renderBanner(
   );
 }
 
+const overflow = () => screen.getByTestId("overflow-content");
+
 describe("SpawnErrorBanner", () => {
+  it("keeps a single inline action and moves Remove terminal into the overflow menu", () => {
+    renderBanner("ENOENT");
+    // Generic error → Retry is the sole inline action (outside the overflow).
+    const retry = screen.getByRole("button", { name: /retry starting terminal/i });
+    expect(overflow().contains(retry)).toBe(false);
+    // Remove terminal is demoted into the overflow menu.
+    const trash = screen.getByRole("button", { name: /move to trash/i });
+    expect(overflow().contains(trash)).toBe(true);
+    expect(trash.textContent).toContain("Remove terminal");
+    // The overflow trigger keeps its accessible label.
+    expect(screen.getByRole("button", { name: /more recovery options/i })).toBeTruthy();
+  });
+
   it.each(["EMFILE", "EAGAIN", "ENOMEM", "ENXIO"] as const)(
-    "renders the terminal-limits action for %s",
+    "promotes the terminal-limits action to the inline primary for %s",
     (code) => {
       renderBanner(code);
-      expect(screen.getByRole("button", { name: /open terminal limits settings/i })).toBeTruthy();
+      const limits = screen.getByRole("button", { name: /open terminal limits settings/i });
+      // Resource-limit errors make "Terminal limits" the primary inline action.
+      expect(overflow().contains(limits)).toBe(false);
+      // Retry is demoted into the overflow for these codes.
+      expect(overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))).toBe(
+        true
+      );
     }
   );
 
@@ -94,11 +128,24 @@ describe("SpawnErrorBanner", () => {
     );
   });
 
-  it("renders the destructive action with verb-noun label", () => {
-    renderBanner("ENOENT");
-    expect(screen.getByRole("button", { name: /move to trash/i }).textContent).toContain(
-      "Remove terminal"
+  it("makes Change directory the inline primary action for an invalid working directory", () => {
+    const onUpdateCwd = vi.fn();
+    renderBanner("ENOTDIR", { onUpdateCwd });
+    const changeDir = screen.getByRole("button", { name: /update working directory/i });
+    expect(overflow().contains(changeDir)).toBe(false);
+    fireEvent.click(changeDir);
+    expect(onUpdateCwd).toHaveBeenCalledWith("t-1");
+    // Retry is demoted into the overflow for cwd errors.
+    expect(overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))).toBe(
+      true
     );
+  });
+
+  it("invokes onTrash from the overflow menu", () => {
+    const onTrash = vi.fn();
+    renderBanner("ENOENT", { onTrash });
+    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    expect(onTrash).toHaveBeenCalledWith("t-1");
   });
 
   it("disables retry and shows aria-busy when isRestarting is true", () => {
