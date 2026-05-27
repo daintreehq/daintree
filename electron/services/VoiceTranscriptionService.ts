@@ -256,6 +256,9 @@ export class VoiceTranscriptionService {
         }
         return;
       }
+      // Expected teardown — the trailing `close` from connection.close() must
+      // not override the "error" status below with "idle".
+      this.isExpectedClose = true;
       try {
         connection.close();
       } catch {
@@ -324,7 +327,7 @@ export class VoiceTranscriptionService {
     });
 
     connection.on("message", (data) => {
-      if (this.sessionId !== mySessionId) return;
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const raw =
         typeof data === "string"
           ? data
@@ -348,7 +351,7 @@ export class VoiceTranscriptionService {
 
     connection.on("error", (err) => {
       this.clearConnectTimeout();
-      if (this.sessionId !== mySessionId) return;
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const message = formatErrorMessage(err, "WebSocket error");
       logError(`${P} WebSocket error`, { message });
       // A transport error on a ready (or reconnecting) session is recoverable —
@@ -363,7 +366,10 @@ export class VoiceTranscriptionService {
     connection.on("close", (code, reason) => {
       this.clearConnectTimeout();
       this.clearHeartbeat();
-      if (this.sessionId !== mySessionId) return;
+      // Ignore the close of a socket that's already been superseded or torn down
+      // out-of-band (reconnect swap, or handleFatalError which terminates after
+      // nulling this.connection) — that path has already emitted its status.
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,
@@ -387,7 +393,12 @@ export class VoiceTranscriptionService {
         return;
       }
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
-      this.emit({ type: "status", status: "idle" });
+      // A deliberate teardown (fatal error / connect timeout) already emitted its
+      // terminal status ("error"); don't override it with "idle" here. Only an
+      // unexpected close of a never-ready connection should fall through to idle.
+      if (!this.isExpectedClose) {
+        this.emit({ type: "status", status: "idle" });
+      }
     });
   }
 
@@ -495,7 +506,17 @@ export class VoiceTranscriptionService {
     this.isExpectedClose = true;
     this.isReconnecting = false;
     this.clearReconnectTimer();
+    // Close the physical socket — a server-sent fatal `error` event leaves the
+    // connection open otherwise. Captured before cleanupConnection() nulls it.
+    const conn = this.connection;
     this.cleanupConnection();
+    if (conn) {
+      try {
+        conn.terminate();
+      } catch {
+        // Ignore terminate errors
+      }
+    }
     this.emit({ type: "error", message });
     this.emit({ type: "status", status: "error" });
     this.settlePendingStart(mySessionId, { ok: false, error: message });
@@ -519,11 +540,14 @@ export class VoiceTranscriptionService {
         logInfo(`${P} ← session.updated — session ready`, { session: payload.session });
         if (this.preConnectBuffer.length > 0 && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
-          for (const chunk of this.preConnectBuffer) {
-            this.sendAudioJson(chunk);
-          }
+          // Detach the buffer before flushing so its state stays consistent even
+          // if a send throws partway through the loop.
+          const buffered = this.preConnectBuffer;
           this.preConnectBuffer = [];
           this.preConnectBufferBytes = 0;
+          for (const chunk of buffered) {
+            this.sendAudioJson(chunk);
+          }
         }
         // A successful (re)connection clears the reconnect state so a later drop
         // gets a fresh full backoff budget.
@@ -685,7 +709,17 @@ export class VoiceTranscriptionService {
   private sendAudioJson(chunk: ArrayBuffer): void {
     if (!this.connection) return;
     const audio = Buffer.from(chunk).toString("base64");
-    this.connection.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+    try {
+      this.connection.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+    } catch (err) {
+      // A send can throw if the socket transitioned to CLOSING mid-flush. Don't
+      // let it escape the buffer-flush loop (which would leave the buffer in a
+      // partially-cleared state) — the trailing `close` event drives reconnect.
+      logWarn(`${P} Failed to send audio chunk`, {
+        message: formatErrorMessage(err, "send failed"),
+      });
+      return;
+    }
     this.bytesSinceCommit += chunk.byteLength;
   }
 

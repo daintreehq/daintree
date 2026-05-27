@@ -1090,18 +1090,77 @@ describe("VoiceTranscriptionService", () => {
     expect(instances.length).toBe(instancesBeforeStop);
   });
 
-  it("does not reconnect after a server-side fatal error", async () => {
+  it("does not reconnect after a server-side fatal error and ends in error, not idle", async () => {
     const service = new VoiceTranscriptionService();
     const { socket } = await bringSessionReady(service);
+    const statuses: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
     const instancesBefore = instances.length;
 
-    // A server error is fatal — the trailing close must not trigger a reconnect.
+    // A server error is fatal: the socket is terminated, the trailing close must
+    // not trigger a reconnect, and the final status stays "error" (not "idle").
     socket.simulateMessage("error", {
       error: { message: "invalid_session_config", type: "invalid_request_error" },
     });
+    expect(socket.terminateCalls).toBe(1);
+
+    // The terminate() above already fired a close; an extra server close is a
+    // no-op for status. Simulate it to be sure idle never leaks through.
     socket.simulateClose(1011);
 
     vi.advanceTimersByTime(3_000);
     expect(instances.length).toBe(instancesBefore);
+    expect(statuses).toContain("error");
+    expect(statuses).not.toContain("idle");
+  });
+
+  it("enforces the pre-connect buffer byte cap independently of the chunk cap", async () => {
+    const service = new VoiceTranscriptionService();
+    void service.start(BASE_SETTINGS);
+    await Promise.resolve();
+
+    // Five 40KB chunks = 200KB, over the 150KB ceiling but well under the
+    // 100-chunk cap — only the first chunks that fit under 150KB are kept.
+    for (let i = 0; i < 5; i++) {
+      service.sendAudioChunk(new Uint8Array(40_000).buffer);
+    }
+    const socket = latestInstance();
+    socket.simulateOpen();
+    socket.simulateMessage("session.updated");
+
+    const audioCount = socket
+      .sentJson()
+      .filter((p) => p.type === "input_audio_buffer.append").length;
+    // 3 × 40KB = 120KB fits; a 4th would push to 160KB > 150KB, so it's dropped.
+    expect(audioCount).toBe(3);
+    service.stop();
+  });
+
+  it("retries and gives up when the reconnect socket constructor keeps throwing", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new VoiceTranscriptionService();
+    const { socket } = await bringSessionReady(service);
+
+    const statuses: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+
+    // Every reconnect attempt's WebSocket construction fails.
+    throwOnConstruct = true;
+    constructError = new Error("ECONNREFUSED");
+    const instancesBefore = instances.length;
+
+    socket.simulateClose(1006);
+    // Drive all backoff cycles — each fires the timer, connect() throws, and
+    // reschedules until attempts are exhausted.
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(3_000);
+    }
+
+    expect(instances.length).toBe(instancesBefore);
+    expect(statuses).toContain("error");
   });
 });
