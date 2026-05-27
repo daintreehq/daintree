@@ -291,6 +291,22 @@ export function XtermAdapter({
           return true;
         }
 
+        // Bare F11 is Electron's fullscreen accelerator on Linux/Windows. xterm
+        // v6 leaves handled keys uncanceled in screen-reader mode, so the event
+        // bubbles to the menu accelerator. Cancel the DOM/default path; return
+        // true so xterm still emits the F11 sequence to the PTY.
+        if (
+          (event.key === "F11" || event.code === "F11" || event.keyCode === 122) &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+
         // Skip repeat events
         if (event.repeat) {
           return true;
