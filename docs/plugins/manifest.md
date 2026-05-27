@@ -33,8 +33,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   },
 
   // Declared capabilities, shown to the user at install time.
-  // Disclosure only; not enforced at runtime. See "Capabilities" below.
-  "capabilities": ["fs:project-read", "network:fetch"],
+  // Disclosure-first with host-side policy effects (no Node sandbox).
+  // The live field key is "permissions"; it becomes "capabilities" in #9268.
+  // See "Capabilities" below and ./trust-model.md.
+  "permissions": ["fs:project-read", "network:fetch"],
 
   // The plugin's UI and functional contributions.
   "contributes": {

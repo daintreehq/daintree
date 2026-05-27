@@ -89,7 +89,7 @@ The chosen contract changes what these issues must do:
 - **#9268** — adopt `capabilities` as the field name and extend the element schema to the discriminated union above. The field rename and the non-guarantee both freeze here.
 - **#9228** — bake the canonical statement into the manifest contract before the SDK ships to npm; the field name and the non-guarantee must be frozen before external authors depend on them.
 - **#9247** — the compound-permission lattice and scope attenuation are load-bearing parts of this contract, not optional add-ons. Ship them in the same release as the schema.
-- **#9234** — `elicitation` / `sampling` advertisement is now gated by `mcp:elicitation` / `mcp:sampling` capabilities; tool advertisement is bounded by the manifest as the upper bound.
+- **#9234** — `elicitation` / `sampling` advertisement must be gated by `mcp:elicitation` / `mcp:sampling` capabilities; tool advertisement must be bounded by the manifest as the upper bound.
 
 ## Open questions
 

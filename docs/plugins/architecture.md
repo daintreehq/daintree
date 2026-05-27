@@ -147,7 +147,7 @@ Plugin manifest `env` values support `${settings:settingId}` syntax. Substitutio
 
 MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model (review by human, trusted source, signed distribution) is the primary defense.
 
-An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's `capabilities` array is disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
+An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared capabilities (the `permissions` field today; renamed to `capabilities` in #9268) are disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
 
 ## Worktree observability
 
