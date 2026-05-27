@@ -137,12 +137,12 @@ export const PluginManifestSchema = z
       .optional(),
     permissions: z.array(PluginPermissionSchema).default([]),
     contributes: z
-      .object({
+      .strictObject({
         panels: z.array(PanelContributionSchema).default([]),
         toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
         menuItems: z.array(MenuItemContributionSchema).default([]),
-        views: z.array(ViewContributionSchema).default([]),
-        mcpServers: z.array(McpServerContributionSchema).default([]),
+        experimental_views: z.array(ViewContributionSchema).default([]),
+        experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
         forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
         fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
       })
@@ -150,8 +150,8 @@ export const PluginManifestSchema = z
         panels: [],
         toolbarButtons: [],
         menuItems: [],
-        views: [],
-        mcpServers: [],
+        experimental_views: [],
+        experimental_mcpServers: [],
         forgeProviders: [],
         fileDecorationProviders: [],
       }),

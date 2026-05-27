@@ -491,15 +491,15 @@ export class PluginService {
       registerPluginMenuItem(manifest.name, menuItem);
     }
 
-    if (manifest.contributes.views.length > 0) {
+    if (manifest.contributes.experimental_views.length > 0) {
       console.warn(
-        `[PluginService] Plugin "${manifest.name}": contributes.views is not yet implemented and will be ignored`
+        `[PluginService] Plugin "${manifest.name}": contributes.experimental_views is not yet implemented and will be ignored`
       );
     }
 
-    if (manifest.contributes.mcpServers.length > 0) {
+    if (manifest.contributes.experimental_mcpServers.length > 0) {
       console.warn(
-        `[PluginService] Plugin "${manifest.name}": contributes.mcpServers is not yet implemented and will be ignored`
+        `[PluginService] Plugin "${manifest.name}": contributes.experimental_mcpServers is not yet implemented and will be ignored`
       );
     }
 

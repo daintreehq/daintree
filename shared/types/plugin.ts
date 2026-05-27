@@ -100,8 +100,8 @@ export interface PluginManifest {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
-    views: ViewContribution[];
-    mcpServers: McpServerContribution[];
+    experimental_views: ViewContribution[];
+    experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
   };

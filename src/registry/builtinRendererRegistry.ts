@@ -4,7 +4,7 @@ import type { ComponentType } from "react";
  * Slot registry for renderer-side views contributed by built-in plugins. The
  * registry exists so host-owned dialogs (NewWorktreeDialog, SidebarContent)
  * can render plugin-contributed components without importing them directly,
- * preserving the plugin boundary while `contributes.views` from the plugin
+ * preserving the plugin boundary while `contributes.experimental_views` from the plugin
  * manifest is unimplemented. Slot ids are dot-namespaced by plugin
  * (`github.bulkCreateWorktreeDialog`) so the host can grep the seam.
  */

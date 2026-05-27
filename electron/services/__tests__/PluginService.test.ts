@@ -456,6 +456,53 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 });
 
+describe("PluginManifestSchema contributes strict validation", () => {
+  const validBase = { name: "acme.test", version: "1.0.0" };
+
+  it("rejects unknown keys inside contributes (typo'd contribution-point names)", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        commands: [{ name: "foo", title: "Foo", description: "bar", category: "test" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects old unprefixed views key inside contributes", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects old unprefixed mcpServers key inside contributes", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an arbitrary unknown key inside contributes", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: { unknownKey: true },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts empty contributes object (no unknown keys, defaults populate)", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.experimental_views).toEqual([]);
+      expect(result.data.contributes.experimental_mcpServers).toEqual([]);
+    }
+  });
+});
+
 describe("PluginService", () => {
   it("returns empty list when plugins directory does not exist", async () => {
     const service = new PluginService(path.join(tmpDir, "nonexistent"));
@@ -2582,13 +2629,13 @@ describe("reserved contribution point warnings", () => {
     errorSpy.mockRestore();
   });
 
-  it("accepts a contributes.views entry and logs a 'not yet implemented' warning", async () => {
+  it("accepts a contributes.experimental_views entry and logs a 'not yet implemented' warning", async () => {
     await writePlugin("views", {
       name: "acme.views",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        views: [
+        experimental_views: [
           {
             id: "main",
             name: "Main",
@@ -2604,17 +2651,19 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.views": contributes.views is not yet implemented')
+      expect.stringContaining(
+        'Plugin "acme.views": contributes.experimental_views is not yet implemented'
+      )
     );
   });
 
-  it("accepts a contributes.mcpServers entry and logs a 'not yet implemented' warning", async () => {
+  it("accepts a contributes.experimental_mcpServers entry and logs a 'not yet implemented' warning", async () => {
     await writePlugin("mcp", {
       name: "acme.mcp",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        mcpServers: [
+        experimental_mcpServers: [
           {
             id: "linear",
             name: "Linear MCP",
@@ -2631,7 +2680,9 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.mcp": contributes.mcpServers is not yet implemented')
+      expect.stringContaining(
+        'Plugin "acme.mcp": contributes.experimental_mcpServers is not yet implemented'
+      )
     );
   });
 
@@ -2701,8 +2752,12 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
-    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.experimental_views"))).toBe(
+      false
+    );
+    expect(
+      warnMessages.some((m: string) => m.includes("contributes.experimental_mcpServers"))
+    ).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
@@ -2711,7 +2766,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.explicit-empty",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
-      contributes: { views: [], mcpServers: [], forgeProviders: [] },
+      contributes: { experimental_views: [], experimental_mcpServers: [], forgeProviders: [] },
     });
 
     const service = new PluginService(tmpDir, "0.7.5");
@@ -2719,8 +2774,12 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
-    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.experimental_views"))).toBe(
+      false
+    );
+    expect(
+      warnMessages.some((m: string) => m.includes("contributes.experimental_mcpServers"))
+    ).toBe(false);
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
@@ -2731,8 +2790,10 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" }],
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        experimental_views: [
+          { id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" },
+        ],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
 
@@ -2742,10 +2803,10 @@ describe("reserved contribution point warnings", () => {
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.views is not yet implemented")
+      expect.stringContaining("contributes.experimental_views is not yet implemented")
     );
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("contributes.mcpServers is not yet implemented")
+      expect.stringContaining("contributes.experimental_mcpServers is not yet implemented")
     );
   });
 
@@ -2755,7 +2816,7 @@ describe("reserved contribution point warnings", () => {
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        views: [
+        experimental_views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
           { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
           { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
@@ -2767,7 +2828,7 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes("contributes.views is not yet implemented")
+      String(call[0]).includes("contributes.experimental_views is not yet implemented")
     );
     expect(viewWarnings).toHaveLength(1);
   });
@@ -2777,7 +2838,9 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+        experimental_views: [
+          { id: "main", name: "Main", componentPath: "./v.js", location: "floating" },
+        ],
       },
     });
     expect(result.success).toBe(false);
@@ -2788,7 +2851,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", location: "panel" }],
+        experimental_views: [{ id: "main", name: "Main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
@@ -2799,7 +2862,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc" }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc" }],
       },
     });
     expect(result.success).toBe(false);
@@ -2810,7 +2873,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
       },
     });
     expect(result.success).toBe(false);
@@ -2821,7 +2884,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
     expect(result.success).toBe(true);
