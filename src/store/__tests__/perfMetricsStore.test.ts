@@ -206,6 +206,80 @@ describe("perfMetricsStore refreshSummaries", () => {
     expect(state.lastLoadedAt).toBeNull();
   });
 
+  it("clearSummaries invalidates an in-flight refresh", async () => {
+    let resolveFirst!: (value: { content: string }) => void;
+    const firstCall = new Promise<{ content: string }>((res) => {
+      resolveFirst = res;
+    });
+    mockRead.mockReturnValue(firstCall);
+
+    const refreshPromise = usePerfMetricsStore.getState().refreshSummaries("/project");
+    expect(usePerfMetricsStore.getState().isLoadingSummaries).toBe(true);
+
+    usePerfMetricsStore.getState().clearSummaries();
+    expect(usePerfMetricsStore.getState().isLoadingSummaries).toBe(false);
+    expect(usePerfMetricsStore.getState().summaryRows).toEqual([]);
+
+    resolveFirst({
+      content: makeSummary("ci", [{ id: "stale", name: "Stale", p95Ms: 100, failedBudget: true }]),
+    });
+    await refreshPromise;
+
+    const state = usePerfMetricsStore.getState();
+    expect(state.summaryRows).toEqual([]);
+    expect(state.failedBudgetCount).toBe(0);
+    expect(state.isLoadingSummaries).toBe(false);
+  });
+
+  it("rejects summaries with malformed aggregate fields", async () => {
+    mockRead.mockImplementation(async ({ path }: { path: string }) => {
+      if (path.endsWith("latest-ci.summary.json")) {
+        return {
+          content: JSON.stringify({
+            generatedAt: "2026-05-27T00:00:00.000Z",
+            mode: "ci",
+            aggregates: [{ id: "broken", name: "Broken", p95Ms: null, failedBudget: false }],
+          }),
+        };
+      }
+      throw new ClientAppError("NOT_FOUND", "file missing");
+    });
+
+    await usePerfMetricsStore.getState().refreshSummaries("/project");
+
+    const state = usePerfMetricsStore.getState();
+    expect(state.summaryRows).toEqual([]);
+    expect(state.summaryLoadError).toBeNull();
+  });
+
+  it("normalizes mode to the filename mode even when summary.mode disagrees", async () => {
+    mockRead.mockImplementation(async ({ path }: { path: string }) => {
+      if (path.endsWith("latest-ci.summary.json")) {
+        return {
+          content: JSON.stringify({
+            generatedAt: "2026-05-27T00:00:00.000Z",
+            mode: "smoke",
+            aggregates: [
+              {
+                id: "boot",
+                name: "Boot",
+                p95Ms: 100,
+                failedBudget: false,
+              },
+            ],
+          }),
+        };
+      }
+      throw new ClientAppError("NOT_FOUND", "file missing");
+    });
+
+    await usePerfMetricsStore.getState().refreshSummaries("/project");
+
+    const rows = usePerfMetricsStore.getState().summaryRows;
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.mode).toBe("ci");
+  });
+
   it("treats empty projectRoot as a clear", async () => {
     mockRead.mockResolvedValue({
       content: makeSummary("ci", [{ id: "x", name: "X", p95Ms: 100, failedBudget: true }]),

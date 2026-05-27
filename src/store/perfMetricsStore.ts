@@ -106,11 +106,8 @@ function startObservers(): void {
   if (typeof PerformanceObserver === "undefined") return;
   try {
     lafObserver = new PerformanceObserver((list) => {
-      const now = performance.now();
       for (const entry of list.getEntries()) {
         lafTimestamps.push(entry.startTime);
-        // No-op on `now` — kept for readability; pruning happens on each tick
-        void now;
       }
     });
     lafObserver.observe({ type: "long-animation-frame", durationThreshold: 50 });
@@ -196,12 +193,28 @@ export function stopLivePerfCapture(): void {
   });
 }
 
-function isParseableSummary(value: unknown): value is PerfRunSummaryJson {
+function isValidAggregate(value: unknown): value is ScenarioAggregateJson {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return (
-    typeof v.generatedAt === "string" && typeof v.mode === "string" && Array.isArray(v.aggregates)
-  );
+  if (typeof v.id !== "string" || typeof v.name !== "string") return false;
+  if (typeof v.p95Ms !== "number" || !Number.isFinite(v.p95Ms)) return false;
+  if (typeof v.failedBudget !== "boolean") return false;
+  if (v.budgetReason !== undefined && typeof v.budgetReason !== "string") return false;
+  return true;
+}
+
+function parseSummary(value: unknown): PerfRunSummaryJson | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.generatedAt !== "string") return null;
+  if (typeof v.mode !== "string") return null;
+  if (!Array.isArray(v.aggregates)) return null;
+  if (!v.aggregates.every(isValidAggregate)) return null;
+  return {
+    generatedAt: v.generatedAt,
+    mode: v.mode as PerfMode,
+    aggregates: v.aggregates as ScenarioAggregateJson[],
+  };
 }
 
 async function readModeSummary(
@@ -211,8 +224,7 @@ async function readModeSummary(
   const path = `${projectRoot}/.tmp/perf-results/latest-${mode}.summary.json`;
   try {
     const { content } = await filesClient.read({ path, rootPath: projectRoot });
-    const parsed: unknown = JSON.parse(content);
-    if (!isParseableSummary(parsed)) return null;
+    const parsed = parseSummary(JSON.parse(content));
     return parsed;
   } catch (error) {
     if (isClientAppError(error) && error.code === "NOT_FOUND") return null;
@@ -220,11 +232,14 @@ async function readModeSummary(
   }
 }
 
-function toRows(summary: PerfRunSummaryJson): PerfSummaryRow[] {
+// Use the requested `mode` (from filename) rather than `summary.mode` from
+// file content so a misplaced summary file can't cause duplicate React keys
+// or mislabel rows. The filename is the authoritative bucket.
+function toRows(summary: PerfRunSummaryJson, mode: PerfMode): PerfSummaryRow[] {
   return summary.aggregates.map((agg) => ({
     scenarioId: agg.id,
     name: agg.name,
-    mode: summary.mode,
+    mode,
     p95Ms: agg.p95Ms,
     failedBudget: agg.failedBudget,
     budgetReason: agg.budgetReason,
@@ -262,13 +277,16 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
     set({ isLoadingSummaries: true, summaryLoadError: null });
     try {
       const results = await Promise.all(
-        PERF_MODES.map((mode) => readModeSummary(mode, projectRoot))
+        PERF_MODES.map(async (mode) => {
+          const summary = await readModeSummary(mode, projectRoot);
+          return summary ? { summary, mode } : null;
+        })
       );
       if (requestId !== refreshRequestId) return;
 
       const rows: PerfSummaryRow[] = [];
-      for (const summary of results) {
-        if (summary) rows.push(...toRows(summary));
+      for (const result of results) {
+        if (result) rows.push(...toRows(result.summary, result.mode));
       }
       const failedBudgetCount = rows.reduce((n, r) => n + (r.failedBudget ? 1 : 0), 0);
       set({
@@ -290,13 +308,18 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
     }
   },
 
-  clearSummaries: () =>
+  clearSummaries: () => {
+    // Invalidate any in-flight refresh so its result can't overwrite the
+    // cleared state, and unstick the loading flag if a refresh is in progress.
+    refreshRequestId++;
     set({
       summaryRows: [],
       failedBudgetCount: 0,
       summaryLoadError: null,
+      isLoadingSummaries: false,
       lastLoadedAt: null,
-    }),
+    });
+  },
 }));
 
 // Test-only reset that drains module-scope state and the rAF loop.
