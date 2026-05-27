@@ -23,7 +23,7 @@ export function invalidateWorktreeCache(cwd: string): void {
 
 export { invalidateWorktreeCache as invalidateGitStatusCache };
 
-interface DiffStat {
+export interface DiffStat {
   insertions: number | null;
   deletions: number | null;
 }
@@ -160,7 +160,7 @@ function normalizeNumstatPath(rawPath: string): string {
   return rawPath.trim();
 }
 
-function parseNumstat(diffOutput: string, gitRoot: string): Map<string, DiffStat> {
+export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, DiffStat> {
   const stats = new Map<string, DiffStat>();
   const lines = diffOutput.split("\n");
 

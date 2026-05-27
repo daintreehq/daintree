@@ -44,6 +44,9 @@ interface CrossWorktreeFileRowProps {
 function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const { label, className: statusClass } = statusLabel(file.status);
+  const insertions = file.insertions ?? 0;
+  const deletions = file.deletions ?? 0;
+  const hasChurn = insertions > 0 || deletions > 0;
 
   return (
     <TruncatedTooltip content={file.path} isTruncated={isTruncated}>
@@ -52,7 +55,7 @@ function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRo
         onClick={onClick}
         className={cn(
           "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
-          isSelected && "bg-surface-panel-elevated"
+          isSelected && "bg-overlay-subtle"
         )}
       >
         <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
@@ -62,8 +65,37 @@ function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRo
         <span ref={ref} className="text-text-secondary truncate min-w-0">
           {file.path.split(/[/\\]/).filter(Boolean).pop()}
         </span>
+        {hasChurn && (
+          <span className="ml-auto flex items-center gap-1 shrink-0 text-[10px] tabular-nums">
+            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
+            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+          </span>
+        )}
       </button>
     </TruncatedTooltip>
+  );
+}
+
+function AggregateChurn({ files }: { files: CrossWorktreeFile[] }) {
+  const { totalInsertions, totalDeletions } = files.reduce(
+    (acc, f) => ({
+      totalInsertions: acc.totalInsertions + (f.insertions ?? 0),
+      totalDeletions: acc.totalDeletions + (f.deletions ?? 0),
+    }),
+    { totalInsertions: 0, totalDeletions: 0 }
+  );
+
+  return (
+    <>
+      {files.length} file{files.length !== 1 ? "s" : ""}
+      {(totalInsertions > 0 || totalDeletions > 0) && (
+        <>
+          {" "}
+          <span className="text-status-success/80">+{totalInsertions}</span>{" "}
+          <span className="text-status-error/80">-{totalDeletions}</span>
+        </>
+      )}
+    </>
   );
 }
 
@@ -227,9 +259,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         {/* File list sidebar */}
         <div className="w-64 shrink-0 border-r border-border-subtle flex flex-col overflow-hidden">
           <div className="px-3 py-2 text-xs text-text-muted border-b border-border-subtle shrink-0">
-            {result
-              ? `${result.files.length} file${result.files.length === 1 ? "" : "s"} changed`
-              : "Files"}
+            {result ? <AggregateChurn files={result.files} /> : "Files"}
           </div>
           <div className="flex-1 overflow-y-auto">
             {loading && (
@@ -250,11 +280,19 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             {!loading && !error && !result && (
-              <div className="p-4 text-text-muted text-xs">Select two worktrees to compare</div>
+              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
+                <p className="text-sm">Select two worktrees to compare</p>
+                <p className="text-xs mt-1">
+                  Pick branches from the selectors above to view changes
+                </p>
+              </div>
             )}
             {result?.files.length === 0 && (
-              <div className="p-4 text-text-muted text-xs">
-                No differences between these branches
+              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
+                <p className="text-sm">No differences between these branches</p>
+                <p className="text-xs mt-1">
+                  Select different branches or verify both branches have diverged
+                </p>
               </div>
             )}
             {result?.files.map((file) => (

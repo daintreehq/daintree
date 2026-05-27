@@ -33,6 +33,10 @@ export interface CrossWorktreeFile {
   oldPath?: string;
   /** Change status: A=added, D=deleted, M=modified, R=renamed, C=copied, U=unmerged */
   status: "A" | "D" | "M" | "R" | "C" | "U" | string;
+  /** Lines inserted (null for binary files or when numstat is unavailable) */
+  insertions: number | null;
+  /** Lines deleted (null for binary files or when numstat is unavailable) */
+  deletions: number | null;
 }
 
 /** Result of comparing two branches */
