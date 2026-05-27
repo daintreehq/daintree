@@ -1,6 +1,6 @@
 {
-  "count": 1362,
-  "moduleCount": 1362,
+  "count": 1258,
+  "moduleCount": 1258,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -23,6 +23,7 @@
     "electron/ipc/handlers/onboarding.ts",
     "electron/ipc/handlers/privacy.ts",
     "electron/ipc/handlers/shortcutHints.ts",
+    "electron/ipc/handlers/systemShell.ts",
     "electron/ipc/handlers/terminalConfig.ts",
     "electron/ipc/handlers/voiceInput.ts",
     "electron/ipc/handlers/worktree/lifecycle.ts",
@@ -170,7 +171,7 @@
     },
     {
       "file": "electron/ipc/handlers/forge.ts",
-      "line": 137,
+      "line": 174,
       "pattern": "sync-store-get"
     },
     {
@@ -304,13 +305,18 @@
       "pattern": "sync-store-get"
     },
     {
+      "file": "electron/ipc/handlers/systemShell.ts",
+      "line": 88,
+      "pattern": "sync-store-get"
+    },
+    {
       "file": "electron/ipc/handlers/terminalConfig.ts",
       "line": 18,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/voiceInput.ts",
-      "line": 44,
+      "line": 45,
       "pattern": "sync-store-get"
     },
     {
@@ -410,42 +416,47 @@
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 276,
+      "line": 215,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 277,
+      "line": 339,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 397,
+      "line": 340,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 406,
+      "line": 460,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 436,
+      "line": 469,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 475,
+      "line": 507,
+      "pattern": "sync-store-get"
+    },
+    {
+      "file": "electron/services/AutoUpdaterService.ts",
+      "line": 565,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 475,
+      "line": 565,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/AutoUpdaterService.ts",
-      "line": 492,
+      "line": 582,
       "pattern": "sync-store-get"
     },
     {
@@ -695,88 +706,83 @@
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 730,
+      "line": 732,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 731,
+      "line": 733,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 761,
+      "line": 763,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 762,
+      "line": 764,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 789,
+      "line": 791,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 816,
+      "line": 818,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 817,
+      "line": 819,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 864,
+      "line": 866,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 865,
+      "line": 867,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 869,
+      "line": 871,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 984,
+      "line": 986,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1008,
+      "line": 1010,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1017,
+      "line": 1019,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1028,
+      "line": 1030,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1029,
+      "line": 1031,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1041,
+      "line": 1043,
       "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1057,
-      "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
@@ -785,12 +791,17 @@
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1065,
+      "line": 1061,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/CrashRecoveryService.ts",
-      "line": 1075,
+      "line": 1067,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/services/CrashRecoveryService.ts",
+      "line": 1077,
       "pattern": "sync-fs"
     },
     {
@@ -850,22 +861,27 @@
     },
     {
       "file": "electron/services/GitService.ts",
-      "line": 60,
+      "line": 62,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/GitService.ts",
-      "line": 111,
+      "line": 113,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/GitService.ts",
-      "line": 528,
+      "line": 419,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/services/GitService.ts",
-      "line": 534,
+      "line": 583,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/services/GitService.ts",
+      "line": 589,
       "pattern": "sync-fs"
     },
     {
@@ -905,7 +921,7 @@
     },
     {
       "file": "electron/services/HelpSessionService.ts",
-      "line": 1090,
+      "line": 1132,
       "pattern": "sync-store-get"
     },
     {
@@ -925,12 +941,12 @@
     },
     {
       "file": "electron/services/mcp-server/httpLifecycle.ts",
-      "line": 365,
+      "line": 419,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/McpServerService.ts",
-      "line": 274,
+      "line": 289,
       "pattern": "sync-store-get"
     },
     {
@@ -1030,7 +1046,7 @@
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 264,
+      "line": 325,
       "pattern": "sync-store-get"
     },
     {
@@ -1365,47 +1381,42 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 493,
+      "line": 502,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 495,
+      "line": 504,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 510,
+      "line": 519,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 525,
+      "line": 534,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 526,
+      "line": 535,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 528,
+      "line": 537,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 543,
+      "line": 552,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 545,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/store.ts",
-      "line": 562,
+      "line": 554,
       "pattern": "sync-fs"
     },
     {
@@ -1415,7 +1426,12 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 572,
+      "line": 580,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/store.ts",
+      "line": 581,
       "pattern": "sync-fs"
     },
     {
@@ -1625,7 +1641,7 @@
     },
     {
       "file": "electron/window/createWindow.ts",
-      "line": 146,
+      "line": 142,
       "pattern": "sync-store-get"
     },
     {
@@ -1650,13 +1666,23 @@
     },
     {
       "file": "electron/window/skeletonCss.ts",
-      "line": 21,
+      "line": 37,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/skeletonCss.ts",
-      "line": 26,
+      "line": 54,
       "pattern": "sync-store-get"
+    },
+    {
+      "file": "electron/window/skeletonCss.ts",
+      "line": 59,
+      "pattern": "sync-store-get"
+    },
+    {
+      "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
+      "line": 376,
+      "pattern": "sync-fs"
     },
     {
       "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
@@ -1665,12 +1691,7 @@
     },
     {
       "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
-      "line": 378,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "plugins/builtin/github/main/GitHubRateLimitService.ts",
-      "line": 382,
+      "line": 381,
       "pattern": "sync-fs"
     }
   ]

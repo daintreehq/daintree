@@ -1,3 +1,4 @@
+// eager-import-allow: reads worktree config via store.get synchronously to derive worktree parent dirs for path-guard checks
 import { app, shell } from "electron";
 import os from "os";
 import * as nodePath from "path";
