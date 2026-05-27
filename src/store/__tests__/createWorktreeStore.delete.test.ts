@@ -207,7 +207,7 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().deleteErrors.get("wt-1")).toMatch(/stop failed/);
   });
 
-  it("skips stopByWorktree when no dev preview is running", async () => {
+  it("calls stopByWorktree unconditionally and suppresses the toast when no session existed", async () => {
     devPreviewGetByWorktreeMock.mockResolvedValueOnce(null);
 
     const store = createWorktreeStore();
@@ -217,8 +217,14 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
+    // The service-side `stopByWorktree` filter no-ops cleanly when no
+    // session matches — the renderer doesn't gate on `getByWorktree`
+    // because that view misses sessions for multi-panel worktrees.
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "wt-1" });
     expect(worktreeClientDeleteMock).toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Dev server stopped" })
+    );
   });
 
   it("startDelete without closeTerminals skips terminal cleanup", async () => {

@@ -262,8 +262,12 @@ describe("useWorktreeBulkRemove — execution", () => {
       await hook.result.current.handleConfirm();
     });
 
-    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(1);
+    // stopByWorktree is called for every target (no client-side gate); the
+    // service no-ops when no session matches. Only `a` had a session, so
+    // the toast names it.
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(2);
     expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "a" });
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "b" });
 
     const successCall = notifyMock.mock.calls.find(
       (c) => (c[0] as { type: string }).type === "success"

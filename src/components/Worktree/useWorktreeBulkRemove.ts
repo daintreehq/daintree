@@ -181,12 +181,16 @@ export function useWorktreeBulkRemove({
             // Windows the dev server's directory lock would otherwise block
             // the removal outright. A stop failure is folded into the
             // partial-failure path so the bulk run can continue with other
-            // targets.
+            // targets. Call `stopByWorktree` unconditionally — it filters
+            // every session itself and no-ops cleanly when none match, so
+            // it survives the case where `getByWorktree` only reports one
+            // panel's session of several sharing the worktreeId.
             const existing = await window.electron.devPreview.getByWorktree({
               worktreeId: target.id,
             });
-            if (existing && existing.status !== "stopped") {
-              await window.electron.devPreview.stopByWorktree({ worktreeId: target.id });
+            const hadDevPreview = existing !== null;
+            await window.electron.devPreview.stopByWorktree({ worktreeId: target.id });
+            if (hadDevPreview) {
               stoppedDevServerCount++;
               stoppedDevServerName = target.name;
             }

@@ -828,16 +828,20 @@ async function runDeleteAsync(
     // Windows the dev server holds a directory lock and the removal would
     // fail outright. Snapshot the worktree name first so a transient toast
     // can name it after `applyRemove` has already cleared the row.
+    //
+    // `getByWorktree` reflects only the worktreeId→session mapping's current
+    // head, so when multiple panels share a worktreeId it may show one
+    // session while another runs. `stopByWorktree` filters every session
+    // itself and no-ops cleanly when nothing matches — call it
+    // unconditionally and use `getByWorktree` only to decide whether to
+    // surface a toast.
     const worktreeBefore = get().worktrees.get(worktreeId);
     const worktreeName = worktreeBefore?.name ?? worktreeBefore?.branch ?? worktreeId;
-    let stoppedDevPreview = false;
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
-    if (existingDevPreview && existingDevPreview.status !== "stopped") {
-      await window.electron.devPreview.stopByWorktree({ worktreeId });
-      stoppedDevPreview = true;
-    }
+    const hadDevPreview = existingDevPreview !== null;
+    await window.electron.devPreview.stopByWorktree({ worktreeId });
     await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
-    if (stoppedDevPreview) {
+    if (hadDevPreview) {
       notify({
         type: "success",
         title: "Dev server stopped",
