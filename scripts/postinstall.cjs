@@ -1,14 +1,51 @@
+const path = require("path");
 const { execSync } = require("child_process");
+const { rebuild } = require("@electron/rebuild");
+const { version: electronVersion } = require("electron/package.json");
 
-// `win-job-object` is a Windows-only N-API addon (#7526). Its binding.gyp
-// emits zero sources on macOS / Linux (the target has empty sources list),
-// so node-gyp skips it with a SKIPPED message — the wrapper handles the
-// missing-binary case gracefully.
-//
-// `posix-pty-reaper` is the inverse (#8769): a macOS / Linux executable whose
-// binding.gyp emits `type: none` on Windows, so it's a no-op there and the
-// wrapper reports unavailable.
-execSync("electron-rebuild -f -w node-pty,better-sqlite3,win-job-object,posix-pty-reaper", {
-  stdio: "inherit",
-});
-require("../node_modules/node-pty/scripts/post-install.js");
+const NATIVE_MODULES = ["node-pty", "better-sqlite3", "win-job-object", "posix-pty-reaper"];
+
+const buildPath = path.resolve(__dirname, "..");
+
+async function runPostinstall() {
+  const failures = [];
+
+  for (const mod of NATIVE_MODULES) {
+    try {
+      await rebuild({
+        buildPath,
+        electronVersion,
+        onlyModules: [mod],
+        force: true,
+      });
+    } catch (err) {
+      failures.push({ module: mod, error: err });
+    }
+  }
+
+  // Always run ConPTY asset fetch — it's idempotent, exits 0 on non-Windows,
+  // and must not be skipped just because an unrelated native rebuild failed.
+  // Using execSync (not require()) because the post-install script ends with
+  // process.exit(0), which would override our process.exitCode.
+  try {
+    execSync("node node_modules/node-pty/scripts/post-install.js", {
+      stdio: "inherit",
+    });
+  } catch (err) {
+    failures.push({ module: "node-pty post-install", error: err });
+  }
+
+  if (failures.length > 0) {
+    console.error(`\nRebuild failures (${failures.length}/${NATIVE_MODULES.length + 1}):`);
+    for (const { module: mod, error } of failures) {
+      console.error(`  ${mod}: ${error.message}`);
+    }
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) {
+  runPostinstall();
+}
+
+module.exports = { runPostinstall };

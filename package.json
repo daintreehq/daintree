@@ -43,7 +43,7 @@
     "package:linux": "npm run build && electron-builder --linux",
     "package:local": "npm run build && electron-builder --mac --dir -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
     "package:local:dmg": "npm run build && electron-builder --mac dmg -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
-    "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3,win-job-object,posix-pty-reaper && node node_modules/node-pty/scripts/post-install.js",
+    "rebuild": "node scripts/postinstall.cjs",
     "postinstall": "node scripts/postinstall.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
