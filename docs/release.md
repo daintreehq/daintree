@@ -159,9 +159,8 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 
 The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 
-- `com.apple.security.cs.allow-jit` — required for Electron with hardened runtime
-- `com.apple.security.cs.allow-unsigned-executable-memory` — may not be needed for Electron 40+, review when re-enabling notarization
-- `com.apple.security.cs.disable-library-validation` — allows loading node-pty native module
+- `com.apple.security.cs.allow-jit` — required for V8 JIT in Electron 41 (no longer requires `allow-unsigned-executable-memory`, dropped in Electron 12)
+- `com.apple.security.cs.disable-library-validation` — allows loading native .node modules at runtime (pty.node, better_sqlite3.node). Retained until the CI TeamIdentifier audit (`scripts/ci/verify-team-identifier.sh`) confirms every Mach-O in the bundle shares the expected Team ID
 
 ## Local Development Builds
 

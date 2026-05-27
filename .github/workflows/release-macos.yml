@@ -209,6 +209,26 @@ jobs:
             spctl --assess --type execute --verbose --ignore-cache --no-cache "$app" || true
           done
 
+      - name: Verify macOS TeamIdentifier audit
+        if: inputs.skip_notarization != true
+        shell: bash
+        env:
+          EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXPECTED_TEAM_ID" ]]; then
+            echo "::error::APPLE_TEAM_ID secret is empty — cannot verify TeamIdentifier"
+            exit 1
+          fi
+          apps=(
+            "release/mac-arm64/Daintree.app"
+            "release/mac/Daintree.app"
+            "release/mac-universal/Daintree.app"
+          )
+          for app in "${apps[@]}"; do
+            scripts/ci/verify-team-identifier.sh "$app" "$EXPECTED_TEAM_ID"
+          done
+
       - name: Validate update metadata (macOS)
         shell: bash
         run: |
