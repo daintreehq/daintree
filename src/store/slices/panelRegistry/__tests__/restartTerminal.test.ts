@@ -58,6 +58,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     fit: vi.fn(),
     captureBufferText: vi.fn().mockReturnValue(""),
     addAgentStateListener: vi.fn().mockReturnValue(vi.fn()),
+    setInputLocked: vi.fn(),
   },
 }));
 
@@ -587,5 +588,151 @@ describe("restartTerminal resume-latest fallback (#8787)", () => {
     // Existing fallback chain (persisted flags / generated command)
     expect(payload.command).toBeDefined();
     expect(payload.command).not.toBe("claude --continue");
+  });
+});
+
+describe("restartTerminal input lock + parallel IPC (#9164)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  it("locks input before destroy and unlocks on successful restart", async () => {
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const setInputLocked = terminalInstanceService.setInputLocked as ReturnType<typeof vi.fn>;
+    const destroy = terminalInstanceService.destroy as ReturnType<typeof vi.fn>;
+
+    const calls: string[] = [];
+    setInputLocked.mockImplementation((_id: string, locked: boolean) => {
+      calls.push(locked ? "lock" : "unlock");
+    });
+    destroy.mockImplementation(() => {
+      calls.push("destroy");
+    });
+
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    // First lock fires before destroy; re-lock fires after waitForInstance;
+    // final unlock on success.
+    expect(calls[0]).toBe("lock");
+    expect(calls[1]).toBe("destroy");
+    expect(calls).toContain("unlock");
+    expect(calls[calls.length - 1]).toBe("unlock");
+
+    // Exactly two lock(true) calls (pre-destroy + post-waitForInstance) and
+    // one lock(false) on success.
+    const lockTrueCalls = setInputLocked.mock.calls.filter((c) => c[1] === true);
+    const lockFalseCalls = setInputLocked.mock.calls.filter((c) => c[1] === false);
+    expect(lockTrueCalls).toHaveLength(2);
+    expect(lockFalseCalls).toHaveLength(1);
+  });
+
+  it("unlocks input on failed restart so the instance is not permanently locked", async () => {
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const setInputLocked = terminalInstanceService.setInputLocked as ReturnType<typeof vi.fn>;
+
+    // Make the spawn fail to drive the catch path.
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    // The catch branch must unlock so the user can keep using the terminal.
+    const lockFalseCalls = setInputLocked.mock.calls.filter((c) => c[1] === false);
+    expect(lockFalseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(setInputLocked.mock.calls[setInputLocked.mock.calls.length - 1]?.[1]).toBe(false);
+  });
+
+  it("does not call the store setInputLocked action during restart (avoids persisting transient lock)", async () => {
+    // The transient input lock during restart must go through the service
+    // directly, NOT through the store action which persists to disk.
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    // isInputLocked must not be true on the persisted panel after a
+    // successful restart.
+    expect(after?.isInputLocked).not.toBe(true);
+  });
+
+  it("starts terminalClient.kill before awaiting buildRestartEnv IPCs (parallelization)", async () => {
+    const { projectClient, globalEnvClient } = await import("@/clients");
+    const projectSettings = projectClient.getSettings as ReturnType<typeof vi.fn>;
+    const globalEnvGet = globalEnvClient.get as ReturnType<typeof vi.fn>;
+
+    const order: string[] = [];
+    mockKill.mockImplementation(() => {
+      order.push("kill-start");
+      return Promise.resolve();
+    });
+    projectSettings.mockImplementation(() => {
+      order.push("project-settings-start");
+      return Promise.resolve(null);
+    });
+    globalEnvGet.mockImplementation(() => {
+      order.push("global-env-start");
+      return Promise.resolve({});
+    });
+
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    // All three IPC starts should appear before spawn — i.e. they were
+    // launched as part of the Promise.all, not awaited serially.
+    expect(order).toContain("kill-start");
+    expect(order).toContain("global-env-start");
+    // The kill IPC must have been invoked before the spawn IPC.
+    const killOrder = mockKill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    const spawnOrder = mockSpawn.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    expect(killOrder).toBeLessThan(spawnOrder);
   });
 });

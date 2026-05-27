@@ -461,16 +461,30 @@ export const createRestartActions = (
         spawnRows = managedInstance.terminal.rows || spawnRows;
       }
 
+      // Lock input on the live instance while the restart is in flight, so
+      // keystrokes can't leak into the kill/spawn window. Bypass the store
+      // action to avoid persisting `isInputLocked: true` to disk for a
+      // transient state.
+      terminalInstanceService.setInputLocked(id, true);
+
       // AGGRESSIVE TEARDOWN: Destroy frontend FIRST to prevent race condition
       terminalInstanceService.destroy(id);
 
       terminalInstanceService.suppressNextExit(id, 10000);
 
-      try {
-        await terminalClient.kill(id);
-      } catch (error) {
-        logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
-      }
+      // Capture project ID before async work to avoid race conditions (issue #3690).
+      const projectStore = await resolveProjectStore();
+      const capturedProjectId = projectStore.getState().currentProject?.id;
+
+      // Parallelize the kill IPC with the env-fetch IPCs (#9164): they have
+      // no ordering dependency, so awaiting them serially adds a needless
+      // round-trip to the restart hot path.
+      const [, restartEnv] = await Promise.all([
+        terminalClient.kill(id).catch((error: unknown) => {
+          logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
+        }),
+        buildRestartEnv(capturedProjectId, runtimeForEnv?.settings.env, "restart"),
+      ]);
 
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
@@ -510,15 +524,9 @@ export const createRestartActions = (
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
-      // Capture project ID before async work to avoid race conditions (issue #3690).
-      const projectStore = await resolveProjectStore();
-      const capturedProjectId = projectStore.getState().currentProject?.id;
-
-      const restartEnv = await buildRestartEnv(
-        capturedProjectId,
-        runtimeForEnv?.settings.env,
-        "restart"
-      );
+      // Re-apply the input lock on the freshly created xterm instance:
+      // xterm 6.0 does not inherit `disableStdin` across instance recreation.
+      terminalInstanceService.setInputLocked(id, true);
 
       await terminalClient.spawn({
         id,
@@ -546,6 +554,9 @@ export const createRestartActions = (
       } else {
         terminalInstanceService.fit(id);
       }
+
+      // Release the transient input lock now that the new PTY is live.
+      terminalInstanceService.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
@@ -577,6 +588,10 @@ export const createRestartActions = (
           agentId: effectiveAgentId,
         },
       };
+
+      // Always release the transient input lock so a failed restart can't
+      // leave the (possibly recreated) instance permanently locked.
+      terminalInstanceService.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
       set((state) =>
