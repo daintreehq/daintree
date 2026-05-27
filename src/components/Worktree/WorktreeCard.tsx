@@ -34,6 +34,7 @@ import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
+  WorktreeIssueErrorBanner,
 } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
@@ -279,6 +280,7 @@ export function WorktreeCard({
 
   const isBeingDeleted = useWorktreeStore((state) => state.deletingIds.has(worktree.id));
   const deleteError = useWorktreeStore((state) => state.deleteErrors.get(worktree.id) ?? null);
+  const issueError = useWorktreeStore((state) => state.issueErrors.get(worktree.id) ?? null);
 
   const handleRetryDelete = () => {
     getCurrentViewStore().getState().retryDelete(worktree.id);
@@ -286,6 +288,16 @@ export function WorktreeCard({
 
   const handleDismissDeleteError = () => {
     getCurrentViewStore().getState().clearDeleteError(worktree.id);
+  };
+
+  const handleRetryIssue = () => {
+    if (!issueError) return;
+    getCurrentViewStore().getState().retryOutboxEntry(issueError.mutationId);
+  };
+
+  const handleDismissIssueError = () => {
+    if (!issueError) return;
+    getCurrentViewStore().getState().dismissOutboxEntry(issueError.mutationId);
   };
 
   const handleErrorRetry = async (
@@ -485,38 +497,22 @@ export function WorktreeCard({
 
   const aiNoteFirstLine = effectiveNote?.split("\n")[0]?.trim() ?? "";
 
-  const handleAttachIssue = async (issue: GitHubIssue) => {
-    await worktreeClient.attachIssue({
+  // Route attach/detach through the resilient mutation outbox (#9163) instead
+  // of a fire-and-forget IPC. The store applies the local association only once
+  // the Electron-store write lands, replays a mutation that was in flight when
+  // the host crashed, and surfaces failures via `WorktreeIssueErrorBanner`.
+  const handleAttachIssue = (issue: GitHubIssue) => {
+    getCurrentViewStore().getState().startAttachIssue({
       worktreeId: worktree.id,
       issueNumber: issue.number,
       issueTitle: issue.title,
       issueState: issue.state,
       issueUrl: issue.url,
     });
-    // Record the manual association in the store so it survives subsequent
-    // `worktree-update` events (which carry only auto-detected issue state).
-    // This also optimistically re-merges the snapshot for immediate feedback.
-    getCurrentViewStore().getState().setManualAssociation(worktree.id, {
-      issueNumber: issue.number,
-      issueTitle: issue.title,
-    });
   };
 
-  const handleDetachIssue = async () => {
-    await worktreeClient.detachIssue(worktree.id);
-    const store = getCurrentViewStore();
-    store.getState().clearManualAssociation(worktree.id);
-    store.setState((prev) => {
-      const existing = prev.worktrees.get(worktree.id);
-      if (!existing) return prev;
-      const next = new Map(prev.worktrees);
-      next.set(worktree.id, {
-        ...existing,
-        issueNumber: undefined,
-        issueTitle: undefined,
-      });
-      return { worktrees: next };
-    });
+  const handleDetachIssue = () => {
+    getCurrentViewStore().getState().startDetachIssue(worktree.id);
   };
 
   const handleTerminalSelect = (terminal: PtyPanelData) => {
@@ -1039,6 +1035,15 @@ export function WorktreeCard({
                 />
               )}
 
+              {issueError && (
+                <WorktreeIssueErrorBanner
+                  message={issueError.message}
+                  mutationType={issueError.type}
+                  onRetry={handleRetryIssue}
+                  onDismiss={handleDismissIssueError}
+                />
+              )}
+
               <WorktreeDialogs
                 worktree={worktree}
                 confirmDialog={confirmDialog}
@@ -1047,8 +1052,8 @@ export function WorktreeCard({
                 onCloseDeleteDialog={() => setShowDeleteDialog(false)}
                 showIssuePicker={showIssuePicker}
                 onCloseIssuePicker={() => setShowIssuePicker(false)}
-                onAttachIssue={(issue) => void handleAttachIssue(issue)}
-                onDetachIssue={() => void handleDetachIssue()}
+                onAttachIssue={handleAttachIssue}
+                onDetachIssue={handleDetachIssue}
                 showReviewHub={showReviewHub}
                 onCloseReviewHub={onCloseReviewHub}
                 reviewHubInitialCommitMessage={aiNoteFirstLine}
