@@ -837,10 +837,15 @@ export class PluginService {
         // Provenance: prefix the message with the plugin id so users can see
         // which plugin raised the toast. pluginId is bound to the host closure
         // at activation and cannot be spoofed.
+        //
+        // rateLimitKey scopes the rate-limit bucket per plugin+type. Without it
+        // plugin toasts fall into the global type-keyed bucket and a burst of
+        // unrelated system toasts could silently suppress a plugin's toast.
         broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: parsed.data.type,
           message: `${pluginId}: ${parsed.data.message}`,
           duration: parsed.data.durationMs,
+          rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
         });
       },
     };

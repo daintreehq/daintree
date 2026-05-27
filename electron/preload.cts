@@ -1988,6 +1988,8 @@ const api: ElectronAPI = {
         type: "success" | "error" | "info" | "warning";
         title?: string;
         message: string;
+        duration?: number;
+        rateLimitKey?: string;
         action?: { label: string; ipcChannel: string; data?: string };
       }) => void
     ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),

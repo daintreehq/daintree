@@ -2135,10 +2135,12 @@ describe("createHost — showToast", () => {
     broadcastToRendererMock.mockClear();
     await host.showToast({ message: "Synced 12 issues", type: "success" });
 
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
     expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type: "success",
       message: "acme.toast-test: Synced 12 issues",
       duration: undefined,
+      rateLimitKey: "plugin:acme.toast-test:success",
     });
   });
 
@@ -2158,6 +2160,7 @@ describe("createHost — showToast", () => {
       type: "info",
       message: "acme.toast-default: Done",
       duration: undefined,
+      rateLimitKey: "plugin:acme.toast-default:info",
     });
   });
 
@@ -2177,7 +2180,48 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "acme.toast-duration: Saved",
       duration: 3000,
+      rateLimitKey: "plugin:acme.toast-duration:success",
     });
+  });
+
+  it("rejects an out-of-range or non-integer durationMs and does not broadcast", async () => {
+    await writePlugin("toast-dur-range", { name: "acme.toast-dur-range", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-dur-range"
+    );
+
+    broadcastToRendererMock.mockClear();
+    for (const durationMs of [0, -1, 1.5, 60_001]) {
+      await expect(host.showToast({ message: "x", durationMs })).rejects.toThrow(
+        /showToast: invalid options/
+      );
+    }
+    // Boundaries that should pass.
+    await host.showToast({ message: "min", durationMs: 1 });
+    await host.showToast({ message: "max", durationMs: 60_000 });
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a message over the max length and does not broadcast", async () => {
+    await writePlugin("toast-maxlen", { name: "acme.toast-maxlen", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-maxlen"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "x".repeat(2000) });
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+
+    await expect(host.showToast({ message: "x".repeat(2001) })).rejects.toThrow(
+      /showToast: invalid options/
+    );
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an empty/whitespace message and does not broadcast", async () => {
@@ -2243,6 +2287,7 @@ describe("createHost — showToast", () => {
       type: "info",
       message: "acme.toast-revoke: Still alive",
       duration: undefined,
+      rateLimitKey: "plugin:acme.toast-revoke:info",
     });
   });
 
