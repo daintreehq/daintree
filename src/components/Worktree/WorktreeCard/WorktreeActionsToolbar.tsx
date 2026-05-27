@@ -55,9 +55,7 @@ interface WorktreeActionsToolbarProps {
     onCopyPath: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
-    onOpenIssuePortal?: () => void;
     onOpenIssueExternal?: () => void;
-    onOpenPRPortal?: () => void;
     onOpenPRExternal?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
@@ -212,9 +210,7 @@ export function WorktreeActionsToolbar({
             onCopyPath={menu.onCopyPath}
             onOpenEditor={menu.onOpenEditor}
             onRevealInFinder={menu.onRevealInFinder}
-            onOpenIssuePortal={menu.onOpenIssuePortal}
             onOpenIssueExternal={menu.onOpenIssueExternal}
-            onOpenPRPortal={menu.onOpenPRPortal}
             onOpenPRExternal={menu.onOpenPRExternal}
             onAttachIssue={menu.onAttachIssue}
             onViewPlan={menu.onViewPlan}

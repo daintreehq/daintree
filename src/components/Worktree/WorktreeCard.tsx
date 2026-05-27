@@ -355,25 +355,9 @@ export function WorktreeCard({
     teardownCommands,
   });
 
-  const handleOpenIssuePortal = () => {
-    void actionService.dispatch(
-      "worktree.openIssueInPortal",
-      { worktreeId: worktree.id },
-      { source: "user" }
-    );
-  };
-
   const handleOpenIssueExternal = () => {
     void actionService.dispatch(
       "worktree.openIssue",
-      { worktreeId: worktree.id },
-      { source: "user" }
-    );
-  };
-
-  const handleOpenPRPortal = () => {
-    void actionService.dispatch(
-      "worktree.openPRInPortal",
       { worktreeId: worktree.id },
       { source: "user" }
     );
@@ -916,9 +900,7 @@ export function WorktreeCard({
                   onCopyPath: handleCopyPath,
                   onOpenEditor,
                   onRevealInFinder: handlePathClick,
-                  onOpenIssuePortal: worktree.issueNumber ? handleOpenIssuePortal : undefined,
                   onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPRPortal: worktree.linked?.pr?.url ? handleOpenPRPortal : undefined,
                   onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
                   onAttachIssue: () => setShowIssuePicker(true),
                   onViewPlan: () => setShowPlanViewer(true),
@@ -1090,9 +1072,7 @@ export function WorktreeCard({
           onCopyPath={handleCopyPath}
           onOpenEditor={onOpenEditor}
           onRevealInFinder={handlePathClick}
-          onOpenIssuePortal={worktree.issueNumber ? handleOpenIssuePortal : undefined}
           onOpenIssueExternal={worktree.issueNumber ? handleOpenIssueExternal : undefined}
-          onOpenPRPortal={worktree.linked?.pr?.url ? handleOpenPRPortal : undefined}
           onOpenPRExternal={worktree.linked?.pr?.url ? handleOpenPRExternal : undefined}
           onAttachIssue={() => setShowIssuePicker(true)}
           onViewPlan={() => setShowPlanViewer(true)}

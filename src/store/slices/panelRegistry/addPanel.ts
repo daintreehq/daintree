@@ -326,7 +326,7 @@ export const createAddPanelActions = (
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
     const spawnStatus: "spawning" | "ready" = isReconnect ? "ready" : "spawning";
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- panel shape is guaranteed by the registered createDefaults factory
+
     const terminal = {
       id,
       kind,
