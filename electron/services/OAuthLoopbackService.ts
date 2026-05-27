@@ -35,9 +35,20 @@ interface LoopbackSession {
 const activeSessions = new Map<string, LoopbackSession>();
 
 export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OAuthLoopbackResult> {
+  // Validate the renderer-supplied URL before any side effect: a malformed
+  // string would otherwise throw out of the typed-result contract, and
+  // cancelling the in-flight session before validation would kill a live flow
+  // on a bad input.
+  let parsed: URL;
+  try {
+    parsed = new URL(authUrl);
+  } catch {
+    console.warn("[OAuthLoopback] Invalid auth URL");
+    return Promise.resolve({ success: false, cause: "server-error" });
+  }
+
   cancelOAuthLoopback(panelId);
 
-  const parsed = new URL(authUrl);
   const originalRedirectUri = parsed.searchParams.get("redirect_uri");
 
   if (!originalRedirectUri) {

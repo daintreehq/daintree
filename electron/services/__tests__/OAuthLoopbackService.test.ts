@@ -102,6 +102,31 @@ describe("OAuthLoopbackService", () => {
       expect(shell.openExternal).not.toHaveBeenCalled();
     });
 
+    it("returns server-error without throwing on a malformed auth URL", async () => {
+      const result = await startOAuthLoopback("not a url", "test-panel");
+      expect(result).toEqual({ success: false, cause: "server-error" });
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    });
+
+    it("does not cancel an in-flight session when a later call has a malformed URL", async () => {
+      const authUrl =
+        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
+
+      const firstPromise = startOAuthLoopback(authUrl, "test-panel");
+      await vi.waitFor(() => {
+        expect(shell.openExternal).toHaveBeenCalledTimes(1);
+      });
+
+      // A malformed URL for the same panel must not disturb the live flow.
+      const badResult = await startOAuthLoopback("not a url", "test-panel");
+      expect(badResult).toEqual({ success: false, cause: "server-error" });
+
+      // The original session is still live — cancelling it now resolves it.
+      cancelOAuthLoopback("test-panel");
+      const firstResult = await firstPromise;
+      expect(firstResult).toEqual({ success: false, cause: "cancelled" });
+    });
+
     it("never opens a disallowed scheme even with a valid redirect_uri", async () => {
       const redirect = encodeURIComponent("http://localhost:3000/auth/callback");
 
