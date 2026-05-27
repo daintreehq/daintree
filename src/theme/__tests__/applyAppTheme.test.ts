@@ -220,6 +220,17 @@ describe("applyDefaultAppTheme (#9169)", () => {
     expect(root.dataset.theme).toBe("daintree");
   });
 
+  it("falls back to prefers-color-scheme when the seeded id is an empty string", () => {
+    mockPrefersDark(true);
+    window.__DAINTREE_INITIAL_THEME__ = { colorSchemeId: "" };
+    const root = document.createElement("div");
+
+    const applied = applyDefaultAppTheme(root);
+
+    expect(applied.id).toBe("daintree");
+    expect(root.dataset.theme).toBe("daintree");
+  });
+
   it("seeds a non-default built-in scheme that exists in the registry", () => {
     mockPrefersDark(true);
     // Sanity: the seeded id resolves to a real built-in scheme object.

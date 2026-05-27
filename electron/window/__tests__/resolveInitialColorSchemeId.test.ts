@@ -23,7 +23,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { resolveInitialColorSchemeId } from "../skeletonCss.js";
+import { resolveInitialColorSchemeId, INITIAL_COLOR_SCHEME_ARG } from "../skeletonCss.js";
 
 describe("resolveInitialColorSchemeId (#9169)", () => {
   const originalScreenshotScale = process.env.DAINTREE_SCREENSHOT_SCALE;
@@ -81,5 +81,20 @@ describe("resolveInitialColorSchemeId (#9169)", () => {
     mocks.shouldUseDarkColors.value = false;
     process.env.DAINTREE_SCREENSHOT_SCALE = "2";
     expect(resolveInitialColorSchemeId()).toBe("daintree");
+  });
+
+  it("matches the prefix preload.cts parses (drift guard)", () => {
+    // preload.cts hardcodes this literal rather than importing the constant
+    // (esbuild cross-bundle); this ties both halves of the contract together so
+    // a rename of INITIAL_COLOR_SCHEME_ARG fails loudly instead of silently
+    // reintroducing the flash (#9169).
+    expect(`${INITIAL_COLOR_SCHEME_ARG}=`).toBe("--daintree-initial-color-scheme-id=");
+  });
+
+  it("returns a trimmed value with no whitespace for a valid argv flag", () => {
+    mocks.storeGet.mockReturnValue({ colorSchemeId: "  table-mountain  " });
+    const arg = `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`;
+    expect(arg).toBe("--daintree-initial-color-scheme-id=table-mountain");
+    expect(arg).not.toMatch(/\s/);
   });
 });
