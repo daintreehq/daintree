@@ -71,12 +71,17 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(18);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(20);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:keybindings", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:context-menu-items",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:validate-action-ids",
       expect.any(Function)
