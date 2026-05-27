@@ -394,6 +394,37 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue));
 
+  const handleGitHubUnassignIssue = async (payload: {
+    cwd: string;
+    issueNumber: number;
+    username: string;
+  }): Promise<void> => {
+    checkRateLimit(CHANNELS.GITHUB_UNASSIGN_ISSUE, 5, 10_000);
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+      throw new Error("Invalid working directory");
+    }
+    if (!path.isAbsolute(payload.cwd)) {
+      throw new Error("Working directory must be an absolute path");
+    }
+    if (
+      typeof payload.issueNumber !== "number" ||
+      !Number.isInteger(payload.issueNumber) ||
+      payload.issueNumber <= 0
+    ) {
+      throw new Error("Invalid issue number");
+    }
+    const trimmedUsername = payload.username?.trim();
+    if (typeof payload.username !== "string" || !trimmedUsername) {
+      throw new Error("Invalid username");
+    }
+    const { unassignIssue } = await import("../../services/github/index.js");
+    await unassignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
+  };
+  handlers.push(typedHandle(CHANNELS.GITHUB_UNASSIGN_ISSUE, handleGitHubUnassignIssue));
+
   const handleGitHubGetIssueTooltip = async (payload: { cwd: string; issueNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") return null;

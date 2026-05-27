@@ -242,6 +242,54 @@ export async function assignIssue(
   });
 }
 
+export async function unassignIssue(
+  cwd: string,
+  issueNumber: number,
+  username: string
+): Promise<void> {
+  const token = GitHubAuth.getToken();
+  if (!token) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  return withRepoContextRetry(cwd, async (context) => {
+    const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
+
+    try {
+      const response = await rateLimitAwareFetch(url, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ assignees: [username] }),
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("Invalid GitHub token. Please update in Settings.");
+        }
+        if (response.status === 403) {
+          throw new Error("Token lacks required permissions. Required scopes: repo, read:org");
+        }
+        if (response.status === 404) {
+          throw new Error("Issue not found or you don't have access to this repository");
+        }
+        throw new Error(
+          `Cannot unassign user "${username}" - server error (HTTP ${response.status})`
+        );
+      }
+
+      removeIssueAssigneeFromCache(context.owner, context.repo, issueNumber, username);
+    } catch (error) {
+      throw new Error(parseGitHubError(error));
+    }
+  });
+}
+
 function updateIssueAssigneeInCache(
   owner: string,
   repo: string,
@@ -274,6 +322,56 @@ function updateIssueAssigneeInCache(
     } else {
       updatedAssignees = [...existingAssignees, assignee];
     }
+
+    const updatedItems = [...value.items];
+    updatedItems[issueIndex] = {
+      ...updatedItems[issueIndex],
+      assignees: updatedAssignees,
+    };
+
+    updates.push({
+      key,
+      value: {
+        ...value,
+        items: updatedItems,
+      },
+    });
+  });
+
+  for (const update of updates) {
+    issueListCache.set(update.key, update.value);
+  }
+
+  issueTooltipCache.invalidate(`${owner}/${repo}:${issueNumber}`);
+}
+
+function removeIssueAssigneeFromCache(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  username: string
+): void {
+  const cachePrefix = `issue:${owner}/${repo}:`;
+  const normalizedUsername = username.toLowerCase();
+
+  const updates: Array<{ key: string; value: GitHubListResponse<GitHubIssue> }> = [];
+
+  issueListCache.forEach((value, key) => {
+    if (!key.startsWith(cachePrefix)) return;
+
+    const issueIndex = value.items.findIndex((issue) => issue.number === issueNumber);
+    if (issueIndex === -1) return;
+
+    const existingAssignees = value.items[issueIndex].assignees;
+    const existingIndex = existingAssignees.findIndex(
+      (a) => a.login.toLowerCase() === normalizedUsername
+    );
+    if (existingIndex === -1) return;
+
+    const updatedAssignees = [
+      ...existingAssignees.slice(0, existingIndex),
+      ...existingAssignees.slice(existingIndex + 1),
+    ];
 
     const updatedItems = [...value.items];
     updatedItems[issueIndex] = {

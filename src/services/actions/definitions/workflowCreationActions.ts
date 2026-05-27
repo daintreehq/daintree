@@ -81,6 +81,7 @@ export function registerWorkflowCreationActions(
         branch: z.string(),
         recipeLaunched: z.boolean(),
         assignedToSelf: z.boolean(),
+        assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
       }),
       run: async ({
@@ -207,6 +208,7 @@ export function registerWorkflowCreationActions(
                 branch: effectiveBranch,
                 recipeLaunched: false,
                 assignedToSelf: false,
+                assignedUsername: null,
                 assignmentError: null,
               }
             );
@@ -214,6 +216,7 @@ export function registerWorkflowCreationActions(
         }
 
         let assignedToSelf = false;
+        let assignedUsername: string | null = null;
         let assignmentError: string | null = null;
         if (issueNumber && effectiveAssignToSelf) {
           try {
@@ -222,6 +225,7 @@ export function registerWorkflowCreationActions(
               try {
                 await githubClient.assignIssue(rootPath, issueNumber, username);
                 assignedToSelf = true;
+                assignedUsername = username;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
@@ -239,6 +243,7 @@ export function registerWorkflowCreationActions(
           branch: effectiveBranch,
           recipeLaunched,
           assignedToSelf,
+          assignedUsername,
           assignmentError,
         };
       },
@@ -299,6 +304,7 @@ export function registerWorkflowCreationActions(
         terminalId: z.string().nullable(),
         recipeLaunched: z.boolean(),
         assignedToSelf: z.boolean(),
+        assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
         contextInjected: z.boolean(),
       }),
@@ -404,6 +410,7 @@ export function registerWorkflowCreationActions(
                 terminalId: null,
                 recipeLaunched: false,
                 assignedToSelf: false,
+                assignedUsername: null,
                 assignmentError: null,
                 contextInjected: false,
               }
@@ -437,6 +444,7 @@ export function registerWorkflowCreationActions(
               terminalId: null,
               recipeLaunched,
               assignedToSelf: false,
+              assignedUsername: null,
               assignmentError: null,
               contextInjected: false,
             }
@@ -453,6 +461,7 @@ export function registerWorkflowCreationActions(
             terminalId: null,
             recipeLaunched,
             assignedToSelf: false,
+            assignedUsername: null,
             assignmentError: null,
             contextInjected: false,
           });
@@ -470,6 +479,7 @@ export function registerWorkflowCreationActions(
         }
 
         let assignedToSelf = false;
+        let assignedUsername: string | null = null;
         let assignmentError: string | null = null;
         if (effectiveAssignToSelf) {
           try {
@@ -478,6 +488,7 @@ export function registerWorkflowCreationActions(
               try {
                 await githubClient.assignIssue(rootPath, issue.number, username);
                 assignedToSelf = true;
+                assignedUsername = username;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
@@ -499,6 +510,7 @@ export function registerWorkflowCreationActions(
           terminalId,
           recipeLaunched,
           assignedToSelf,
+          assignedUsername,
           assignmentError,
           contextInjected,
         };

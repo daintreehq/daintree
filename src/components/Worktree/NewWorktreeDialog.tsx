@@ -571,6 +571,33 @@ export function NewWorktreeDialog({
         if (!snapUseExisting && snapIssue && snapAssignToSelf && snapCurrentUser) {
           try {
             await githubClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);
+            const assignIssueNumber = snapIssue.number;
+            const assignUsername = snapCurrentUser;
+            const undoFiredRef = { current: false };
+            const undoOnClick = (): void => {
+              if (undoFiredRef.current) return;
+              undoFiredRef.current = true;
+              void githubClient
+                .unassignIssue(rootPath, assignIssueNumber, assignUsername)
+                .catch((err: unknown) => {
+                  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                  notify({
+                    type: "warning",
+                    title: "Couldn't undo assignment",
+                    message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                  });
+                });
+            };
+            notify({
+              type: "success",
+              title: "Issue assigned",
+              message: `#${snapIssue.number} assigned to you`,
+              correlationId: worktreeId,
+              action: {
+                label: "Undo",
+                onClick: undoOnClick,
+              },
+            });
           } catch (assignErr) {
             const message = formatErrorMessage(assignErr, "Failed to assign issue");
             const issueUrl = snapIssue.url;

@@ -3,13 +3,17 @@ import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
+// eslint-disable-next-line no-restricted-imports
+import { githubClient } from "@/clients";
 import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 export type QuickCreateItem =
   | (TerminalRecipe & { _kind: "recipe" })
@@ -152,12 +156,14 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               worktreeId: createdWorktreeId,
               branch,
               assignedToSelf: wasAssigned,
+              assignedUsername,
             } = result.result as {
               worktreeId: string;
               worktreePath: string;
               branch: string;
               recipeLaunched: boolean;
               assignedToSelf: boolean;
+              assignedUsername: string | null;
             };
 
             useWorktreeSelectionStore.getState().setPendingWorktree(createdWorktreeId);
@@ -174,6 +180,40 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const tierIndex = Math.min(comboCountRef.current - 1, tiers.length - 1);
             const tieredMessage = tiers[tierIndex];
 
+            // Sticky toast surface lets users click Undo more than once before
+            // the first invocation resolves; guard so worktree.delete and the
+            // un-assign each fire at most once per success toast.
+            const undoFiredRef = { current: false };
+            const undoOnClick = (): void => {
+              if (undoFiredRef.current) return;
+              undoFiredRef.current = true;
+              void (async () => {
+                try {
+                  await actionService.dispatch(
+                    "worktree.delete",
+                    { worktreeId: createdWorktreeId, force: true },
+                    { source: "user" }
+                  );
+                } catch (err) {
+                  logError("Undo: failed to delete worktree", err);
+                }
+                if (wasAssigned && issueNumber && assignedUsername) {
+                  const rootPath = useProjectStore.getState().currentProject?.path;
+                  if (!rootPath) return;
+                  try {
+                    await githubClient.unassignIssue(rootPath, issueNumber, assignedUsername);
+                  } catch (err) {
+                    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                    notify({
+                      type: "warning",
+                      title: "Couldn't undo assignment",
+                      message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                    });
+                  }
+                }
+              })();
+            };
+
             notify({
               type: "success",
               title: "Worktree created",
@@ -187,7 +227,12 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               correlationId: createdWorktreeId,
               action: {
                 label: "Undo",
-                onClick: () => {},
+                onClick: undoOnClick,
+                // The toast surface fires `onClick` (full delete + un-assign);
+                // the inbox-row fallback at NotificationCenterEntry.tsx only
+                // dispatches `actionId`, so it stays delete-only — matching
+                // pre-fix behavior rather than a silent regression. The toast
+                // is the primary undo surface (sticky during the action stack).
                 actionId: "worktree.delete",
                 actionArgs: { worktreeId: createdWorktreeId, force: true },
               },

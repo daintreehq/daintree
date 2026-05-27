@@ -696,7 +696,32 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     )) as Record<string, unknown>;
     expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
     expect(result.assignedToSelf).toBe(true);
+    expect(result.assignedUsername).toBe("ada");
     expect(result.assignmentError).toBeNull();
+  });
+
+  it("assignedUsername is null when no assignment occurs", async () => {
+    setGithubUser("ada");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: false },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignedUsername).toBeNull();
+  });
+
+  it("assignedUsername is null when assignment fails", async () => {
+    setGithubUser("ada");
+    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+    expect(result.assignedToSelf).toBe(false);
+    expect(result.assignedUsername).toBeNull();
+    expect(result.assignmentError).toBe("403 Forbidden");
   });
 
   it("assignToSelf omitted falls back to assignWorktreeToSelf preference (true)", async () => {

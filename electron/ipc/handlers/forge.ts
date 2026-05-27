@@ -125,6 +125,34 @@ export function registerForgeHandlers(): () => void {
   );
 
   cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_UNASSIGN_ISSUE,
+      async (payload: { cwd: string; issueNumber: number; username: string }) => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.issueNumber !== "number" ||
+          !Number.isInteger(payload.issueNumber) ||
+          payload.issueNumber <= 0
+        ) {
+          throw new Error("Invalid issue number");
+        }
+        const trimmedUsername = payload.username?.trim();
+        if (typeof payload.username !== "string" || !trimmedUsername) {
+          throw new Error("Invalid username");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        await impl.unassignIssue(repoRef, payload.issueNumber, trimmedUsername);
+      }
+    )
+  );
+
+  cleanups.push(
     typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {
       if (typeof token !== "string" || !token.trim()) {
         return { valid: false as const, error: "Token is required" };
