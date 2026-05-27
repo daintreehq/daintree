@@ -250,163 +250,165 @@ interface NotificationHistoryState {
 export const useNotificationHistoryStore = create<NotificationHistoryState>()(
   persist(
     (set, get) => ({
-  entries: [],
-  unreadCount: 0,
-  evictedToInboxCount: 0,
-  addEntry: (entry) => {
-    const { supersedes, ...rest } = entry;
-    const seenAsToast = rest.seenAsToast ?? false;
-    const countable = rest.countable ?? true;
-    const newEntry: NotificationHistoryEntry = {
-      ...rest,
-      seenAsToast,
-      summarized: false,
-      countable,
-      archivedAt: null,
-      id: crypto.randomUUID(),
-      timestamp: Date.now(),
-    };
-    set((state) => {
-      // Resolve supersede target inside the same set() so the insert + archive
-      // land atomically — observers never see an unread count that omits one
-      // change but includes the other.
-      let archiveId: string | undefined;
-      if (supersedes) {
-        const target = state.entries.find((e) => e.id === supersedes);
-        if (target && !target.archivedAt) archiveId = target.id;
-      } else if (rest.supersedeKey) {
-        const target = state.entries.find(
-          (e) => e.supersedeKey === rest.supersedeKey && !e.archivedAt
-        );
-        if (target) archiveId = target.id;
-      }
-
-      const now = Date.now();
-      const sourceEntries = archiveId
-        ? state.entries.map((e) =>
-            e.id === archiveId ? { ...e, archivedAt: now, seenAsToast: true } : e
-          )
-        : state.entries;
-
-      const candidate = [newEntry, ...sourceEntries];
-      const updated = pruneNotificationEntries(candidate, now);
-      return { entries: updated, unreadCount: computeUnreadCount(updated) };
-    });
-    return newEntry.id;
-  },
-  updateEntryMessage: (id, message) => {
-    const state = get();
-    const entry = state.entries.find((e) => e.id === id);
-    if (!entry || entry.archivedAt) return false;
-    set({
-      entries: state.entries.map((e) => (e.id === id ? { ...e, message } : e)),
-    });
-    return true;
-  },
-  markUnseenAsToast: (id, options) =>
-    set((state) => {
-      const entry = state.entries.find((e) => e.id === id);
-      // Archived entries are done — never re-evict them into the unread/
-      // overflow path. Without this guard a late toast expiry would flip
-      // seenAsToast back to false on an archived entry and inflate
-      // evictedToInboxCount even though unreadCount stays correct.
-      if (!entry || !entry.seenAsToast || entry.archivedAt) return state;
-      const entries = state.entries.map((e) => (e.id === id ? { ...e, seenAsToast: false } : e));
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-        evictedToInboxCount: options?.silent
-          ? state.evictedToInboxCount
-          : state.evictedToInboxCount + 1,
-      };
-    }),
-  dismissEntry: (id) =>
-    set((state) => {
-      const entries = state.entries.filter((e) => e.id !== id);
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-      };
-    }),
-  dismissByCorrelationId: (correlationId) =>
-    set((state) => {
-      const entries = state.entries.filter((e) => e.correlationId !== correlationId);
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-      };
-    }),
-  archiveEntry: (id) =>
-    set((state) => {
-      const entry = state.entries.find((e) => e.id === id);
-      if (!entry || entry.archivedAt) return state;
-      const now = Date.now();
-      const entries = state.entries.map((e) =>
-        e.id === id ? { ...e, archivedAt: now, seenAsToast: true } : e
-      );
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-      };
-    }),
-  archiveByCorrelationId: (correlationId) =>
-    set((state) => {
-      let mutated = false;
-      const now = Date.now();
-      const entries = state.entries.map((e) => {
-        if (e.correlationId === correlationId && !e.archivedAt) {
-          mutated = true;
-          return { ...e, archivedAt: now, seenAsToast: true };
-        }
-        return e;
-      });
-      if (!mutated) return state;
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-      };
-    }),
-  clearAll: () => set({ entries: [], unreadCount: 0, evictedToInboxCount: 0 }),
-  markAllRead: () =>
-    set((state) => ({
+      entries: [],
       unreadCount: 0,
-      entries: state.entries.map((e) => (e.seenAsToast ? e : { ...e, seenAsToast: true })),
-    })),
-  markIdsRead: (ids) =>
-    set((state) => {
-      if (ids.length === 0) return state;
-      const idSet = new Set(ids);
-      let mutated = false;
-      const entries = state.entries.map((e) => {
-        if (idSet.has(e.id) && !e.seenAsToast) {
-          mutated = true;
-          return { ...e, seenAsToast: true };
-        }
-        return e;
-      });
-      if (!mutated) return state;
-      return {
-        entries,
-        unreadCount: computeUnreadCount(entries),
-      };
-    }),
-  markSummarized: (ids) =>
-    set((state) => {
-      const idSet = new Set(ids);
-      return {
-        entries: state.entries.map((e) =>
-          idSet.has(e.id) && !e.summarized ? { ...e, summarized: true } : e
-        ),
-      };
-    }),
-  resetEvictedCount: () =>
-    set((state) => (state.evictedToInboxCount === 0 ? state : { evictedToInboxCount: 0 })),
-  pruneExpiredEntries: (now = Date.now()) =>
-    set((state) => {
-      const filtered = pruneNotificationEntries(state.entries, now);
-      if (filtered.length === state.entries.length) return state;
-      return { entries: filtered, unreadCount: computeUnreadCount(filtered) };
-    }),
+      evictedToInboxCount: 0,
+      addEntry: (entry) => {
+        const { supersedes, ...rest } = entry;
+        const seenAsToast = rest.seenAsToast ?? false;
+        const countable = rest.countable ?? true;
+        const newEntry: NotificationHistoryEntry = {
+          ...rest,
+          seenAsToast,
+          summarized: false,
+          countable,
+          archivedAt: null,
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+        };
+        set((state) => {
+          // Resolve supersede target inside the same set() so the insert + archive
+          // land atomically — observers never see an unread count that omits one
+          // change but includes the other.
+          let archiveId: string | undefined;
+          if (supersedes) {
+            const target = state.entries.find((e) => e.id === supersedes);
+            if (target && !target.archivedAt) archiveId = target.id;
+          } else if (rest.supersedeKey) {
+            const target = state.entries.find(
+              (e) => e.supersedeKey === rest.supersedeKey && !e.archivedAt
+            );
+            if (target) archiveId = target.id;
+          }
+
+          const now = Date.now();
+          const sourceEntries = archiveId
+            ? state.entries.map((e) =>
+                e.id === archiveId ? { ...e, archivedAt: now, seenAsToast: true } : e
+              )
+            : state.entries;
+
+          const candidate = [newEntry, ...sourceEntries];
+          const updated = pruneNotificationEntries(candidate, now);
+          return { entries: updated, unreadCount: computeUnreadCount(updated) };
+        });
+        return newEntry.id;
+      },
+      updateEntryMessage: (id, message) => {
+        const state = get();
+        const entry = state.entries.find((e) => e.id === id);
+        if (!entry || entry.archivedAt) return false;
+        set({
+          entries: state.entries.map((e) => (e.id === id ? { ...e, message } : e)),
+        });
+        return true;
+      },
+      markUnseenAsToast: (id, options) =>
+        set((state) => {
+          const entry = state.entries.find((e) => e.id === id);
+          // Archived entries are done — never re-evict them into the unread/
+          // overflow path. Without this guard a late toast expiry would flip
+          // seenAsToast back to false on an archived entry and inflate
+          // evictedToInboxCount even though unreadCount stays correct.
+          if (!entry || !entry.seenAsToast || entry.archivedAt) return state;
+          const entries = state.entries.map((e) =>
+            e.id === id ? { ...e, seenAsToast: false } : e
+          );
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+            evictedToInboxCount: options?.silent
+              ? state.evictedToInboxCount
+              : state.evictedToInboxCount + 1,
+          };
+        }),
+      dismissEntry: (id) =>
+        set((state) => {
+          const entries = state.entries.filter((e) => e.id !== id);
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+          };
+        }),
+      dismissByCorrelationId: (correlationId) =>
+        set((state) => {
+          const entries = state.entries.filter((e) => e.correlationId !== correlationId);
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+          };
+        }),
+      archiveEntry: (id) =>
+        set((state) => {
+          const entry = state.entries.find((e) => e.id === id);
+          if (!entry || entry.archivedAt) return state;
+          const now = Date.now();
+          const entries = state.entries.map((e) =>
+            e.id === id ? { ...e, archivedAt: now, seenAsToast: true } : e
+          );
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+          };
+        }),
+      archiveByCorrelationId: (correlationId) =>
+        set((state) => {
+          let mutated = false;
+          const now = Date.now();
+          const entries = state.entries.map((e) => {
+            if (e.correlationId === correlationId && !e.archivedAt) {
+              mutated = true;
+              return { ...e, archivedAt: now, seenAsToast: true };
+            }
+            return e;
+          });
+          if (!mutated) return state;
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+          };
+        }),
+      clearAll: () => set({ entries: [], unreadCount: 0, evictedToInboxCount: 0 }),
+      markAllRead: () =>
+        set((state) => ({
+          unreadCount: 0,
+          entries: state.entries.map((e) => (e.seenAsToast ? e : { ...e, seenAsToast: true })),
+        })),
+      markIdsRead: (ids) =>
+        set((state) => {
+          if (ids.length === 0) return state;
+          const idSet = new Set(ids);
+          let mutated = false;
+          const entries = state.entries.map((e) => {
+            if (idSet.has(e.id) && !e.seenAsToast) {
+              mutated = true;
+              return { ...e, seenAsToast: true };
+            }
+            return e;
+          });
+          if (!mutated) return state;
+          return {
+            entries,
+            unreadCount: computeUnreadCount(entries),
+          };
+        }),
+      markSummarized: (ids) =>
+        set((state) => {
+          const idSet = new Set(ids);
+          return {
+            entries: state.entries.map((e) =>
+              idSet.has(e.id) && !e.summarized ? { ...e, summarized: true } : e
+            ),
+          };
+        }),
+      resetEvictedCount: () =>
+        set((state) => (state.evictedToInboxCount === 0 ? state : { evictedToInboxCount: 0 })),
+      pruneExpiredEntries: (now = Date.now()) =>
+        set((state) => {
+          const filtered = pruneNotificationEntries(state.entries, now);
+          if (filtered.length === state.entries.length) return state;
+          return { entries: filtered, unreadCount: computeUnreadCount(filtered) };
+        }),
     }),
     {
       name: NOTIFICATION_HISTORY_STORAGE_KEY,

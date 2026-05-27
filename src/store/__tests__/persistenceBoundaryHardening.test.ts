@@ -674,7 +674,10 @@ describe("persistence boundary hardening", () => {
       vi.advanceTimersByTime(300);
 
       expect(setItem).toHaveBeenCalledTimes(1);
-      expect(setItem).toHaveBeenCalledWith("k", JSON.stringify({ state: { value: 3 }, version: 1 }));
+      expect(setItem).toHaveBeenCalledWith(
+        "k",
+        JSON.stringify({ state: { value: 3 }, version: 1 })
+      );
 
       vi.useRealTimers();
     });

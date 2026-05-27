@@ -1095,8 +1095,12 @@ describe("notificationHistorySlice", () => {
     });
 
     it("rejects entries missing a string id", () => {
-      expect(sanitizePersistedEntry({ id: 123, timestamp: 1, type: "info", message: "" })).toBeNull();
-      expect(sanitizePersistedEntry({ id: "", timestamp: 1, type: "info", message: "" })).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: 123, timestamp: 1, type: "info", message: "" })
+      ).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: "", timestamp: 1, type: "info", message: "" })
+      ).toBeNull();
     });
 
     it("rejects entries with non-finite timestamp", () => {
