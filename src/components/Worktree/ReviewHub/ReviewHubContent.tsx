@@ -71,7 +71,6 @@ import {
   FILTER_DEBOUNCE_MS,
   getPushBannerConfig,
   isDensity,
-  isGeneratedFile,
   isSortKey,
   matchesFilter,
   readGitErrorFields,
@@ -79,6 +78,7 @@ import {
   truncateFilterQuery,
   getBaseBranchStatusConfig,
 } from "./reviewHubUtils";
+import { isGeneratedFile } from "../generatedFileClassifier";
 
 export interface ReviewHubContentProps {
   /**

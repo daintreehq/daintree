@@ -260,25 +260,6 @@ export const DEFAULT_SECTION_STATE: SectionViewState = {
   showGenerated: true,
 };
 
-const GENERATED_FILE_PATTERNS = [
-  /(^|\/)package-lock\.json$/,
-  /(^|\/)pnpm-lock\.yaml$/,
-  /(^|\/)yarn\.lock$/,
-  /(^|\/)bun\.lockb?$/,
-  /(^|\/)Cargo\.lock$/,
-  /(^|\/)Gemfile\.lock$/,
-  /(^|\/)composer\.lock$/,
-  /(^|\/)poetry\.lock$/,
-  /\.gen\.\w+$/,
-  /\.generated\.\w+$/,
-  /__generated__\//,
-];
-
-export function isGeneratedFile(path: string): boolean {
-  const normalized = path.replace(/\\/g, "/");
-  return GENERATED_FILE_PATTERNS.some((re) => re.test(normalized));
-}
-
 export function matchesFilter(path: string, query: string): boolean {
   const trimmed = query.trim().replace(/\\/g, "/");
   if (!trimmed) return true;

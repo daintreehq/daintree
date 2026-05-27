@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { isGeneratedFile } from "./generatedFiles";
+import { isGeneratedFile } from "../generatedFileClassifier";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
