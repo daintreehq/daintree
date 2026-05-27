@@ -50,3 +50,24 @@ export interface DevPreviewStateChangedPayload {
 export interface DevPreviewGetByWorktreeRequest {
   worktreeId: string;
 }
+
+export type DevPreviewPackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+export interface DevPreviewDirMeta {
+  relPath: string;
+  exists: boolean;
+  mtimeMs: number | null;
+}
+
+export interface DevPreviewDestructivePreviewMeta {
+  cwd: string;
+  cacheDirs: DevPreviewDirMeta[];
+  nodeModules: DevPreviewDirMeta;
+  packageManager: DevPreviewPackageManager;
+  lockfileName: string | null;
+}
+
+export interface DevPreviewDestructivePreviewSizes {
+  cacheDirSizes: Record<string, number | null>;
+  nodeModulesSizeBytes: number | null;
+}

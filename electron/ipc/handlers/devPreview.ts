@@ -94,6 +94,20 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.getByWorktree(request.worktreeId);
         }
       ),
+      getDestructivePreviewMeta: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewMeta,
+        async (request: DevPreviewSessionRequest) => {
+          const svc = await getSessionService();
+          return svc.getDestructivePreviewMeta(request);
+        }
+      ),
+      getDestructivePreviewSizes: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewSizes,
+        async (request: DevPreviewSessionRequest) => {
+          const svc = await getSessionService();
+          return svc.getDestructivePreviewSizes(request);
+        }
+      ),
     },
   });
 

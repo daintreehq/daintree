@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +32,10 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewSessionStatus,
+  DevPreviewDirMeta,
+  DevPreviewDestructivePreviewMeta,
+  DevPreviewDestructivePreviewSizes,
+  DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -1263,12 +1268,173 @@ export class DevPreviewSessionService {
   }
 
   private detectInstallCommand(cwd: string): string {
-    if (existsSync(path.join(cwd, "bun.lock")) || existsSync(path.join(cwd, "bun.lockb"))) {
-      return "bun install";
+    const info = this.detectPackageManagerInfo(cwd);
+    return `${info.packageManager} install`;
+  }
+
+  // Lockfile precedence mirrors detectInstallCommand: bun > pnpm > yarn > npm.
+  // package-lock.json is only used to report the lockfile name when no other
+  // lockfile is present; it does not change the install command (npm is the
+  // default fallback regardless).
+  private detectPackageManagerInfo(cwd: string): {
+    packageManager: DevPreviewPackageManager;
+    lockfileName: string | null;
+  } {
+    if (existsSync(path.join(cwd, "bun.lock"))) {
+      return { packageManager: "bun", lockfileName: "bun.lock" };
     }
-    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm install";
-    if (existsSync(path.join(cwd, "yarn.lock"))) return "yarn install";
-    return "npm install";
+    if (existsSync(path.join(cwd, "bun.lockb"))) {
+      return { packageManager: "bun", lockfileName: "bun.lockb" };
+    }
+    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
+      return { packageManager: "pnpm", lockfileName: "pnpm-lock.yaml" };
+    }
+    if (existsSync(path.join(cwd, "yarn.lock"))) {
+      return { packageManager: "yarn", lockfileName: "yarn.lock" };
+    }
+    if (existsSync(path.join(cwd, "package-lock.json"))) {
+      return { packageManager: "npm", lockfileName: "package-lock.json" };
+    }
+    return { packageManager: "npm", lockfileName: null };
+  }
+
+  async getDestructivePreviewMeta(
+    request: DevPreviewSessionRequest
+  ): Promise<DevPreviewDestructivePreviewMeta> {
+    validateSessionRequest(request);
+    const cwd = this.resolveSessionCwd(request);
+    const [cacheDirs, nodeModules] = await Promise.all([
+      Promise.all(CACHE_DIRS.map((relPath) => this.statDirMeta(cwd, relPath))),
+      this.statDirMeta(cwd, "node_modules"),
+    ]);
+    const pmInfo = this.detectPackageManagerInfo(cwd);
+    return {
+      cwd,
+      cacheDirs,
+      nodeModules,
+      packageManager: pmInfo.packageManager,
+      lockfileName: pmInfo.lockfileName,
+    };
+  }
+
+  async getDestructivePreviewSizes(
+    request: DevPreviewSessionRequest
+  ): Promise<DevPreviewDestructivePreviewSizes> {
+    validateSessionRequest(request);
+    const cwd = this.resolveSessionCwd(request);
+    const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
+      Promise.all(
+        CACHE_DIRS.map(async (relPath) => {
+          const size = await this.computeDirSize(path.join(cwd, relPath));
+          return [relPath, size] as const;
+        })
+      ),
+      this.computeDirSize(path.join(cwd, "node_modules")),
+    ]);
+    return {
+      cacheDirSizes: Object.fromEntries(cacheDirEntries),
+      nodeModulesSizeBytes,
+    };
+  }
+
+  private resolveSessionCwd(request: DevPreviewSessionRequest): string {
+    const key = createSessionKey(request.projectId, request.panelId);
+    const session = this.sessions.get(key);
+    if (!session) {
+      throw new Error(
+        `No dev-preview session for panel ${request.panelId} in project ${request.projectId}`
+      );
+    }
+    return session.cwd;
+  }
+
+  private async statDirMeta(cwd: string, relPath: string): Promise<DevPreviewDirMeta> {
+    const fullPath = path.join(cwd, relPath);
+    try {
+      const stat = await fsPromises.stat(fullPath);
+      if (!stat.isDirectory()) {
+        return { relPath, exists: false, mtimeMs: null };
+      }
+      return { relPath, exists: true, mtimeMs: stat.mtimeMs };
+    } catch {
+      return { relPath, exists: false, mtimeMs: null };
+    }
+  }
+
+  private async computeDirSize(dirPath: string): Promise<number | null> {
+    try {
+      const stat = await fsPromises.stat(dirPath);
+      if (!stat.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    if (process.platform === "win32") {
+      return this.computeDirSizeWalk(dirPath);
+    }
+    return this.computeDirSizeDu(dirPath);
+  }
+
+  // POSIX path: shell out to `du -sk` (kilobytes). execFile avoids shell
+  // interpretation entirely — dirPath cannot inject. `du` deduplicates
+  // hardlinks by inode within the traversal, so pnpm-linked files inside
+  // node_modules count once per inode (still reports apparent content size,
+  // not the disk that would actually be reclaimed by deletion).
+  private async computeDirSizeDu(dirPath: string): Promise<number | null> {
+    return new Promise((resolve) => {
+      execFile(
+        "du",
+        ["-sk", dirPath],
+        { maxBuffer: 1024 * 1024, timeout: 30_000 },
+        (err, stdout) => {
+          if (err) return resolve(null);
+          const firstField = stdout.trim().split(/\s+/, 1)[0];
+          const kilobytes = Number.parseInt(firstField, 10);
+          if (!Number.isFinite(kilobytes)) return resolve(null);
+          resolve(kilobytes * 1024);
+        }
+      );
+    });
+  }
+
+  // Windows fallback: no `du` available. Walks the tree with opendir,
+  // accumulating file sizes via lstat. Tracks an inode set to dedupe
+  // hardlinks where the FS reports a stable inode (NTFS returns 0/unstable
+  // values in some cases — those entries simply count each time, accepting a
+  // small over-report on edge filesystems).
+  private async computeDirSizeWalk(dirPath: string): Promise<number | null> {
+    try {
+      let total = 0;
+      const seenInos = new Set<string>();
+      const stack: string[] = [dirPath];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        let handle: Awaited<ReturnType<typeof fsPromises.opendir>>;
+        try {
+          handle = await fsPromises.opendir(cur);
+        } catch {
+          continue;
+        }
+        for await (const ent of handle) {
+          const full = path.join(cur, ent.name);
+          if (ent.isDirectory()) {
+            stack.push(full);
+          } else if (ent.isFile() || ent.isSymbolicLink()) {
+            try {
+              const st = await fsPromises.lstat(full);
+              const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
+              if (inoKey && seenInos.has(inoKey)) continue;
+              if (inoKey) seenInos.add(inoKey);
+              total += st.size;
+            } catch {
+              // skip unreadable
+            }
+          }
+        }
+      }
+      return total;
+    } catch {
+      return null;
+    }
   }
 
   private pollServerReadiness(

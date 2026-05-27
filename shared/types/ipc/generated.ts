@@ -192,6 +192,14 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewGetByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState | null;
   };
+  "dev-preview:get-destructive-preview-meta": {
+    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    result: import("./devPreview.js").DevPreviewDestructivePreviewMeta;
+  };
+  "dev-preview:get-destructive-preview-sizes": {
+    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
+  };
   "dev-preview:get-state": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
