@@ -1717,11 +1717,11 @@
     "pipelineErrors": []
   },
   "src/components/Recovery/CrashRecoveryDialog.tsx": {
-    "success": 2,
+    "success": 3,
     "skip": 0,
-    "error": 1,
+    "error": 2,
     "pipeline": 0,
-    "hintCount": 1,
+    "hintCount": 2,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
