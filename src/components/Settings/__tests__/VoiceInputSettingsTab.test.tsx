@@ -87,7 +87,7 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
     checkMicPermission: vi.fn().mockResolvedValue("unknown"),
     requestMicPermission: vi.fn().mockResolvedValue(undefined),
     openMicSettings: vi.fn(),
-    validateApiKey: vi.fn().mockResolvedValue("idle"),
+    validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
     ...overrides,
   };
 }
@@ -152,6 +152,7 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
   });
 
@@ -180,6 +181,7 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.queryByText(/stored locally in plain text/)).toBeNull();
     });
   });
 });

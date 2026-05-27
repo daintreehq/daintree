@@ -79,6 +79,12 @@ export function getVoiceSettings(): VoiceInputSettings {
     store.set("voiceInput", merged);
   }
 
+  // Env-var override takes absolute precedence over stored key.
+  const envKey = process.env.WHISPER_API_KEY?.trim();
+  if (envKey) {
+    merged.openaiApiKey = envKey;
+  }
+
   return merged;
 }
 
@@ -147,8 +153,34 @@ function openMicSettings(): void {
   }
 }
 
-async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
-  if (!apiKey.trim()) {
+async function parseOpenAIErrorBody(
+  response: Response
+): Promise<{ message?: string; code?: string } | undefined> {
+  const contentType = response.headers.get("content-type");
+  if (!contentType?.includes("application/json")) {
+    return undefined;
+  }
+  try {
+    const body = (await response.json()) as {
+      error?: { message?: unknown; code?: unknown };
+    };
+    const err = body?.error;
+    if (err && typeof err === "object") {
+      return {
+        message: typeof err.message === "string" ? err.message : undefined,
+        code: typeof err.code === "string" ? err.code : undefined,
+      };
+    }
+  } catch {
+    // Non-JSON body or parse failure.
+  }
+  return undefined;
+}
+
+export async function validateOpenAIKey(
+  apiKey: string
+): Promise<{ valid: boolean; error?: string }> {
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
     return { valid: false, error: "API key is required" };
   }
 
@@ -165,17 +197,37 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
       return { valid: true };
     }
 
+    const body = await parseOpenAIErrorBody(response);
+
     if (response.status === 401) {
-      return { valid: false, error: "Invalid API key" };
+      return { valid: false, error: body?.message || "Invalid API key" };
     }
 
     if (response.status === 429) {
+      if (body?.code === "insufficient_quota") {
+        return {
+          valid: false,
+          error:
+            "API key is valid but the OpenAI account has no credits. Add a payment method to continue.",
+        };
+      }
+      // rate_limit_exceeded and unknown 429 codes are transient — key is valid.
       return { valid: true };
     }
 
-    return { valid: false, error: `API returned status ${response.status}` };
+    if (response.status === 403) {
+      if (body?.code === "unsupported_country_region_territory") {
+        return {
+          valid: false,
+          error: body.message || "OpenAI is not available in your current region.",
+        };
+      }
+      return { valid: false, error: body?.message || "Access denied" };
+    }
+
+    return { valid: false, error: body?.message || `API returned status ${response.status}` };
   } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
+    if (error instanceof Error && error.name === "AbortError") {
       return { valid: false, error: "Connection timed out" };
     }
     return { valid: false, error: "Failed to connect to OpenAI" };
