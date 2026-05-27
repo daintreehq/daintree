@@ -10,14 +10,31 @@ function nextV(): WorktreeEventVersion {
   return { epoch: TEST_EPOCH, seq: ++_seq };
 }
 
-const { worktreeClientDeleteMock, closeTerminalsForWorktreeMock, notifyMock } = vi.hoisted(() => ({
+const {
+  worktreeClientDeleteMock,
+  closeTerminalsForWorktreeMock,
+  notifyMock,
+  devPreviewGetByWorktreeMock,
+  devPreviewStopByWorktreeMock,
+} = vi.hoisted(() => ({
   worktreeClientDeleteMock:
     vi.fn<
       (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
     >(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
   notifyMock: vi.fn(),
+  devPreviewGetByWorktreeMock: vi.fn(),
+  devPreviewStopByWorktreeMock: vi.fn(),
 }));
+
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
+  ...((window as unknown as Record<string, unknown>).electron ?? {}),
+  devPreview: {
+    getByWorktree: devPreviewGetByWorktreeMock,
+    stopByWorktree: devPreviewStopByWorktreeMock,
+  },
+};
 
 vi.mock("@/clients", async () => {
   const actual = await vi.importActual<typeof import("@/clients")>("@/clients");
@@ -66,8 +83,14 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     worktreeClientDeleteMock.mockReset();
     closeTerminalsForWorktreeMock.mockReset();
     notifyMock.mockReset();
+    devPreviewGetByWorktreeMock.mockReset();
+    devPreviewStopByWorktreeMock.mockReset();
     worktreeClientDeleteMock.mockResolvedValue();
     closeTerminalsForWorktreeMock.mockResolvedValue();
+    // Default: no dev preview session for the worktree. Tests opt-in by
+    // overriding the mock per case.
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    devPreviewStopByWorktreeMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -116,6 +139,86 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       undefined,
       expect.any(String)
     );
+  });
+
+  it("stops a running dev preview before delete and emits a transient success toast (#9084)", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce({
+      panelId: "panel-1",
+      projectId: "project-1",
+      worktreeId: "wt-1",
+      status: "running",
+      url: "http://localhost:5173",
+      assignedUrl: null,
+      error: null,
+      terminalId: "t-1",
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    });
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(worktreeClientDeleteMock).toHaveBeenCalled();
+    // stopByWorktree must precede the git delete call to avoid Windows
+    // directory-lock failures.
+    const stopOrder = devPreviewStopByWorktreeMock.mock.invocationCallOrder[0]!;
+    const deleteOrder = worktreeClientDeleteMock.mock.invocationCallOrder[0]!;
+    expect(stopOrder).toBeLessThan(deleteOrder);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "success",
+        title: "Dev server stopped",
+        transient: true,
+      })
+    );
+  });
+
+  it("aborts the delete when stopByWorktree fails and records the error (#9084)", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce({
+      panelId: "panel-1",
+      projectId: "project-1",
+      worktreeId: "wt-1",
+      status: "running",
+      url: "http://localhost:5173",
+      assignedUrl: null,
+      error: null,
+      terminalId: "t-1",
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    });
+    devPreviewStopByWorktreeMock.mockRejectedValueOnce(new Error("stop failed"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+    expect(store.getState().deleteErrors.get("wt-1")).toMatch(/stop failed/);
+  });
+
+  it("skips stopByWorktree when no dev preview is running", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce(null);
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
+    expect(worktreeClientDeleteMock).toHaveBeenCalled();
   });
 
   it("startDelete without closeTerminals skips terminal cleanup", async () => {
@@ -313,6 +416,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
     expect(store.getState().deletingIds.has("wt-1")).toBe(true);
     expect(store.getState().deletingIds.has("wt-2")).toBe(true);
+
+    // Let the pre-delete getByWorktree microtask resolve so the deferred
+    // worktreeClient.delete mocks attach their resolvers/rejecters.
+    await flushPromises();
+    await flushPromises();
 
     rejectWt2(new Error("wt-2 failed"));
     await flushPromises();

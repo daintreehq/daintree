@@ -162,6 +162,8 @@ export function useWorktreeBulkRemove({
 
     const queue = new PQueue({ concurrency: 4, timeout: 30_000 });
     let successCount = 0;
+    let stoppedDevServerCount = 0;
+    let stoppedDevServerName: string | null = null;
     const failures: Array<{ name: string; reason: string }> = [];
     const total = targets.length;
 
@@ -175,6 +177,19 @@ export function useWorktreeBulkRemove({
       await queue.addAll(
         targets.map((target) => async () => {
           try {
+            // Stop dev preview BEFORE `git worktree remove` (#9084). On
+            // Windows the dev server's directory lock would otherwise block
+            // the removal outright. A stop failure is folded into the
+            // partial-failure path so the bulk run can continue with other
+            // targets.
+            const existing = await window.electron.devPreview.getByWorktree({
+              worktreeId: target.id,
+            });
+            if (existing && existing.status !== "stopped") {
+              await window.electron.devPreview.stopByWorktree({ worktreeId: target.id });
+              stoppedDevServerCount++;
+              stoppedDevServerName = target.name;
+            }
             await worktreeClient.delete(target.id, true, false);
             successCount++;
           } catch (err) {
@@ -192,13 +207,19 @@ export function useWorktreeBulkRemove({
         // not something the user needs to revisit from the notification
         // inbox (#8249).
         const successTitle = total === 1 ? "Removed 1 worktree" : `Removed ${total} worktrees`;
+        let successMessage =
+          total === 1
+            ? "The worktree directory was deleted from disk."
+            : `${total} worktree directories were deleted from disk.`;
+        if (stoppedDevServerCount === 1 && stoppedDevServerName) {
+          successMessage = `${successMessage} Stopped dev server for ${stoppedDevServerName}.`;
+        } else if (stoppedDevServerCount > 1) {
+          successMessage = `${successMessage} Stopped ${stoppedDevServerCount} dev servers.`;
+        }
         notify({
           type: "success",
           title: successTitle,
-          message:
-            total === 1
-              ? "The worktree directory was deleted from disk."
-              : `${total} worktree directories were deleted from disk.`,
+          message: successMessage,
           transient: true,
         });
         announce(successTitle);

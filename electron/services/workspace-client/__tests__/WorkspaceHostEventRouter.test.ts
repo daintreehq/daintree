@@ -191,6 +191,23 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("sys:worktree:remove (#9084)", () => {
+    it("emits sys:worktree:remove when a worktree-removed event arrives", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-deleted",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 1,
+      });
+
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:worktree:remove",
+        expect.objectContaining({ worktreeId: "wt-deleted" })
+      );
+    });
+  });
+
   describe("pr-detected IPC payload (#8870)", () => {
     function makeWebContents() {
       return {

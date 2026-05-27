@@ -78,3 +78,7 @@ export interface DevPreviewDestructivePreviewSizes {
   cacheDirSizes: Record<string, number | null>;
   nodeModulesSizeBytes: number | null;
 }
+
+export interface DevPreviewStopByWorktreeRequest {
+  worktreeId: string;
+}

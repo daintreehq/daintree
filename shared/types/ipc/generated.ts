@@ -224,6 +224,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewStopByPanelRequest];
     result: void;
   };
+  "dev-preview:stop-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewStopByWorktreeRequest];
+    result: void;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];

@@ -824,7 +824,27 @@ async function runDeleteAsync(
     if (options.closeTerminals) {
       await closeTerminalsForWorktree(worktreeId);
     }
+    // Stop any running dev preview BEFORE `git worktree remove` (#9084). On
+    // Windows the dev server holds a directory lock and the removal would
+    // fail outright. Snapshot the worktree name first so a transient toast
+    // can name it after `applyRemove` has already cleared the row.
+    const worktreeBefore = get().worktrees.get(worktreeId);
+    const worktreeName = worktreeBefore?.name ?? worktreeBefore?.branch ?? worktreeId;
+    let stoppedDevPreview = false;
+    const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
+    if (existingDevPreview && existingDevPreview.status !== "stopped") {
+      await window.electron.devPreview.stopByWorktree({ worktreeId });
+      stoppedDevPreview = true;
+    }
     await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
+    if (stoppedDevPreview) {
+      notify({
+        type: "success",
+        title: "Dev server stopped",
+        message: `${worktreeName} stopped before removing the worktree.`,
+        transient: true,
+      });
+    }
     // Success: `worktree-removed` will fire `applyRemove`, which clears
     // `deletingIds` + delete-error maps. The outbox entry is pruned either by
     // `applyRemove` (success path) or by the next `get-all-states` reply via
