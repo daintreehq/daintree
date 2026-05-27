@@ -163,6 +163,10 @@ describe("normalizeViteDevCommand", () => {
       expect(await normalizeViteDevCommand("vite -p 5173", CWD, PORT)).toBe("vite -p 5173");
     });
 
+    it("does NOT modify when command has compact -pN form", async () => {
+      expect(await normalizeViteDevCommand("vite -p5173", CWD, PORT)).toBe("vite -p5173");
+    });
+
     it("does NOT modify when command has PORT= env prefix", async () => {
       expect(await normalizeViteDevCommand("PORT=5173 vite", CWD, PORT)).toBe("PORT=5173 vite");
     });
@@ -219,6 +223,18 @@ describe("normalizeViteDevCommand", () => {
       );
     });
 
+    it("does NOT modify 'vite-node' (hyphenated tool name)", async () => {
+      expect(await normalizeViteDevCommand("vite-node server.ts", CWD, PORT)).toBe(
+        "vite-node server.ts"
+      );
+    });
+
+    it("does NOT modify 'npx vite-node'", async () => {
+      expect(await normalizeViteDevCommand("npx vite-node scripts/dev.ts", CWD, PORT)).toBe(
+        "npx vite-node scripts/dev.ts"
+      );
+    });
+
     it("does NOT modify pkg manager scripts that resolve to non-Vite commands", async () => {
       mockPkg({ dev: "next dev" });
       expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
@@ -228,6 +244,14 @@ describe("normalizeViteDevCommand", () => {
   describe("idempotency", () => {
     it("calling twice does not double-append (PORT_FLAG_PRESENT_RE skip)", async () => {
       const once = await normalizeViteDevCommand("vite", CWD, PORT);
+      const twice = await normalizeViteDevCommand(once, CWD, PORT);
+      expect(twice).toBe(once);
+    });
+
+    it("calling twice on a pkg-manager script does not double-append", async () => {
+      mockPkg({ dev: "vite" });
+      const once = await normalizeViteDevCommand("npm run dev", CWD, PORT);
+      mockPkg({ dev: "vite" });
       const twice = await normalizeViteDevCommand(once, CWD, PORT);
       expect(twice).toBe(once);
     });

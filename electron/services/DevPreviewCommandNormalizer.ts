@@ -12,9 +12,9 @@ export const PKG_SCRIPT_RE =
 export const SHELL_CONTROL_RE = /[;&|#`]|<|>|\$\(/;
 
 export const PORT_FLAG_RE =
-  /(?:--port(?:=|\s+)|-p\s+|\bPORT=)(["']?)(?:\$\{PORT:-)?(\d+)(?![.\w])\}?\1/i;
+  /(?:--port(?:=|\s+)|-p(?:\s+|(?=\d))|\bPORT=)(["']?)(?:\$\{PORT:-)?(\d+)(?![.\w])\}?\1/i;
 
-export const PORT_FLAG_PRESENT_RE = /(?:--port(?:=|\s+)|-p\s+|\bPORT=)/i;
+export const PORT_FLAG_PRESENT_RE = /(?:--port(?:=|\s+)|-p(?:\s+|(?=\d))|\bPORT=)/i;
 
 export const FRAMEWORK_DEFAULT_PORTS: Array<[RegExp, number]> = [
   [/\bnext\s+dev\b/, 3000],
@@ -32,8 +32,11 @@ export const FRAMEWORK_DEFAULT_PORTS: Array<[RegExp, number]> = [
 // Vite and SvelteKit (SvelteKit v2+ runs on Vite) both expose --strictPort,
 // which makes the server exit on EADDRINUSE rather than drifting to the next
 // free port. Pinning strictPort lets the readiness poller trust the allocated
-// URL instead of needing UrlDetector to catch a silent reassignment.
-export const VITE_STRICT_PORT_RE = /\bvite(?:\s+dev)?\b|\bsvelte-kit\s+dev\b/;
+// URL instead of needing UrlDetector to catch a silent reassignment. The
+// `(?![\w-])` lookahead keeps `vite-node` and similar hyphenated tools out
+// of the match — `\bvite\b` alone would treat `vite-node server.ts` as a
+// Vite dev command.
+export const VITE_STRICT_PORT_RE = /\bvite(?![\w-])(?:\s+dev)?|\bsvelte-kit\s+dev\b/;
 
 // Astro and Nuxt accept --port via their own CLIs but do NOT propagate
 // --strictPort to underlying Vite. Injecting it would cause the dev server
