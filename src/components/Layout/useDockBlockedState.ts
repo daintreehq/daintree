@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentState } from "shared/types/agent";
+import type { AgentState } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { isAgentTerminal } from "@/utils/terminalType";
 

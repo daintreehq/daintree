@@ -25,7 +25,6 @@
     "forceConsistentCasingInFileNames": true,
 
     /* Paths */
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["./shared/*"],

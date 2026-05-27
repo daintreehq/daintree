@@ -6,7 +6,7 @@ import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { promises as fs, createWriteStream } from "node:fs";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 import { CHANNELS } from "../channels.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import type { HandlerDependencies } from "../types.js";
@@ -71,7 +71,7 @@ async function writeBundleZip(
 
   await new Promise<void>((resolve, reject) => {
     const output = createWriteStream(zipPath, { mode: 0o600 });
-    const archive = archiver("zip", { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
 
     output.on("close", () => {
       resolve();

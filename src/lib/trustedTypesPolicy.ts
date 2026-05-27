@@ -30,6 +30,7 @@
 // hide missed sinks. Tests must mock the API before importing this module
 // (jsdom does not ship with Trusted Types).
 
+import type { TrustedTypePolicyFactory } from "trusted-types/lib";
 import { TRUSTED_TYPES_POLICY_NAME } from "@shared/config/csp";
 
 // In a Chromium 83+ renderer this resolves to `window.trustedTypes`. Reading

@@ -17,11 +17,11 @@ import {
   GitPullRequest,
   CircleDot,
   GitMerge,
-  Github,
   WifiOff,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Activity } from "@/components/icons";
+import { GitHubIcon } from "@/components/icons/brands";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -305,7 +305,7 @@ function HealthSectionSkeleton() {
 function NoRemoteHint() {
   return (
     <div className="flex items-center gap-2 text-xs text-daintree-text/75">
-      <Github className="w-3.5 h-3.5" />
+      <GitHubIcon className="w-3.5 h-3.5" />
       <span>Connect a GitHub remote for CI status, issues, and PRs</span>
     </div>
   );

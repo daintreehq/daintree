@@ -9,9 +9,9 @@ import {
   Settings,
   X,
   Filter,
-  Github,
   Clock,
 } from "lucide-react";
+import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -564,7 +564,7 @@ export function GitHubResourceList({
         <EmptyState
           variant="zero-data"
           scale="canvas"
-          icon={<Github />}
+          icon={<GitHubIcon />}
           title="GitHub not connected"
           description="Add a personal access token to browse issues and pull requests for this project."
           action={
