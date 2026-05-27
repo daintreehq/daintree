@@ -85,10 +85,15 @@ export function McpConfirmDialog() {
   }
 
   // Severity follows the action's registry classification, not the fact that
-  // an MCP client dispatched it. Provenance is already conveyed by the
-  // "Run '…'?" framing; only genuinely destructive dispatches earn red.
+  // an MCP client dispatched it; only genuinely destructive dispatches earn
+  // red. Provenance differs by dispatch origin: pinned help-session dispatch
+  // is the assistant's own panel, so `callerInfo` is absent and the dialog
+  // stays provenance-free. Unpinned external/api-key dispatch carries the
+  // requesting bearer's identity (#9157), surfaced in a "Requested by" row so
+  // the user can see which client is asking before approving.
   const isDestructive = current.danger === "confirm";
   const variant = isDestructive ? "destructive" : "default";
+  const callerInfo = current.callerInfo;
 
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
@@ -104,11 +109,23 @@ export function McpConfirmDialog() {
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
-        <div className="space-y-2">
-          <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>
-          <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-            {current.argsSummary || "(none)"}
-          </pre>
+        <div className="space-y-3">
+          {callerInfo && (
+            <div className="space-y-2">
+              <div className="text-xs text-daintree-text/60 uppercase tracking-wide">
+                Requested by
+              </div>
+              <div className="text-xs text-daintree-text/80 break-words">
+                …{callerInfo.token4LastChars} · {callerInfo.userAgent}
+              </div>
+            </div>
+          )}
+          <div className="space-y-2">
+            <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
+              {current.argsSummary || "(none)"}
+            </pre>
+          </div>
         </div>
       </ConfirmDialog>
     </ErrorBoundary>

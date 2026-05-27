@@ -17,6 +17,7 @@ import type { AppErrorCode } from "../shared/types/appError.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
+  McpBearerIdentity,
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
@@ -2362,6 +2363,7 @@ const api: ElectronAPI = {
         args?: unknown;
         confirmed?: boolean;
         context?: ActionContext;
+        callerInfo?: McpBearerIdentity;
       }) => void
     ) => {
       const handler = (
@@ -2372,6 +2374,7 @@ const api: ElectronAPI = {
           args?: unknown;
           confirmed?: boolean;
           context?: ActionContext;
+          callerInfo?: McpBearerIdentity;
         }
       ) => callback(payload);
       ipcRenderer.on(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, handler);

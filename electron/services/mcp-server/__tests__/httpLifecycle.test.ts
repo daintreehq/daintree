@@ -631,6 +631,84 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("getBearerInfoForSession (#9157)", () => {
+    const authExt = "Bearer ext-token-1234";
+
+    type BearerInfoHandle = BearerTestHandle & {
+      getBearerInfoForSession: (
+        sessionId: string
+      ) => { token4LastChars: string; userAgent: string } | null;
+    };
+
+    it("returns the display-only identity for an external bearer", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerInfoHandle;
+      handle.touchBearer(authExt, "Claude Code", "sess-ext", "external");
+
+      expect(handle.getBearerInfoForSession("sess-ext")).toEqual({
+        token4LastChars: "1234",
+        userAgent: "Claude Code",
+      });
+    });
+
+    it("returns null for help-session bearers — the assistant's own panel stays provenance-free", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerInfoHandle;
+      handle.touchBearer("Bearer help-token-9999", "Help/1", "sess-help", "action");
+
+      expect(handle.getBearerInfoForSession("sess-help")).toBeNull();
+    });
+
+    it("returns null for an unknown / detached session", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerInfoHandle;
+      expect(handle.getBearerInfoForSession("ghost")).toBeNull();
+
+      handle.touchBearer(authExt, "Claude Code", "sess-ext", "external");
+      handle.detachBearerSession("sess-ext");
+      expect(handle.getBearerInfoForSession("sess-ext")).toBeNull();
+    });
+
+    it("threads callerInfo into the unpinned dispatch for external sessions", async () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authExt, "Claude Code", "sess-ext", "external");
+
+      const sessionDeps = (
+        lc as unknown as {
+          buildSessionServerDeps: (
+            sessionId: string
+          ) => import("../sessionServer.js").SessionServerDeps;
+        }
+      ).buildSessionServerDeps("sess-ext");
+
+      await sessionDeps.dispatchAction("terminal.kill", { id: "t-1" }, false);
+
+      expect(deps.dispatchAction).toHaveBeenCalledWith("terminal.kill", { id: "t-1" }, false, {
+        token4LastChars: "1234",
+        userAgent: "Claude Code",
+      });
+    });
+
+    it("passes callerInfo: undefined when the session has no tracked bearer", async () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+
+      const sessionDeps = (
+        lc as unknown as {
+          buildSessionServerDeps: (
+            sessionId: string
+          ) => import("../sessionServer.js").SessionServerDeps;
+        }
+      ).buildSessionServerDeps("sess-untracked");
+
+      await sessionDeps.dispatchAction("actions.list", {}, false);
+
+      expect(deps.dispatchAction).toHaveBeenCalledWith("actions.list", {}, false, undefined);
+    });
+  });
+
   describe("auth gate", () => {
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();

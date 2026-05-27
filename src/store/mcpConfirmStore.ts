@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ActionDanger } from "@shared/types/actions";
-import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import type { McpBearerIdentity, McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 
 /**
  * One pending confirmation surfaced for a `danger: "confirm"` MCP dispatch.
@@ -19,6 +19,13 @@ export interface PendingMcpConfirm {
    * (red) styling; read-only/safe dispatches must not borrow that weight.
    */
   danger: ActionDanger;
+  /**
+   * Display-only identity of the external client behind this dispatch (#9157).
+   * Present only for unpinned external/api-key dispatch; absent for pinned
+   * help-session dispatch (the assistant's own panel is its own context), so
+   * the dialog shows a "Requested by" row only for genuine external clients.
+   */
+  callerInfo?: McpBearerIdentity;
   enqueuedAt: number;
 }
 

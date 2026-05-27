@@ -21,6 +21,7 @@ import type {
 import type {
   ActiveBearerRecord,
   McpActiveClientInfo,
+  McpBearerIdentity,
   McpIssueGrantResult,
   McpRevokeSessionGrantsResult,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -57,7 +58,8 @@ export interface HttpLifecycleDeps {
   dispatchAction: (
     actionId: string,
     args: unknown,
-    confirmed?: boolean
+    confirmed?: boolean,
+    callerInfo?: McpBearerIdentity
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Pinned variants used for help-session bearers — route to the renderer
   // WebContents that minted the bearer at provision time (#7002). Optional
@@ -327,6 +329,23 @@ export class HttpLifecycle {
     if (tokenHash === undefined) return;
     const entry = this.bearerRegister.get(tokenHash);
     if (entry) entry.lastActiveAt = Date.now();
+  }
+
+  /**
+   * Resolve the display-only bearer identity behind a session so the confirm
+   * dialog can show which external client is asking (#9157). Returns null for
+   * help-session bearers (`isHelpSession`) — the assistant's own pinned panel
+   * is its own context, so its dispatches stay provenance-free — and for any
+   * session not currently tracked (internal-tier / already detached). The
+   * lookup is O(1) over the two register Maps and runs at dispatch time, when
+   * the entry is guaranteed live (teardown only fires on transport close).
+   */
+  private getBearerInfoForSession(sessionId: string): McpBearerIdentity | null {
+    const tokenHash = this.sessionToTokenHash.get(sessionId);
+    if (tokenHash === undefined) return null;
+    const entry = this.bearerRegister.get(tokenHash);
+    if (!entry || entry.isHelpSession) return null;
+    return { token4LastChars: entry.token4LastChars, userAgent: entry.userAgent };
   }
 
   /**
@@ -1091,7 +1110,12 @@ export class HttpLifecycle {
         const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
         return pinnedDispatch(id, actionId, args, confirmed, boundContext);
       }
-      return this.deps.dispatchAction(actionId, args, confirmed);
+      // Unpinned external/api-key dispatch — surface the requesting bearer's
+      // identity so the confirm dialog can name the client (#9157). Returns
+      // null (→ undefined) for help-session bearers, so callerInfo never
+      // reaches the renderer for the assistant's own dispatches.
+      const callerInfo = this.getBearerInfoForSession(sessionId) ?? undefined;
+      return this.deps.dispatchAction(actionId, args, confirmed, callerInfo);
     };
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =

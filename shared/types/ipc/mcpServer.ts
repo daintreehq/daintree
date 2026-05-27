@@ -470,6 +470,19 @@ export interface ActiveBearerRecord {
 }
 
 /**
+ * Display-only provenance for the external bearer behind a `danger: "confirm"`
+ * dispatch, threaded into the MCP confirm dialog so the user can see which
+ * client is asking before approving (#9157). Carries only the non-sensitive
+ * fields — the 4-char token suffix and the client user-agent. Absent for
+ * pinned help-session dispatch (the assistant's own panel is the context), so
+ * the dialog stays provenance-free there.
+ */
+export interface McpBearerIdentity {
+  token4LastChars: string;
+  userAgent: string;
+}
+
+/**
  * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true
  * when a matching bearer entry existed and its sessions were revoked — false
  * when the token hash was already absent (e.g. the client disconnected first).

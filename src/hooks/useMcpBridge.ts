@@ -87,7 +87,7 @@ export function useMcpBridge(): void {
     });
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args, confirmed, context }) => {
+      async ({ requestId, actionId, args, confirmed, context, callerInfo }) => {
         let confirmationDecision: McpConfirmationDecision | undefined;
         try {
           let effectiveConfirmed = confirmed;
@@ -105,6 +105,10 @@ export function useMcpBridge(): void {
                   actionDescription: definition.description,
                   argsSummary: summarizeMcpArgs(args),
                   danger: definition.danger,
+                  // Display-only requesting-bearer identity (#9157). Present
+                  // only for unpinned external dispatch; the dialog renders a
+                  // "Requested by" row when set, stays provenance-free when not.
+                  callerInfo,
                 });
               } finally {
                 inFlightConfirms.delete(requestId);

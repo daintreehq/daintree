@@ -1417,6 +1417,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * external/api-key dispatch, which keeps live renderer context.
          */
         context?: ActionContext;
+        /**
+         * Display-only requesting-bearer identity for the confirm dialog
+         * (#9157). Present only for unpinned external/api-key dispatch;
+         * absent for pinned help-session dispatch so the dialog stays
+         * provenance-free.
+         */
+        callerInfo?: import("./mcpServer.js").McpBearerIdentity;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
