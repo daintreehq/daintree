@@ -746,6 +746,12 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       let nextDeletingIds = prev.deletingIds;
       let nextDeleteErrors = prev.deleteErrors;
       let nextDeleteErrorArgs = prev.deleteErrorArgs;
+      // The host ack list only carries `delete-worktree` ids in practice (issue
+      // mutations route through main, never the host ack map), but sweep the
+      // issue guards/errors too so an unexpected ack can never permanently wedge
+      // a worktree in `issueMutatingIds` (which would block re-attach).
+      let nextIssueMutatingIds = prev.issueMutatingIds;
+      let nextIssueErrors = prev.issueErrors;
       for (const removedWorktreeId of removedWorktreeIds) {
         if (prev.deletingIds.has(removedWorktreeId)) {
           if (nextDeletingIds === prev.deletingIds) nextDeletingIds = new Set(prev.deletingIds);
@@ -760,12 +766,23 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
             nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
           nextDeleteErrorArgs.delete(removedWorktreeId);
         }
+        if (prev.issueMutatingIds.has(removedWorktreeId)) {
+          if (nextIssueMutatingIds === prev.issueMutatingIds)
+            nextIssueMutatingIds = new Set(prev.issueMutatingIds);
+          nextIssueMutatingIds.delete(removedWorktreeId);
+        }
+        if (prev.issueErrors.has(removedWorktreeId)) {
+          if (nextIssueErrors === prev.issueErrors) nextIssueErrors = new Map(prev.issueErrors);
+          nextIssueErrors.delete(removedWorktreeId);
+        }
       }
       set({
         mutationOutbox: next,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
+        issueMutatingIds: nextIssueMutatingIds,
+        issueErrors: nextIssueErrors,
       });
     },
 
@@ -1278,6 +1295,11 @@ function applyIssueMutationSuccess(
 ): void {
   const prev = get();
   const { worktreeId, mutationId } = entry;
+  // Superseded mid-flight: the entry was pruned (worktree removed, or the user
+  // dismissed it) while the IPC was outstanding, so this result is moot. Don't
+  // write a stale `manualAssociations` entry for a worktree that may be gone —
+  // the pruning path already cleared the in-flight guard and any error.
+  if (!prev.mutationOutbox.has(mutationId)) return;
   const existing = prev.worktrees.get(worktreeId);
 
   let nextManual = prev.manualAssociations;
@@ -1346,27 +1368,24 @@ function handleIssueFailure(
   const { worktreeId, mutationId, type } = entry;
   const prev = get();
   const current = prev.mutationOutbox.get(mutationId);
+  // Superseded mid-flight (worktree removed, or the entry dismissed): the
+  // failure is moot and the pruning path already cleared the in-flight guard
+  // and any error. Don't resurrect a banner for a worktree that may be gone.
+  if (!current) return;
   const isConnectivity = isConnectivityError(message);
 
   const nextIssueMutatingIds = new Set(prev.issueMutatingIds);
   nextIssueMutatingIds.delete(worktreeId);
 
   if (isConnectivity) {
-    const nextOutbox = current ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
-    if (current) {
-      nextOutbox.set(mutationId, { ...current, status: "pending", lastError: message });
-    }
+    const nextOutbox = new Map(prev.mutationOutbox);
+    nextOutbox.set(mutationId, { ...current, status: "pending", lastError: message });
     set({ issueMutatingIds: nextIssueMutatingIds, mutationOutbox: nextOutbox });
     return;
   }
 
   const nextIssueErrors = new Map(prev.issueErrors);
   nextIssueErrors.set(worktreeId, { message, type, mutationId });
-
-  if (!current) {
-    set({ issueMutatingIds: nextIssueMutatingIds, issueErrors: nextIssueErrors });
-    return;
-  }
 
   const nextRetryCount = current.retryCount + 1;
   const exceededCap = nextRetryCount >= OUTBOX_RETRY_CAP;

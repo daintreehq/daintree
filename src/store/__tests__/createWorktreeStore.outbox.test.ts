@@ -909,6 +909,94 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
         expect(store.getState().issueErrors.has("wt-1")).toBe(false);
         expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
       });
+
+      it("prunes both a delete and an issue entry for the same worktree", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        // A connectivity-failed attach left pending, plus an in-flight delete.
+        worktreeClientAttachIssueMock.mockRejectedValueOnce(
+          new Error("HOST_EXITED: Worktree port disconnected")
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+        await flushPromises();
+        let resolveDelete: () => void = () => {};
+        worktreeClientDeleteMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveDelete = resolve;
+            })
+        );
+        store.getState().startDelete("wt-1", { force: false });
+        await flushPromises();
+        expect(store.getState().mutationOutbox.size).toBe(2);
+
+        store.getState().applyRemove("wt-1", nextV());
+
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().deletingIds.has("wt-1")).toBe(false);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+
+        resolveDelete();
+        await flushPromises();
+      });
+    });
+
+    describe("supersession race (#9163 review)", () => {
+      it("attach resolving after applyRemove leaves no orphaned manualAssociation", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let resolveAttach: () => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveAttach = resolve;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+
+        // Worktree removed while the attach IPC is still outstanding.
+        store.getState().applyRemove("wt-1", nextV());
+        expect(store.getState().mutationOutbox.size).toBe(0);
+
+        // The IPC now resolves — the success path must NOT resurrect state.
+        resolveAttach();
+        await flushPromises();
+        await flushPromises();
+
+        expect(store.getState().manualAssociations.has("wt-1")).toBe(false);
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
+
+      it("attach rejecting after applyRemove leaves no orphaned issueError", async () => {
+        const store = createWorktreeStore();
+        store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+        let rejectAttach: (e: Error) => void = () => {};
+        worktreeClientAttachIssueMock.mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectAttach = reject;
+            })
+        );
+        store.getState().startAttachIssue(attachPayload("wt-1"));
+        await flushPromises();
+
+        store.getState().applyRemove("wt-1", nextV());
+        expect(store.getState().mutationOutbox.size).toBe(0);
+
+        rejectAttach(new Error("network blip"));
+        await flushPromises();
+        await flushPromises();
+
+        expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+        expect(store.getState().mutationOutbox.size).toBe(0);
+        expect(store.getState().issueMutatingIds.has("wt-1")).toBe(false);
+      });
     });
   });
 });
