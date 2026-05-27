@@ -1955,6 +1955,97 @@ describe("Manifest commands", () => {
     errorSpy.mockRestore();
   });
 
+  it("keeps the first command intact when a later command has a duplicate name", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await writePlugin("cmd-dupe", {
+      name: "acme.cmd-dupe",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          { name: "run", title: "First", description: "First", category: "Demo" },
+          { name: "run", title: "Second", description: "Second", category: "Demo" },
+        ],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-dupe", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(path.join(srcDir, "run.mjs"), "export default () => 'first';\n");
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const matches = service.listPluginActions().filter((a) => a.id === "acme.cmd-dupe.run");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.title).toBe("First");
+
+    // The surviving command's handler path is not corrupted by the rejected
+    // duplicate registration.
+    expect(
+      await service.dispatchHandler(
+        "acme.cmd-dupe",
+        "acme.cmd-dupe.run",
+        makeCtx("acme.cmd-dupe"),
+        []
+      )
+    ).toBe("first");
+    errorSpy.mockRestore();
+  });
+
+  it("throws when the handler module has no default export function", async () => {
+    await writePlugin("cmd-nodefault", {
+      name: "acme.cmd-nodefault",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-nodefault", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(path.join(srcDir, "run.mjs"), "export const handler = () => 'nope';\n");
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-nodefault",
+        "acme.cmd-nodefault.run",
+        makeCtx("acme.cmd-nodefault"),
+        []
+      )
+    ).rejects.toThrow(/has no default export function/);
+  });
+
+  it("propagates a handler runtime error as a rejection", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await writePlugin("cmd-throws", {
+      name: "acme.cmd-throws",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-throws", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(
+      path.join(srcDir, "run.mjs"),
+      "export default () => { throw new Error('handler boom'); };\n"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-throws",
+        "acme.cmd-throws.run",
+        makeCtx("acme.cmd-throws"),
+        []
+      )
+    ).rejects.toThrow(/handler boom/);
+    errorSpy.mockRestore();
+  });
+
   it("clears command handlers on unload", async () => {
     await writePlugin("cmd-unload", {
       name: "acme.cmd-unload",

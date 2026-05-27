@@ -281,6 +281,32 @@ describe("toolbarPreferencesStore", () => {
       });
     });
 
+    it("v9 strips stale plugin.-prefixed pinned keys while preserving new-format ones", async () => {
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "settings"],
+            pinnedButtons: {
+              "plugin.acme.old-btn": false,
+              "acme.linear.viewer": false,
+              "copy-tree": false,
+            },
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        8
+      );
+
+      const store = await loadStore();
+      const { pinnedButtons } = store.getState().layout;
+      // Old `plugin.`-prefixed key is dropped by the v9 migration.
+      expect(pinnedButtons["plugin.acme.old-btn" as keyof typeof pinnedButtons]).toBeUndefined();
+      // New `{pluginId}.{id}` plugin key and built-in keys survive untouched.
+      expect(pinnedButtons["acme.linear.viewer" as keyof typeof pinnedButtons]).toBe(false);
+      expect(pinnedButtons["copy-tree"]).toBe(false);
+    });
+
     it("merges new default buttons without re-inserting hidden ones", async () => {
       setStoredState(
         {

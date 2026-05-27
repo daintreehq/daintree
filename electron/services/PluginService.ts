@@ -976,9 +976,6 @@ export class PluginService {
       }
 
       const resolvedPath = await this.resolveCommandHandlerPath(pluginDir, cmd.name);
-      if (resolvedPath) {
-        this.commandHandlerPaths.set(actionId, resolvedPath);
-      }
 
       try {
         this.registerPluginAction(manifest.name, {
@@ -991,14 +988,21 @@ export class PluginService {
           keywords: cmd.keywords,
         });
       } catch (err) {
+        // A duplicate `name` (or otherwise-invalid contribution) throws here.
+        // Skip without touching the maps so a prior command that resolved to
+        // the same id keeps its handler path and dispatch entry intact.
         console.error(
           `[PluginService] Failed to register manifest command "${actionId}" for "${manifest.name}":`,
           err
         );
-        this.commandHandlerPaths.delete(actionId);
         continue;
       }
 
+      // Record the handler path and dispatch entry only after registration
+      // succeeds, so a failed registration can't corrupt an existing command.
+      if (resolvedPath) {
+        this.commandHandlerPaths.set(actionId, resolvedPath);
+      }
       // The renderer dispatches the action by its full id, so the handler is
       // keyed `{pluginId}:{actionId}` to match `dispatchHandler`'s lookup.
       this.handlerMap.set(`${manifest.name}:${actionId}`, this.makeCommandHandler(actionId));
