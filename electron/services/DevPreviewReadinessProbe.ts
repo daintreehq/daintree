@@ -160,11 +160,16 @@ export async function probeHmrWebSocket(
       }
       sockets.push(socket);
 
-      socket.once("open", () => settle(true));
+      // ws emits both "error" and "close" on a failed connection. Guard so a single
+      // socket can only decrement `pending` once regardless of event ordering.
+      let counted = false;
       const onFail = () => {
+        if (counted) return;
+        counted = true;
         pending -= 1;
         if (pending === 0 && !settled) settle(false);
       };
+      socket.once("open", () => settle(true));
       socket.once("error", onFail);
       socket.once("close", onFail);
     }

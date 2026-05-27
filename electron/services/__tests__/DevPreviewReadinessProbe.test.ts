@@ -26,7 +26,10 @@ const { mockRequest, wsInstances, wsBehavior } = vi.hoisted(() => ({
       (url: string, options: Record<string, unknown>, callback: RequestCallback) => MockRequest
     >(),
   wsInstances: [] as MockWebSocket[],
-  wsBehavior: { mode: "error" as "error" | "open" | "throw" | "openOn", openOnUrl: "" },
+  wsBehavior: {
+    mode: "error" as "error" | "open" | "throw" | "openOn" | "manual",
+    openOnUrl: "",
+  },
 }));
 
 vi.mock("node:http", () => ({
@@ -68,6 +71,10 @@ vi.mock("ws", () => {
       }
 
       wsInstances.push(this as unknown as MockWebSocket);
+
+      if (wsBehavior.mode === "manual") {
+        return;
+      }
 
       const shouldOpen =
         wsBehavior.mode === "open" ||
@@ -414,6 +421,32 @@ describe("probeHmrWebSocket", () => {
     const signal = new AbortController().signal;
     const result = await probeHmrWebSocket("http://localhost:3000", signal);
     expect(result).toBe(false);
+  });
+
+  it("does not double-count error+close on the same failed socket", async () => {
+    // Regression: ws emits both "error" and "close" on a failed connection.
+    // Without per-socket guarding, two failed sockets (4 events) would settle
+    // the probe to false before the third (successful) socket fires "open".
+    wsBehavior.mode = "manual";
+    const signal = new AbortController().signal;
+    const probePromise = probeHmrWebSocket("http://localhost:3000", signal);
+
+    // Let the constructor loop complete (synchronous), then drive events.
+    await Promise.resolve();
+    expect(wsInstances.length).toBe(3);
+
+    // Two sockets fail with both error then close (the ws-native sequence).
+    wsInstances[0].emit("error", new Error("refused"));
+    wsInstances[0].emit("close");
+    wsInstances[1].emit("error", new Error("refused"));
+    wsInstances[1].emit("close");
+
+    // Third socket opens successfully — guard must have kept pending > 0 so
+    // settle(false) wasn't called prematurely.
+    wsInstances[2].emit("open");
+
+    const result = await probePromise;
+    expect(result).toBe(true);
   });
 });
 
