@@ -10,8 +10,8 @@ import type {
   ViewContribution,
   ViewLocation,
   McpServerContribution,
-  PluginPermission,
-  BuiltInPluginPermission,
+  PluginCapability,
+  BuiltInPluginCapability,
   PluginActionContribution,
   PluginWorktreeSnapshot,
   PluginWorktreeLinked,
@@ -47,8 +47,8 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<ViewContribution>().toMatchTypeOf<object>();
       expectTypeOf<ViewLocation>().toMatchTypeOf<string>();
       expectTypeOf<McpServerContribution>().toMatchTypeOf<object>();
-      expectTypeOf<PluginPermission>().toMatchTypeOf<string>();
-      expectTypeOf<BuiltInPluginPermission>().toMatchTypeOf<string>();
+      expectTypeOf<PluginCapability>().toMatchTypeOf<string>();
+      expectTypeOf<BuiltInPluginCapability>().toMatchTypeOf<string>();
       expectTypeOf<PluginActionContribution>().toMatchTypeOf<object>();
     });
 
