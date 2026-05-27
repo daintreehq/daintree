@@ -184,7 +184,7 @@ export function LogFilters({
                     className={cn(
                       "w-full justify-start rounded-none",
                       isActive ? "text-status-info bg-status-info/10" : "text-daintree-text",
-                      count === 0 && "opacity-50"
+                      count === 0 && !isActive && "opacity-50"
                     )}
                     aria-pressed={isActive}
                   >

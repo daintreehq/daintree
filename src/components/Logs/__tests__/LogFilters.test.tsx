@@ -101,16 +101,19 @@ describe("LogFilters accessibility", () => {
     const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
     const mainBtn = screen.getByText(/^\*?main/).closest("button")!;
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
-    expect(rendererBtn.textContent).toContain("3");
-    expect(mainBtn.textContent).toContain("1");
-    expect(preloadBtn.textContent).toContain("0");
+    const rendererCount = rendererBtn.querySelector("span.ml-auto.tabular-nums");
+    const mainCount = mainBtn.querySelector("span.ml-auto.tabular-nums");
+    const preloadCount = preloadBtn.querySelector("span.ml-auto.tabular-nums");
+    expect(rendererCount?.textContent).toBe("3");
+    expect(mainCount?.textContent).toBe("1");
+    expect(preloadCount?.textContent).toBe("0");
   });
 
   it("dims zero-count source rows with opacity-50", () => {
     render(<LogFilters {...baseProps} />);
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
-    expect(preloadBtn.className).toContain("opacity-50");
+    expect(preloadBtn.classList.contains("opacity-50")).toBe(true);
   });
 
   it("keeps zero-count source rows clickable", () => {
@@ -129,5 +132,26 @@ describe("LogFilters accessibility", () => {
     const countSpan = rendererBtn.querySelector("span.ml-auto.tabular-nums");
     expect(countSpan).toBeTruthy();
     expect(countSpan!.className).toContain("opacity-70");
+  });
+
+  it("does not dim zero-count rows when the source is actively selected", () => {
+    render(
+      <LogFilters
+        {...baseProps}
+        filters={{ sources: ["preload"] }}
+        sourceCounts={{ ...baseProps.sourceCounts, preload: 0 }}
+      />
+    );
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const preloadBtn = screen.getByText(/\* preload/).closest("button")!;
+    expect(preloadBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(preloadBtn.classList.contains("opacity-50")).toBe(false);
+  });
+
+  it("does not dim non-zero source rows", () => {
+    render(<LogFilters {...baseProps} />);
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
+    expect(rendererBtn.classList.contains("opacity-50")).toBe(false);
   });
 });
