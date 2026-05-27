@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
@@ -376,11 +377,15 @@ export function WorktreeCard({
   };
 
   const handleStopDevServer = useCallback((worktreeId: string) => {
-    void window.electron.devPreview.stopDevServerByWorktree({ worktreeId });
+    safeFireAndForget(window.electron.devPreview.stopDevServerByWorktree({ worktreeId }), {
+      context: "Stop dev server for worktree",
+    });
   }, []);
 
   const handleRestartDevServer = useCallback((worktreeId: string) => {
-    void window.electron.devPreview.restartByWorktree({ worktreeId });
+    safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
+      context: "Restart dev server for worktree",
+    });
   }, []);
 
   const handleResourceResume = () => {
