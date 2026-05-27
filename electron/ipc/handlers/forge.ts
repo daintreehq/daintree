@@ -1,6 +1,6 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
-import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { store } from "../../store.js";
@@ -57,7 +57,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildIssuesUrl(repoRef, { query, state });
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -66,7 +66,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildPRsUrl(repoRef, { query, state });
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -78,7 +78,7 @@ export function registerForgeHandlers(): () => void {
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildCommitsUrl(repoRef, branch);
-      await shell.openExternal(url);
+      await openExternalUrl(url);
     })
   );
 
@@ -102,7 +102,7 @@ export function registerForgeHandlers(): () => void {
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
         const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
-        await shell.openExternal(url);
+        await openExternalUrl(url);
       }
     )
   );

@@ -1,5 +1,6 @@
-import { Menu, dialog, BrowserWindow, shell, app, webContents } from "electron";
+import { Menu, dialog, BrowserWindow, app, webContents } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
+import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
@@ -476,7 +477,7 @@ export function createApplicationMenu(
         {
           label: "Learn More",
           click: async () => {
-            await shell.openExternal("https://github.com/daintreehq/daintree");
+            await openExternalUrl("https://github.com/daintreehq/daintree");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged && !isWindowsStoreBuild()
