@@ -3,15 +3,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { StrictMode } from "react";
 import { AccessibilityAnnouncer } from "../AccessibilityAnnouncer";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import {
+  useAnnouncerStore,
+  _resetAnnouncerDeliveryForTests,
+} from "@/store/accessibilityAnnouncerStore";
 
 interface DocumentWithAriaNotify extends Document {
-  ariaNotify?: (message: string, options?: { priority?: "normal" | "important" }) => void;
+  ariaNotify?: (message: string, options?: { priority?: "normal" | "high" }) => void;
 }
 
 describe("AccessibilityAnnouncer", () => {
   beforeEach(() => {
     useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
     vi.useFakeTimers();
   });
 
@@ -196,6 +200,19 @@ describe("AccessibilityAnnouncer", () => {
     expect(assertiveRegion?.textContent).toBe("Assertive");
   });
 
+  it("does not replay a delivered entry when a second instance mounts later", () => {
+    useAnnouncerStore.setState({ polite: { msg: "Saved", id: 1 } });
+    const { container: first } = render(<AccessibilityAnnouncer />);
+    vi.advanceTimersByTime(100);
+    expect(first.querySelector('[aria-live="polite"]')?.textContent).toBe("Saved");
+
+    // Simulate a modal opening: a new AccessibilityAnnouncer mounts that
+    // subscribes to the same (already-delivered) store entry.
+    const { container: second } = render(<AccessibilityAnnouncer />);
+    vi.advanceTimersByTime(100);
+    expect(second.querySelector('[aria-live="polite"]')?.textContent).toBe("");
+  });
+
   it("does not leak timers under StrictMode double-mount", () => {
     useAnnouncerStore.setState({ polite: { msg: "Hello", id: 1 } });
     render(
@@ -220,6 +237,7 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
 
   beforeEach(() => {
     useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
     ariaNotifyMock = vi.fn();
     (document as DocumentWithAriaNotify).ariaNotify = ariaNotifyMock;
   });
@@ -234,10 +252,10 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
     expect(ariaNotifyMock).toHaveBeenCalledWith("Saved", { priority: "normal" });
   });
 
-  it("calls document.ariaNotify with priority 'important' for assertive", () => {
+  it("calls document.ariaNotify with priority 'high' for assertive", () => {
     useAnnouncerStore.getState().announce("Failure", "assertive");
     expect(ariaNotifyMock).toHaveBeenCalledTimes(1);
-    expect(ariaNotifyMock).toHaveBeenCalledWith("Failure", { priority: "important" });
+    expect(ariaNotifyMock).toHaveBeenCalledWith("Failure", { priority: "high" });
   });
 
   it("defaults to 'normal' priority when no priority is specified", () => {
@@ -268,6 +286,7 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
 describe("accessibilityAnnouncerStore — DOM-mutation fallback", () => {
   beforeEach(() => {
     useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
     delete (document as DocumentWithAriaNotify).ariaNotify;
   });
 

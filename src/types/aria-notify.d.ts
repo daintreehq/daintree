@@ -4,7 +4,7 @@
 // out-of-modal `aria-live` regions on VoiceOver (Chromium issue 354736464).
 // Declared optional so all call sites must feature-detect.
 
-type AriaNotifyPriority = "normal" | "important";
+type AriaNotifyPriority = "normal" | "high";
 
 interface AriaNotifyOptions {
   priority?: AriaNotifyPriority;

@@ -12,6 +12,25 @@ interface AnnouncerState {
   announce: (msg: string, priority?: "polite" | "assertive") => void;
 }
 
+// Module-scoped record of the latest delivered entry id per channel.
+// Lets co-located `AccessibilityAnnouncer` instances coordinate so a
+// modal that mounts after an announcement was already delivered doesn't
+// replay the stale entry into its newly focused subtree.
+const deliveredIds: { polite: number; assertive: number } = { polite: 0, assertive: 0 };
+
+export function isDelivered(channel: "polite" | "assertive", id: number): boolean {
+  return deliveredIds[channel] >= id;
+}
+
+export function markDelivered(channel: "polite" | "assertive", id: number): void {
+  if (id > deliveredIds[channel]) deliveredIds[channel] = id;
+}
+
+export function _resetAnnouncerDeliveryForTests(): void {
+  deliveredIds.polite = 0;
+  deliveredIds.assertive = 0;
+}
+
 // VoiceOver on macOS ignores `aria-live` updates outside the focused
 // `aria-modal="true"` dialog's DOM subtree (Chromium 354736464). The
 // native `document.ariaNotify` API (Chrome 141+ / Chromium 146) queues
@@ -24,7 +43,7 @@ function tryAriaNotify(msg: string, priority: "polite" | "assertive"): boolean {
   if (typeof notify !== "function") return false;
   try {
     notify.call(document, msg, {
-      priority: priority === "assertive" ? "important" : "normal",
+      priority: priority === "assertive" ? "high" : "normal",
     });
     return true;
   } catch {
