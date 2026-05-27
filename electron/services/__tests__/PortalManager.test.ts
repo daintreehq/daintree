@@ -28,6 +28,7 @@ vi.mock("electron", () => {
   class MockWebContentsView {
     webContents = createMockWebContents();
     setBounds = vi.fn();
+    setBackgroundColor = vi.fn();
     constructor() {
       createdWebContents.push(this.webContents);
     }
@@ -185,7 +186,10 @@ describe("PortalManager", () => {
 
       manager.showTab("tab-b", { x: 0, y: 0, width: 800, height: 600 });
       expect(manager.getActiveTabId()).toBe("tab-b");
-      expect(mockWindow.contentView.removeChildView).toHaveBeenCalled();
+      // Tab switching parks the previous active view offscreen rather than
+      // detaching it — preserves embedded page state across switches.
+      expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
+      expect(mockWindow.contentView.addChildView).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -233,7 +237,7 @@ describe("PortalManager", () => {
   });
 
   describe("hideAll()", () => {
-    it("hides all tabs and clears active tab", () => {
+    it("parks active view offscreen without detaching or clearing activeTabId", () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-hide", "http://localhost:3000");
@@ -241,10 +245,50 @@ describe("PortalManager", () => {
 
       expect(manager.getActiveTabId()).toBe("tab-hide");
 
+      const view = createdWebContents[createdWebContents.length - 1];
+      // Resolve the WebContentsView instance via the same mock pattern other
+      // tests use — setBounds is on the view itself, not webContents.
+      const electronModule = (
+        mockWindow as unknown as { contentView: { addChildView: ReturnType<typeof vi.fn> } }
+      ).contentView;
+      const addedView = electronModule.addChildView.mock.calls.at(-1)?.[0] as {
+        setBounds: ReturnType<typeof vi.fn>;
+      };
+
+      const setBoundsCallsBefore = addedView.setBounds.mock.calls.length;
+
       manager.hideAll();
 
-      expect(manager.getActiveTabId()).toBeNull();
-      expect(mockWindow.contentView.removeChildView).toHaveBeenCalled();
+      // activeView/activeTabId remain set so the same tab re-appears when the
+      // overlay closes and destroyHiddenTabs() still protects this tab.
+      expect(manager.getActiveTabId()).toBe("tab-hide");
+      // No detach — preserves embedded page state across overlay open/close.
+      expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
+      // setBounds was called with offscreen coordinates.
+      expect(addedView.setBounds.mock.calls.length).toBe(setBoundsCallsBefore + 1);
+      const offscreenBounds = addedView.setBounds.mock.calls.at(-1)?.[0];
+      expect(offscreenBounds.x).toBeLessThan(0);
+      expect(offscreenBounds.y).toBeLessThan(0);
+      // Suppress unused-warning for `view` — it is still imported to allow the
+      // test name to refer to "view" semantics even though webContents-level
+      // assertions aren't needed here.
+      expect(view).toBeDefined();
+    });
+
+    it("re-showing the same tab after hideAll does not call addChildView again", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-cycle", "http://localhost:3000");
+      manager.showTab("tab-cycle", { x: 0, y: 0, width: 800, height: 600 });
+      expect(mockWindow.contentView.addChildView).toHaveBeenCalledTimes(1);
+
+      manager.hideAll();
+      manager.showTab("tab-cycle", { x: 0, y: 0, width: 800, height: 600 });
+
+      // No second addChildView — view stayed attached across hide/show cycle.
+      // This is what preserves embedded WebContents state across overlay open/close.
+      expect(mockWindow.contentView.addChildView).toHaveBeenCalledTimes(1);
+      expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
     });
 
     it("is safe to call when no tab is active", () => {
@@ -252,6 +296,45 @@ describe("PortalManager", () => {
 
       expect(() => manager.hideAll()).not.toThrow();
       expect(manager.getActiveTabId()).toBeNull();
+    });
+  });
+
+  describe("setBackgroundColor (flash prevention)", () => {
+    it("applies background color to new view before loadURL", () => {
+      const customBg = "#1a1a1a";
+      const manager = new PortalManagerClass(mockWindow, customBg);
+
+      const addChildViewMock = mockWindow.contentView.addChildView as ReturnType<typeof vi.fn>;
+      const beforeCalls = addChildViewMock.mock.calls.length;
+
+      manager.createTab("tab-bg", "http://localhost:3000");
+      manager.showTab("tab-bg", { x: 0, y: 0, width: 800, height: 600 });
+
+      const view = addChildViewMock.mock.calls[beforeCalls]?.[0] as {
+        setBackgroundColor: ReturnType<typeof vi.fn>;
+      };
+      const wc = createdWebContents[createdWebContents.length - 1];
+
+      expect(view.setBackgroundColor).toHaveBeenCalledWith(customBg);
+
+      // Order: setBackgroundColor must run before loadURL so the first paint
+      // doesn't show the default opaque white.
+      const bgOrder = view.setBackgroundColor.mock.invocationCallOrder[0];
+      const loadOrder = wc.loadURL.mock.invocationCallOrder[0];
+      expect(bgOrder).toBeLessThan(loadOrder);
+    });
+
+    it("defaults to black when no backgroundColor is provided", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      const addChildViewMock = mockWindow.contentView.addChildView as ReturnType<typeof vi.fn>;
+      manager.createTab("tab-default-bg", "http://localhost:3000");
+      manager.showTab("tab-default-bg", { x: 0, y: 0, width: 800, height: 600 });
+
+      const view = addChildViewMock.mock.calls.at(-1)?.[0] as {
+        setBackgroundColor: ReturnType<typeof vi.fn>;
+      };
+      expect(view.setBackgroundColor).toHaveBeenCalledWith("#000000");
     });
   });
 
@@ -796,12 +879,14 @@ describe("PortalManager destroyHiddenTabs()", () => {
     expect(manager.hasTab("tab-c")).toBe(false);
   });
 
-  it("preserves lastShownTabId when activeTabId is null", async () => {
+  it("hideAll keeps activeTabId set so the parked tab is protected from eviction", async () => {
     const manager = new PortalManagerClass(mockWindow);
     manager.createTab("tab-1", "http://localhost:3000");
     manager.createTab("tab-2", "http://localhost:3001");
     manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
-    manager.hideAll(); // clears activeTabId, but lastShownTabId = tab-1
+    manager.hideAll(); // parks tab-1 offscreen; activeTabId stays "tab-1"
+
+    expect(manager.getActiveTabId()).toBe("tab-1");
 
     const result = await manager.destroyHiddenTabs();
 

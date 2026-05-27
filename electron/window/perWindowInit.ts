@@ -3,6 +3,8 @@ import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
+import { resolveInitialColorSchemeId } from "./skeletonCss.js";
+import { resolveAppTheme } from "../../shared/theme/index.js";
 import { PtyClient } from "../services/PtyClient.js";
 import {
   getMainProcessWatchdogClient,
@@ -313,7 +315,15 @@ export async function initPerWindowServices(
   // bus so early-boot events (migrations, PTY init, hydration) reach the
   // inspector. Deferring would drop those events.
   ctx.services.eventBuffer.start();
-  ctx.services.portalManager = new PortalManager(win);
+  // Match the main app view's background color so portal WebContentsView's
+  // first paint blends with the window chrome instead of flashing white when a
+  // tab is created or returned to after an overlay (#9207). Custom-scheme
+  // precision isn't load-bearing here — the goal is "not white", so we resolve
+  // the base scheme without threading customSchemes through this code path.
+  const portalBackgroundColor = resolveAppTheme(resolveInitialColorSchemeId(), []).tokens[
+    "surface-canvas"
+  ];
+  ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   ctx.services.projectSwitchService = new ProjectSwitchService({
     mainWindow: win,
     ptyClient: ptyClient ?? undefined,
