@@ -101,6 +101,11 @@ export function FileViewerModal({
   const diffViewerRef = useRef<HTMLDivElement>(null);
   // -1 sentinel: "no hunk navigated to yet". First `n` or `p` jumps to hunk 0.
   const currentHunkIndexRef = useRef<number>(-1);
+  const [activeHunkIndex, setActiveHunkIndex] = useState<number>(-1);
+  const [hunkCount, setHunkCount] = useState<number>(0);
+  const hunkRatiosRef = useRef<Map<number, number>>(new Map());
+  const observerGenerationRef = useRef(0);
+  const observerDisposedRef = useRef(false);
 
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
@@ -308,6 +313,7 @@ export function FileViewerModal({
         next = current < 0 ? 0 : Math.max(current - 1, 0);
       }
       currentHunkIndexRef.current = next;
+      setActiveHunkIndex(next);
       hunks[next]?.scrollIntoView({ block: "start", behavior: "smooth" });
     };
 
@@ -316,6 +322,83 @@ export function FileViewerModal({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isOpen, mode]);
+
+  // IntersectionObserver tracks the most-visible hunk during free scrolling.
+  // Observes tr:first-child (not tbody — table-row-group collapses to 0 height
+  // in Chromium and races with layout). The observer is keyed on diffViewType
+  // so split/unified toggles re-observe the new DOM.
+  useEffect(() => {
+    if (!isOpen || mode !== "diff" || !diff) {
+      setActiveHunkIndex(-1);
+      setHunkCount(0);
+      return;
+    }
+
+    const container = diffViewerRef.current;
+    if (!container) return;
+
+    const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
+    const count = hunks.length;
+    setHunkCount(count);
+
+    if (count <= 1) {
+      setActiveHunkIndex(-1);
+      return;
+    }
+
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
+
+    const generation = ++observerGenerationRef.current;
+    observerDisposedRef.current = false;
+    hunkRatiosRef.current = new Map();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (observerDisposedRef.current) return;
+        if (generation !== observerGenerationRef.current) return;
+
+        for (const entry of entries) {
+          const idx = Number((entry.target as HTMLElement).dataset.hunkObserverIndex);
+          if (Number.isNaN(idx)) continue;
+          if (entry.intersectionRatio === 0) {
+            hunkRatiosRef.current.delete(idx);
+          } else {
+            hunkRatiosRef.current.set(idx, entry.intersectionRatio);
+          }
+        }
+
+        let bestIdx = -1;
+        let bestRatio = -1;
+        for (const [idx, ratio] of hunkRatiosRef.current) {
+          if (ratio > bestRatio || (ratio === bestRatio && idx < bestIdx)) {
+            bestRatio = ratio;
+            bestIdx = idx;
+          }
+        }
+
+        if (bestIdx >= 0) {
+          setActiveHunkIndex(bestIdx);
+          currentHunkIndexRef.current = bestIdx;
+        }
+      },
+      { root: container, threshold: [0, 0.2, 0.4, 0.6, 0.8, 1.0] }
+    );
+
+    hunks.forEach((hunk, index) => {
+      const firstRow = hunk.querySelector("tr:first-child");
+      if (firstRow) {
+        (firstRow as HTMLElement).dataset.hunkObserverIndex = String(index);
+        observer.observe(firstRow);
+      }
+    });
+
+    return () => {
+      observerDisposedRef.current = true;
+      observer.disconnect();
+    };
+  }, [isOpen, mode, diff, diffViewType]);
 
   return (
     <AppDialog
@@ -375,6 +458,15 @@ export function FileViewerModal({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Hunk position indicator — visible during free scroll and n/p nav */}
+          {mode === "diff" && hunkCount > 1 && activeHunkIndex >= 0 && (
+            <span
+              data-testid="hunk-position-indicator"
+              className="text-xs text-muted-foreground tabular-nums"
+            >
+              Hunk {activeHunkIndex + 1} of {hunkCount}
+            </span>
+          )}
           {/* Split/Unified toggle — only visible in diff mode */}
           {mode === "diff" && hasDiff && (
             <div className="flex bg-daintree-sidebar rounded p-0.5">

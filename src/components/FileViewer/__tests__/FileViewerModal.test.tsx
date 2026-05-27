@@ -2,6 +2,42 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { forwardRef, type ReactNode } from "react";
+
+interface MockIntersectionObserverEntry {
+  target: Element;
+  intersectionRatio: number;
+  isIntersecting: boolean;
+}
+
+let mockObserverInstances: MockIntersectionObserver[] = [];
+
+class MockIntersectionObserver {
+  callback: IntersectionObserverCallback;
+  options?: IntersectionObserverInit;
+  observed: Element[] = [];
+
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.callback = callback;
+    this.options = options;
+    mockObserverInstances.push(this);
+  }
+
+  observe(target: Element) {
+    this.observed.push(target);
+  }
+
+  unobserve(target: Element) {
+    this.observed = this.observed.filter((el) => el !== target);
+  }
+
+  disconnect() {
+    this.observed = [];
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
 // jsdom does not implement Trusted Types. Mock the renderer policy module
 // with pass-through spies so the modal renders sanitized SVG inline AND we
 // can assert the policy is exercised on the SVG path. See #6392.
@@ -55,10 +91,20 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: forwardRef<HTMLDivElement, { onRetry?: () => void }>(({ onRetry }, ref) => (
     <div ref={ref} data-testid="diff-viewer" data-has-retry={onRetry ? "true" : "false"}>
-      {/* Two stub hunk rows so hunk-nav tests have predictable targets. */}
+      {/* Two stub hunk rows so hunk-nav tests have predictable targets.
+          Each tbody must contain a tr:first-child for the IntersectionObserver
+          to observe (tbody alone collapses to 0 height in Chromium). */}
       <table>
-        <tbody className="diff-hunk" data-testid="hunk-0" />
-        <tbody className="diff-hunk" data-testid="hunk-1" />
+        <tbody className="diff-hunk" data-testid="hunk-0">
+          <tr>
+            <td>hunk 0</td>
+          </tr>
+        </tbody>
+        <tbody className="diff-hunk" data-testid="hunk-1">
+          <tr>
+            <td>hunk 1</td>
+          </tr>
+        </tbody>
       </table>
     </div>
   )),
@@ -109,6 +155,8 @@ const scrollIntoViewCalls: HTMLElement[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockObserverInstances = [];
+  vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
   mockRead.mockResolvedValue({ content: "file content" });
   setDiffViewTypeMock.mockReset();
   usePreferencesStoreMock.mockImplementation(
@@ -635,5 +683,192 @@ describe("FileViewerModal", () => {
     });
 
     expect(screen.getByTestId("diff-viewer").getAttribute("data-has-retry")).toBe("false");
+  });
+
+  describe("hunk position indicator", () => {
+    const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+
+    it("is hidden when diff is not loaded", async () => {
+      render(<FileViewerModal {...defaultProps} defaultMode="view" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      expect(screen.queryByTestId("hunk-position-indicator")).toBeNull();
+    });
+
+    it("is hidden in view mode even with diff content", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="view" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      expect(screen.queryByTestId("hunk-position-indicator")).toBeNull();
+    });
+
+    it("shows Hunk 1 of 2 when observer fires for the first hunk", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      // The effect should create an IntersectionObserver instance
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+
+      // Fire the callback with the first hunk visible
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+      expect(hunk0Row).toBeTruthy();
+      observer.callback(
+        [
+          {
+            target: hunk0Row!,
+            intersectionRatio: 0.8,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+        ],
+        observer as unknown as IntersectionObserver
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator")).toBeTruthy();
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+    });
+
+    it("updates indicator when observer fires for the second hunk", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+
+      const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
+      expect(hunk1Row).toBeTruthy();
+      observer.callback(
+        [
+          {
+            target: hunk1Row!,
+            intersectionRatio: 1.0,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+        ],
+        observer as unknown as IntersectionObserver
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
+      });
+    });
+
+    it("picks the hunk with highest intersectionRatio when multiple fire", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+      const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
+
+      // Hunk 1 is more visible than hunk 0
+      observer.callback(
+        [
+          {
+            target: hunk0Row!,
+            intersectionRatio: 0.3,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+          {
+            target: hunk1Row!,
+            intersectionRatio: 0.9,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+        ],
+        observer as unknown as IntersectionObserver
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
+      });
+    });
+
+    it("n key updates the indicator immediately", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      fireEvent.keyDown(window, { key: "n" });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+    });
+
+    it("p key updates the indicator after navigating forward", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      fireEvent.keyDown(window, { key: "n" }); // hunk 0
+      fireEvent.keyDown(window, { key: "n" }); // hunk 1
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
+      });
+
+      fireEvent.keyDown(window, { key: "p" }); // back to hunk 0
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+    });
+
+    it("disconnects observer on unmount", async () => {
+      const { unmount } = render(
+        <FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+      const disconnectSpy = vi.spyOn(observer, "disconnect");
+
+      unmount();
+
+      expect(disconnectSpy).toHaveBeenCalled();
+    });
   });
 });
