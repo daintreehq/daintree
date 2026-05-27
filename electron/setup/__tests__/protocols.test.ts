@@ -113,8 +113,20 @@ vi.mock("../../ipc/channels.js", () => ({
   },
 }));
 
+const pluginServiceMock = vi.hoisted(() => ({
+  getPluginDir: vi.fn<(pluginId: string) => string | null>(() => null),
+}));
+vi.mock("../../services/PluginService.js", () => ({
+  pluginService: pluginServiceMock,
+}));
+
+vi.mock("../../../shared/config/devServer.js", () => ({
+  getDevServerOrigins: vi.fn<() => string[]>(() => []),
+}));
+
 import {
   registerDaintreeFileProtocol,
+  registerPluginProtocol,
   registerProtocolsForSession,
   setupWebviewCSP,
 } from "../protocols.js";
@@ -766,15 +778,16 @@ describe("protocol registration", () => {
     vi.clearAllMocks();
   });
 
-  it("registers app and daintree-file protocols on per-project sessions", async () => {
+  it("registers app, daintree-file, and plugin protocols on per-project sessions", async () => {
     const handle = vi.fn();
     const mockSession = { protocol: { handle } } as unknown as Electron.Session;
 
     registerProtocolsForSession(mockSession, "/tmp/dist");
 
-    expect(handle).toHaveBeenCalledTimes(2);
+    expect(handle).toHaveBeenCalledTimes(3);
     expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
     expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+    expect(handle).toHaveBeenCalledWith("plugin", expect.any(Function));
   });
 
   it("registers the default-session daintree-file protocol", async () => {
@@ -783,6 +796,14 @@ describe("protocol registration", () => {
     registerDaintreeFileProtocol();
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+  });
+
+  it("registers the default-session plugin protocol", async () => {
+    const { protocol } = await import("electron");
+
+    registerPluginProtocol();
+
+    expect(protocol.handle).toHaveBeenCalledWith("plugin", expect.any(Function));
   });
 });
 
@@ -1152,5 +1173,159 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+});
+
+describe("createPluginProtocolHandler — plugin asset resolution & containment", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  const PLUGIN_ROOT = "/plugins/acme.demo";
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "plugin");
+    if (!call) throw new Error("handler for plugin not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(
+    pluginId: string,
+    assetPath: string,
+    init: { method?: string; origin?: string } = {}
+  ): GlobalRequest {
+    const headers: Record<string, string> = {};
+    if (init.origin) headers["Origin"] = init.origin;
+    return new Request(`plugin://${pluginId}/${assetPath}`, {
+      method: init.method,
+      headers,
+    }) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "data") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    pluginServiceMock.getPluginDir.mockReturnValue(PLUGIN_ROOT);
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({
+      isFile: () => true,
+      mtime: new Date(0),
+      size: 4,
+    } as unknown as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("application/javascript");
+    const devServer = await import("../../../shared/config/devServer.js");
+    vi.mocked(devServer.getDevServerOrigins).mockReturnValue([]);
+  });
+
+  it("serves a file for a known plugin and opens the resolved path with O_NOFOLLOW", async () => {
+    const fs = await import("fs/promises");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", "dist/index.mjs"));
+
+    expect(response.status).toBe(200);
+    expect(pluginServiceMock.getPluginDir).toHaveBeenCalledWith("acme.demo");
+    expect(response.headers.get("Content-Type")).toBe("application/javascript");
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs[0]).toBe(path.resolve(PLUGIN_ROOT, "dist/index.mjs"));
+    expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  });
+
+  it("returns 404 for an unknown plugin without touching the filesystem", async () => {
+    const fs = await import("fs/promises");
+    pluginServiceMock.getPluginDir.mockReturnValue(null);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("ghost.plugin", "index.mjs"));
+
+    expect(response.status).toBe(404);
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("blocks a symlink/traversal escape after realpath and never opens the file", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === PLUGIN_ROOT ? PLUGIN_ROOT : "/etc/passwd")
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", "link.mjs"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the final path component is a symlink (ELOOP on open)", async () => {
+    const fs = await import("fs/promises");
+    const eloop = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+    vi.mocked(fs.open).mockRejectedValue(eloop);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", "evil.mjs"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 405 for non-GET/HEAD methods", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", "index.mjs", { method: "POST" }));
+
+    expect(response.status).toBe(405);
+  });
+
+  it("returns 404 for a directory request (no listing, no index fallback)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({
+      isFile: () => false,
+      mtime: new Date(0),
+      size: 0,
+    } as unknown as Awaited<ReturnType<typeof fs.stat>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", "dist"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("echoes a trusted dev-server Origin into Access-Control-Allow-Origin", async () => {
+    const devServer = await import("../../../shared/config/devServer.js");
+    vi.mocked(devServer.getDevServerOrigins).mockReturnValue(["http://localhost:5173"]);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("acme.demo", "index.mjs", { origin: "http://localhost:5173" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("falls back to app://daintree for an untrusted Origin", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("acme.demo", "index.mjs", { origin: "https://evil.example" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
   });
 });

@@ -21,6 +21,8 @@ import { isLocalhostUrl, isSafeNavigationUrl } from "../../shared/utils/urlUtils
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { pluginService } from "../services/PluginService.js";
+import { getDevServerOrigins } from "../../shared/config/devServer.js";
 
 // Track which sessions have had protocols registered to avoid double-registration
 const registeredSessions = new WeakSet<Electron.Session>();
@@ -259,10 +261,177 @@ function createDaintreeFileProtocolHandler() {
   };
 }
 
+// The renderer shell that loads plugin:// sub-resources. In production it is
+// app://daintree; in development it is the Vite dev server origin. ESM import()
+// and fetch() of cross-origin plugin modules need a matching CORS allow-origin,
+// so we echo the request Origin when it is one of these trusted shells and fall
+// back to app://daintree otherwise. Non-CORS subresource loads (img/css/script)
+// are governed by Cross-Origin-Resource-Policy: cross-origin instead.
+function resolvePluginAllowOrigin(request: GlobalRequest): string {
+  const origin = request.headers.get("Origin");
+  if (origin && (origin === "app://daintree" || getDevServerOrigins().includes(origin))) {
+    return origin;
+  }
+  return "app://daintree";
+}
+
+// Hardened response headers for plugin:// assets. CORP is cross-origin because
+// the app://daintree (or dev-server) renderer is a different origin and
+// same-origin would block every sub-resource load. No size cap (plugin JS
+// bundles routinely exceed daintree-file's 512KB limit) and no sandbox CSP
+// (plugin modules must execute — they stay subject to the host page CSP, which
+// allows `plugin:` in script-src/connect-src/img-src/style-src). nosniff hardens
+// MIME-confusion; no-cache + Last-Modified lets the renderer revalidate.
+function buildPluginHeaders(
+  mimeType: string,
+  contentLength: number,
+  allowOrigin: string,
+  mtime?: Date
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": mimeType,
+    "Content-Length": String(contentLength),
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Access-Control-Allow-Origin": allowOrigin,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-cache, must-revalidate",
+  };
+  if (mtime) {
+    headers["Last-Modified"] = mtime.toUTCString();
+  }
+  return headers;
+}
+
+function buildPluginErrorHeaders(allowOrigin: string): Record<string, string> {
+  return {
+    "Content-Type": "text/plain",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Access-Control-Allow-Origin": allowOrigin,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  };
+}
+
 /**
- * Register app:// and daintree-file:// protocol handlers on a specific session.
- * Safe to call multiple times — skips sessions that are already configured.
- * Used for per-project session partitions that don't inherit the default session's handlers.
+ * Create the plugin:// protocol handler. Resolves plugin://{pluginId}/{path} to
+ * a file under the plugin's installed root (looked up from PluginService at
+ * request time). Uses fs.realpath containment + O_NOFOLLOW to block path
+ * traversal and symlink escapes — identical to the daintree-file:// pattern, but
+ * the root is dynamic per pluginId. Always 404 on miss/escape (no 403, no
+ * directory listings, no index.html fallback) to avoid leaking what exists.
+ */
+function createPluginProtocolHandler() {
+  return async (request: GlobalRequest) => {
+    const allowOrigin = resolvePluginAllowOrigin(request);
+
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildPluginErrorHeaders(allowOrigin),
+      });
+    }
+
+    const notFound = () =>
+      new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(allowOrigin),
+      });
+
+    try {
+      const url = new URL(request.url);
+      const pluginId = url.hostname;
+      if (!pluginId) {
+        return notFound();
+      }
+
+      // Request-time lookup so plugin reinstall/unload is reflected immediately.
+      const pluginRoot = pluginService.getPluginDir(pluginId);
+      if (!pluginRoot) {
+        return notFound();
+      }
+
+      const rawPath = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
+      if (!rawPath) {
+        return notFound();
+      }
+
+      const decodedPath = decodeURIComponent(rawPath);
+      if (decodedPath.includes("\0")) {
+        return new Response("Invalid path", {
+          status: 400,
+          headers: buildPluginErrorHeaders(allowOrigin),
+        });
+      }
+
+      // path.resolve normalizes ".." segments; the realpath containment below is
+      // the load-bearing guard against traversal and in-root symlink escapes.
+      const candidate = path.resolve(pluginRoot, decodedPath);
+
+      let realRoot: string;
+      let realFile: string;
+      try {
+        realRoot = await fs.realpath(pluginRoot);
+        realFile = await fs.realpath(candidate);
+      } catch {
+        return notFound();
+      }
+
+      const rel = path.relative(realRoot, realFile);
+      // Match exact ".." and "../*" — bare startsWith("..") would reject legitimate
+      // files like "..hidden/x". isAbsolute catches Windows cross-drive escapes.
+      if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+        return notFound();
+      }
+
+      let fileStat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        fileStat = await fs.stat(realFile);
+      } catch {
+        return notFound();
+      }
+      if (!fileStat.isFile()) {
+        return notFound();
+      }
+
+      // Open the resolved candidate with O_NOFOLLOW so a final-component symlink
+      // injected after the realpath check is rejected with ELOOP (TOCTOU close).
+      // On Windows O_NOFOLLOW is 0 (no-op); realpath containment still applies.
+      let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        fileHandle = await fs.open(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      } catch (err) {
+        const errCode = (err as NodeJS.ErrnoException).code;
+        if (errCode === "ELOOP" || errCode === "ENOENT") {
+          return notFound();
+        }
+        throw err;
+      }
+
+      try {
+        const buffer = await fileHandle.readFile();
+        const mimeType = getMimeType(realFile);
+        return new Response(buffer, {
+          status: 200,
+          headers: buildPluginHeaders(mimeType, buffer.length, allowOrigin, fileStat.mtime),
+        });
+      } finally {
+        await fileHandle.close().catch(() => {});
+      }
+    } catch (err) {
+      console.error("[MAIN] plugin protocol error:", err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildPluginErrorHeaders(allowOrigin),
+      });
+    }
+  };
+}
+
+/**
+ * Register app://, daintree-file://, and plugin:// protocol handlers on a
+ * specific session. Safe to call multiple times — skips sessions that are
+ * already configured. Used for per-project session partitions that don't inherit
+ * the default session's handlers.
  */
 export function registerProtocolsForSession(ses: Electron.Session, distPath: string): void {
   if (registeredSessions.has(ses)) return;
@@ -270,6 +439,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
+  ses.protocol.handle("plugin", createPluginProtocolHandler());
 }
 
 export function registerAppProtocol(distPath: string): void {
@@ -279,6 +449,10 @@ export function registerAppProtocol(distPath: string): void {
 
 export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
+}
+
+export function registerPluginProtocol(): void {
+  protocol.handle("plugin", createPluginProtocolHandler());
 }
 
 /**

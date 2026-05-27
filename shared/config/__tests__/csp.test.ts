@@ -28,4 +28,18 @@ describe("Daintree app CSP", () => {
     expect(getDaintreeAppCSP(true)).toBe(getDaintreeAppDevCSP());
     expect(getDaintreeAppCSP(false)).toBe(getDaintreeAppProdCSP());
   });
+
+  it("allows the plugin: scheme in script/connect/img/style directives (prod and dev)", () => {
+    for (const csp of [getDaintreeAppProdCSP(), getDaintreeAppDevCSP()]) {
+      const directive = (name: string) =>
+        csp
+          .split(";")
+          .map((d) => d.trim())
+          .find((d) => d.startsWith(`${name} `)) ?? "";
+      expect(directive("script-src")).toContain("plugin:");
+      expect(directive("connect-src")).toContain("plugin:");
+      expect(directive("img-src")).toContain("plugin:");
+      expect(directive("style-src")).toContain("plugin:");
+    }
+  });
 });

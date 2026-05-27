@@ -918,6 +918,16 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
+  /**
+   * Resolve a plugin's installed on-disk root directory by id, or null if no
+   * plugin with that id is loaded. Used by the `plugin://` protocol handler to
+   * map `plugin://{pluginId}/...` URLs to files on disk. Looked up at request
+   * time so reinstall/unload is reflected immediately.
+   */
+  getPluginDir(pluginId: string): string | null {
+    return this.plugins.get(pluginId)?.dir ?? null;
+  }
+
   registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void {
     if (!this.plugins.has(pluginId)) {
       throw new Error(`Unknown plugin: ${pluginId}`);

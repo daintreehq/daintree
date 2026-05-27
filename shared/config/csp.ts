@@ -3,6 +3,12 @@ import { getDevServerOrigins, getDevServerWebSocketOrigins } from "./devServer.j
 // Custom protocol scheme the renderer fetches/loads from.
 const FILE_SCHEMES = "daintree-file:";
 
+// Per-plugin static asset scheme (plugin://{pluginId}/...). Plugin view bundles
+// load as cross-origin ESM modules, CSS, and images from the app shell, so the
+// scheme must be allowed in script/connect/img/style directives — 'self' does
+// not cover it. Plugins stay subject to CSP (registered with bypassCSP: false).
+const PLUGIN_SCHEME = "plugin:";
+
 // Localhost origins allowed for embedded <webview> guests in BrowserPane and
 // DevPreviewPane. Without these in frame-src the host page cannot mount its
 // webview elements at all.
@@ -47,10 +53,10 @@ export const TRUSTED_TYPES_POLICY_NAME = "daintree-svg";
 export function getDaintreeAppProdCSP(): string {
   return [
     "default-src 'self'",
-    "script-src 'self' 'wasm-unsafe-eval'",
-    "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${FILE_SCHEMES}`,
-    `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
+    `script-src 'self' 'wasm-unsafe-eval' ${PLUGIN_SCHEME}`,
+    `style-src 'self' 'unsafe-inline' ${PLUGIN_SCHEME}`,
+    `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
+    `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} ${PLUGIN_SCHEME} data: blob:`,
     "font-src 'self' data:",
     "media-src 'self'",
     "worker-src 'self' blob:",
@@ -81,10 +87,10 @@ export function getDaintreeAppDevCSP(): string {
 
   return [
     `default-src 'self' ${origins} ${wsOrigins}`,
-    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'`,
-    `style-src 'self' ${origins} 'unsafe-inline'`,
-    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES}`,
-    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} data: blob:`,
+    `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval' ${PLUGIN_SCHEME}`,
+    `style-src 'self' ${origins} 'unsafe-inline' ${PLUGIN_SCHEME}`,
+    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
+    `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${FILE_SCHEMES} ${PLUGIN_SCHEME} data: blob:`,
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
     "worker-src 'self' blob:",

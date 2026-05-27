@@ -518,6 +518,16 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toEqual([]);
   });
 
+  it("getPluginDir returns the on-disk root for a loaded plugin and null otherwise", async () => {
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.getPluginDir("acme.test-plugin")).toBe(path.join(tmpDir, "test-plugin"));
+    expect(service.getPluginDir("acme.unknown")).toBeNull();
+  });
+
   it("skips plugins with invalid JSON", async () => {
     const dir = path.join(tmpDir, "bad-json");
     await fs.mkdir(dir);

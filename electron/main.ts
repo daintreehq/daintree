@@ -21,6 +21,7 @@ import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/sec
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerPluginProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
 import {
@@ -114,6 +115,19 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       secure: true,
       supportFetchAPI: true,
+    },
+  },
+  {
+    // Per-plugin static asset scheme: plugin://{pluginId}/{path}. standard+secure
+    // so relative ESM imports resolve and the renderer treats it as a secure
+    // context; the {pluginId} host segment is a distinct origin per plugin
+    // (corsEnabled). bypassCSP defaults to false — plugins stay subject to CSP.
+    scheme: "plugin",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
     },
   },
 ]);
@@ -420,6 +434,7 @@ if (!gotTheLock) {
       setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
+      registerPluginProtocol();
       setupWebviewCSP();
       // Prime the hydrate prefetch cache for the last-active project so the
       // renderer's first `app:boot` invoke resolves as a cache hit instead of
