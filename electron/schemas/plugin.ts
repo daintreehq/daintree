@@ -145,53 +145,64 @@ export const PluginToastOptionsSchema = z
   })
   .strict();
 
-export const PluginManifestSchema = z
-  .strictObject({
-    name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
-      error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
-    }),
-    version: z.string().min(1),
-    displayName: z.string().optional(),
-    description: z.string().optional(),
-    main: z.string().optional(),
-    engines: z
-      .object({
-        daintree: z
-          .string()
-          .trim()
-          .min(1)
-          .refine((val) => semver.validRange(val) !== null, {
-            message: "engines.daintree must be a valid semver range",
-          })
-          .optional(),
-      })
-      .optional(),
-    capabilities: z.array(PluginCapabilitySchema).default([]),
-    contributes: z
-      .strictObject({
-        panels: z.array(PanelContributionSchema).default([]),
-        toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
-        menuItems: z.array(MenuItemContributionSchema).default([]),
-        keybindings: z.array(KeybindingContributionSchema).default([]),
-        contextMenus: z.array(ContextMenuContributionSchema).default([]),
-        experimental_views: z.array(ViewContributionSchema).default([]),
-        experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
-        forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
-        fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
-      })
-      .default({
-        panels: [],
-        toolbarButtons: [],
-        menuItems: [],
-        keybindings: [],
-        contextMenus: [],
-        experimental_views: [],
-        experimental_mcpServers: [],
-        forgeProviders: [],
-        fileDecorationProviders: [],
+export function getPluginManifestSchema(isBuiltin: boolean) {
+  return z
+    .strictObject({
+      name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
+        error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
       }),
-  })
-  .strict();
+      version: z.string().min(1),
+      displayName: z.string().optional(),
+      description: z.string().optional(),
+      main: z.string().optional(),
+      engines: z
+        .object({
+          daintree: z
+            .string()
+            .trim()
+            .min(1)
+            .refine((val) => semver.validRange(val) !== null, {
+              message: "engines.daintree must be a valid semver range",
+            })
+            .optional(),
+        })
+        .optional(),
+      capabilities: z.array(PluginCapabilitySchema).default([]),
+      contributes: z
+        .strictObject({
+          panels: z.array(PanelContributionSchema).default([]),
+          toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
+          menuItems: z.array(MenuItemContributionSchema).default([]),
+          keybindings: z.array(KeybindingContributionSchema).default([]),
+          contextMenus: z.array(ContextMenuContributionSchema).default([]),
+          experimental_views: z.array(ViewContributionSchema).default([]),
+          experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
+          forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
+          fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
+        })
+        .default({
+          panels: [],
+          toolbarButtons: [],
+          menuItems: [],
+          keybindings: [],
+          contextMenus: [],
+          experimental_views: [],
+          experimental_mcpServers: [],
+          forgeProviders: [],
+          fileDecorationProviders: [],
+        }),
+    })
+    .superRefine((manifest, ctx) => {
+      if (!isBuiltin && manifest.name.startsWith("daintree.")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["name"],
+          message: `Plugin name "${manifest.name}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
+          params: { errorCode: "namespace_reserved" },
+        });
+      }
+    });
+}
 
 export type {
   PluginManifest,

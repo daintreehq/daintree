@@ -4,7 +4,7 @@ import { createWriteStream } from "fs";
 import path from "path";
 import { ZipArchive } from "archiver";
 import yauzl from "yauzl";
-import { PluginManifestSchema } from "../schemas/plugin.js";
+import { getPluginManifestSchema } from "../schemas/plugin.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
@@ -216,7 +216,7 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
           } catch {
             return reject(new Error("plugin.json is not valid JSON"));
           }
-          const result = PluginManifestSchema.safeParse(json);
+          const result = getPluginManifestSchema(false).safeParse(json);
           if (!result.success) {
             return reject(
               new Error(`plugin.json failed schema validation: ${result.error.message}`)
@@ -349,7 +349,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
               zipfile.close();
               return resolve({ valid: false, error: "plugin.json is not valid JSON" });
             }
-            const parseResult = PluginManifestSchema.safeParse(json);
+            const parseResult = getPluginManifestSchema(false).safeParse(json);
             if (!parseResult.success) {
               settled = true;
               zipfile.close();
