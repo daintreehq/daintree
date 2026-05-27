@@ -460,6 +460,8 @@ export const CHANNELS = {
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_META: "dev-preview:get-destructive-preview-meta",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:get-destructive-preview-sizes",
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",
+  DEV_PREVIEW_RESTART_BY_WORKTREE: "dev-preview:restart-by-worktree",
+  DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE: "dev-preview:stop-dev-server-by-worktree",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
 
   COMMANDS_LIST: "commands:list",
