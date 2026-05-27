@@ -14,7 +14,10 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
-import type { McpRuntimeSnapshot } from "../shared/types/ipc/mcpServer.js";
+import type {
+  McpRuntimeSnapshot,
+  McpGrantLifecyclePayload,
+} from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -2324,16 +2327,8 @@ const api: ElectronAPI = {
         targetTier: "workbench" | "action" | "system" | null;
       }) => void
     ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
-    onGrantLifecycle: (
-      callback: (payload: {
-        type: "grant.issued" | "grant.expired" | "grant.revoked";
-        sessionId: string;
-        toolId: string;
-        ttlMs: number;
-        expiresAt?: number;
-        revokedReason?: "user" | "session-ended" | "session-idle";
-      }) => void
-    ) => _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+    onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
+      _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
   },
 
   helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
