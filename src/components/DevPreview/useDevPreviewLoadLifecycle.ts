@@ -185,8 +185,10 @@ export function useDevPreviewLoadLifecycle({
         failLoadRetryRef.current = null;
       }
       failLoadRetryCountRef.current = 0;
+      if (reason === "clean-exit") return;
       setWebviewCrashed({ reason, exitCode });
       setWebviewLoadError(null);
+      onRenderProcessGone?.({ reason, exitCode });
     };
 
     const handleDidStartLoading = () => {

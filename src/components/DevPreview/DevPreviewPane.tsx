@@ -65,6 +65,7 @@ import { isDevPreviewPanel, type ViewportPresetId } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
@@ -452,19 +453,34 @@ export function DevPreviewPane({
     return () => clearTimeout(timer);
   }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
 
-  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
-    const now = Date.now();
-    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-    timestamps.push(now);
-    crashTimestampsRef.current = timestamps;
+  const handleRenderProcessGone = useCallback(
+    (details: { reason: string; exitCode: number }) => {
+      const now = Date.now();
+      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+      timestamps.push(now);
+      crashTimestampsRef.current = timestamps;
 
-    setCrashDetails(details);
-    setCrashState("crashed");
+      setCrashDetails(details);
+      setCrashState("crashed");
 
-    if (timestamps.length < 2) {
-      crashReloadRef.current();
-    }
-  }, []);
+      if (timestamps.length < 2) {
+        crashReloadRef.current();
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Preview process crashed repeatedly",
+          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
+          priority: "high",
+          duration: 0,
+          context: { eventKind: "recovery", panelId: id },
+          supersedeKey: `dev-preview-crash-loop:${id}`,
+          correlationId: id,
+        });
+      }
+    },
+    [id]
+  );
 
   const {
     isWebviewReady,
