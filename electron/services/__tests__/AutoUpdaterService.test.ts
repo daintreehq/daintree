@@ -446,6 +446,12 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
     });
 
     it("skips initialization on Linux when SNAP is set", () => {
@@ -455,6 +461,25 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Snap sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when both FLATPAK_ID and APPIMAGE are set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
     });
 
     it("initializes normally on Linux when APPIMAGE is set", () => {
@@ -528,7 +553,7 @@ describe("AutoUpdaterService", () => {
 
       autoUpdaterService.initialize();
 
-      expect(fsMock.existsSync).toHaveBeenCalledWith(expect.stringContaining("package-type"));
+      expect(fsMock.existsSync).toHaveBeenCalledWith("/mock/resources/package-type");
     });
 
     it("skips filesystem probe when APPIMAGE is set", () => {
