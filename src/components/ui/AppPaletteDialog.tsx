@@ -12,6 +12,7 @@ import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { KbdChord } from "@/components/ui/Kbd";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
   registerDialogEscapeBackstop,
@@ -222,6 +223,10 @@ export function AppPaletteDialog({
         onClick={(e) => e.stopPropagation()}
       >
         {children}
+        {/* Co-located live region: VoiceOver suppresses announcements made
+            from `aria-live` regions outside the focused `aria-modal` subtree
+            when `document.ariaNotify` is unavailable (Chromium 354736464). */}
+        <AccessibilityAnnouncer />
       </div>
     </div>,
     document.body

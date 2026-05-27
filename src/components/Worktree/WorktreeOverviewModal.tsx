@@ -16,6 +16,7 @@ import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -1215,6 +1216,10 @@ export function WorktreeOverviewModal({
           <span>This is irreversible. Type the count to confirm.</span>
         </div>
       </ConfirmDialog>
+      {/* Co-located live region: VoiceOver suppresses announcements made
+          from `aria-live` regions outside the focused `aria-modal` subtree
+          when `document.ariaNotify` is unavailable (Chromium 354736464). */}
+      <AccessibilityAnnouncer />
     </div>
   );
 }

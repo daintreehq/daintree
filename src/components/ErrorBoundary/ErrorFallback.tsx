@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { TriangleAlert } from "lucide-react";
 
 export interface ErrorFallbackProps {
@@ -199,6 +200,10 @@ export function ErrorFallback({
           </details>
         )}
       </div>
+      {/* Co-located live region: fullscreen variant carries `aria-modal`, so
+          VoiceOver suppresses external `aria-live` regions when
+          `document.ariaNotify` is unavailable (Chromium 354736464). */}
+      {isFullscreen && <AccessibilityAnnouncer />}
     </div>
   );
 }
