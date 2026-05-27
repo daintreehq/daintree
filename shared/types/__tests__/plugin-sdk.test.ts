@@ -164,4 +164,21 @@ describe("plugin-sdk boundary", () => {
       expect(Object.keys(mod)).toHaveLength(0);
     });
   });
+
+  describe("host-internal types are NOT exported from SDK", () => {
+    it("LoadedPluginInfo is not in the SDK barrel", () => {
+      // @ts-expect-error — LoadedPluginInfo is host-internal
+      const _check: import("../plugin-sdk.js").LoadedPluginInfo = null;
+    });
+
+    it("PluginActionDescriptor is not in the SDK barrel", () => {
+      // @ts-expect-error — PluginActionDescriptor is host-internal
+      const _check: import("../plugin-sdk.js").PluginActionDescriptor = null;
+    });
+
+    it("BUILT_IN_PLUGIN_PERMISSIONS is not in the SDK barrel", () => {
+      // @ts-expect-error — BUILT_IN_PLUGIN_PERMISSIONS is host-internal
+      const _check: import("../plugin-sdk.js").BUILT_IN_PLUGIN_PERMISSIONS = null;
+    });
+  });
 });
