@@ -1034,7 +1034,25 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "worktree:create": {
-    args: [payload: { rootPath: string; options: import("../git.js").CreateWorktreeOptions }];
+    args: [
+      payload: {
+        rootPath: string;
+        options: {
+          baseBranch: string;
+          newBranch: string;
+          path: string;
+          fromRemote?: boolean | undefined;
+          useExistingBranch?: boolean | undefined;
+          provisionResource?: boolean | undefined;
+          worktreeMode?: string | undefined;
+          sourcePrNumber?: number | undefined;
+          sourcePrTitle?: string | undefined;
+          sourcePrUrl?: string | undefined;
+          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrLinkedIssueNumber?: number | undefined;
+        };
+      },
+    ];
     result: string;
   };
   "worktree:delete": {
@@ -1098,7 +1116,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "worktree:set-active": {
-    args: [payload: import("./worktree.js").WorktreeSetActivePayload];
+    args: [payload: { worktreeId: string }];
     result: void;
   };
 }
