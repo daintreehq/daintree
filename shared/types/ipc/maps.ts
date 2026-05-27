@@ -1274,6 +1274,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [webContentsId: number];
     result: number;
   };
+  "webview:get-navigation-history": {
+    args: [webContentsId: number];
+    result: import("../browser.js").BrowserNavigationHistorySnapshot;
+  };
+  "webview:go-to-history-index": {
+    args: [webContentsId: number, index: number];
+    result: void;
+  };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
   // App Agent channels

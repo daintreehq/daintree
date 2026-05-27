@@ -9,7 +9,7 @@ import { AlertTriangle, ExternalLink, RotateCw, Square } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
-import type { BrowserHistory } from "@shared/types/browser";
+import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import {
@@ -20,12 +20,7 @@ import {
   clampZoom,
   type LoadError,
 } from "./browserUtils";
-import {
-  goBackBrowserHistory,
-  goForwardBrowserHistory,
-  initializeBrowserHistory,
-  pushBrowserHistory,
-} from "./historyUtils";
+import { initializeBrowserHistory } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
 import { FindBar } from "./FindBar";
@@ -135,6 +130,8 @@ export function BrowserPane({
     return initializeBrowserHistory(initialHistory ?? null, fallbackPresent);
   });
 
+  const [navSnapshot, setNavSnapshot] = useState<BrowserNavigationHistorySnapshot | null>(null);
+
   // Track whether the current load is the initial session-restored load (not a fresh panel)
   const isInitialRestoredLoadRef = useRef(Boolean(initialHistory?.present));
 
@@ -159,6 +156,19 @@ export function BrowserPane({
   const lastSetUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
+
+  const refreshNavigationHistory = useCallback(async () => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    try {
+      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+      const snapshot = await window.electron.webview.getNavigationHistory(wcId);
+      setNavSnapshot(snapshot);
+    } catch {
+      // Webview may have been destroyed between the guard and the IPC call
+    }
+  }, [isWebviewReady]);
+
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSlowLoad, setIsSlowLoad] = useState(false);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -166,8 +176,14 @@ export function BrowserPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const canGoBack = history.past.length > 0;
-  const canGoForward = history.future.length > 0;
+  const canGoBack = navSnapshot?.canGoBack ?? history.past.length > 0;
+  const canGoForward = navSnapshot?.canGoForward ?? history.future.length > 0;
+  const backEntry = navSnapshot?.entries
+    ? (navSnapshot.entries[navSnapshot.activeIndex - 1] ?? null)
+    : null;
+  const forwardEntry = navSnapshot?.entries
+    ? (navSnapshot.entries[navSnapshot.activeIndex + 1] ?? null)
+    : null;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
@@ -250,19 +266,13 @@ export function BrowserPane({
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setPendingApproval(null);
-      setHistory((prev) => pushBrowserHistory(prev, url));
+      setHistory((prev) => ({ ...prev, present: url }));
       setIsLoading(true);
       setLoadError(null);
       lastSetUrlRef.current = url;
 
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        // ERR_ABORTED (-3) is benign: emitted when a pending load is superseded
-        // by a fresh navigation (typing a new URL while the previous one is
-        // still loading). The did-fail-load handler already filters -3 — we
-        // mirror that here on the loadURL Promise so the rejection doesn't
-        // bubble to the global unhandled-rejection handler. Any genuine load
-        // failure will surface through did-fail-load with a non-(-3) code.
         loadWebviewUrl(webview, url);
       }
     },
@@ -314,46 +324,23 @@ export function BrowserPane({
   const handleBack = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
     setBlockedNav(null);
-    setHistory((prev) => {
-      const next = goBackBrowserHistory(prev);
-      if (next === prev) return prev;
-      const previousUrl = next.present;
-      lastSetUrlRef.current = previousUrl;
-
-      // Navigate webview back. Swallow ERR_ABORTED-class rejections — see
-      // commitNavigation comment above; did-fail-load is the source of truth
-      // for genuine failures.
-      const webview = webviewRef.current;
-      if (webview && isWebviewReady) {
-        loadWebviewUrl(webview, previousUrl);
-      }
-
-      return next;
-    });
     setIsLoading(true);
     setLoadError(null);
+    const webview = webviewRef.current;
+    if (webview && isWebviewReady && webview.canGoBack()) {
+      webview.goBack();
+    }
   }, [isWebviewReady]);
 
   const handleForward = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
     setBlockedNav(null);
-    setHistory((prev) => {
-      const next = goForwardBrowserHistory(prev);
-      if (next === prev) return prev;
-      const nextUrl = next.present;
-      lastSetUrlRef.current = nextUrl;
-
-      // Navigate webview forward. Swallow ERR_ABORTED-class rejections —
-      // see commitNavigation comment.
-      const webview = webviewRef.current;
-      if (webview && isWebviewReady) {
-        loadWebviewUrl(webview, nextUrl);
-      }
-
-      return next;
-    });
     setIsLoading(true);
     setLoadError(null);
+    const webview = webviewRef.current;
+    if (webview && isWebviewReady && webview.canGoForward()) {
+      webview.goForward();
+    }
   }, [isWebviewReady]);
 
   const handleReload = useCallback(() => {
@@ -465,6 +452,38 @@ export function BrowserPane({
     setZoomFactor(clampZoom(rawZoom));
   }, []);
 
+  const handleGoToHistoryIndex = useCallback(
+    async (index: number) => {
+      const entry = navSnapshot?.entries[index];
+      if (!entry) return;
+
+      const result = normalizeBrowserUrl(entry.url, { allowedHosts });
+      if (result.requiresConfirmation && result.hostname) {
+        setPendingApproval({ url: result.url!, hostname: result.hostname });
+        return;
+      }
+
+      const webview = webviewRef.current;
+      if (!webview || !isWebviewReady) return;
+      try {
+        const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+        await window.electron.webview.goToHistoryIndex(wcId, index);
+        void refreshNavigationHistory();
+      } catch {
+        // Index may be stale — refresh and let the user retry
+        void refreshNavigationHistory();
+      }
+    },
+    [navSnapshot, allowedHosts, isWebviewReady, refreshNavigationHistory]
+  );
+
+  // Refresh navigation history snapshot after webview finishes loading
+  useEffect(() => {
+    if (isWebviewReady && !isLoading) {
+      void refreshNavigationHistory();
+    }
+  }, [isWebviewReady, isLoading, refreshNavigationHistory]);
+
   useBrowserActionListeners(id, {
     onReload: handleReload,
     onNavigate: handleNavigate,
@@ -517,6 +536,9 @@ export function BrowserPane({
       url={currentUrl}
       canGoBack={canGoBack}
       canGoForward={canGoForward}
+      backEntry={backEntry}
+      forwardEntry={forwardEntry}
+      navSnapshot={navSnapshot}
       isLoading={showLoadingOverlay}
       zoomFactor={zoomFactor}
       isWebviewReady={isWebviewReady}
@@ -529,6 +551,7 @@ export function BrowserPane({
       onForward={() =>
         void actionService.dispatch("browser.forward", { terminalId: id }, { source: "user" })
       }
+      onGoToHistoryIndex={handleGoToHistoryIndex}
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }

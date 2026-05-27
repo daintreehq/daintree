@@ -1817,6 +1817,12 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
     getScrollPosition: (webContentsId: number): Promise<number> =>
       _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
+    getNavigationHistory: (
+      webContentsId: number
+    ): Promise<import("../shared/types/browser.js").BrowserNavigationHistorySnapshot> =>
+      _unwrappingInvoke(CHANNELS.WEBVIEW_GET_NAVIGATION_HISTORY, webContentsId),
+    goToHistoryIndex: (webContentsId: number, index: number): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.WEBVIEW_GO_TO_HISTORY_INDEX, webContentsId, index),
   },
 
   // Hibernation API

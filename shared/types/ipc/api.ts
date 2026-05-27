@@ -943,6 +943,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
+    /** Read Chromium navigation history for the webview */
+    getNavigationHistory(
+      webContentsId: number
+    ): Promise<import("../browser.js").BrowserNavigationHistorySnapshot>;
+    /** Navigate to a specific index in Chromium's navigation history */
+    goToHistoryIndex(webContentsId: number, index: number): Promise<void>;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {
