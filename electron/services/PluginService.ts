@@ -179,6 +179,13 @@ export class PluginService {
     string,
     Map<string, Map<SettingsScope, Set<(value: unknown) => void>>>
   >();
+  /**
+   * Per-file write chains serializing `host.settings.set()` read-modify-write
+   * cycles. Without this, two concurrent `set()` calls on different keys of
+   * the same file both read the same snapshot and the last atomic rename wins,
+   * silently dropping the other key. Keyed by settings file path.
+   */
+  private settingsWriteChains = new Map<string, Promise<void>>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -600,11 +607,13 @@ export class PluginService {
           if (typeof key !== "string" || key.length === 0) {
             throw new Error(`Plugin "${pluginId}" settings.get: key must be a non-empty string`);
           }
-          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          const scope = this.resolveSettingsScope(pluginId, options?.scope);
           const filePath = this.getSettingsFilePath(pluginId, scope);
           if (!filePath) return undefined; // project scope with no active project
           const data = await this.readSettingsFile(filePath);
-          return (key in data ? data[key] : undefined) as T | undefined;
+          return (Object.prototype.hasOwnProperty.call(data, key) ? data[key] : undefined) as
+            | T
+            | undefined;
         },
         set: async <T>(
           key: string,
@@ -622,22 +631,29 @@ export class PluginService {
               `Plugin "${pluginId}" settings.set: value for key "${key}" must not be undefined`
             );
           }
+          if (typeof value === "function" || typeof value === "symbol") {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: value for key "${key}" must be JSON-serializable`
+            );
+          }
           const declared = this.pluginSettingKeys.get(pluginId);
           if (!declared || !declared.has(key)) {
             throw new Error(
               `Plugin "${pluginId}" settings.set: key "${key}" is not declared in contributes.settings`
             );
           }
-          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          const scope = this.resolveSettingsScope(pluginId, options?.scope);
           const filePath = this.getSettingsFilePath(pluginId, scope);
           if (!filePath) {
             throw new Error(
               `Plugin "${pluginId}" settings.set: cannot write project-scoped key "${key}" — no active project`
             );
           }
-          const data = await this.readSettingsFile(filePath);
-          data[key] = value;
-          await this.writeSettingsFile(filePath, data);
+          await this.enqueueSettingsWrite(filePath, async () => {
+            const data = await this.readSettingsFile(filePath);
+            data[key] = value;
+            await this.writeSettingsFile(filePath, data);
+          });
           this.emitSettingsChange(pluginId, scope, key, value);
         },
         onDidChange: <T>(
@@ -655,7 +671,12 @@ export class PluginService {
               `Plugin "${pluginId}" settings.onDidChange: callback must be a function`
             );
           }
-          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          // Guard against a post-unload subscription (e.g. from a lingering
+          // timer holding the host reference). flushPluginEventCleanups has
+          // already run, so a new entry would never be torn down — return an
+          // inert disposer and register nothing.
+          if (!this.plugins.has(pluginId)) return () => {};
+          const scope = this.resolveSettingsScope(pluginId, options?.scope);
           const typedCallback = callback as (value: unknown) => void;
 
           let byPlugin = this.settingsListeners.get(pluginId);
@@ -985,9 +1006,7 @@ export class PluginService {
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      throw new Error(
-        `Failed to parse plugin settings file at ${filePath}: ${(err as Error).message}`
-      );
+      throw new Error(`Failed to parse plugin settings file at ${filePath}`, { cause: err });
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`Plugin settings file at ${filePath} is not a JSON object`);
@@ -1005,6 +1024,42 @@ export class PluginService {
     await resilientAtomicWriteFile(filePath, JSON.stringify(data, null, 2), "utf-8", {
       mode: 0o600,
     });
+  }
+
+  /**
+   * Normalize and validate a caller-supplied scope. TypeScript guards
+   * in-process callers, but plugin code is JS at runtime — an unrecognized
+   * scope must fail loudly rather than silently coerce to `"user"`.
+   */
+  private resolveSettingsScope(pluginId: string, scope: unknown): SettingsScope {
+    if (scope === undefined || scope === "user") return "user";
+    if (scope === "project") return "project";
+    throw new Error(
+      `Plugin "${pluginId}" settings: invalid scope "${String(scope)}" — must be "user" or "project"`
+    );
+  }
+
+  /**
+   * Serialize a read-modify-write op for a settings file against any other
+   * in-flight write to the same path. A failed write does not poison the
+   * chain — subsequent writes still run. The chain entry self-prunes when it
+   * is the last link, so the map doesn't grow unbounded.
+   */
+  private enqueueSettingsWrite(filePath: string, op: () => Promise<void>): Promise<void> {
+    const tail = this.settingsWriteChains.get(filePath) ?? Promise.resolve();
+    const next = tail.then(op, op);
+    const tracked: Promise<void> = next
+      .then(
+        () => undefined,
+        () => undefined
+      )
+      .finally(() => {
+        if (this.settingsWriteChains.get(filePath) === tracked) {
+          this.settingsWriteChains.delete(filePath);
+        }
+      });
+    this.settingsWriteChains.set(filePath, tracked);
+    return next;
   }
 
   /** Fire in-process onDidChange listeners for a plugin's key+scope after a write. */

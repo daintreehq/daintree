@@ -229,28 +229,23 @@ Keybindings map a key combination to an action.
 
 Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
 
-## Settings schema — _Planned_
+## Settings schema
 
-> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
-
-Declares user-configurable settings for your plugin.
+Declares the setting keys your plugin may persist. `host.settings.set()` rejects any key not listed here; `get()` and `onDidChange()` accept any key.
 
 ```json
 {
   "contributes": {
     "settings": [
       {
-        "id": "linear.apiToken",
-        "type": "secret",
-        "scope": "user",
-        "title": "Linear API Token",
-        "description": "Personal API token from linear.app/settings/api"
+        "key": "apiToken",
+        "type": "string",
+        "description": "Personal API token from linear.app/settings/api",
+        "secret": true
       },
       {
-        "id": "linear.defaultTeam",
+        "key": "defaultTeam",
         "type": "string",
-        "scope": "project",
-        "title": "Default team",
         "description": "Team slug to use when opening a new planning session",
         "default": ""
       }
@@ -259,17 +254,24 @@ Declares user-configurable settings for your plugin.
 }
 ```
 
-**Field types:** `string`, `number`, `boolean`, `secret`, `enum`, `json`.
+| Field | Required | Notes |
+| --- | --- | --- |
+| `key` | yes | Setting identifier. Must start with a letter (`[a-zA-Z][a-zA-Z0-9._-]*`, ≤ 128). |
+| `type` | yes | One of `string`, `number`, `boolean`, `object`, `array`. Advisory (for UI forms). |
+| `description` | no | Human-readable description. |
+| `default` | no | Default value. |
+| `secret` | no | Marks the value as sensitive. **Advisory only** — see the storage note below. |
 
-**Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted with project state).
+**Scope** is chosen per call, not per declaration: `host.settings.get/set/onDidChange` take an optional `{ scope }` of `"user"` (default) or `"project"`. User settings persist to `~/.daintree/plugin-settings/{pluginId}.json`; project settings to `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` for the active project.
 
-Settings appear in Preferences → Plugins → `{pluginId}` as a generated form. Values are read via the host API:
+**Storage:** plaintext JSON, written with `0o600` permissions on macOS/Linux. There is no OS keychain — the `secret` flag is advisory (it lets the UI warn the user); the host does not encrypt secret values. Values are read and written via the host API:
 
 ```ts
-const token = await host.settings.get<string>("linear.apiToken");
+const token = await host.settings.get<string>("apiToken");
+await host.settings.set("defaultTeam", "engineering");
 ```
 
-Changes fire a subscription callback, so you don't need to reactivate to pick them up.
+In-process writes fire `onDidChange` subscriptions for the same key and scope, so you don't need to reactivate to pick them up. See [Host API → settings](./host-api.md#settings) for the full reference.
 
 ## Context menus — _Planned_
 

@@ -222,6 +222,54 @@ describe("host.settings — user scope", () => {
     );
   });
 
+  it("rejects a non-JSON-serializable function value", async () => {
+    const { host } = await makeHost();
+    await expect(host.settings.set("apiKey", (() => "x") as unknown as string)).rejects.toThrow(
+      /must be JSON-serializable/
+    );
+  });
+
+  it("rejects an invalid scope value", async () => {
+    const { host } = await makeHost();
+    await expect(
+      host.settings.set("apiKey", "v", { scope: "workspace" as "user" })
+    ).rejects.toThrow(/invalid scope/);
+  });
+
+  it("returns undefined for an inherited prototype key on an empty file", async () => {
+    const { host } = await makeHost([{ key: "toStringX", type: "string" }]);
+    // "constructor" lives on Object.prototype but is never an own key of {}
+    expect(await host.settings.get("constructor")).toBeUndefined();
+  });
+
+  it("preserves all keys under concurrent writes to the same file", async () => {
+    const { host } = await makeHost([
+      { key: "a", type: "number" },
+      { key: "b", type: "number" },
+      { key: "c", type: "number" },
+    ]);
+    await Promise.all([
+      host.settings.set("a", 1),
+      host.settings.set("b", 2),
+      host.settings.set("c", 3),
+    ]);
+    expect(await host.settings.get<number>("a")).toBe(1);
+    expect(await host.settings.get<number>("b")).toBe(2);
+    expect(await host.settings.get<number>("c")).toBe(3);
+  });
+
+  it("persists values across PluginService instances", async () => {
+    const { host } = await makeHost();
+    await host.settings.set("apiKey", "durable");
+    // A fresh service over the same plugins + home dirs must read the value.
+    const service2 = new PluginService(pluginsDir);
+    await service2.initialize();
+    const { host: host2 } = (service2 as unknown as { createHost: CreateHostShape }).createHost(
+      PLUGIN_ID
+    );
+    expect(await host2.settings.get<string>("apiKey")).toBe("durable");
+  });
+
   it("throws when the settings file contains corrupt JSON", async () => {
     const { host } = await makeHost();
     const filePath = path.join(homeDir, ".daintree", "plugin-settings", `${PLUGIN_ID}.json`);
@@ -310,6 +358,17 @@ describe("host.settings.onDidChange", () => {
     const cb = vi.fn();
     host.settings.onDidChange("apiKey", cb);
     service.unloadPlugin(PLUGIN_ID);
+    const listeners = (service as unknown as { settingsListeners: Map<string, unknown> })
+      .settingsListeners;
+    expect(listeners.has(PLUGIN_ID)).toBe(false);
+  });
+
+  it("registers nothing when onDidChange is called after unload", async () => {
+    const { service, host } = await makeHost();
+    service.unloadPlugin(PLUGIN_ID);
+    const dispose = host.settings.onDidChange("apiKey", vi.fn());
+    expect(typeof dispose).toBe("function");
+    expect(() => dispose()).not.toThrow();
     const listeners = (service as unknown as { settingsListeners: Map<string, unknown> })
       .settingsListeners;
     expect(listeners.has(PLUGIN_ID)).toBe(false);

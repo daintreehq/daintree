@@ -18,6 +18,13 @@ import type {
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
+/**
+ * Setting keys must start with a letter. Stricter than `SAFE_ID_PATTERN` to
+ * exclude leading-underscore names like `__proto__` that would otherwise be
+ * valid identifiers but interact badly with plain-object settings storage.
+ */
+const SETTING_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
+
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const PanelContributionSchema = z.object({
@@ -121,7 +128,7 @@ export const FileDecorationContributionSchema = z
  */
 export const SettingContributionSchema = z
   .object({
-    key: z.string().min(1).max(128).regex(SAFE_ID_PATTERN),
+    key: z.string().min(1).max(128).regex(SETTING_KEY_PATTERN),
     type: z.enum(["string", "number", "boolean", "object", "array"]),
     description: z.string().optional(),
     default: z.any().optional(),
