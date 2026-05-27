@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { notify } from "@/lib/notify";
 import { detectCloudSyncService, type Platform } from "@/utils/cloudSyncDetection";
 import { isMac, isLinux } from "@/lib/platform";
 
@@ -39,13 +39,20 @@ export function useCloudSyncWarning(homeDir?: string) {
 
     setBanner({ service, projectId: currentProject.id });
 
-    // Inbox entry once per project — banner is the live surface; the entry is an audit trail.
+    // Inbox entry once per project — banner is the live surface; the entry is
+    // an audit trail that survives when a higher-priority global banner
+    // suppresses the live banner. priority:"low" keeps it inbox-only (no
+    // toast); the project-scoped supersedeKey retires the prior row when the
+    // same project re-detects, and the ref guards against re-firing on rerenders.
     if (lastInboxedProjectRef.current !== currentProject.id) {
       lastInboxedProjectRef.current = currentProject.id;
-      useNotificationHistoryStore.getState().addEntry({
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: diagnostic state detection, not user action
+      notify({
         type: "warning",
+        priority: "low",
         title: "Cloud sync folder detected",
         message: `Project is in a ${service}-synced folder which can interfere with terminal operations and git.`,
+        supersedeKey: `cloud-sync:${currentProject.id}`,
         countable: false,
       });
     }
