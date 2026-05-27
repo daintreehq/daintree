@@ -1,0 +1,35 @@
+{
+  "name": "daintree.hello",
+  "version": "0.1.0",
+  "displayName": "Hello Daintree",
+  "description": "Minimal reference plugin — the canonical example for plugin authors and the F10b host-contract test consumer. Grows by one contribution point per PR.",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "permissions": [],
+  "contributes": {
+    "toolbarButtons": [
+      {
+        "id": "ping",
+        "label": "Hello ping",
+        "iconId": "sparkles",
+        "actionId": "daintree.hello.ping",
+        "priority": 5
+      }
+    ],
+    "menuItems": [
+      {
+        "label": "Hello ping",
+        "actionId": "daintree.hello.ping",
+        "location": "help"
+      }
+    ],
+    "fileDecorationProviders": [
+      {
+        "id": "hello",
+        "scopes": ["hello:*"]
+      }
+    ]
+  }
+}
