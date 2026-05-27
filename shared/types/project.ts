@@ -264,6 +264,11 @@ export interface RunCommand {
   preferredLocation?: "dock" | "grid";
   /** Whether to auto-restart the command on exit */
   preferredAutoRestart?: boolean;
+  /** True when the detector identified this script as the canonical dev script
+   * for a known framework signature (e.g. `start` for Create React App). Lets
+   * the renderer trust the upstream framework-aware ordering instead of
+   * re-imposing name-only priority. */
+  isFrameworkDefault?: boolean;
 }
 
 /** CopyTree context generation settings */

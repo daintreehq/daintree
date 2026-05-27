@@ -82,12 +82,16 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 ]);
 
 // Framework build/dep caches wiped by restartAndClearCache, relative to the
-// session cwd. node_modules/.vite is Vite's dep-optimization cache and is
-// distinct from a root-level .vite directory.
+// session cwd. Covers Next, Vite, Turbo, SvelteKit, Astro, and Nuxt root caches
+// plus Vite's node_modules/.vite dep-optimization cache (distinct from a
+// root-level .vite directory). Missing dirs are tolerated by removal callers.
 const CACHE_DIRS: readonly string[] = [
   ".next",
   ".vite",
   ".turbo",
+  ".svelte-kit",
+  ".astro",
+  ".nuxt",
   path.join("node_modules", ".vite"),
 ];
 

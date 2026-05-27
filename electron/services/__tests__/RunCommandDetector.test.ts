@@ -1029,6 +1029,191 @@ describe("RunCommandDetector", () => {
     });
   });
 
+  describe("framework-aware ordering", () => {
+    const writePkg = async (pkg: Record<string, unknown>) => {
+      await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg, null, 2), "utf-8");
+    };
+
+    const npmNames = (commands: { id: string; name: string }[]): string[] =>
+      commands.filter((cmd) => cmd.id.startsWith("npm-")).map((cmd) => cmd.name);
+
+    it("promotes `start` for Create React App (react-scripts)", async () => {
+      await writePkg({
+        name: "cra-app",
+        scripts: {
+          dev: "echo unrelated",
+          start: "react-scripts start",
+          build: "react-scripts build",
+        },
+        dependencies: { "react-scripts": "5.0.1" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["start", "dev", "build"]);
+    });
+
+    it("promotes `dev` for Next.js", async () => {
+      await writePkg({
+        name: "next-app",
+        scripts: { start: "next start", build: "next build", dev: "next dev" },
+        dependencies: { next: "15.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "start", "build"]);
+    });
+
+    it("promotes `dev` for Vite", async () => {
+      await writePkg({
+        name: "vite-app",
+        scripts: { build: "vite build", dev: "vite" },
+        devDependencies: { vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("promotes `dev` for Astro", async () => {
+      await writePkg({
+        name: "astro-app",
+        scripts: { build: "astro build", dev: "astro dev" },
+        devDependencies: { astro: "5.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("promotes `dev` for Nuxt", async () => {
+      await writePkg({
+        name: "nuxt-app",
+        scripts: { build: "nuxt build", dev: "nuxt dev" },
+        dependencies: { nuxt: "3.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("promotes `dev` for Remix", async () => {
+      await writePkg({
+        name: "remix-app",
+        scripts: { build: "remix build", dev: "remix dev" },
+        devDependencies: { "@remix-run/dev": "2.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("promotes `dev` for React Router v7", async () => {
+      await writePkg({
+        name: "rr7-app",
+        scripts: { build: "react-router build", dev: "react-router dev" },
+        devDependencies: { "@react-router/dev": "7.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("promotes `dev` for SvelteKit", async () => {
+      await writePkg({
+        name: "sveltekit-app",
+        scripts: { build: "vite build", dev: "vite dev" },
+        devDependencies: { "@sveltejs/kit": "2.0.0", vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("prefers Next.js over generic Vite when both deps are present", async () => {
+      await writePkg({
+        name: "ambiguous-app",
+        scripts: { build: "next build", dev: "next dev", start: "next start" },
+        dependencies: { next: "15.0.0" },
+        devDependencies: { vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)[0]).toBe("dev");
+    });
+
+    it("falls through to lower-priority framework when canonical script is absent", async () => {
+      await writePkg({
+        name: "cra-fallthrough",
+        scripts: { dev: "vite", build: "vite build" },
+        dependencies: { "react-scripts": "5.0.1" },
+        devDependencies: { vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "build"]);
+    });
+
+    it("preserves declaration order when no recognised framework is present", async () => {
+      await writePkg({
+        name: "plain-app",
+        scripts: { start: "node server.js", dev: "node --watch server.js", lint: "eslint ." },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["start", "dev", "lint"]);
+    });
+
+    it("preserves declaration order when framework is detected but neither dev nor start script exists", async () => {
+      await writePkg({
+        name: "weird-next",
+        scripts: { build: "next build", lint: "eslint ." },
+        dependencies: { next: "15.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["build", "lint"]);
+    });
+
+    it("does not promote `start` for CRA when the start body does not invoke react-scripts", async () => {
+      await writePkg({
+        name: "cra-stale-deps",
+        scripts: { start: "node server.js", dev: "vite", build: "vite build" },
+        dependencies: { "react-scripts": "5.0.1" },
+        devDependencies: { vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "start", "build"]);
+    });
+
+    it("preserves declaration order when framework dep is present but the canonical script body does not invoke it", async () => {
+      await writePkg({
+        name: "next-stale-dep-only",
+        scripts: { start: "node ./build/index.js", dev: "node --watch ./src/index.js" },
+        dependencies: { next: "15.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["start", "dev"]);
+      expect(commands.find((c) => c.id.startsWith("npm-"))?.isFrameworkDefault).toBeUndefined();
+    });
+
+    it("marks the promoted script with isFrameworkDefault", async () => {
+      await writePkg({
+        name: "cra-marked",
+        scripts: { dev: "echo unrelated", start: "react-scripts start" },
+        dependencies: { "react-scripts": "5.0.1" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      const npm = commands.filter((c) => c.id.startsWith("npm-"));
+      expect(npm[0]?.name).toBe("start");
+      expect(npm[0]?.isFrameworkDefault).toBe(true);
+      // Non-promoted scripts must not carry the flag.
+      expect(npm[1]?.isFrameworkDefault).toBeUndefined();
+    });
+  });
+
   describe("caching", () => {
     it("returns cached results on second call without re-reading files", async () => {
       await fs.writeFile(

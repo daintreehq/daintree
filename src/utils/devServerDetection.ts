@@ -26,6 +26,17 @@ export function findAllDevServerCandidates(
   const result: RunCommand[] = [];
   let hasPriorityMatch = false;
 
+  // If the upstream detector marked a script as the framework default (e.g.
+  // `start` for Create React App, `dev` for Next.js), trust that signal over
+  // name-only priority — otherwise we'd re-demote `start` below `dev` and
+  // undo the framework-aware ordering decided in RunCommandDetector.
+  const frameworkDefault = allDetectedRunners.find((r) => r.isFrameworkDefault === true);
+  if (frameworkDefault) {
+    seen.add(frameworkDefault.id);
+    result.push(applyNextjsTurbopack(frameworkDefault, turbopackEnabled));
+    hasPriorityMatch = true;
+  }
+
   for (const name of DEV_SCRIPT_PRIORITY) {
     const runner = allDetectedRunners.find((r) => r.name === name && !seen.has(r.id));
     if (runner) {
