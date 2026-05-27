@@ -373,7 +373,9 @@ export function FileViewerModal({
         if (generation !== observerGenerationRef.current) return;
 
         for (const entry of entries) {
-          const idx = Number((entry.target as HTMLElement).dataset.hunkObserverIndex);
+          const target = entry.target;
+          if (!(target instanceof HTMLElement)) continue;
+          const idx = Number(target.dataset.hunkObserverIndex);
           if (Number.isNaN(idx)) continue;
           if (entry.intersectionRatio === 0) {
             hunkRatiosRef.current.delete(idx);
@@ -401,8 +403,8 @@ export function FileViewerModal({
 
     hunks.forEach((hunk, index) => {
       const firstRow = hunk.querySelector("tr:first-child");
-      if (firstRow) {
-        (firstRow as HTMLElement).dataset.hunkObserverIndex = String(index);
+      if (firstRow instanceof HTMLElement) {
+        firstRow.dataset.hunkObserverIndex = String(index);
         observer.observe(firstRow);
       }
     });
