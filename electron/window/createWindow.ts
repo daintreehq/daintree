@@ -355,6 +355,12 @@ export function setupBrowserWindow(
       showOnce();
     }, SHOW_FALLBACK_MS);
     appWebContents.once("dom-ready", showOnce);
+    win.once("closed", () => {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    });
 
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     console.log(`[MAIN] Loading renderer (${reason})...`);
