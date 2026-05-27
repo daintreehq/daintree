@@ -98,7 +98,7 @@ export class McpServerService {
         // below). The closure defers the reference until teardown time, by
         // which point the field is assigned. Mirrors `dropAbuseState`.
         dropBearerState: (sessionId) => this.httpLifecycle.detachBearerSession(sessionId),
-        onTierDecayed: (sessionId) => {
+        onTierDecayed: (sessionId, previousTier, newTier) => {
           // Tier just decayed to the workbench baseline (#8462). Push a
           // tools/list_changed so the model re-fetches the now-narrowed
           // manifest instead of calling a tool it no longer has. The
@@ -111,6 +111,21 @@ export class McpServerService {
             // Transport already closing/closed — the model will see the
             // narrowed surface on its next list call regardless.
           });
+          // Positive audit trail for the decay (#9151): the elevation window
+          // closed and access narrowed back to the baseline. Best-effort —
+          // an audit-write failure must never block the tier rollback.
+          try {
+            this.auditService.appendGrantRecord({
+              type: "tier.decayed",
+              sessionId,
+              toolId: "*",
+              ttlMs: 0,
+              previousTier,
+              tier: newTier,
+            });
+          } catch (err) {
+            console.error("[MCP] Failed to append tier.decayed audit record:", err);
+          }
         },
       }
     );
@@ -488,6 +503,21 @@ export class McpServerService {
     this.httpLifecycle.clearBearer(tokenHash);
     this.emitRuntimeStateChange();
     return { tokenHash, disconnected: true };
+  }
+
+  /**
+   * Eagerly tear down the live MCP session(s) a help-session bearer owns
+   * when the help session is revoked (#9151). Resolves the raw help token to
+   * its register key, then reuses {@link disconnectBearer} so tier, grants,
+   * and pin drop immediately instead of lingering until the 30-minute idle
+   * reaper. A no-op when the agent never connected (or already disconnected)
+   * — the token won't be tracked. Wired in via
+   * `HelpSessionService.setOnMcpSessionRevoked`.
+   */
+  disconnectHelpBearer(rawToken: string): void {
+    const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
+    if (tokenHash === null) return;
+    this.disconnectBearer(tokenHash);
   }
 
   /**

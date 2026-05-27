@@ -621,14 +621,17 @@ describe("SessionStore dropBearerState wiring (#8778)", () => {
 describe("SessionStore tier-elevation decay (#8462)", () => {
   let store: SessionStore;
   let decayed: string[];
+  let decayedArgs: Array<{ sessionId: string; previousTier: string; newTier: string }>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     setAwakeTime(0);
     decayed = [];
+    decayedArgs = [];
     store = new SessionStore(() => {}, {
-      onTierDecayed: (sessionId) => {
+      onTierDecayed: (sessionId, previousTier, newTier) => {
         decayed.push(sessionId);
+        decayedArgs.push({ sessionId, previousTier, newTier });
       },
     });
   });
@@ -649,6 +652,18 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
     expect(store.getTier("s")).toBe("workbench");
     expect(decayed).toEqual(["s"]);
+  });
+
+  it("passes the elevated tier and baseline to onTierDecayed for the audit trail (#9151)", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "action");
+    store.armTierElevationTimer("s", "system", "action");
+    store.sessionTierMap.set("s", "system");
+
+    setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
+    vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
+
+    expect(decayedArgs).toEqual([{ sessionId: "s", previousTier: "system", newTier: "action" }]);
   });
 
   it("decays to the session's token baseline, not hardcoded workbench", () => {

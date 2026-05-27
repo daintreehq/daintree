@@ -247,6 +247,7 @@ export class HelpSessionService {
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
+  private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -255,6 +256,16 @@ export class HelpSessionService {
 
   setPtyClient(client: PtyKillClient | null): void {
     this.ptyClient = client;
+  }
+
+  /**
+   * Wire the eager MCP-session teardown invoked on revoke (#9151). Given the
+   * revoked help session's raw bearer token, the callback drops the live MCP
+   * session(s) it owns so tier/grants/pin don't linger until the idle reaper.
+   * Idempotent — re-set on every `ensureMcpServerReady`.
+   */
+  setOnMcpSessionRevoked(cb: ((token: string) => void) | null): void {
+    this.onMcpSessionRevokedFn = cb;
   }
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
@@ -874,6 +885,23 @@ export class HelpSessionService {
       }
     }
 
+    // Eagerly tear down the live MCP session(s) bound to this bearer (#9151).
+    // Without this the MCP session keeps its tier, grants, and renderer pin
+    // until the abuse policy trips on accumulated 401s or the 30-minute idle
+    // reaper collects it — up to a full 30 minutes of stale state for a
+    // session that goes idle right after revoke. Fires unconditionally (the
+    // MCP session is live regardless of whether we captured a hibernation
+    // resume ID); a no-op when the agent never reached the MCP server.
+    try {
+      this.onMcpSessionRevokedFn?.(record.token);
+    } catch (err) {
+      console.warn(
+        "[HelpSessionService] MCP session teardown during revoke failed:",
+        sessionId,
+        err
+      );
+    }
+
     if (capturedAgentSessionId && this.pendingHibernationStore && !displacedDuringCapture) {
       void this.pendingHibernationStore
         .set(record.projectId, {
@@ -1184,6 +1212,8 @@ export class HelpSessionService {
       this.getActionContextForToken(token)
     );
     mcpServerService.setSessionIdResolver((terminalId) => this.getSessionIdForTerminal(terminalId));
+    // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
+    this.setOnMcpSessionRevoked((token) => mcpServerService.disconnectHelpBearer(token));
     if (!mcpServerService.isEnabled()) {
       // setEnabled() will only call start() internally if it has its own
       // `registry` already set — which it doesn't on cold boot if the

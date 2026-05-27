@@ -29,6 +29,7 @@ const {
     setHelpSessionWebContentsResolver: vi.fn(),
     setHelpSessionActionContextResolver: vi.fn(),
     setSessionIdResolver: vi.fn(),
+    disconnectHelpBearer: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
       () => import("../../../shared/types/ipc/mcpServer.js").McpRuntimeSnapshot
@@ -176,6 +177,7 @@ describe("HelpSessionService", () => {
     mockMcpServerService.setHelpTokenValidator.mockClear();
     mockMcpServerService.setHelpSessionWebContentsResolver.mockClear();
     mockMcpServerService.setSessionIdResolver.mockClear();
+    mockMcpServerService.disconnectHelpBearer.mockClear();
     mockMcpServerService.recordTurnOutcome.mockClear();
     mockProbeMcpServer.mockReset();
     mockProbeMcpServer.mockResolvedValue(undefined);
@@ -551,6 +553,55 @@ describe("HelpSessionService", () => {
     expect(after.mcpServers.daintree).toBeUndefined();
     // daintree-docs entry must remain — it doesn't depend on a live session.
     expect(after.mcpServers["daintree-docs"]).toBeDefined();
+  });
+
+  it("tears down the live MCP session via disconnectHelpBearer on revoke (#9151)", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    await service.revokeSession(result.sessionId);
+
+    // The bearer token is handed to McpServerService so it can drop the
+    // session's tier/grants/pin immediately instead of leaving them for the
+    // 30-minute idle reaper.
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(result.token);
+  });
+
+  it("tears down the MCP session even when a hibernation resume id is captured (#9151)", async () => {
+    mockPtyGracefulKill.mockResolvedValueOnce("resume-id-123");
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    mockMcpServerService.disconnectHelpBearer.mockClear();
+
+    await service.revokeSession(result.sessionId, { captureHibernation: true });
+
+    // The live MCP session is orthogonal to transcript capture — it must be
+    // dropped regardless of whether we preserved a resume id.
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(result.token);
+  });
+
+  it("revokeByWebContentsId drops the MCP session for each matched session (crash/eviction path, #9151)", async () => {
+    // Distinct projects so neither provision displaces the other — we want
+    // both sessions live and pinned to different WebContents.
+    const a = await service.provisionSession({
+      ...provisionInput(),
+      projectId: "proj-a",
+      projectPath: "/tmp/proj-a",
+      projectViewWebContentsId: 1,
+    });
+    const b = await service.provisionSession({
+      ...provisionInput(),
+      projectId: "proj-b",
+      projectPath: "/tmp/proj-b",
+      projectViewWebContentsId: 2,
+    });
+    if (!a || !b) throw new Error("expected provisions");
+    mockMcpServerService.disconnectHelpBearer.mockClear();
+
+    await service.revokeByWebContentsId(1);
+
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(a.token);
+    expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalledWith(b.token);
   });
 
   it("reuses the same per-project session dir across consecutive launches with a freshly rotated bearer", async () => {
