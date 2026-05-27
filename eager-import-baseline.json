@@ -1,6 +1,6 @@
 {
-  "count": 1260,
-  "moduleCount": 1260,
+  "count": 1263,
+  "moduleCount": 1263,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -64,6 +64,7 @@
     "electron/services/TelemetryService.ts",
     "electron/services/TrashedPidTracker.ts",
     "electron/services/UserAgentRegistryService.ts",
+    "electron/services/forge/forgeAuditService.ts",
     "electron/services/mcp-server/httpLifecycle.ts",
     "electron/services/persistence/db.ts",
     "electron/services/persistence/readLastProjectId.ts",
@@ -172,7 +173,7 @@
     },
     {
       "file": "electron/ipc/handlers/forge.ts",
-      "line": 174,
+      "line": 193,
       "pattern": "sync-store-get"
     },
     {
@@ -182,22 +183,22 @@
     },
     {
       "file": "electron/ipc/handlers/forgeSettings.ts",
-      "line": 24,
+      "line": 25,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/forgeSettings.ts",
-      "line": 189,
+      "line": 197,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/forgeSettings.ts",
-      "line": 204,
+      "line": 212,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/forgeSettings.ts",
-      "line": 214,
+      "line": 222,
       "pattern": "sync-store-get"
     },
     {
@@ -821,6 +822,16 @@
       "pattern": "sync-fs"
     },
     {
+      "file": "electron/services/forge/forgeAuditService.ts",
+      "line": 30,
+      "pattern": "sync-store-get"
+    },
+    {
+      "file": "electron/services/forge/forgeAuditService.ts",
+      "line": 36,
+      "pattern": "sync-store-get"
+    },
+    {
       "file": "electron/services/GitHubFirstPageCache.ts",
       "line": 196,
       "pattern": "sync-fs"
@@ -1047,17 +1058,17 @@
     },
     {
       "file": "electron/services/PluginActionAuditService.ts",
-      "line": 249,
+      "line": 250,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginActionAuditService.ts",
-      "line": 252,
+      "line": 253,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 325,
+      "line": 327,
       "pattern": "sync-store-get"
     },
     {
@@ -1392,37 +1403,17 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 518,
+      "line": 538,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 520,
+      "line": 540,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 535,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/store.ts",
-      "line": 550,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/store.ts",
-      "line": 551,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/store.ts",
-      "line": 553,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/store.ts",
-      "line": 568,
+      "line": 555,
       "pattern": "sync-fs"
     },
     {
@@ -1432,17 +1423,37 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 587,
+      "line": 571,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 596,
+      "line": 573,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 597,
+      "line": 588,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/store.ts",
+      "line": 590,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/store.ts",
+      "line": 607,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/store.ts",
+      "line": 616,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/store.ts",
+      "line": 617,
       "pattern": "sync-fs"
     },
     {

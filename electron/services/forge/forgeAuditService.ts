@@ -1,3 +1,4 @@
+// eager-import-allow: reads/writes the forgeAudit store key via store.get/set inside the audit callbacks, invoked from forge IPC handlers (not at boot)
 import type {
   ForgeAuditRecord,
   ForgeAuditResult,
