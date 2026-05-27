@@ -1,8 +1,9 @@
 {
   "entryName": "index",
-  "eagerChunkCount": 66,
+  "eagerChunkCount": 67,
   "eagerChunks": [
     "ActionService",
+    "GitHubIcon",
     "KeybindingService",
     "Spinner",
     "TerminalInstanceService",
@@ -69,12 +70,12 @@
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2739205,
-  "eagerGzip": 822015,
+  "eagerRaw": 2750816,
+  "eagerGzip": 826496,
   "chunkGzip": {
-    "vendor-radix-utils": 3262,
-    "vendor-react": 56449,
-    "vendor-xterm": 127757
+    "vendor-radix-utils": 3261,
+    "vendor-react": 56453,
+    "vendor-xterm": 127759
   },
   "chunkModules": {
     "vendor-radix-utils": [
