@@ -24,7 +24,7 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#D4C499",
     accent: "#9E7F22",
-    accentSecondary: "#5E7A45",
+    accentSecondary: "#BF8445",
     status: {
       success: "#5E7A45",
       warning: "#A0601E",
