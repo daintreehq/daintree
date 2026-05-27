@@ -73,6 +73,7 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
     };
   }, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- configs keys are always namespaced plugin button IDs from sync()
   const buttonIds = Array.from(configs.keys()) as PluginToolbarButtonId[];
   const isRegistered = (id: string) => configs.has(id);
 
