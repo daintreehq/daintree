@@ -149,6 +149,12 @@ function toSyntheticDefinition(
         inFlightConfirms.add(requestId);
         let decision;
         try {
+          let argsSummary: string;
+          try {
+            argsSummary = summarizeMcpArgs(args);
+          } catch {
+            argsSummary = "<unserializable>";
+          }
           decision = await requestPluginConfirmation({
             requestId,
             pluginId,
@@ -156,7 +162,7 @@ function toSyntheticDefinition(
             actionTitle: title ?? id,
             actionDescription: description ?? "",
             effectiveDanger,
-            argsSummary: summarizeMcpArgs(args),
+            argsSummary,
           });
         } finally {
           inFlightConfirms.delete(requestId);

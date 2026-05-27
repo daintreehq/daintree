@@ -67,7 +67,8 @@ export function PluginConfirmDialog() {
         onClose={() => resolveOnce(current.requestId, "rejected")}
         title={`Run '${current.actionTitle}'?`}
         description={
-          current.actionDescription || `Action contributed by the '${current.pluginId}' plugin.`
+          current.actionDescription.trim() ||
+          `Action contributed by the '${current.pluginId}' plugin.`
         }
         confirmLabel={current.actionTitle}
         cancelLabel="Cancel"
