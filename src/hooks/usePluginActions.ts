@@ -4,6 +4,7 @@ import type { AnyActionDefinition } from "@/services/actions/actionTypes";
 import type { ActionDefinition } from "@shared/types/actions";
 import type { PluginActionDescriptor } from "@shared/types/plugin";
 import { requestPluginConfirmation, usePluginConfirmStore } from "@/store/pluginConfirmStore";
+import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 
@@ -148,12 +149,20 @@ function toSyntheticDefinition(
         inFlightConfirms.add(requestId);
         let decision;
         try {
+          let argsSummary: string;
+          try {
+            argsSummary = summarizeMcpArgs(args);
+          } catch {
+            argsSummary = "<unserializable>";
+          }
           decision = await requestPluginConfirmation({
             requestId,
             pluginId,
             actionId: id,
             actionTitle: title ?? id,
             actionDescription: description ?? "",
+            effectiveDanger,
+            argsSummary,
           });
         } finally {
           inFlightConfirms.delete(requestId);
