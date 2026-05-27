@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type PerfMode = "smoke" | "ci" | "nightly" | "soak";
 
@@ -102,6 +103,20 @@ function tick(): void {
   rafHandle = requestAnimationFrame(tick);
 }
 
+interface LayoutShiftEntry extends PerformanceEntry {
+  value: number;
+  hadRecentInput: boolean;
+}
+
+function isLayoutShiftEntry(entry: PerformanceEntry): entry is LayoutShiftEntry {
+  return (
+    "value" in entry &&
+    typeof (entry as { value: unknown }).value === "number" &&
+    "hadRecentInput" in entry &&
+    typeof (entry as { hadRecentInput: unknown }).hadRecentInput === "boolean"
+  );
+}
+
 function startObservers(): void {
   if (typeof PerformanceObserver === "undefined") return;
   try {
@@ -120,11 +135,8 @@ function startObservers(): void {
     clsObserver = new PerformanceObserver((list) => {
       const now = performance.now();
       const cutoff = now - WINDOW_MS;
-      for (const raw of list.getEntries()) {
-        const entry = raw as PerformanceEntry & {
-          value: number;
-          hadRecentInput: boolean;
-        };
+      for (const entry of list.getEntries()) {
+        if (!isLayoutShiftEntry(entry)) continue;
         if (entry.hadRecentInput) continue;
         if (entry.startTime < cutoff) continue;
         clsEntries.push({ startTime: entry.startTime, value: entry.value });
@@ -193,28 +205,35 @@ export function stopLivePerfCapture(): void {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPerfMode(value: unknown): value is PerfMode {
+  return value === "smoke" || value === "ci" || value === "nightly" || value === "soak";
+}
+
 function isValidAggregate(value: unknown): value is ScenarioAggregateJson {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
-  if (typeof v.id !== "string" || typeof v.name !== "string") return false;
-  if (typeof v.p95Ms !== "number" || !Number.isFinite(v.p95Ms)) return false;
-  if (typeof v.failedBudget !== "boolean") return false;
-  if (v.budgetReason !== undefined && typeof v.budgetReason !== "string") return false;
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string" || typeof value.name !== "string") return false;
+  if (typeof value.p95Ms !== "number" || !Number.isFinite(value.p95Ms)) return false;
+  if (typeof value.failedBudget !== "boolean") return false;
+  if (value.budgetReason !== undefined && typeof value.budgetReason !== "string") return false;
   return true;
 }
 
 function parseSummary(value: unknown): PerfRunSummaryJson | null {
-  if (!value || typeof value !== "object") return null;
-  const v = value as Record<string, unknown>;
-  if (typeof v.generatedAt !== "string") return null;
-  if (typeof v.mode !== "string") return null;
-  if (!Array.isArray(v.aggregates)) return null;
-  if (!v.aggregates.every(isValidAggregate)) return null;
-  return {
-    generatedAt: v.generatedAt,
-    mode: v.mode as PerfMode,
-    aggregates: v.aggregates as ScenarioAggregateJson[],
-  };
+  if (!isRecord(value)) return null;
+  const { generatedAt, mode, aggregates } = value;
+  if (typeof generatedAt !== "string") return null;
+  if (!isPerfMode(mode)) return null;
+  if (!Array.isArray(aggregates)) return null;
+  const validated: ScenarioAggregateJson[] = [];
+  for (const candidate of aggregates) {
+    if (!isValidAggregate(candidate)) return null;
+    validated.push(candidate);
+  }
+  return { generatedAt, mode, aggregates: validated };
 }
 
 async function readModeSummary(
@@ -299,10 +318,9 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
     } catch (error) {
       if (requestId !== refreshRequestId) return;
       logError("Failed to read perf summary files", error);
-      const message = error instanceof Error ? error.message : "Unknown error";
       set({
         isLoadingSummaries: false,
-        summaryLoadError: message,
+        summaryLoadError: formatErrorMessage(error, "Failed to read perf results"),
         lastLoadedAt: Date.now(),
       });
     }
