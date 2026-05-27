@@ -107,12 +107,14 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-const { fileDiffModalOpenHistory } = vi.hoisted(() => ({
+const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
   fileDiffModalOpenHistory: { value: [] as boolean[] },
+  fileDiffModalLastFilePath: { value: null as string | null },
 }));
 vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({ isOpen }: { isOpen: boolean }) => {
+  FileDiffModal: ({ isOpen, filePath }: { isOpen: boolean; filePath: string }) => {
     fileDiffModalOpenHistory.value.push(isOpen);
+    if (isOpen) fileDiffModalLastFilePath.value = filePath;
     return null;
   },
 }));
@@ -3705,6 +3707,150 @@ describe("ReviewHub", () => {
       // baseBranchLoading was cleared on close (no stuck skeleton).
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe("keyboard navigation (issue #9215)", () => {
+    // jsdom doesn't implement scrollIntoView; the focus effect calls it.
+    beforeEach(() => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+    });
+
+    const renderHub = async () => {
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+      return screen.getByRole("listbox", { name: "Changed files" });
+    };
+
+    it("ArrowDown focuses the first row, then traverses across sections", async () => {
+      const listbox = await renderHub();
+      expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+      expect(screen.getByTestId("file-stage-row-src/index.ts").getAttribute("data-focused")).toBe(
+        "true"
+      );
+
+      // Row 1 is the first unstaged file — ArrowDown crosses the section boundary.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+
+      // Already at the last row — ArrowDown stops, no wrap.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+    });
+
+    it("ArrowUp from no focus jumps to the last row", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowUp" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+    });
+
+    it("Space unstages the focused staged row and keeps focus", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      await waitFor(() =>
+        expect(unstageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/index.ts")
+      );
+      expect(stageFileMock).not.toHaveBeenCalled();
+      // Focus is not cleared by toggling.
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+    });
+
+    it("Space stages the focused unstaged row", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts"));
+      expect(unstageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("Enter opens the diff for the focused row", async () => {
+      await renderHub();
+      // Focus row 1 (the unstaged file) so a wrong-file bug would be caught.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      fileDiffModalOpenHistory.value.length = 0;
+      fileDiffModalLastFilePath.value = null;
+      act(() => void fireEvent.keyDown(document, { key: "Enter" }));
+      await waitFor(() => expect(fileDiffModalOpenHistory.value.at(-1)).toBe(true));
+      expect(fileDiffModalLastFilePath.value).toBe("src/app.ts");
+    });
+
+    it("'v' toggles the Viewed marker for the focused row", async () => {
+      await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      expect(screen.getByLabelText("Mark src/index.ts as viewed")).toBeTruthy();
+      act(() => void fireEvent.keyDown(document, { key: "v" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Mark src/index.ts as not viewed")).toBeTruthy()
+      );
+    });
+
+    it("ignores navigation keys while a filter input is focused", async () => {
+      const listbox = await renderHub();
+      const filterInput = screen.getAllByPlaceholderText("Filter…")[0]!;
+      filterInput.focus();
+
+      act(() => void fireEvent.keyDown(filterInput, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+    });
+
+    it("does nothing when the file list is collapsed", async () => {
+      // The disclosure defaults to collapsed; rows (and the listbox) aren't
+      // rendered, so keys must not mutate the index or fire git side effects.
+      useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, false);
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
+      await act(async () => {});
+
+      expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull();
+      fileDiffModalOpenHistory.value.length = 0;
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      act(() => void fireEvent.keyDown(document, { key: "Enter" }));
+      expect(stageFileMock).not.toHaveBeenCalled();
+      expect(unstageFileMock).not.toHaveBeenCalled();
+      expect(fileDiffModalOpenHistory.value.some((o) => o === true)).toBe(false);
+    });
+
+    it("does not hijack Space when a toolbar button has focus", async () => {
+      await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      // With a row keyboard-focused, Space on the Refresh button must NOT
+      // unstage the row — the button owns its own activation.
+      const refreshButton = screen.getByRole("button", { name: /refresh/i });
+      act(() => void fireEvent.keyDown(refreshButton, { key: " " }));
+      expect(unstageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("clears keyboard focus when the hub closes", async () => {
+      const { rerender } = render(
+        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(
+        screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
+      ).toBe("review-hub-row-0");
+
+      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      expect(
+        screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
+      ).toBeNull();
     });
   });
 });

@@ -58,6 +58,14 @@ interface FileStageRowProps {
   section: FileStageRowSection;
   isStaged: boolean;
   isSelected: boolean;
+  /** Keyboard-navigation focus (roving via `aria-activedescendant`). Distinct
+   * from `isSelected` (multi-select) — both can be true at once. */
+  isFocused?: boolean;
+  /** DOM id, referenced by the parent listbox's `aria-activedescendant`. */
+  id?: string;
+  /** Flat index across both sections; used by the parent to scroll the row
+   * into view via `[data-row-index]`. */
+  rowIndex?: number;
   onToggle: (filePath: string) => void;
   onRowClick: (
     section: FileStageRowSection,
@@ -82,6 +90,9 @@ function FileStageRowComponent({
   section,
   isStaged,
   isSelected,
+  isFocused = false,
+  id,
+  rowIndex,
   onToggle,
   onRowClick,
   density = "comfortable",
@@ -124,9 +135,13 @@ function FileStageRowComponent({
 
   return (
     <div
+      id={id}
+      role="option"
+      data-row-index={rowIndex}
       onClick={handleClick}
       data-testid={`file-stage-row-${file.path}`}
       data-selected={isSelected || undefined}
+      data-focused={isFocused || undefined}
       aria-selected={isSelected}
       className={cn(
         "relative group/stagerow flex items-center text-xs rounded px-1.5 transition-colors",
@@ -139,6 +154,12 @@ function FileStageRowComponent({
         <div
           aria-hidden="true"
           className="absolute inset-0 rounded bg-overlay-subtle pointer-events-none"
+        />
+      )}
+      {isFocused && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 rounded ring-1 ring-inset ring-tint/30 pointer-events-none"
         />
       )}
       <TruncatedTooltip content={file.path}>
