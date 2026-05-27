@@ -8,8 +8,6 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
-import extractZip from "extract-zip";
-import * as lockfile from "proper-lockfile";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -1219,7 +1217,10 @@ export class PluginService {
 
     let release: () => Promise<void>;
     try {
-      release = await lockfile.lock(path.join(this.pluginsRoot, "install.lock"), {
+      // Lazy-loaded: proper-lockfile (and its transitive deps) must not enter
+      // the boot-time import graph — install is a rare user action.
+      const { lock } = await import("proper-lockfile");
+      release = await lock(path.join(this.pluginsRoot, "install.lock"), {
         realpath: false,
         stale: INSTALL_LOCK_STALE_MS,
         retries: INSTALL_LOCK_RETRIES,
@@ -1266,7 +1267,9 @@ export class PluginService {
         }
         try {
           await fs.mkdir(tempDir, { recursive: true });
+          // Lazy-loaded for the same boot-budget reason as proper-lockfile.
           // extract-zip validates each entry resolves within `dir` (zip-slip).
+          const { default: extractZip } = await import("extract-zip");
           await extractZip(sourcePath, { dir: tempDir });
         } catch (err) {
           return {
