@@ -11,6 +11,7 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
+import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
 import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mcpServer.js";
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
@@ -328,6 +329,7 @@ export interface StoreSchema {
     auditMaxRecords: number;
     /** Persisted plugin-action audit ring buffer (oldest-first). */
     auditLog?: PluginActionAuditRecord[];
+    installed: Record<string, InstalledPluginRecord>;
   };
   /**
    * Global default forge provider id for newly opened projects. `null` (or
@@ -514,6 +516,7 @@ const storeOptions = {
       disabled: [],
       auditEnabled: true,
       auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+      installed: {},
     },
     forgeAudit: {
       auditEnabled: true,

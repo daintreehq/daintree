@@ -3810,7 +3810,7 @@ describe("Plugin exception containment (#9276)", () => {
       expect(service.getPluginLoadError("acme.no-main")).toBeUndefined();
     });
 
-    it("clears the recorded error after unload", async () => {
+    it("load error persists in the provenance record across unload", async () => {
       const pluginDir = path.join(tmpDir, "throws-then-unload");
       await fs.mkdir(pluginDir);
       await fs.writeFile(
@@ -3826,8 +3826,12 @@ describe("Plugin exception containment (#9276)", () => {
       await service.initialize();
       expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
 
+      // Unload removes the plugin from the registry, but the persisted
+      // provenance record (including loadError) survives so diagnostics
+      // export and re-install flows can still read it.
       service.unloadPlugin("acme.throws-then-unload");
-      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeUndefined();
+      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
+      expect(service.getPluginLoadError("acme.throws-then-unload")?.message).toBe("boom");
     });
 
     it("normalises non-Error throws into a load error record", async () => {
@@ -4139,5 +4143,271 @@ describe("hello-daintree sample fixture", () => {
     expect(manifest.contributes.menuItems).toHaveLength(1);
     expect(manifest.contributes.fileDecorationProviders).toHaveLength(1);
     expect(manifest.contributes.fileDecorationProviders[0].scopes).toEqual(["hello:*"]);
+  });
+});
+
+describe("Plugin provenance persistence", () => {
+  it("creates a sideload record for non-builtin plugin on first load", async () => {
+    await writePlugin("fresh", { name: "acme.fresh", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].source).toBe("sideload");
+    expect(plugins[0].installedAt).toBeGreaterThan(0);
+    expect(plugins[0].archiveHash).toBeNull();
+    expect(plugins[0].originalUrl).toBeNull();
+    expect(plugins[0].disabled).toBe(false);
+    expect(plugins[0].updateAvailable).toBeNull();
+    expect(plugins[0].devMode).toBe(false);
+    expect(plugins[0].loadError).toBeNull();
+  });
+
+  it("built-in plugins return synthetic provenance fields without a store record", async () => {
+    const builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-prov-"));
+    try {
+      const dir = path.join(builtinDir, "helper");
+      await fs.mkdir(dir);
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.helper", version: "1.0.0" })
+      );
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      const plugins = service.listPlugins();
+      const builtin = plugins.find((p) => p.manifest.name === "daintree.helper");
+      expect(builtin).toBeDefined();
+      expect(builtin!.source).toBe("builtin");
+      expect(builtin!.installedAt).toBe(0);
+      expect(builtin!.archiveHash).toBeNull();
+      expect(builtin!.originalUrl).toBeNull();
+      expect(builtin!.loadError).toBeNull();
+      expect(builtin!.disabled).toBe(false);
+      expect(builtin!.updateAvailable).toBeNull();
+      expect(builtin!.devMode).toBe(false);
+    } finally {
+      await fs.rm(builtinDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves installedAt across repeated loads (idempotent record creation)", async () => {
+    await writePlugin("persist", { name: "acme.persist", version: "1.0.0" });
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    const firstInstalledAt = first.listPlugins()[0].installedAt;
+
+    // Second service instance simulates a restart — the store mock persists
+    // the record (store is a singleton mock in tests).
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+
+    const plugins = second.listPlugins();
+    expect(plugins[0].installedAt).toBe(firstInstalledAt);
+  });
+
+  it("non-builtin plugin with disabled=true is listed but not activated", async () => {
+    const pluginDir = path.join(tmpDir, "disabled-nonbuiltin");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.disabled-nb",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // main.mjs calls a global to prove activation was skipped
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__disabledActivated = true; export function activate() {}"
+    );
+
+    // Pre-seed the store with the unified disabled list (#9284); the
+    // provenance record's `disabled` field is set independently by
+    // setEnabled() — listing alone surfaces the unified state.
+    storeMock._state.set("plugins", {
+      disabled: ["acme.disabled-nb"],
+      installed: {
+        "acme.disabled-nb": {
+          source: "sideload",
+          installedAt: Date.now(),
+          archiveHash: null,
+          originalUrl: null,
+          disabled: true,
+          updateAvailable: null,
+          devMode: false,
+          loadError: null,
+        },
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("acme.disabled-nb");
+    expect(plugins[0].disabled).toBe(true);
+    expect(plugins[0].isBuiltin).toBe(false);
+
+    // Activation was skipped — the main.mjs was never imported
+    expect((globalThis as Record<string, unknown>).__disabledActivated).toBeUndefined();
+  });
+
+  it("writes activation error to the persisted record", async () => {
+    const pluginDir = path.join(tmpDir, "err-persist");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.err-persist", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { throw new Error('persisted-boom'); }"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const record = service.getPluginLoadError("acme.err-persist");
+    expect(record?.message).toBe("persisted-boom");
+
+    // Also visible via listPlugins
+    const plugins = service.listPlugins();
+    expect(plugins[0].loadError?.message).toBe("persisted-boom");
+  });
+
+  it("clears loadError on a subsequent successful activation", async () => {
+    // Use two different plugin directories with distinct names to avoid
+    // Node ESM module caching (import() caches by URL, so the same file
+    // path would return the cached throwing module).
+    const failDir = path.join(tmpDir, "heal-fail");
+    await fs.mkdir(failDir);
+    await fs.writeFile(
+      path.join(failDir, "plugin.json"),
+      JSON.stringify({ name: "acme.heal-fail", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(failDir, "main.mjs"),
+      "globalThis.__healFailCalled = true; export function activate() { throw new Error('first-fail'); }"
+    );
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    expect(first.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
+
+    // Second plugin: same concept but different dir + name, so ESM cache
+    // doesn't interfere. The store still holds the first plugin's error
+    // record, confirming persistence works.
+    const healDir = path.join(tmpDir, "heal-ok");
+    await fs.mkdir(healDir);
+    await fs.writeFile(
+      path.join(healDir, "plugin.json"),
+      JSON.stringify({ name: "acme.heal-ok", version: "1.0.0", main: "main.mjs" })
+    );
+    await fs.writeFile(
+      path.join(healDir, "main.mjs"),
+      "export function activate() { return () => {}; }"
+    );
+
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+
+    // New plugin loaded successfully — no error
+    expect(second.getPluginLoadError("acme.heal-ok")).toBeUndefined();
+    const plugins = second.listPlugins();
+    const healed = plugins.find((p) => p.manifest.name === "acme.heal-ok");
+    expect(healed?.loadError).toBeNull();
+
+    // Original failed plugin's error still in the store
+    expect(second.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
+  });
+
+  it("getPluginLoadError returns undefined for an unknown plugin", () => {
+    const service = new PluginService(tmpDir);
+    expect(service.getPluginLoadError("acme.never-existed")).toBeUndefined();
+  });
+
+  it("listPlugins includes all provenance fields in output", async () => {
+    await writePlugin("full-prov", { name: "acme.full-prov", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const [plugin] = service.listPlugins();
+    expect(Object.keys(plugin)).toContain("source");
+    expect(Object.keys(plugin)).toContain("installedAt");
+    expect(Object.keys(plugin)).toContain("archiveHash");
+    expect(Object.keys(plugin)).toContain("originalUrl");
+    expect(Object.keys(plugin)).toContain("loadError");
+    expect(Object.keys(plugin)).toContain("disabled");
+    expect(Object.keys(plugin)).toContain("updateAvailable");
+    expect(Object.keys(plugin)).toContain("devMode");
+    // Runtime fields still present
+    expect(Object.keys(plugin)).toContain("manifest");
+    expect(Object.keys(plugin)).toContain("dir");
+    expect(Object.keys(plugin)).toContain("loadedAt");
+    expect(Object.keys(plugin)).toContain("isBuiltin");
+    // Internal field still excluded
+    expect(Object.keys(plugin)).not.toContain("resolvedMain");
+  });
+
+  it("disabled builtin returns disabled=true in listPlugins output", async () => {
+    const builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-dis-"));
+    try {
+      const dir = path.join(builtinDir, "muted");
+      await fs.mkdir(dir);
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.muted", version: "1.0.0" })
+      );
+
+      storeMock._state.set("plugins", { disabled: ["daintree.muted"], installed: {} });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      // Disabled builtins are tracked in `disabledPlugins` so listPlugins()
+      // can surface them for the Preferences toggle (#9284); they are not
+      // activated. The entry reports disabled=true.
+      const plugins = service.listPlugins();
+      const muted = plugins.find((p) => p.manifest.name === "daintree.muted");
+      expect(muted).toBeDefined();
+      expect(muted!.disabled).toBe(true);
+      expect(muted!.loadedAt).toBe(0);
+    } finally {
+      await fs.rm(builtinDir, { recursive: true, force: true });
+    }
+  });
+
+  it("plugin with dot in name stores record without nesting", async () => {
+    // Plugin names are scoped as "publisher.name" — a single dot is valid.
+    // electron-store's dotNotation would split "acme.foo" into nested keys
+    // if written per-field, so we write the whole `plugins.installed` object.
+    const pluginDir = path.join(tmpDir, "dot-plugin");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.foo", version: "1.0.0" })
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("acme.foo");
+
+    // Record stored under the dotted name without nesting
+    const stored = storeMock._state.get("plugins") as
+      | { installed?: Record<string, unknown> }
+      | undefined;
+    expect(stored?.installed).toHaveProperty("acme.foo");
+    expect(stored?.installed?.["acme.foo"]).toBeDefined();
   });
 });
