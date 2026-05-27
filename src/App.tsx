@@ -58,6 +58,7 @@ import {
   useAgentWaitingNudge,
   useFocusOnActivateIntent,
   useNotificationHistoryPruning,
+  useRecipeFocusReload,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -269,6 +270,13 @@ const LazyGitPullRebaseConfirmDialog = lazy(() =>
   }))
 );
 
+function preloadRecipeConflictDialog() {
+  return import("./components/TerminalRecipe/RecipeConflictDialog");
+}
+const LazyRecipeConflictDialog = lazy(() =>
+  preloadRecipeConflictDialog().then((m) => ({ default: m.RecipeConflictDialog }))
+);
+
 function preloadCrashRecoveryDialog() {
   return import("./components/Recovery/CrashRecoveryDialog");
 }
@@ -327,6 +335,7 @@ function AppInner() {
   useGitHubRateLimit();
   useUnloadCleanup();
   useResourceProfile();
+  useRecipeFocusReload();
 
   useEffect(() => {
     window.__DAINTREE_E2E_ERROR_STORE__ = () =>
@@ -1306,6 +1315,18 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyGitPullRebaseConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="RecipeConflictDialog"
+                resetKeys={[Number(isStateLoaded)]}
+              >
+                <Suspense fallback={null}>
+                  <LazyRecipeConflictDialog />
                 </Suspense>
               </ErrorBoundary>
             )}

@@ -240,11 +240,12 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     projectId: string;
     recipe: TerminalRecipe;
     previousName?: string;
+    force?: boolean;
   }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
-    const { projectId, recipe, previousName } = payload;
+    const { projectId, recipe, previousName, force } = payload;
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -256,12 +257,15 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
     assertNoSecretEnvValues(recipe.terminals);
-    await projectStore.writeInRepoRecipe(project.path, recipe);
+    await projectStore.writeInRepoRecipeChecked(project.path, recipe, { force: force === true });
     if (
       previousName &&
       typeof previousName === "string" &&
       safeRecipeFilename(previousName) !== safeRecipeFilename(recipe.name)
     ) {
+      // Delete the old-name file; the stale cache entry for the old recipe id
+      // self-heals on the next loadRecipes (which clears the per-project hash
+      // map and repopulates from disk).
       await projectStore.deleteInRepoRecipe(project.path, previousName);
     }
   };

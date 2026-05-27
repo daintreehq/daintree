@@ -21,3 +21,4 @@ export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
+export { useRecipeFocusReload } from "./useRecipeFocusReload";

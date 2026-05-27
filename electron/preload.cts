@@ -1399,12 +1399,14 @@ const api: ElectronAPI = {
     updateInRepoRecipe: (
       projectId: string,
       recipe: import("../shared/types/index.js").TerminalRecipe,
-      previousName?: string
+      previousName?: string,
+      options?: { force?: boolean }
     ): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, {
         projectId,
         recipe,
         previousName,
+        force: options?.force === true ? true : undefined,
       }),
 
     deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
