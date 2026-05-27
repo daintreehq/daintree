@@ -650,6 +650,19 @@ export type DaintreeEventMap = {
     danger: "safe" | "confirm" | "restricted";
     /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
     confirmed?: boolean;
+    /**
+     * Contributing plugin id when this action was registered by a plugin
+     * (`ActionDefinition.pluginId`). Absent for built-in actions. Drives the
+     * plugin-action audit log — the main-side `PluginActionAuditService`
+     * appends a record only when this is present.
+     */
+    pluginId?: string;
+    /**
+     * SHA-256 hex digest of the (redacted) dispatch args, computed in the
+     * renderer. Only set for plugin actions. Persisted in the audit record
+     * so raw args need never cross IPC for fingerprinting.
+     */
+    argsHash?: string;
   };
 
   // Terminal Trash Events

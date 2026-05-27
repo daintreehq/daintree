@@ -1,6 +1,14 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog } from "electron";
+import { writeFile } from "node:fs/promises";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { getPluginActionAuditService } from "../../services/PluginActionAuditService.js";
+import {
+  PLUGIN_AUDIT_MAX_RECORDS,
+  PLUGIN_AUDIT_MIN_RECORDS,
+  type PluginActionAuditRecord,
+  type PluginAuditConfig,
+} from "../../../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import { pluginService } from "../../services/PluginService.js";
 import {
@@ -217,6 +225,52 @@ async function handleFileDecorationsGet(
   return merged;
 }
 
+// ── Plugin-action audit log ───────────────────────────────────────────────
+
+async function handleGetAuditRecords(): Promise<PluginActionAuditRecord[]> {
+  return getPluginActionAuditService().getRecords();
+}
+
+async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
+  return getPluginActionAuditService().getConfig();
+}
+
+async function handleClearAuditLog(): Promise<void> {
+  getPluginActionAuditService().clear();
+}
+
+async function handleSetAuditEnabled(enabled: boolean): Promise<PluginAuditConfig> {
+  if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
+  return getPluginActionAuditService().setEnabled(enabled);
+}
+
+async function handleSetAuditMaxRecords(max: number): Promise<PluginAuditConfig> {
+  if (typeof max !== "number" || !Number.isFinite(max) || !Number.isInteger(max)) {
+    throw new Error("max must be a finite integer");
+  }
+  if (max < PLUGIN_AUDIT_MIN_RECORDS || max > PLUGIN_AUDIT_MAX_RECORDS) {
+    throw new Error(
+      `max must be between ${PLUGIN_AUDIT_MIN_RECORDS} and ${PLUGIN_AUDIT_MAX_RECORDS}`
+    );
+  }
+  return getPluginActionAuditService().setMaxRecords(max);
+}
+
+async function handleExportAuditLog(records: PluginActionAuditRecord[]): Promise<boolean> {
+  if (!Array.isArray(records)) throw new Error("records must be an array");
+  const ndjsonContent = getPluginActionAuditService().exportRecords(records) + "\n";
+  const now = Date.now();
+  const defaultFilename = `plugin-audit-log-${new Date(now).toISOString().replace(/[:.]/g, "-")}.ndjson`;
+  const { filePath, canceled } = await dialog.showSaveDialog({
+    title: "Export plugin audit log",
+    defaultPath: defaultFilename,
+    filters: [{ name: "NDJSON Files", extensions: ["ndjson"] }],
+  });
+  if (canceled || !filePath) return false;
+  await writeFile(filePath, ndjsonContent, "utf-8");
+  return true;
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -230,6 +284,12 @@ export const pluginNamespace = defineIpcNamespace({
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
+    getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),
+    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog),
+    setAuditEnabled: op(PLUGIN_METHOD_CHANNELS.setAuditEnabled, handleSetAuditEnabled),
+    setAuditMaxRecords: op(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords, handleSetAuditMaxRecords),
+    exportAuditLog: op(PLUGIN_METHOD_CHANNELS.exportAuditLog, handleExportAuditLog),
   },
 });
 

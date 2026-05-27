@@ -518,6 +518,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             showStateDebug: Boolean(devMode.showStateDebug),
             autoOpenDiagnostics: Boolean(devMode.autoOpenDiagnostics),
             focusEventsTab: Boolean(devMode.focusEventsTab),
+            ...(typeof devMode.pluginAuditPlaintext === "boolean"
+              ? { pluginAuditPlaintext: devMode.pluginAuditPlaintext }
+              : {}),
           };
         }
       }

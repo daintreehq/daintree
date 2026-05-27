@@ -69,7 +69,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(11);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(17);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
@@ -93,6 +93,21 @@ describe("registerPluginHandlers", () => {
       "plugin:file-decorations-get",
       expect.any(Function)
     );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:get-audit-records",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:get-audit-config", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:clear-audit-log", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:set-audit-enabled",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:set-audit-max-records",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:export-audit-log", expect.any(Function));
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {

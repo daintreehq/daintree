@@ -8,6 +8,10 @@ vi.mock("electron", () => ({
   clipboard: { readImage: vi.fn(), writeImage: vi.fn(), writeText: vi.fn(), readText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn(), createFromPath: vi.fn() },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  // The clipboard handler transitively imports the projectStore singleton,
+  // whose constructor reads app.getPath("userData"). Include `app` so the
+  // module graph instantiates regardless of suite ordering.
+  app: { getPath: vi.fn(() => "/tmp/clipboard-test-user-data") },
 }));
 
 // clipboard.ts imports projectStore from ProjectStore.js which imports

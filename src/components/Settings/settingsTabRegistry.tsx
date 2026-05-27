@@ -8,6 +8,7 @@ import {
   Mic,
   PanelRight,
   Keyboard,
+  ScrollText,
   SquareTerminal,
   Settings as SettingsIcon,
   Settings2,
@@ -94,6 +95,7 @@ const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
+const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
 const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
@@ -146,6 +148,9 @@ const LazyVoiceInputSettingsTab = lazy(() =>
 );
 const LazyMcpServerSettingsTab = lazy(() =>
   importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
+);
+const LazyPluginActionsSettingsTab = lazy(() =>
+  importPluginActionsSettingsTab().then((m) => ({ default: m.PluginActionsSettingsTab }))
 );
 const LazyDaintreeAssistantSettingsTab = lazy(() =>
   importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
@@ -1340,6 +1345,30 @@ export const SETTINGS_REGISTRY = [
     ],
   } satisfies LazySettingsTabEntry,
 
+  {
+    id: "plugins",
+    scope: "global",
+    group: "Integrations",
+    label: "Plugins",
+    headerTitle: "Plugins",
+    icon: <ScrollText className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importPluginActionsSettingsTab,
+    LazyComponent: LazyPluginActionsSettingsTab,
+    searchNavDescription: "Audit log of actions dispatched by installed plugins",
+    searchNavKeywords: ["plugins", "audit", "log", "actions", "dispatch", "history", "security"],
+    sections: [
+      {
+        id: "plugin-audit-enable",
+        section: "Plugin action audit log",
+        title: "Record plugin actions",
+        description:
+          "Append a structured audit record each time an installed plugin dispatches an action. Arguments are hashed by default.",
+        keywords: ["plugin", "audit", "log", "record", "actions", "dispatch", "hash", "privacy"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
   // ═══ Global — Support ═══
   {
     id: "troubleshooting",
@@ -1741,6 +1770,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
+  plugins: <ScrollText className="w-5 h-5 text-text-secondary" />,
   environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
   privacy: <Shield className="w-5 h-5 text-text-secondary" />,
   troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,

@@ -16,6 +16,7 @@ import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
+import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
 import {
   initializeHibernationService,
   getHibernationService,
@@ -226,6 +227,13 @@ export async function initGlobalServices(
   // grace period now starts from the deferred initialize() so the suppression
   // window still covers the actual agent startup interval.
   getActionBreadcrumbService().initialize();
+
+  // Plugin-action audit log: subscribes to action:dispatched and records every
+  // plugin-contributed dispatch. Plaintext args are persisted only when the
+  // developer has opted in via appState.developerMode.pluginAuditPlaintext.
+  getPluginActionAuditService().initialize({
+    isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
+  });
 
   registerDeferredTask({
     name: "agent-notification-service",

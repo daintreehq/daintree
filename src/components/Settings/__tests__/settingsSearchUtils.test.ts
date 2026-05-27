@@ -356,6 +356,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       assistant: "Daintree Assistant",
 
       mcp: "MCP Server",
+      plugins: "Plugins",
       environment: "Environment",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
@@ -393,6 +394,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       assistant: "Daintree Assistant",
 
       mcp: "MCP Server",
+      plugins: "Plugins",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",

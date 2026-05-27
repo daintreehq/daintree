@@ -14,6 +14,8 @@ import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
 import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mcpServer.js";
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
+import type { PluginActionAuditRecord } from "../shared/types/ipc/pluginAudit.js";
+import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudit.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
@@ -79,6 +81,12 @@ export interface StoreSchema {
       showStateDebug: boolean;
       autoOpenDiagnostics: boolean;
       focusEventsTab: boolean;
+      /**
+       * Persist raw (redacted) plugin-action args alongside the SHA-256 hash
+       * in the plugin audit log. Off by default — the audit log stores only
+       * the hash for privacy. Opt-in for plugin authors debugging dispatch.
+       */
+      pluginAuditPlaintext?: boolean;
     };
     terminals: Array<{
       id: string;
@@ -306,6 +314,12 @@ export interface StoreSchema {
    */
   plugins: {
     disabledBuiltins: string[];
+    /** Master switch for the plugin-action audit log. Defaults to true. */
+    auditEnabled: boolean;
+    /** Ring-buffer cap for persisted plugin-action audit records. */
+    auditMaxRecords: number;
+    /** Persisted plugin-action audit ring buffer (oldest-first). */
+    auditLog?: PluginActionAuditRecord[];
   };
   /**
    * Global default forge provider id for newly opened projects. `null` (or
@@ -476,6 +490,8 @@ const storeOptions = {
     logLevelOverrides: {},
     plugins: {
       disabledBuiltins: [],
+      auditEnabled: true,
+      auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
     },
   },
   cwd: process.env.DAINTREE_USER_DATA,
