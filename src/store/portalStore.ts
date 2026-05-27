@@ -415,6 +415,7 @@ const portalStoreCreator: StateCreator<
     links: state.links,
     width: state.width,
     tabs: state.tabs,
+    activeTabId: state.activeTabId,
     defaultNewTabUrl: state.defaultNewTabUrl,
   }),
   merge: (persistedState: unknown, currentState) => {
@@ -465,10 +466,19 @@ const portalStoreCreator: StateCreator<
       ] as PortalLink[];
     }
 
+    const persistedTabs = Array.isArray(persisted.tabs) ? persisted.tabs : currentState.tabs;
+    const persistedActiveTabId = persisted.activeTabId;
+    const activeTabId =
+      typeof persistedActiveTabId === "string" &&
+      persistedTabs.some((t) => t != null && t.id === persistedActiveTabId)
+        ? persistedActiveTabId
+        : (persistedTabs.find((t) => t != null)?.id ?? null);
+
     return {
       ...currentState,
       ...persisted,
       links,
+      tabs: persistedTabs,
       width:
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH)
@@ -477,6 +487,7 @@ const portalStoreCreator: StateCreator<
         typeof persisted.defaultNewTabUrl === "string" && persisted.defaultNewTabUrl.trim()
           ? persisted.defaultNewTabUrl.trim()
           : null,
+      activeTabId,
     };
   },
 });
@@ -486,5 +497,5 @@ export const usePortalStore = create<PortalState & PortalActions>()(portalStoreC
 registerPersistedStore({
   storeId: "portalStore",
   store: usePortalStore,
-  persistedStateType: "Partial<PortalState> (links, width, tabs, defaultNewTabUrl)",
+  persistedStateType: "Partial<PortalState> (links, width, tabs, activeTabId, defaultNewTabUrl)",
 });

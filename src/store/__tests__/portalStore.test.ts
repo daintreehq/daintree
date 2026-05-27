@@ -358,6 +358,108 @@ describe("portalStore persistence migration", () => {
     expect(store.getState().links.some((l) => l.id === "discovered-foo")).toBe(false);
   });
 
+  it("restores a persisted activeTabId that matches a known tab", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        width: 600,
+        tabs: [
+          { id: "tab-1", title: "One", url: "https://example.com/1" },
+          { id: "tab-3", title: "Three", url: "https://example.com/3" },
+        ],
+        activeTabId: "tab-3",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-3");
+  });
+
+  it("falls back to the first persisted tab when activeTabId references a missing tab", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [
+          { id: "tab-1", title: "One", url: "https://example.com/1" },
+          { id: "tab-2", title: "Two", url: "https://example.com/2" },
+        ],
+        activeTabId: "tab-deleted",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-1");
+  });
+
+  it("falls back to the first persisted tab when activeTabId is missing", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [{ id: "tab-only", title: "Only", url: "https://example.com" }],
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-only");
+  });
+
+  it("does not crash when persisted tabs contains a null entry", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [null, { id: "tab-keep", title: "Keep", url: "https://example.com" }],
+        activeTabId: "tab-keep",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-keep");
+  });
+
+  it("falls back to currentState.tabs when persisted tabs is non-array", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: "corrupted",
+        activeTabId: "tab-1",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(Array.isArray(store.getState().tabs)).toBe(true);
+  });
+
+  it("falls back to the first persisted tab when activeTabId is malformed", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [{ id: "tab-only", title: "Only", url: "https://example.com" }],
+        activeTabId: 42,
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-only");
+  });
+
   it("writes version: 0 on the next persist after rehydration", async () => {
     const legacyBlob = JSON.stringify({
       state: {
