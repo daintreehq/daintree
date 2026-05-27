@@ -7,6 +7,8 @@ set -euo pipefail
 APP_BUNDLE="${1:?Usage: $0 <app_bundle_path> <expected_team_id>}"
 EXPECTED_TEAM_ID="${2:?Usage: $0 <app_bundle_path> <expected_team_id>}"
 
+APP_BUNDLE="${APP_BUNDLE%/}"
+
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "::error::App bundle directory does not exist: $APP_BUNDLE"
   exit 1
