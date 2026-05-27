@@ -560,3 +560,63 @@ export function WorktreeDeleteErrorBanner({
     </div>
   );
 }
+
+export interface WorktreeIssueErrorBannerProps {
+  message: string;
+  /** Drives the title — attach vs detach failure (#9163). */
+  mutationType: "attach-issue" | "detach-issue";
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}
+
+/**
+ * Inline banner for a failed attach/detach-issue mutation (#9163), mirroring
+ * {@link WorktreeDeleteErrorBanner}. Rendered outside the details section so a
+ * collapsed card still surfaces the failure rather than silently absorbing it.
+ */
+export function WorktreeIssueErrorBanner({
+  message,
+  mutationType,
+  onRetry,
+  onDismiss,
+}: WorktreeIssueErrorBannerProps) {
+  const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't detach issue";
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      data-testid="worktree-issue-error-banner"
+      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+    >
+      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-status-error">{title}</span>
+          <span className="break-words text-text-secondary">{message}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="worktree-issue-retry"
+              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              Retry
+            </button>
+          )}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              data-testid="worktree-issue-dismiss"
+              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

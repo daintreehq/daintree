@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
+import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
 import { worktreeClient } from "@/clients";
 import { closeTerminalsForWorktree } from "@/components/Worktree/worktreeDeleteHelper";
@@ -94,18 +94,18 @@ export interface WorktreeDeleteOptions {
 export const OUTBOX_RETRY_CAP = 3;
 
 /**
- * Renderer-side mutation outbox entry (#8405) — one per user-intent worktree
- * mutation, keyed by `mutationId`. The outbox survives `setFatalError` so a
- * delete that was in flight when the host crashed can be replayed once the
- * host comes back. The stable `mutationId` is what lets the host dedupe — a
- * replay carries the same id and is short-circuited to the original success
- * ack instead of re-running `git worktree remove`.
+ * Fields shared by every mutation-outbox entry (#8405). One entry per
+ * user-intent worktree mutation, keyed by `mutationId`. The outbox survives
+ * `setFatalError` so a mutation that was in flight when the host crashed can be
+ * replayed once the host comes back. For `delete-worktree` the stable
+ * `mutationId` also lets the host dedupe a replay against its ack map; the
+ * issue-association mutations route through the main-process IPC bridge (the
+ * `worktreeIssueMap` Electron-store write is main-owned, not host-owned), so
+ * for them `mutationId` is purely the renderer's outbox key.
  */
-export interface MutationOutboxEntry {
+interface MutationOutboxEntryBase {
   mutationId: string;
   worktreeId: string;
-  type: "delete-worktree";
-  options: WorktreeDeleteOptions;
   /** Number of generic (unclassified) attempts so far; counted toward {@link OUTBOX_RETRY_CAP}. */
   retryCount: number;
   /**
@@ -116,6 +116,49 @@ export interface MutationOutboxEntry {
    */
   status: "pending" | "in-flight" | "failed";
   lastError?: string;
+}
+
+/** Delete-worktree outbox entry — acked by the `worktree-removed` host event. */
+export interface DeleteWorktreeOutboxEntry extends MutationOutboxEntryBase {
+  type: "delete-worktree";
+  options: WorktreeDeleteOptions;
+}
+
+/**
+ * Attach-issue outbox entry (#9163). Unlike delete there is no host-emitted ack
+ * event — the main-process `worktreeIssueMap` write is synchronous, so the
+ * resolved IPC promise IS the ack and the entry is pruned on resolve. The local
+ * association is applied only on success (pessimistic), so a failed/abandoned
+ * attach needs no rollback — the renderer never gets ahead of the store.
+ */
+export interface AttachIssueOutboxEntry extends MutationOutboxEntryBase {
+  type: "attach-issue";
+  payload: AttachIssuePayload;
+}
+
+/** Detach-issue outbox entry (#9163). Same ack/no-rollback semantics as attach. */
+export interface DetachIssueOutboxEntry extends MutationOutboxEntryBase {
+  type: "detach-issue";
+}
+
+export type MutationOutboxEntry =
+  | DeleteWorktreeOutboxEntry
+  | AttachIssueOutboxEntry
+  | DetachIssueOutboxEntry;
+
+/** True for the issue-association mutation arms (#9163). */
+function isIssueMutation(
+  entry: MutationOutboxEntry
+): entry is AttachIssueOutboxEntry | DetachIssueOutboxEntry {
+  return entry.type === "attach-issue" || entry.type === "detach-issue";
+}
+
+/** Per-worktree issue-mutation failure surfaced on the card banner (#9163). */
+export interface IssueMutationError {
+  message: string;
+  type: "attach-issue" | "detach-issue";
+  /** Outbox entry id so the banner's Retry/Dismiss can target it directly. */
+  mutationId: string;
 }
 
 /**
@@ -187,6 +230,21 @@ export interface WorktreeViewState {
   deleteErrors: Map<string, string>;
   deleteErrorArgs: Map<string, WorktreeDeleteOptions>;
   /**
+   * Worktrees with an attach/detach-issue mutation currently in flight (#9163).
+   * Shared single-flight key for both attach and detach so a rapid
+   * attach→detach on the same row can't interleave and leave the Electron
+   * store in a last-write-wins race. Internal guard only — there's no card
+   * "in progress" treatment for issue mutations (the badge updates on success).
+   */
+  issueMutatingIds: Set<string>;
+  /**
+   * Per-worktree issue-mutation failures (#9163). Drives the inline
+   * `WorktreeIssueErrorBanner`. Connectivity failures don't populate this — the
+   * global reconnect indicator covers them and the outbox entry stays pending
+   * for the reconnect replay.
+   */
+  issueErrors: Map<string, IssueMutationError>;
+  /**
    * Mutation outbox keyed by `mutationId` (#8405). Survives `setFatalError`
    * so a delete that was in flight when the workspace host crashed can be
    * replayed once the host returns. Entries are pruned on a successful ack
@@ -231,6 +289,16 @@ export interface WorktreeViewActions {
   startDelete(worktreeId: string, options: WorktreeDeleteOptions): void;
   retryDelete(worktreeId: string): void;
   clearDeleteError(worktreeId: string): void;
+  /**
+   * Attach an issue to a worktree through the resilient outbox (#9163). Creates
+   * an `attach-issue` outbox entry and fires the IPC; the local association is
+   * applied only once the IPC resolves (the renderer never gets ahead of the
+   * Electron store). A host crash mid-call leaves the entry `pending` for the
+   * reconnect replay; a non-connectivity failure surfaces the inline banner.
+   */
+  startAttachIssue(payload: AttachIssuePayload): void;
+  /** Detach a worktree's issue through the resilient outbox (#9163). */
+  startDetachIssue(worktreeId: string): void;
   /**
    * Prune outbox entries whose `mutationId` is in the supplied set. Called
    * after every `get-all-states` reply so acks the renderer missed (host
@@ -279,6 +347,8 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     deletingIds: new Set(),
     deleteErrors: new Map(),
     deleteErrorArgs: new Map(),
+    issueMutatingIds: new Set(),
+    issueErrors: new Map(),
     mutationOutbox: new Map(),
     isLoading: true,
     error: null,
@@ -454,7 +524,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
-      const outboxEntry = findOutboxEntryForWorktree(prevState.mutationOutbox, worktreeId);
+      const hadIssueMutating = prevState.issueMutatingIds.has(worktreeId);
+      const hadIssueError = prevState.issueErrors.has(worktreeId);
+      const outboxEntries = findOutboxEntriesForWorktree(prevState.mutationOutbox, worktreeId);
 
       const nextWorktrees = hadWorktree ? new Map(prevState.worktrees) : prevState.worktrees;
       if (hadWorktree) nextWorktrees.delete(worktreeId);
@@ -470,20 +542,33 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map(prevState.deleteErrorArgs)
         : prevState.deleteErrorArgs;
       if (hadDeleteErrorArgs) nextDeleteErrorArgs.delete(worktreeId);
-      // Mutation outbox: `worktree-removed` is the authoritative "this delete
-      // succeeded" signal — prune any live entry for the same worktree (#8405)
-      // so a late reply replay can't re-fire a delete that already landed.
+      const nextIssueMutatingIds = hadIssueMutating
+        ? new Set(prevState.issueMutatingIds)
+        : prevState.issueMutatingIds;
+      if (hadIssueMutating) nextIssueMutatingIds.delete(worktreeId);
+      const nextIssueErrors = hadIssueError
+        ? new Map(prevState.issueErrors)
+        : prevState.issueErrors;
+      if (hadIssueError) nextIssueErrors.delete(worktreeId);
+      // Mutation outbox: a removed worktree moots every outbox entry targeting
+      // it. For `delete-worktree`, `worktree-removed` is the authoritative
+      // "this delete succeeded" signal (#8405) so a late reply replay can't
+      // re-fire a delete that already landed. Issue-association entries are
+      // equally moot — the worktree they'd attach/detach an issue on is gone.
       // `runDeleteAsync` also prunes on its own success branch; this is the
       // belt-and-braces convergence for the case where `worktree-removed`
       // arrives before the IPC promise resolves (a common ordering).
-      const nextOutbox = outboxEntry ? new Map(prevState.mutationOutbox) : prevState.mutationOutbox;
-      if (outboxEntry) nextOutbox.delete(outboxEntry.mutationId);
+      const nextOutbox =
+        outboxEntries.length > 0 ? new Map(prevState.mutationOutbox) : prevState.mutationOutbox;
+      for (const entry of outboxEntries) nextOutbox.delete(entry.mutationId);
 
       set({
         worktrees: nextWorktrees,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
+        issueMutatingIds: nextIssueMutatingIds,
+        issueErrors: nextIssueErrors,
         mutationOutbox: nextOutbox,
         version,
         tombstones,
@@ -508,7 +593,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // initiated retries — only a fresh `startDelete` for a worktree that has
       // no live outbox entry mints a new id. This is what lets the host's ack
       // map dedupe replays.
-      const existingEntry = findOutboxEntryForWorktree(prev.mutationOutbox, worktreeId);
+      const existingEntry = findDeleteOutboxEntryForWorktree(prev.mutationOutbox, worktreeId);
       const mutationId = existingEntry?.mutationId ?? mintMutationId();
       const nextOutbox = new Map(prev.mutationOutbox);
       nextOutbox.set(mutationId, {
@@ -557,6 +642,80 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       });
     },
 
+    startAttachIssue(payload: AttachIssuePayload) {
+      const { worktreeId } = payload;
+      const prev = get();
+      // Shared single-flight key: an attach or detach already in flight for this
+      // worktree blocks a new one so the last-write-wins Electron store isn't
+      // raced. The user can act again once the in-flight mutation settles.
+      if (prev.issueMutatingIds.has(worktreeId)) return;
+
+      const nextIssueMutatingIds = new Set(prev.issueMutatingIds);
+      nextIssueMutatingIds.add(worktreeId);
+      const nextIssueErrors = prev.issueErrors.has(worktreeId)
+        ? new Map(prev.issueErrors)
+        : prev.issueErrors;
+      if (prev.issueErrors.has(worktreeId)) nextIssueErrors.delete(worktreeId);
+
+      // Replace any prior (failed) issue entry for this worktree — a fresh user
+      // action supersedes it. `mutationId` is just the outbox key here (the
+      // issue IPC is main-owned, not host-deduped), so minting a new one is fine.
+      const existing = findIssueOutboxEntryForWorktree(prev.mutationOutbox, worktreeId);
+      const nextOutbox = new Map(prev.mutationOutbox);
+      if (existing) nextOutbox.delete(existing.mutationId);
+      const mutationId = mintMutationId();
+      const entry: AttachIssueOutboxEntry = {
+        type: "attach-issue",
+        mutationId,
+        worktreeId,
+        payload,
+        retryCount: 0,
+        status: "in-flight",
+        lastError: undefined,
+      };
+      nextOutbox.set(mutationId, entry);
+
+      set({
+        issueMutatingIds: nextIssueMutatingIds,
+        issueErrors: nextIssueErrors,
+        mutationOutbox: nextOutbox,
+      });
+      void runIssueMutationAsync(get, set, entry);
+    },
+
+    startDetachIssue(worktreeId: string) {
+      const prev = get();
+      if (prev.issueMutatingIds.has(worktreeId)) return;
+
+      const nextIssueMutatingIds = new Set(prev.issueMutatingIds);
+      nextIssueMutatingIds.add(worktreeId);
+      const nextIssueErrors = prev.issueErrors.has(worktreeId)
+        ? new Map(prev.issueErrors)
+        : prev.issueErrors;
+      if (prev.issueErrors.has(worktreeId)) nextIssueErrors.delete(worktreeId);
+
+      const existing = findIssueOutboxEntryForWorktree(prev.mutationOutbox, worktreeId);
+      const nextOutbox = new Map(prev.mutationOutbox);
+      if (existing) nextOutbox.delete(existing.mutationId);
+      const mutationId = mintMutationId();
+      const entry: DetachIssueOutboxEntry = {
+        type: "detach-issue",
+        mutationId,
+        worktreeId,
+        retryCount: 0,
+        status: "in-flight",
+        lastError: undefined,
+      };
+      nextOutbox.set(mutationId, entry);
+
+      set({
+        issueMutatingIds: nextIssueMutatingIds,
+        issueErrors: nextIssueErrors,
+        mutationOutbox: nextOutbox,
+      });
+      void runIssueMutationAsync(get, set, entry);
+    },
+
     pruneAcknowledgedMutations(mutationIds: readonly string[]) {
       if (mutationIds.length === 0) return;
       const prev = get();
@@ -587,6 +746,12 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       let nextDeletingIds = prev.deletingIds;
       let nextDeleteErrors = prev.deleteErrors;
       let nextDeleteErrorArgs = prev.deleteErrorArgs;
+      // The host ack list only carries `delete-worktree` ids in practice (issue
+      // mutations route through main, never the host ack map), but sweep the
+      // issue guards/errors too so an unexpected ack can never permanently wedge
+      // a worktree in `issueMutatingIds` (which would block re-attach).
+      let nextIssueMutatingIds = prev.issueMutatingIds;
+      let nextIssueErrors = prev.issueErrors;
       for (const removedWorktreeId of removedWorktreeIds) {
         if (prev.deletingIds.has(removedWorktreeId)) {
           if (nextDeletingIds === prev.deletingIds) nextDeletingIds = new Set(prev.deletingIds);
@@ -601,12 +766,23 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
             nextDeleteErrorArgs = new Map(prev.deleteErrorArgs);
           nextDeleteErrorArgs.delete(removedWorktreeId);
         }
+        if (prev.issueMutatingIds.has(removedWorktreeId)) {
+          if (nextIssueMutatingIds === prev.issueMutatingIds)
+            nextIssueMutatingIds = new Set(prev.issueMutatingIds);
+          nextIssueMutatingIds.delete(removedWorktreeId);
+        }
+        if (prev.issueErrors.has(removedWorktreeId)) {
+          if (nextIssueErrors === prev.issueErrors) nextIssueErrors = new Map(prev.issueErrors);
+          nextIssueErrors.delete(removedWorktreeId);
+        }
       }
       set({
         mutationOutbox: next,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
+        issueMutatingIds: nextIssueMutatingIds,
+        issueErrors: nextIssueErrors,
       });
     },
 
@@ -618,27 +794,46 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // Reset retry budget on a user-initiated retry — the user is making a
       // fresh judgment that the failure is worth another attempt, and an
       // exhausted auto-retry budget should not stick. Reuses the original
-      // `mutationId` so the host's ack map still recognizes the replay.
+      // `mutationId` so the delete host's ack map still recognizes the replay.
       const next = new Map(prev.mutationOutbox);
-      next.set(mutationId, {
+      const reset: MutationOutboxEntry = {
         ...entry,
         status: "in-flight",
         retryCount: 0,
         lastError: undefined,
-      });
-      const nextDeletingIds = prev.deletingIds.has(entry.worktreeId)
+      };
+      next.set(mutationId, reset);
+
+      if (isIssueMutation(reset)) {
+        const nextIssueMutatingIds = prev.issueMutatingIds.has(reset.worktreeId)
+          ? prev.issueMutatingIds
+          : new Set(prev.issueMutatingIds).add(reset.worktreeId);
+        const nextIssueErrors = prev.issueErrors.has(reset.worktreeId)
+          ? new Map(prev.issueErrors)
+          : prev.issueErrors;
+        if (prev.issueErrors.has(reset.worktreeId)) nextIssueErrors.delete(reset.worktreeId);
+        set({
+          mutationOutbox: next,
+          issueMutatingIds: nextIssueMutatingIds,
+          issueErrors: nextIssueErrors,
+        });
+        void runIssueMutationAsync(get, set, reset);
+        return;
+      }
+
+      const nextDeletingIds = prev.deletingIds.has(reset.worktreeId)
         ? prev.deletingIds
-        : new Set(prev.deletingIds).add(entry.worktreeId);
-      const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
+        : new Set(prev.deletingIds).add(reset.worktreeId);
+      const nextDeleteErrors = prev.deleteErrors.has(reset.worktreeId)
         ? new Map(prev.deleteErrors)
         : prev.deleteErrors;
-      if (prev.deleteErrors.has(entry.worktreeId)) nextDeleteErrors.delete(entry.worktreeId);
+      if (prev.deleteErrors.has(reset.worktreeId)) nextDeleteErrors.delete(reset.worktreeId);
       set({
         mutationOutbox: next,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
       });
-      void runDeleteAsync(get, set, entry.worktreeId, entry.options, mutationId);
+      void runDeleteAsync(get, set, reset.worktreeId, reset.options, mutationId);
     },
 
     dismissOutboxEntry(mutationId: string) {
@@ -647,6 +842,28 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       if (!entry) return;
       const next = new Map(prev.mutationOutbox);
       next.delete(mutationId);
+
+      if (isIssueMutation(entry)) {
+        // No optimistic state to unwind — issue mutations apply the local
+        // association only on success, so dismissing a failed entry just clears
+        // the error and the in-flight guard.
+        const nextIssueErrors = prev.issueErrors.has(entry.worktreeId)
+          ? new Map(prev.issueErrors)
+          : prev.issueErrors;
+        if (prev.issueErrors.has(entry.worktreeId)) nextIssueErrors.delete(entry.worktreeId);
+        const nextIssueMutatingIds = prev.issueMutatingIds.has(entry.worktreeId)
+          ? new Set(prev.issueMutatingIds)
+          : prev.issueMutatingIds;
+        if (prev.issueMutatingIds.has(entry.worktreeId))
+          nextIssueMutatingIds.delete(entry.worktreeId);
+        set({
+          mutationOutbox: next,
+          issueErrors: nextIssueErrors,
+          issueMutatingIds: nextIssueMutatingIds,
+        });
+        return;
+      }
+
       const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
         ? new Map(prev.deleteErrors)
         : prev.deleteErrors;
@@ -673,43 +890,62 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // and hit "Worktree not found", showing a spurious permanent error.
       let outboxChanged = false;
       let deletingChanged = false;
+      let issueMutatingChanged = false;
       const nextOutbox = new Map(prev.mutationOutbox);
       const nextDeletingIds = new Set(prev.deletingIds);
+      const nextIssueMutatingIds = new Set(prev.issueMutatingIds);
       const toReplay: MutationOutboxEntry[] = [];
       for (const entry of prev.mutationOutbox.values()) {
         if (entry.status === "failed") continue;
         // Skip `in-flight` so a second `replayOutboxAfterReconnect` call
         // (two rapid `onReady` events before the first replay's IPC settles)
-        // doesn't double-fire the same delete (#8405 review finding #4). The
+        // doesn't double-fire the same mutation (#8405 review finding #4). The
         // first call's IPC promise will still resolve/reject and update the
         // entry; only then is another replay eligible.
         if (entry.status === "in-flight") continue;
-        if (entry.type !== "delete-worktree") continue;
         if (!prev.worktrees.has(entry.worktreeId)) {
-          // Reconciled — target already absent from snapshot.
+          // Reconciled — target already absent from the post-crash snapshot. For
+          // a delete this means it completed pre-crash but the ack was lost; for
+          // an issue mutation the worktree is simply gone, so the attach/detach
+          // is moot. Either way: prune, don't replay (a replay would hit
+          // "Worktree not found" and surface a spurious error).
           nextOutbox.delete(entry.mutationId);
           outboxChanged = true;
           if (nextDeletingIds.delete(entry.worktreeId)) deletingChanged = true;
+          if (nextIssueMutatingIds.delete(entry.worktreeId)) issueMutatingChanged = true;
           continue;
         }
         // Replay candidate — flip to in-flight so a duplicate replay during
         // the same reconnect window is suppressed.
         nextOutbox.set(entry.mutationId, { ...entry, status: "in-flight" });
         outboxChanged = true;
-        if (!nextDeletingIds.has(entry.worktreeId)) {
+        if (isIssueMutation(entry)) {
+          if (!nextIssueMutatingIds.has(entry.worktreeId)) {
+            nextIssueMutatingIds.add(entry.worktreeId);
+            issueMutatingChanged = true;
+          }
+        } else if (!nextDeletingIds.has(entry.worktreeId)) {
           nextDeletingIds.add(entry.worktreeId);
           deletingChanged = true;
         }
         toReplay.push(entry);
       }
-      if (outboxChanged || deletingChanged) {
+      if (outboxChanged || deletingChanged || issueMutatingChanged) {
         set({
           mutationOutbox: outboxChanged ? nextOutbox : prev.mutationOutbox,
           deletingIds: deletingChanged ? nextDeletingIds : prev.deletingIds,
+          issueMutatingIds: issueMutatingChanged ? nextIssueMutatingIds : prev.issueMutatingIds,
         });
       }
       for (const entry of toReplay) {
-        void runDeleteAsync(get, set, entry.worktreeId, entry.options, entry.mutationId);
+        // Each replay re-reads the freshest entry shape it needs; the flipped
+        // `in-flight` copy in `nextOutbox` is what the async helpers mutate.
+        const flipped = nextOutbox.get(entry.mutationId)!;
+        if (isIssueMutation(flipped)) {
+          void runIssueMutationAsync(get, set, flipped);
+        } else {
+          void runDeleteAsync(get, set, flipped.worktreeId, flipped.options, flipped.mutationId);
+        }
       }
     },
 
@@ -774,15 +1010,40 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
   }));
 }
 
-/** Locate the live outbox entry (if any) for a given worktreeId. Used to
- *  reuse `mutationId` across user-initiated retries so the host's ack map
- *  dedupes correctly. */
-function findOutboxEntryForWorktree(
+/** Every live outbox entry for a worktreeId — a worktree can now hold both a
+ *  delete and an issue-mutation entry concurrently (#9163). Used by
+ *  `applyRemove` to prune them all when the worktree is gone. */
+function findOutboxEntriesForWorktree(
   outbox: Map<string, MutationOutboxEntry>,
   worktreeId: string
-): MutationOutboxEntry | undefined {
+): MutationOutboxEntry[] {
+  const entries: MutationOutboxEntry[] = [];
   for (const entry of outbox.values()) {
-    if (entry.worktreeId === worktreeId) return entry;
+    if (entry.worktreeId === worktreeId) entries.push(entry);
+  }
+  return entries;
+}
+
+/** Locate the live delete entry (if any) for a worktreeId. Used to reuse
+ *  `mutationId` across user-initiated retries so the host's ack map dedupes. */
+function findDeleteOutboxEntryForWorktree(
+  outbox: Map<string, MutationOutboxEntry>,
+  worktreeId: string
+): DeleteWorktreeOutboxEntry | undefined {
+  for (const entry of outbox.values()) {
+    if (entry.worktreeId === worktreeId && entry.type === "delete-worktree") return entry;
+  }
+  return undefined;
+}
+
+/** Locate the live issue-association entry (if any) for a worktreeId (#9163).
+ *  Attach and detach share the slot — only one issue mutation per worktree. */
+function findIssueOutboxEntryForWorktree(
+  outbox: Map<string, MutationOutboxEntry>,
+  worktreeId: string
+): AttachIssueOutboxEntry | DetachIssueOutboxEntry | undefined {
+  for (const entry of outbox.values()) {
+    if (entry.worktreeId === worktreeId && isIssueMutation(entry)) return entry;
   }
   return undefined;
 }
@@ -978,6 +1239,166 @@ function handleDeleteFailure(
     deletingIds: nextDeletingIds,
     deleteErrors: nextDeleteErrors,
     deleteErrorArgs: nextDeleteErrorArgs,
+    mutationOutbox: nextOutbox,
+  });
+}
+
+type WorktreeSet = (
+  partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
+) => void;
+
+/**
+ * Fire-and-forget attach/detach-issue async chain (#9163). Mirrors
+ * `runDeleteAsync`'s store-driven shape so it survives a host crash via the
+ * outbox, but differs in two ways grounded in where the data lives:
+ *
+ *  1. **No host ack event.** `worktreeIssueMap` is a main-process Electron-store
+ *     write (not host-owned like `git worktree remove`), so there is no
+ *     `worktree-removed`-style push to wait on. The resolved IPC promise IS the
+ *     ack, so success applies the local association and prunes the entry here.
+ *  2. **No rollback / partial-success path.** The local association is applied
+ *     only on success (the renderer never gets ahead of the store), so a
+ *     failed or abandoned mutation needs nothing unwound — eliminating the
+ *     silent desync this fixes at the root.
+ *
+ * Uses `get()` at the point of use (never a captured closure) so a replay after
+ * reconnect reads the freshest state (lesson #5087).
+ */
+async function runIssueMutationAsync(
+  get: () => WorktreeViewStore,
+  set: WorktreeSet,
+  entry: AttachIssueOutboxEntry | DetachIssueOutboxEntry
+): Promise<void> {
+  const { worktreeId, type } = entry;
+  try {
+    if (type === "attach-issue") {
+      await worktreeClient.attachIssue(entry.payload);
+    } else {
+      await worktreeClient.detachIssue(worktreeId);
+    }
+    applyIssueMutationSuccess(get, set, entry);
+  } catch (err) {
+    const message = formatErrorMessage(
+      err,
+      type === "attach-issue" ? "Failed to attach issue" : "Failed to detach issue"
+    );
+    handleIssueFailure(get, set, entry, message);
+  }
+}
+
+/** Apply the authoritative local association now that the store write landed,
+ *  then prune the outbox entry and clear the in-flight guard / any error. */
+function applyIssueMutationSuccess(
+  get: () => WorktreeViewStore,
+  set: WorktreeSet,
+  entry: AttachIssueOutboxEntry | DetachIssueOutboxEntry
+): void {
+  const prev = get();
+  const { worktreeId, mutationId } = entry;
+  // Superseded mid-flight: the entry was pruned (worktree removed, or the user
+  // dismissed it) while the IPC was outstanding, so this result is moot. Don't
+  // write a stale `manualAssociations` entry for a worktree that may be gone —
+  // the pruning path already cleared the in-flight guard and any error.
+  if (!prev.mutationOutbox.has(mutationId)) return;
+  const existing = prev.worktrees.get(worktreeId);
+
+  let nextManual = prev.manualAssociations;
+  let nextWorktrees = prev.worktrees;
+  if (entry.type === "attach-issue") {
+    // Record the manual association + re-merge the snapshot so it survives the
+    // next `worktree-update` (which carries only auto-detected issue state).
+    const assoc: ManualIssueAssociation = {
+      issueNumber: entry.payload.issueNumber,
+      issueTitle: entry.payload.issueTitle,
+    };
+    nextManual = new Map(prev.manualAssociations);
+    nextManual.set(worktreeId, assoc);
+    if (existing) {
+      nextWorktrees = new Map(prev.worktrees);
+      nextWorktrees.set(worktreeId, mergeIssueState(existing, existing, assoc));
+    }
+  } else {
+    if (prev.manualAssociations.has(worktreeId)) {
+      nextManual = new Map(prev.manualAssociations);
+      nextManual.delete(worktreeId);
+    }
+    if (existing && (existing.issueNumber !== undefined || existing.issueTitle !== undefined)) {
+      nextWorktrees = new Map(prev.worktrees);
+      nextWorktrees.set(worktreeId, { ...existing, issueNumber: undefined, issueTitle: undefined });
+    }
+  }
+
+  const nextOutbox = prev.mutationOutbox.has(mutationId)
+    ? new Map(prev.mutationOutbox)
+    : prev.mutationOutbox;
+  if (prev.mutationOutbox.has(mutationId)) nextOutbox.delete(mutationId);
+  const nextIssueMutatingIds = prev.issueMutatingIds.has(worktreeId)
+    ? new Set(prev.issueMutatingIds)
+    : prev.issueMutatingIds;
+  if (prev.issueMutatingIds.has(worktreeId)) nextIssueMutatingIds.delete(worktreeId);
+  const nextIssueErrors = prev.issueErrors.has(worktreeId)
+    ? new Map(prev.issueErrors)
+    : prev.issueErrors;
+  if (prev.issueErrors.has(worktreeId)) nextIssueErrors.delete(worktreeId);
+
+  set({
+    manualAssociations: nextManual,
+    worktrees: nextWorktrees,
+    mutationOutbox: nextOutbox,
+    issueMutatingIds: nextIssueMutatingIds,
+    issueErrors: nextIssueErrors,
+  });
+}
+
+/** Classify an attach/detach-issue failure (#9163).
+ *
+ *  - **Connectivity** — host exited / port down. Leave the entry `pending` for
+ *    the reconnect replay; no banner (the global reconnect indicator covers it).
+ *  - **Generic** — anything else. The issue-map write is a key-value store
+ *    write with no deterministic "permanent" failure class (unlike delete's
+ *    "uncommitted changes"), so every non-connectivity error retries up to the
+ *    cap, then flips to `failed`. The banner is surfaced immediately so the
+ *    user sees the failure even while the entry is still retry-eligible. */
+function handleIssueFailure(
+  get: () => WorktreeViewStore,
+  set: WorktreeSet,
+  entry: AttachIssueOutboxEntry | DetachIssueOutboxEntry,
+  message: string
+): void {
+  const { worktreeId, mutationId, type } = entry;
+  const prev = get();
+  const current = prev.mutationOutbox.get(mutationId);
+  // Superseded mid-flight (worktree removed, or the entry dismissed): the
+  // failure is moot and the pruning path already cleared the in-flight guard
+  // and any error. Don't resurrect a banner for a worktree that may be gone.
+  if (!current) return;
+  const isConnectivity = isConnectivityError(message);
+
+  const nextIssueMutatingIds = new Set(prev.issueMutatingIds);
+  nextIssueMutatingIds.delete(worktreeId);
+
+  if (isConnectivity) {
+    const nextOutbox = new Map(prev.mutationOutbox);
+    nextOutbox.set(mutationId, { ...current, status: "pending", lastError: message });
+    set({ issueMutatingIds: nextIssueMutatingIds, mutationOutbox: nextOutbox });
+    return;
+  }
+
+  const nextIssueErrors = new Map(prev.issueErrors);
+  nextIssueErrors.set(worktreeId, { message, type, mutationId });
+
+  const nextRetryCount = current.retryCount + 1;
+  const exceededCap = nextRetryCount >= OUTBOX_RETRY_CAP;
+  const nextOutbox = new Map(prev.mutationOutbox);
+  nextOutbox.set(mutationId, {
+    ...current,
+    status: exceededCap ? "failed" : "pending",
+    retryCount: nextRetryCount,
+    lastError: message,
+  });
+  set({
+    issueMutatingIds: nextIssueMutatingIds,
+    issueErrors: nextIssueErrors,
     mutationOutbox: nextOutbox,
   });
 }
