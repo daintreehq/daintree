@@ -26,6 +26,10 @@ export default defineConfig({
   workers: e2eWorkers,
   fullyParallel: false,
   timeout: 180_000,
+  // failOnFlakyTests is top-level only (not per-project). Gate it behind
+  // FAIL_ON_FLAKY_TESTS so only release-gating suites (core, online) enable
+  // it in CI. full-* buckets keep retries without a flake gate for PR velocity.
+  failOnFlakyTests: process.env.FAIL_ON_FLAKY_TESTS === "true",
   expect: { timeout: isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000 },
   outputDir: "./test-results",
   ...(reporter ? { reporter } : {}),

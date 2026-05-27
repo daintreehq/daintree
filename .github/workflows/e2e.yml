@@ -433,6 +433,7 @@ jobs:
           # when secrets aren't inherited.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
@@ -443,6 +444,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${LAST_FAILED_ARGS:-}
@@ -460,6 +462,7 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
+          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
