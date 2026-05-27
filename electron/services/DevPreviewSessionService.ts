@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   getInvalidCommandMessage,
   normalizeNextjsDevCommand,
+  normalizeViteDevCommand,
 } from "./DevPreviewCommandNormalizer.js";
 import {
   allocatePort,
@@ -208,7 +209,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -248,7 +249,7 @@ export class DevPreviewSessionService {
             status: "error",
             error: { type: "unknown", message: commandError },
             url: null,
-            assignedUrl: null,
+            predictedUrl: null,
             terminalId: null,
             isRestarting: false,
           });
@@ -298,7 +299,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -326,7 +327,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Failed to clear cache: ${deletionError}`,
@@ -358,7 +359,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -388,7 +389,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Failed to remove node_modules: ${message}`,
@@ -448,7 +449,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "error",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: {
                 type: "port-conflict",
                 message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s after stopping. Retry to start again.`,
@@ -466,7 +467,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "stopped",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: null,
           terminalId: null,
           isRestarting: false,
@@ -477,7 +478,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "stopped",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: null,
           terminalId: null,
           isRestarting: false,
@@ -503,7 +504,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
@@ -516,7 +517,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "error",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: { type: "unknown", message: `Failed to stop dev preview: ${message}` },
               terminalId: null,
               isRestarting: false,
@@ -545,7 +546,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
@@ -582,7 +583,7 @@ export class DevPreviewSessionService {
       worktreeId: undefined,
       status: "stopped",
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -620,7 +621,7 @@ export class DevPreviewSessionService {
         worktreeId: undefined,
         status: "stopped",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
@@ -640,7 +641,7 @@ export class DevPreviewSessionService {
       worktreeId: session.worktreeId,
       status: session.status,
       url: session.url,
-      assignedUrl: session.assignedUrl,
+      predictedUrl: session.predictedUrl,
       error: session.error,
       terminalId: session.terminalId,
       isRestarting: session.isRestarting,
@@ -658,7 +659,7 @@ export class DevPreviewSessionService {
         DevPreviewSession,
         | "status"
         | "url"
-        | "assignedUrl"
+        | "predictedUrl"
         | "error"
         | "terminalId"
         | "isRestarting"
@@ -672,7 +673,7 @@ export class DevPreviewSessionService {
     if (this.disposed) return;
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
-    if (updates.assignedUrl !== undefined) session.assignedUrl = updates.assignedUrl;
+    if (updates.predictedUrl !== undefined) session.predictedUrl = updates.predictedUrl;
     if (updates.error !== undefined) session.error = updates.error;
     if (updates.terminalId !== undefined) session.terminalId = updates.terminalId;
     if (updates.isRestarting !== undefined) session.isRestarting = updates.isRestarting;
@@ -736,7 +737,7 @@ export class DevPreviewSessionService {
       session.markerSeen = false;
       session.needsInstall = false;
       session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null, assignedUrl: null });
+      this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
     }
 
     await this.spawnSessionTerminal(session);
@@ -766,21 +767,21 @@ export class DevPreviewSessionService {
       releasePort(this.portRegistry, sessionKey);
       return;
     }
-    const assignedUrl = `http://localhost:${port}`;
+    const predictedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
 
     session.buffer = "";
     session.lastErrorKey = null;
     session.markerSeen = false;
-    session.assignedUrl = assignedUrl;
+    session.predictedUrl = predictedUrl;
     this.clearCompiling(session);
     this.attachTerminal(session, terminalId);
     this.updateSession(session, {
       terminalId,
       status: "starting",
       url: null,
-      assignedUrl,
+      predictedUrl,
       error: null,
       generation: nextGeneration,
       forceKilled: undefined,
@@ -803,9 +804,11 @@ export class DevPreviewSessionService {
         terminalId,
       });
 
-      // The allocated PORT is authoritative for the common zero-config path.
-      // Keep output URL detection below as an override for servers that choose
-      // their own port, but do not depend on a single terminal line to start.
+      // predictedUrl is the allocator-derived starting point for the readiness
+      // poller — it's accurate for frameworks that honor env.PORT or the
+      // injected --port flag, but not authoritative. UrlDetector overwrites
+      // state.url when real output reveals a different bind address (e.g. next
+      // dev auto-incrementing past EADDRINUSE on configs without --strictPort).
       setTimeout(() => {
         if (this.disposed) return;
         if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
@@ -813,7 +816,7 @@ export class DevPreviewSessionService {
 
         const abort = new AbortController();
         session.readinessAbort = abort;
-        this.pollServerReadiness(session, assignedUrl, abort.signal, nextGeneration);
+        this.pollServerReadiness(session, predictedUrl, abort.signal, nextGeneration);
       }, 0);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to start dev server");
@@ -821,7 +824,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: { type: "unknown", message: `Failed to start dev server: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -844,6 +847,7 @@ export class DevPreviewSessionService {
     };
 
     void normalizeNextjsDevCommand(trimmedCommand, session.cwd, session.turbopackEnabled)
+      .then((nextNormalized) => normalizeViteDevCommand(nextNormalized, session.cwd, port))
       .then((normalizedCommand) => {
         submitCommand(normalizedCommand);
       })
@@ -981,7 +985,7 @@ export class DevPreviewSessionService {
     this.updateSession(session, {
       status: "error",
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       error: {
         type: "port-conflict",
         message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s. Retry to start again.`,
@@ -1132,7 +1136,7 @@ export class DevPreviewSessionService {
       status: "error",
       error: result.error,
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       isRestarting: false,
       phaseLabel: undefined,
     });
@@ -1165,7 +1169,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: {
           type: "missing-dependencies",
           message: `Dependency installation failed (exit code ${exitCode})`,
@@ -1192,7 +1196,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error,
         terminalId: null,
         isRestarting: false,
@@ -1204,7 +1208,7 @@ export class DevPreviewSessionService {
     this.updateSession(session, {
       status: "stopped",
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -1249,7 +1253,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -1473,7 +1477,7 @@ export class DevPreviewSessionService {
           this.updateSession(session, {
             status: "error",
             url: null,
-            assignedUrl: null,
+            predictedUrl: null,
             error: {
               type: "unknown",
               message: `Dev server at ${url} did not respond within ${READINESS_TIMEOUT_MS / 1000} seconds`,
@@ -1499,7 +1503,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Dev server readiness check failed: ${message}`,

@@ -33,7 +33,7 @@ export interface DevPreviewSessionState {
   worktreeId?: string;
   status: DevPreviewSessionStatus;
   url: string | null;
-  assignedUrl: string | null;
+  predictedUrl: string | null;
   error: DevServerError | null;
   terminalId: string | null;
   isRestarting: boolean;

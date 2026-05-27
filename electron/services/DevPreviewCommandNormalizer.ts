@@ -22,11 +22,23 @@ export const FRAMEWORK_DEFAULT_PORTS: Array<[RegExp, number]> = [
   [/\bvite\b/, 5173],
   [/\bsvelte-kit\s+dev\b/, 5173],
   [/\bastro\s+dev\b/, 4321],
+  [/\bnuxt\s+dev\b/, 3000],
   [/\brails\s+server\b/, 3000],
   [/\bmanage\.py\s+runserver\b/, 8000],
   [/\bmix\s+phx\.server\b/, 4000],
   [/\bphp\s+artisan\s+serve\b/, 8000],
 ];
+
+// Vite and SvelteKit (SvelteKit v2+ runs on Vite) both expose --strictPort,
+// which makes the server exit on EADDRINUSE rather than drifting to the next
+// free port. Pinning strictPort lets the readiness poller trust the allocated
+// URL instead of needing UrlDetector to catch a silent reassignment.
+export const VITE_STRICT_PORT_RE = /\bvite(?:\s+dev)?\b|\bsvelte-kit\s+dev\b/;
+
+// Astro and Nuxt accept --port via their own CLIs but do NOT propagate
+// --strictPort to underlying Vite. Injecting it would cause the dev server
+// to error on an unknown flag, so we only pin the port here.
+export const VITE_SOFT_PORT_RE = /\bastro\s+dev\b|\bnuxt\s+dev\b/;
 
 export async function extractPort(command: string, cwd: string): Promise<number | null> {
   if (SHELL_CONTROL_RE.test(command)) return null;
@@ -106,4 +118,47 @@ export async function normalizeNextjsDevCommand(
   }
 
   return command;
+}
+
+// Vite, SvelteKit, Astro, and Nuxt all ignore process.env.PORT — the only
+// boundary-safe way to pin the allocated port is to inject the CLI flag.
+// Vite/SvelteKit also accept --strictPort so the server fails fast on
+// collision instead of silently drifting; Astro/Nuxt only accept --port.
+export async function normalizeViteDevCommand(
+  command: string,
+  cwd: string,
+  port: number
+): Promise<string> {
+  if (SHELL_CONTROL_RE.test(command)) return command;
+  if (PORT_FLAG_PRESENT_RE.test(command)) return command;
+
+  let resolved = command;
+  const scriptMatch = PKG_SCRIPT_RE.exec(command);
+  if (scriptMatch) {
+    const scriptName = scriptMatch[1];
+    try {
+      const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
+      const pkg = JSON.parse(pkgRaw);
+      const scriptBody = pkg?.scripts?.[scriptName];
+      if (typeof scriptBody !== "string") return command;
+      if (SHELL_CONTROL_RE.test(scriptBody)) return command;
+      if (PORT_FLAG_PRESENT_RE.test(scriptBody)) return command;
+      resolved = scriptBody;
+    } catch {
+      return command;
+    }
+  }
+
+  const isStrict = VITE_STRICT_PORT_RE.test(resolved);
+  const isSoft = !isStrict && VITE_SOFT_PORT_RE.test(resolved);
+  if (!isStrict && !isSoft) return command;
+
+  const flags = isStrict ? `--port ${port} --strictPort` : `--port ${port}`;
+  // npm/pnpm/yarn require `--` to forward flags through `run <script>`; bun
+  // forwards extra args directly. Direct CLI invocations (no pkg manager
+  // wrapping) take flags inline.
+  const isPkgScript = scriptMatch !== null;
+  const isBun = command.trimStart().startsWith("bun ");
+  const sep = isPkgScript && !isBun ? " -- " : " ";
+  return `${command}${sep}${flags}`;
 }

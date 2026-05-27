@@ -4,7 +4,7 @@
  * Bugs targeted:
  *   V – two panels share a worktreeId → second panel's stop orphans first panel
  *       (worktreeToSession stale after stopByPanel when another session still claims the key)
- *   W – ensureSessionTerminal dead-terminal path broadcasts assignedUrl while terminalId is null
+ *   W – ensureSessionTerminal dead-terminal path broadcasts predictedUrl while terminalId is null
  *       (intermediate state: server gone but URL still advertised)
  *   X – stop() does not remove the worktreeToSession entry: getByWorktree returns stopped
  *       session instead of null after explicit stop
@@ -173,7 +173,7 @@ describe("DevPreviewSessionService — worktreeToSession map invariants (adversa
 
   it("BUG-V3: after panel-2 steals wt-1 then stops, panel-1 getState still works normally", async () => {
     const s1 = await service.ensure({ ...project, panelId: "panel-1", worktreeId: "wt-1" });
-    expect(s1.assignedUrl).toBeTruthy();
+    expect(s1.predictedUrl).toBeTruthy();
 
     await service.ensure({ ...project, panelId: "panel-2", worktreeId: "wt-1" });
     await service.stopByPanel({ panelId: "panel-2" });
@@ -181,20 +181,20 @@ describe("DevPreviewSessionService — worktreeToSession map invariants (adversa
     // Panel 1's session should still be accessible via getState (different lookup path).
     const direct = service.getState({ ...project, panelId: "panel-1" });
     expect(direct.status).toBe("starting");
-    expect(direct.assignedUrl).toBeTruthy();
+    expect(direct.predictedUrl).toBeTruthy();
 
     // AND via getByWorktree (requires the fix).
     const byWt = service.getByWorktree("wt-1");
     expect(byWt).not.toBeNull();
-    expect(byWt!.assignedUrl).toBe(direct.assignedUrl);
+    expect(byWt!.predictedUrl).toBe(direct.predictedUrl);
   });
 
   // ── Bug W ──────────────────────────────────────────────────────────────────
 
-  it("BUG-W: ensureSessionTerminal dead-terminal intermediate broadcast has no assignedUrl", async () => {
-    // Ensure a session so a terminal is spawned and assignedUrl is set.
+  it("BUG-W: ensureSessionTerminal dead-terminal intermediate broadcast has no predictedUrl", async () => {
+    // Ensure a session so a terminal is spawned and predictedUrl is set.
     const state = await service.ensure({ ...project, panelId: "panel-1", worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Kill the terminal silently (no exit event) so isTerminalAlive returns false.
     ptyClient.kill(state.terminalId!);
@@ -202,14 +202,14 @@ describe("DevPreviewSessionService — worktreeToSession map invariants (adversa
     broadcasts.length = 0;
 
     // Re-ensure — ensureSessionTerminal detects dead terminal, clears terminalId/url,
-    // then re-spawns. The intermediate broadcast should NOT expose a non-null assignedUrl
+    // then re-spawns. The intermediate broadcast should NOT expose a non-null predictedUrl
     // with a null terminalId (server not running but URL still advertised).
     await service.ensure({ ...project, panelId: "panel-1", worktreeId: "wt-1" });
 
-    // Find any broadcast where terminalId was null but assignedUrl was non-null.
-    // Fails if the intermediate updateSession({ terminalId: null, url: null }) omits assignedUrl: null.
+    // Find any broadcast where terminalId was null but predictedUrl was non-null.
+    // Fails if the intermediate updateSession({ terminalId: null, url: null }) omits predictedUrl: null.
     const inconsistentBroadcast = broadcasts.find(
-      (b) => b.terminalId === null && b.assignedUrl !== null
+      (b) => b.terminalId === null && b.predictedUrl !== null
     );
     expect(inconsistentBroadcast).toBeUndefined();
   });
@@ -231,10 +231,10 @@ describe("DevPreviewSessionService — worktreeToSession map invariants (adversa
     const result = service.getByWorktree("wt-1");
 
     // The session still exists (stop() keeps it), so getByWorktree returns it.
-    // Assert the returned state is correct — status stopped, assignedUrl null.
+    // Assert the returned state is correct — status stopped, predictedUrl null.
     expect(result).not.toBeNull();
     expect(result!.status).toBe("stopped");
-    expect(result!.assignedUrl).toBeNull();
+    expect(result!.predictedUrl).toBeNull();
   });
 
   // ── Regression: single-panel worktreeToSession cleanup ────────────────────

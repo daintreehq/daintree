@@ -4,9 +4,9 @@
  *
  * Bugs targeted:
  *   A – PORT env override: caller env.PORT silently beats the allocated port
- *   B – assignedUrl stale after crash exit (handleExit error path)
- *   C – assignedUrl stale after clean exit (handleExit stopped path)
- *   D – assignedUrl stale after install exit failure
+ *   B – predictedUrl stale after crash exit (handleExit error path)
+ *   C – predictedUrl stale after clean exit (handleExit stopped path)
+ *   D – predictedUrl stale after install exit failure
  *   E – real net socket calls leak into tests (net not mocked)
  *   F – getByWorktree stale after worktreeId change on same session
  *   G – worktreeToSession not cleaned up after stopByPanel (memory + correctness)
@@ -160,45 +160,45 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
   });
 
   // ── Bug A ──────────────────────────────────────────────────────────────────
-  it("BUG-A: assignedUrl matches the port injected into the spawn env — caller env.PORT must not override", async () => {
+  it("BUG-A: predictedUrl matches the port injected into the spawn env — caller env.PORT must not override", async () => {
     // If the spread is wrong ({ PORT: allocated, ...session.env }), then
     // session.env.PORT=9000 wins and the spawn env gets PORT=9000 while
-    // assignedUrl still says http://localhost:3100 → mismatch.
+    // predictedUrl still says http://localhost:3100 → mismatch.
     const state = await service.ensure({
       ...base,
       worktreeId: "wt-1",
       env: { PORT: "9000" },
     });
 
-    expect(state.assignedUrl).toBeTruthy();
-    const allocatedPort = state.assignedUrl!.replace("http://localhost:", "");
+    expect(state.predictedUrl).toBeTruthy();
+    const allocatedPort = state.predictedUrl!.replace("http://localhost:", "");
 
     const lastSpawn = ptyClient.spawnCalls[ptyClient.spawnCalls.length - 1];
     const spawnedPort = (lastSpawn.opts.env as Record<string, string>).PORT;
 
-    // The port in assignedUrl must equal the port that was actually injected.
+    // The port in predictedUrl must equal the port that was actually injected.
     // Fails if the spread is reversed (caller env.PORT wins).
     expect(spawnedPort).toBe(allocatedPort);
   });
 
   // ── Bug B ──────────────────────────────────────────────────────────────────
-  it("BUG-B: assignedUrl is cleared when the terminal crashes (non-zero exit)", async () => {
+  it("BUG-B: predictedUrl is cleared when the terminal crashes (non-zero exit)", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Simulate crash
     ptyClient.emitExit(state.terminalId!, 1);
 
     const after = service.getState(base);
-    // handleExit error-path does not clear assignedUrl → this assertion will fail
-    expect(after.assignedUrl).toBeNull();
+    // handleExit error-path does not clear predictedUrl → this assertion will fail
+    expect(after.predictedUrl).toBeNull();
   });
 
   // ── Bug C ──────────────────────────────────────────────────────────────────
-  it("BUG-C: assignedUrl is cleared when the terminal exits cleanly (zero exit from running state)", async () => {
+  it("BUG-C: predictedUrl is cleared when the terminal exits cleanly (zero exit from running state)", async () => {
     mockHttpResponse(200);
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Emit URL so status transitions to running
     ptyClient.emitData(state.terminalId!, "ready at http://localhost:5173\n");
@@ -208,15 +208,15 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
     ptyClient.emitExit(state.terminalId!, 0);
 
     const after = service.getState(base);
-    // handleExit stopped-path does not clear assignedUrl → this assertion will fail
-    expect(after.assignedUrl).toBeNull();
+    // handleExit stopped-path does not clear predictedUrl → this assertion will fail
+    expect(after.predictedUrl).toBeNull();
   });
 
   // ── Bug D ──────────────────────────────────────────────────────────────────
-  it("BUG-D: assignedUrl is cleared when install subprocess exits with failure", async () => {
+  it("BUG-D: predictedUrl is cleared when install subprocess exits with failure", async () => {
     // Trigger install path: emit missing-dependencies error, then exit triggers install
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Emit a missing-dependencies error to set needsInstall = true
     ptyClient.emitData(
@@ -227,13 +227,13 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
 
     // Mark as install subprocess running (simulate the install terminal exit with failure)
     // The service sets isRunningInstall=true when runInstall is triggered.
-    // Exit with failure code should clear assignedUrl.
+    // Exit with failure code should clear predictedUrl.
     ptyClient.emitExit(state.terminalId!, 1);
     await new Promise((r) => setTimeout(r, 20));
 
     const after = service.getState(base);
-    // handleExit install-failure path does not clear assignedUrl
-    expect(after.assignedUrl).toBeNull();
+    // handleExit install-failure path does not clear predictedUrl
+    expect(after.predictedUrl).toBeNull();
   });
 
   // ── Bug E ──────────────────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
   // ── Regression H ──────────────────────────────────────────────────────────
   it("REGRESSION-H: restart reuses the same port (no orphaned allocations)", async () => {
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    const portBefore = first.assignedUrl;
+    const portBefore = first.predictedUrl;
     expect(portBefore).toBeTruthy();
 
     // Snapshot call count after initial allocation.
@@ -287,7 +287,7 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
     const second = service.getState(base);
 
     // The same port should be reused after restart.
-    expect(second.assignedUrl).toBe(portBefore);
+    expect(second.predictedUrl).toBe(portBefore);
     // allocatePort returned early from registry (no allocation probe), but
     // restart now also calls waitForPortFree which probes once to confirm the
     // old PTY released the port before respawning. One additional probe call
@@ -297,11 +297,11 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
   });
 
   // ── Positive baseline ──────────────────────────────────────────────────────
-  it("assignedUrl is populated immediately after ensure() before server is ready", async () => {
+  it("predictedUrl is populated immediately after ensure() before server is ready", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
 
     expect(state.status).toBe("starting");
-    expect(state.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(state.predictedUrl).toMatch(/^http:\/\/localhost:\d+$/);
   });
 
   it("getByWorktree returns null for unknown worktreeId", () => {
@@ -329,27 +329,27 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
       worktreeId: "wt-2",
     });
 
-    expect(s1.assignedUrl).toBeTruthy();
-    expect(s2.assignedUrl).toBeTruthy();
-    expect(s1.assignedUrl).not.toBe(s2.assignedUrl);
+    expect(s1.predictedUrl).toBeTruthy();
+    expect(s2.predictedUrl).toBeTruthy();
+    expect(s1.predictedUrl).not.toBe(s2.predictedUrl);
   });
 
-  it("assignedUrl is cleared after explicit stop()", async () => {
+  it("predictedUrl is cleared after explicit stop()", async () => {
     const state = await service.ensure(base);
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     await service.stop(base);
     const after = service.getState(base);
-    expect(after.assignedUrl).toBeNull();
+    expect(after.predictedUrl).toBeNull();
   });
 
-  it("assignedUrl is cleared after stopByPanel()", async () => {
+  it("predictedUrl is cleared after stopByPanel()", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     await service.stopByPanel({ panelId: base.panelId });
     // Session is removed — getState returns default null state
     const after = service.getState(base);
-    expect(after.assignedUrl).toBeNull();
+    expect(after.predictedUrl).toBeNull();
   });
 });
