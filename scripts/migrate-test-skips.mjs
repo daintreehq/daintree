@@ -91,15 +91,16 @@ function classify(skipLine, lines) {
   // Pattern: test.skip("test name", async () => { — quarantine (full test skip)
   if (skipText.match(/test\.skip\(\s*"/)) {
     const nameMatch = skipText.match(/test\.skip\(\s*"([^"]+)"/);
-    const reason = nameMatch
-      ? `Full test quarantined: ${nameMatch[1]}`
-      : "Quarantined test";
+    const reason = nameMatch ? `Full test quarantined: ${nameMatch[1]}` : "Quarantined test";
     return { type: "quarantine", description: `2026-05-27 ${reason}` };
   }
 
   // Pattern: bare test.skip() inside an if-block — conditional-fallback
   if (skipText === "test.skip();") {
-    return { type: "conditional-skip", description: "Required element or state not available in this launch" };
+    return {
+      type: "conditional-skip",
+      description: "Required element or state not available in this launch",
+    };
   }
 
   // Unrecognized — classify as conditional-skip with generic description
