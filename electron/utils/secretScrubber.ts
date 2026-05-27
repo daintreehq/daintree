@@ -439,3 +439,28 @@ export function scrubSecrets(value: string): string {
 
   return out;
 }
+
+/**
+ * Detects whether a string contains a known secret sigil, returning the first
+ * matching pattern (or `undefined` when clean). Unlike {@link scrubSecrets},
+ * this is a predicate — it reports a match instead of redacting.
+ *
+ * The shared `PATTERNS` regexes carry the `g` flag, which makes `.test()`
+ * stateful (`lastIndex` persists across calls on the same instance and yields
+ * non-deterministic false negatives in a loop). Each pattern is cloned with the
+ * `g`/`y` flags stripped before testing so detection stays stateless and the
+ * module-level catalogue is never mutated.
+ *
+ * @param value arbitrary string, e.g. a recipe env value
+ * @returns the first matching `SecretPattern`, or `undefined` when none match
+ */
+export function findSecretInValue(value: string): SecretPattern | undefined {
+  if (value.length === 0) return undefined;
+
+  for (const pattern of PATTERNS) {
+    const stateless = new RegExp(pattern.regex.source, pattern.regex.flags.replace(/[gy]/g, ""));
+    if (stateless.test(value)) return pattern;
+  }
+
+  return undefined;
+}

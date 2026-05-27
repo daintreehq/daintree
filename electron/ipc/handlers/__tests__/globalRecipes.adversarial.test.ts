@@ -236,6 +236,37 @@ describe("globalRecipes IPC adversarial", () => {
     ).rejects.toThrow(/Invalid recipe ID/);
   });
 
+  const SECRET_PAT = `ghp_${"A".repeat(36)}`;
+  const secretTerminal = () => ({ type: "terminal", env: { GITHUB_TOKEN: SECRET_PAT } });
+
+  it("addRecipe rejects a terminal env value containing a secret", async () => {
+    await expect(
+      getHandler(CHANNELS.GLOBAL_ADD_RECIPE)(fakeEvent(), {
+        recipe: { ...validRecipe(), terminals: [secretTerminal()] },
+      })
+    ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
+    expect(projectStoreMock.addGlobalRecipe).not.toHaveBeenCalled();
+  });
+
+  it("updateRecipe rejects a terminals patch containing a secret env value", async () => {
+    await expect(
+      getHandler(CHANNELS.GLOBAL_UPDATE_RECIPE)(fakeEvent(), {
+        recipeId: "r1",
+        updates: { terminals: [secretTerminal()] },
+      })
+    ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
+    expect(projectStoreMock.updateGlobalRecipe).not.toHaveBeenCalled();
+  });
+
+  it("addRecipe accepts a non-secret terminal env value", async () => {
+    const recipe = {
+      ...validRecipe(),
+      terminals: [{ type: "terminal", env: { NODE_ENV: "production" } }],
+    };
+    await getHandler(CHANNELS.GLOBAL_ADD_RECIPE)(fakeEvent(), { recipe });
+    expect(projectStoreMock.addGlobalRecipe).toHaveBeenCalledWith(recipe);
+  });
+
   it("cleanup removes all four handlers", () => {
     expect(ipcHandlers.size).toBe(4);
     cleanup();
