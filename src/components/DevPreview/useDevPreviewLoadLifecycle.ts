@@ -371,6 +371,11 @@ export function useDevPreviewLoadLifecycle({
       const isCertError = e.errorCode <= ERR_CERT_RANGE_END && e.errorCode >= ERR_CERT_RANGE_START;
 
       if (e.errorCode === ERR_SSL_PROTOCOL_ERROR) {
+        if (failLoadRetryRef.current) {
+          clearTimeout(failLoadRetryRef.current);
+          failLoadRetryRef.current = null;
+        }
+        failLoadRetryCountRef.current = 0;
         setWebviewLoadError({
           code: "ssl_protocol",
           message: `SSL/TLS handshake failed to ${e.validatedURL || "the server"}. The server may not support HTTPS, or its certificate may be invalid.`,
@@ -381,6 +386,11 @@ export function useDevPreviewLoadLifecycle({
       }
 
       if (isCertError) {
+        if (failLoadRetryRef.current) {
+          clearTimeout(failLoadRetryRef.current);
+          failLoadRetryRef.current = null;
+        }
+        failLoadRetryCountRef.current = 0;
         setWebviewLoadError({
           code: "cert",
           message: `The site's certificate couldn't be verified for ${e.validatedURL || "the server"}. If this is a local development server, make sure the local CA is trusted (e.g. run \`mkcert -install\`).`,

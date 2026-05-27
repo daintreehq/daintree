@@ -1510,6 +1510,113 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("mkcert -install");
     });
 
+    it("cancels pending connection-refused retry when cert error arrives", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Fire a connection-refused to schedule a retry at 500ms
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+
+      // Before the retry fires, a cert error arrives
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      // Advance past the retry timeout
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The stale retry must NOT have called loadURL
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      // Cert error overlay must be visible
+      expect(container.textContent).toContain("Certificate Error");
+    });
+
+    it("classifies -299 (cert range lower bound) as cert, -199 and -300 fall through", () => {
+      const { container: c1 } = render(<DevPreviewPane {...baseProps} />);
+      const w1 = getWebviewElement(c1);
+      act(() => {
+        emitWebviewEvent(w1, "did-fail-load", {
+          errorCode: -299,
+          errorDescription: "ERR_CERT_VALIDITY_TOO_LONG",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c1.textContent).toContain("Certificate Error");
+
+      const { container: c2 } = render(<DevPreviewPane {...baseProps} />);
+      const w2 = getWebviewElement(c2);
+      act(() => {
+        emitWebviewEvent(w2, "did-fail-load", {
+          errorCode: -199,
+          errorDescription: "ERR_CERT_END",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c2.textContent).toContain("Page load failed");
+      expect(c2.textContent).not.toContain("mkcert");
+
+      const { container: c3 } = render(<DevPreviewPane {...baseProps} />);
+      const w3 = getWebviewElement(c3);
+      act(() => {
+        emitWebviewEvent(w3, "did-fail-load", {
+          errorCode: -300,
+          errorDescription: "ERR_CERT_START",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+      expect(c3.textContent).toContain("Page load failed");
+      expect(c3.textContent).not.toContain("mkcert");
+    });
+
+    it("shows Copied feedback on mkcert copy button click", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      const buttons = Array.from(container.querySelectorAll("button"));
+      const mkcertButton = buttons.find((btn) => btn.textContent?.includes("mkcert -install"));
+      expect(mkcertButton).toBeTruthy();
+
+      await act(async () => {
+        mkcertButton!.click();
+        // Flush the microtask from the async clipboard handler
+        await Promise.resolve();
+      });
+
+      expect(mkcertButton!.textContent).toContain("Copied");
+
+      act(() => {
+        vi.advanceTimersByTime(2500);
+      });
+
+      expect(mkcertButton!.textContent).toContain("mkcert -install");
+    });
+
     it("cleans slow timer on unmount", () => {
       const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
