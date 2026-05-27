@@ -2,7 +2,7 @@ import { projectStore } from "../../services/ProjectStore.js";
 import type { TerminalRecipe } from "../../types/index.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { GLOBAL_RECIPES_METHOD_CHANNELS } from "./globalRecipes.preload.js";
-import { assertRecipeUsageFields } from "./recipeValidation.js";
+import { assertNoSecretEnvValues, assertRecipeUsageFields } from "./recipeValidation.js";
 
 export const globalRecipesNamespace = defineIpcNamespace({
   name: "global-recipes",
@@ -42,6 +42,7 @@ export const globalRecipesNamespace = defineIpcNamespace({
           throw new Error("Recipe createdAt must be a finite number");
         }
         assertRecipeUsageFields(recipe);
+        assertNoSecretEnvValues(recipe.terminals);
         return projectStore.addGlobalRecipe(recipe);
       }
     ),
@@ -72,6 +73,9 @@ export const globalRecipesNamespace = defineIpcNamespace({
           throw new Error("Invalid updates: terminals must be an array");
         }
         assertRecipeUsageFields(patch);
+        if (Array.isArray(patch.terminals)) {
+          assertNoSecretEnvValues(patch.terminals as TerminalRecipe["terminals"]);
+        }
         return projectStore.updateGlobalRecipe(recipeId, updates);
       }
     ),

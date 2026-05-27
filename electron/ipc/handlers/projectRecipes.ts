@@ -7,7 +7,7 @@ import { stableInRepoId } from "../../../shared/utils/recipeFilename.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalRecipe } from "../../types/index.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
-import { assertRecipeUsageFields } from "./recipeValidation.js";
+import { assertNoSecretEnvValues, assertRecipeUsageFields } from "./recipeValidation.js";
 
 export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -41,6 +41,11 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     }
     if (!Array.isArray(recipes)) {
       throw new Error("Invalid recipes array");
+    }
+    for (const recipe of recipes) {
+      if (Array.isArray(recipe?.terminals)) {
+        assertNoSecretEnvValues(recipe.terminals);
+      }
     }
     return projectStore.saveRecipes(projectId, recipes);
   };
@@ -76,6 +81,7 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error("Recipe createdAt must be a finite number");
     }
     assertRecipeUsageFields(recipe);
+    assertNoSecretEnvValues(recipe.terminals);
     return projectStore.addRecipe(projectId, recipe);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_ADD_RECIPE, handleProjectAddRecipe));
@@ -109,6 +115,9 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error("Invalid updates: terminals must be an array");
     }
     assertRecipeUsageFields(patch);
+    if (Array.isArray(patch.terminals)) {
+      assertNoSecretEnvValues(patch.terminals as TerminalRecipe["terminals"]);
+    }
     return projectStore.updateRecipe(projectId, recipeId, updates);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_UPDATE_RECIPE, handleProjectUpdateRecipe));
@@ -217,6 +226,11 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
     for (const recipe of recipes) {
+      if (Array.isArray(recipe?.terminals)) {
+        assertNoSecretEnvValues(recipe.terminals);
+      }
+    }
+    for (const recipe of recipes) {
       await projectStore.writeInRepoRecipe(project.path, recipe);
     }
   };
@@ -241,6 +255,7 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
+    assertNoSecretEnvValues(recipe.terminals);
     await projectStore.writeInRepoRecipe(project.path, recipe);
     if (
       previousName &&

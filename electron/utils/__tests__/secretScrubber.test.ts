@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import safe from "safe-regex2";
-import { PATTERNS, REDACTED, scrubSecrets } from "../secretScrubber.js";
+import { findSecretInValue, PATTERNS, REDACTED, scrubSecrets } from "../secretScrubber.js";
 
 describe("secretScrubber", () => {
   describe("ReDoS safety", () => {
@@ -961,6 +961,55 @@ describe("secretScrubber", () => {
       expect(out).not.toMatch(/Bearer [A-Za-z0-9]/);
       const redactionCount = (out.match(/\[REDACTED\]/g) ?? []).length;
       expect(redactionCount).toBe(3);
+    });
+  });
+
+  describe("findSecretInValue", () => {
+    it("returns undefined for a clean string", () => {
+      expect(findSecretInValue("just a normal value")).toBeUndefined();
+    });
+
+    it("returns undefined for an empty string", () => {
+      expect(findSecretInValue("")).toBeUndefined();
+    });
+
+    it("returns the matching pattern for a GitHub PAT", () => {
+      const match = findSecretInValue(`ghp_${"A".repeat(36)}`);
+      expect(match?.name).toBe("github-pat");
+    });
+
+    it("identifies an Anthropic key", () => {
+      const match = findSecretInValue(`sk-ant-${"a".repeat(95)}`);
+      expect(match?.name).toBe("anthropic-api-key");
+    });
+
+    it("is stateless across repeated calls on the same value (no lastIndex leak)", () => {
+      const token = `ghp_${"A".repeat(36)}`;
+      expect(findSecretInValue(token)?.name).toBe("github-pat");
+      expect(findSecretInValue(token)?.name).toBe("github-pat");
+      expect(findSecretInValue(token)?.name).toBe("github-pat");
+    });
+
+    it("matches context-dependent patterns when the key name precedes the value", () => {
+      expect(findSecretInValue(`AWS_SECRET_ACCESS_KEY=${"A".repeat(40)}`)?.name).toBe(
+        "aws-secret-access-key"
+      );
+      expect(findSecretInValue(`DD_API_KEY=${"a".repeat(32)}`)?.name).toBe("datadog-key");
+      expect(findSecretInValue(`api_key=${"A".repeat(32)}`)?.name).toBe("generic-key-fallback");
+    });
+
+    it("does not match a bare context-dependent value without its key name", () => {
+      // The AWS secret pattern requires the key name as context — the bare
+      // 40-char value alone must not match (this is why assertNoSecretEnvValues
+      // also tests the `KEY=value` form).
+      expect(findSecretInValue("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")).toBeUndefined();
+    });
+
+    it("does not mutate the shared PATTERNS lastIndex (scrubSecrets still works after)", () => {
+      findSecretInValue(`ghp_${"A".repeat(36)}`);
+      // If findSecretInValue had advanced a shared regex's lastIndex, this
+      // global-flag .replace() would skip the leading match.
+      expect(scrubSecrets(`ghp_${"A".repeat(36)}`)).toBe(REDACTED);
     });
   });
 });
