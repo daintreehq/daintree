@@ -6,6 +6,7 @@ import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
 import type { z } from "zod";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -967,13 +968,25 @@ export class PluginService {
     }
 
     let entry: HandlerEntry;
-    if (typeof schemaOrHandler === "function") {
-      // Untyped registration — raw passthrough, no validation or gate.
+    if (maybeHandler === undefined) {
+      // Untyped form: registerHandler(channel, handler) — raw passthrough.
+      if (typeof schemaOrHandler !== "function") {
+        throw new Error(`Plugin handler must be a function, got ${typeof schemaOrHandler}`);
+      }
       entry = { handler: schemaOrHandler, requires: [] };
-    } else if (isChannelSchema(schemaOrHandler)) {
-      // Typed registration — store schemas + declared permission gate.
+    } else {
+      // Typed form: registerHandler(channel, schema, handler) — gate + validate.
       if (typeof maybeHandler !== "function") {
         throw new Error(`Plugin handler must be a function, got ${typeof maybeHandler}`);
+      }
+      if (!isChannelSchema(schemaOrHandler)) {
+        throw new Error(`Plugin channel schema must provide a Zod "args" schema`);
+      }
+      if (
+        schemaOrHandler.result !== undefined &&
+        typeof (schemaOrHandler.result as { safeParse?: unknown }).safeParse !== "function"
+      ) {
+        throw new Error(`Plugin channel "result" must be a Zod schema`);
       }
       entry = {
         handler: maybeHandler,
@@ -981,8 +994,6 @@ export class PluginService {
         resultSchema: schemaOrHandler.result,
         requires: schemaOrHandler.requires ?? [],
       };
-    } else {
-      throw new Error(`Plugin handler must be a function, got ${typeof schemaOrHandler}`);
     }
 
     const key = `${pluginId}:${channel}`;
@@ -1035,6 +1046,9 @@ export class PluginService {
       } satisfies PluginInvokeResult<never>;
     }
 
+    // The handler passed the gate and validation, so an exception here is a
+    // runtime bug inside the plugin — surface it as HANDLER_ERROR rather than
+    // letting it reject (which the renderer would misread as HANDLER_NOT_FOUND).
     let result: unknown;
     try {
       result = await entry.handler(ctx, parsed.data);
@@ -1042,7 +1056,7 @@ export class PluginService {
       return {
         ok: false,
         code: "HANDLER_ERROR",
-        message: err instanceof Error ? err.message : String(err),
+        message: formatErrorMessage(err, "Plugin handler threw"),
       } satisfies PluginInvokeResult<never>;
     }
 

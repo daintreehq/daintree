@@ -44,12 +44,17 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
     };
   }, []);
 
+  // Last-write-wins: a slower earlier invoke must not clobber a newer one's
+  // result. Each call captures its id and bails if a later call superseded it.
+  const callIdRef = useRef(0);
+
   const invoke = useCallback(
     (payload: TArgs) => {
+      const callId = ++callIdRef.current;
       startTransition(async () => {
         try {
           const raw = await window.electron.plugin.invoke(pluginId, channel, payload);
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || callId !== callIdRef.current) return;
 
           if (isInvokeResult(raw)) {
             if (raw.ok) {
@@ -58,6 +63,9 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
               setData(raw.data as TResult);
               setError(null);
             } else {
+              // Clear stale data so a caller can't render an old payload next
+              // to a fresh denial/validation error.
+              setData(null);
               setError(raw);
             }
             return;
@@ -70,10 +78,12 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
           setData(raw as TResult);
           setError(null);
         } catch {
-          // A rejected invoke means the channel never reached its typed
-          // dispatch path (missing handler, untrusted sender, or a handler
-          // that threw). Surface it as the structured HANDLER_NOT_FOUND code.
-          if (!isMountedRef.current) return;
+          // A rejected invoke means dispatch never reached the typed handler:
+          // the channel isn't registered (or the sender wasn't trusted). Typed
+          // handlers that throw at runtime are returned as a HANDLER_ERROR
+          // envelope above, so they don't land here.
+          if (!isMountedRef.current || callId !== callIdRef.current) return;
+          setData(null);
           setError({ ok: false, code: "HANDLER_NOT_FOUND", channel });
         }
       });

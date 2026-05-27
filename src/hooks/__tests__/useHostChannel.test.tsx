@@ -102,6 +102,58 @@ describe("useHostChannel", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("clears stale data when a later call fails", async () => {
+    invokeMock.mockResolvedValueOnce({ ok: true, data: "secret" });
+    const { result } = renderHook(() => useHostChannel("acme.plugin", "run"));
+
+    await act(async () => {
+      result.current.invoke({});
+    });
+    await waitFor(() => expect(result.current.data).toBe("secret"));
+
+    invokeMock.mockResolvedValueOnce({
+      ok: false,
+      code: "PERMISSION_REQUIRED",
+      missing: ["git:write"],
+    });
+    await act(async () => {
+      result.current.invoke({});
+    });
+
+    await waitFor(() => expect(result.current.error?.code).toBe("PERMISSION_REQUIRED"));
+    // Old payload must not linger next to the fresh denial.
+    expect(result.current.data).toBeNull();
+  });
+
+  it("ignores a slower earlier invoke that resolves after a newer one (last-write-wins)", async () => {
+    const deferreds: Array<(v: unknown) => void> = [];
+    invokeMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          deferreds.push(resolve);
+        })
+    );
+    const { result } = renderHook(() => useHostChannel<unknown, string>("acme.plugin", "run"));
+
+    act(() => {
+      result.current.invoke("A");
+    });
+    act(() => {
+      result.current.invoke("B");
+    });
+
+    // Resolve the newer call (B) first, then the older call (A).
+    await act(async () => {
+      deferreds[1]?.({ ok: true, data: "B" });
+    });
+    await act(async () => {
+      deferreds[0]?.({ ok: true, data: "A" });
+    });
+
+    // A is stale — it must not clobber B's result.
+    expect(result.current.data).toBe("B");
+  });
+
   it("treats a raw (non-envelope) resolution as success data for legacy channels", async () => {
     invokeMock.mockResolvedValue("legacy-value");
     const { result } = renderHook(() => useHostChannel("acme.plugin", "legacy"));

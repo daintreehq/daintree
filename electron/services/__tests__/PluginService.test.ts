@@ -1322,6 +1322,57 @@ describe("PluginService typed channel registerHandler + capability gate", () => 
     expect(result).toEqual({ ok: false, code: "PERMISSION_REQUIRED", missing: ["network:fetch"] });
   });
 
+  it("returns HANDLER_ERROR when the handler throws after passing the gate", async () => {
+    const handler = vi.fn(() => {
+      throw new Error("db down");
+    });
+    service.registerHandler("acme.test-plugin", "boom", { args: z.object({}) }, handler);
+
+    const result = (await service.dispatchHandler(
+      "acme.test-plugin",
+      "boom",
+      makeCtx("acme.test-plugin"),
+      [{}]
+    )) as { ok: false; code: string; message: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("HANDLER_ERROR");
+    expect(result.message).toBe("db down");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports exactly the missing permissions when grants are partial", async () => {
+    const handler = vi.fn();
+    service.registerHandler(
+      "acme.test-plugin",
+      "multi",
+      { args: z.object({}), requires: ["network:fetch", "shell:exec", "git:write"] },
+      handler
+    );
+
+    const result = (await service.dispatchHandler(
+      "acme.test-plugin",
+      "multi",
+      makeCtx("acme.test-plugin"),
+      [{}]
+    )) as { code: string; missing: string[] };
+
+    expect(result.code).toBe("PERMISSION_REQUIRED");
+    expect(result.missing).toEqual(["shell:exec", "git:write"]);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects a typed registration whose result is not a Zod schema", () => {
+    expect(() =>
+      service.registerHandler(
+        "acme.test-plugin",
+        "bad-result",
+        { args: z.object({}), result: { notZod: true } as never },
+        vi.fn()
+      )
+    ).toThrow('Plugin channel "result" must be a Zod schema');
+  });
+
   it("still throws for a missing handler (untyped action-dispatch contract preserved)", async () => {
     await expect(
       service.dispatchHandler("acme.test-plugin", "nope", makeCtx("acme.test-plugin"), [{}])

@@ -166,13 +166,17 @@ export interface PluginInvokeIssue {
 /**
  * Structured failure returned by a typed channel. Always returned, never
  * thrown — throwing would strip the structured fields to a bare message across
- * the contextBridge. `HANDLER_NOT_FOUND` is synthesized renderer-side by
- * {@link useHostChannel} when an invoke rejects (the host still throws on a
- * missing handler to preserve the untyped action-dispatch contract).
+ * the contextBridge. `HANDLER_ERROR` carries the message of an exception the
+ * handler threw *after* passing the gate and validation (a runtime bug in the
+ * plugin, distinct from a missing handler). `HANDLER_NOT_FOUND` is synthesized
+ * renderer-side by {@link useHostChannel} when an invoke rejects (the host
+ * still throws on a missing handler to preserve the untyped action-dispatch
+ * contract).
  */
 export type PluginInvokeError =
   | { ok: false; code: "VALIDATION_FAILED"; issues: PluginInvokeIssue[] }
   | { ok: false; code: "PERMISSION_REQUIRED"; missing: BuiltInPluginPermission[] }
+  | { ok: false; code: "HANDLER_ERROR"; message: string }
   | { ok: false; code: "HANDLER_NOT_FOUND"; channel: string };
 
 /** Result envelope a typed channel resolves with: success data or a structured error. */
