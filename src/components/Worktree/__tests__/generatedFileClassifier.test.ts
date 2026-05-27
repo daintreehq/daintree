@@ -274,7 +274,12 @@ describe("isGeneratedDiffFile", () => {
     });
 
     it("does not flag file with header beyond sniff window (line > 20)", () => {
-      const changes = [];
+      const changes = [] as Array<{
+        type: "insert";
+        content: string;
+        isInsert: true;
+        lineNumber: number;
+      }>;
       for (let i = 1; i <= 25; i++) {
         changes.push({
           type: "insert" as const,
