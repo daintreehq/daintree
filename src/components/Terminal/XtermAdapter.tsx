@@ -296,7 +296,7 @@ export function XtermAdapter({
         // bubbles to the menu accelerator. Cancel the DOM/default path; return
         // true so xterm still emits the F11 sequence to the PTY.
         if (
-          event.key === "F11" &&
+          (event.key === "F11" || event.code === "F11" || event.keyCode === 122) &&
           !event.ctrlKey &&
           !event.altKey &&
           !event.metaKey &&

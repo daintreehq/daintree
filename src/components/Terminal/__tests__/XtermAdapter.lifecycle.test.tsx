@@ -344,6 +344,10 @@ describe("XtermAdapter lifecycle", () => {
   });
 
   it("captures bare F11 so Electron's fullscreen accelerator does not fire (#9104)", async () => {
+    // The regression condition is xterm v6's screen-reader mode, which skips
+    // its internal preventDefault on handled keys and lets F11 bubble to the
+    // Electron menu accelerator. The guard itself is unconditional, so this
+    // test exercises the same handler path regardless of screenReaderMode.
     renderAdapter();
     await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
 
@@ -389,6 +393,22 @@ describe("XtermAdapter lifecycle", () => {
     keyHandler?.(shiftF11Event);
     expect(shiftPreventDefaultSpy).not.toHaveBeenCalled();
     expect(shiftStopPropagationSpy).not.toHaveBeenCalled();
+
+    // Some input methods report key="Unidentified" with code/keyCode intact.
+    // xterm still emits F11 to the PTY via keyCode 122, so the guard must too.
+    const unidentifiedF11Event = new KeyboardEvent("keydown", {
+      key: "Unidentified",
+      code: "F11",
+      keyCode: 122,
+      bubbles: true,
+      cancelable: true,
+    });
+    const unidentifiedPreventDefaultSpy = vi.spyOn(unidentifiedF11Event, "preventDefault");
+    const unidentifiedStopPropagationSpy = vi.spyOn(unidentifiedF11Event, "stopPropagation");
+    const unidentifiedResult = keyHandler?.(unidentifiedF11Event);
+    expect(unidentifiedResult).toBe(true);
+    expect(unidentifiedPreventDefaultSpy).toHaveBeenCalled();
+    expect(unidentifiedStopPropagationSpy).toHaveBeenCalled();
 
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
