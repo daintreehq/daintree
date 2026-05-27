@@ -474,11 +474,21 @@ export const WorktreeSetActivePayloadSchema = z.object({
 });
 
 export const WorktreeCreatePayloadSchema = z.object({
-  rootPath: z.string().min(1),
+  rootPath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
   options: z.object({
     baseBranch: z.string().min(1),
     newBranch: z.string().min(1),
-    path: z.string().min(1),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      // eslint-disable-next-line no-control-regex
+      .regex(/^[^\x00]*$/, "Null bytes not allowed"),
     fromRemote: z.boolean().optional(),
   }),
 });

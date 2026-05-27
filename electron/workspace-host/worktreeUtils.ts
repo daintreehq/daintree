@@ -1,6 +1,14 @@
 import { execFile } from "child_process";
-import { mkdir, writeFile, stat } from "fs/promises";
-import { join as pathJoin, dirname } from "path";
+import { mkdir, writeFile, stat, realpath } from "fs/promises";
+import {
+  join as pathJoin,
+  dirname,
+  basename,
+  resolve as pathResolve,
+  relative as pathRelative,
+  isAbsolute as pathIsAbsolute,
+  sep,
+} from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
 import { isGitHubRemoteUrl } from "../../shared/utils/githubUrl.js";
@@ -123,5 +131,57 @@ export async function ensureNoteFile(worktreePath: string): Promise<void> {
         console.warn("[WorkspaceHost] Failed to create note file:", notePath);
       }
     }
+  }
+}
+
+/**
+ * Canonicalize the nearest existing ancestor of `target` through `realpath`,
+ * then re-append the not-yet-created tail segments. A worktree directory does
+ * not exist when its path is validated, so `realpath(target)` would throw
+ * ENOENT; walking up to the first existing ancestor still canonicalizes any
+ * symlink in the existing portion of the path (e.g. a parent symlinked outside
+ * the workspace) without requiring the leaf to exist. Falls back to the
+ * lexically resolved path if no ancestor exists.
+ */
+export async function canonicalizeNearestExisting(target: string): Promise<string> {
+  let current = pathResolve(target);
+  const tail: string[] = [];
+  // Bounded by path depth; dirname() reaches a fixed point at the fs root.
+  for (;;) {
+    try {
+      const real = await realpath(current);
+      return tail.length ? pathResolve(real, ...tail) : real;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        return pathResolve(target);
+      }
+      tail.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Enforce that a worktree create target stays within the repository's parent
+ * directory. That parent is the outermost location the worktree path patterns
+ * can produce — the default `{parent-dir}/{base-folder}-worktrees/{branch-slug}`
+ * places the worktree as a sibling of the repo, and `validatePathPattern`
+ * rejects absolute patterns that don't start with `{parent-dir}`. Containing to
+ * the parent (rather than rootPath itself) preserves that model while rejecting
+ * arbitrary writable locations and symlink escapes. Throws on violation. #9154.
+ */
+export async function assertWorktreePathContained(
+  rootPath: string,
+  absoluteCreatePath: string
+): Promise<void> {
+  const boundary = await realpath(dirname(pathResolve(rootPath)));
+  const target = await canonicalizeNearestExisting(absoluteCreatePath);
+  const rel = pathRelative(boundary, target);
+  // Reject the boundary itself (rel === ""), escapes ("../…"), and absolute
+  // results (different drive on Windows). A plain "startsWith('..')" would
+  // misfire on a legitimate sibling like "..foo"; gate on the separator. #4702.
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || pathIsAbsolute(rel)) {
+    throw new Error("Worktree path must be within the repository's parent directory");
   }
 }
