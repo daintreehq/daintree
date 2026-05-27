@@ -115,11 +115,16 @@ function toPluginLoadErrorRecord(err: unknown): PluginLoadErrorRecord {
   if (typeof err === "string") {
     return { message: err, at: Date.now() };
   }
+  // `JSON.stringify(undefined)` returns `undefined`, not a string, and would
+  // violate the `message: string` contract — coalesce to `String(err)` so
+  // bare `throw undefined` / `throw null` still surface a usable label.
+  let message: string;
   try {
-    return { message: JSON.stringify(err), at: Date.now() };
+    message = JSON.stringify(err) ?? String(err);
   } catch {
-    return { message: String(err), at: Date.now() };
+    message = String(err);
   }
+  return { message, at: Date.now() };
 }
 
 /**
@@ -987,32 +992,39 @@ export class PluginService {
     // strand later cleanup steps — partial-unload leaks would re-surface as
     // duplicate-id errors on the next load. Disposer throws are warnings
     // (the cleanup is best-effort), not user-visible errors.
+    //
+    // Belt-and-suspenders: per-provider disposers pushed onto
+    // pluginEventCleanups by host.registerForgeProvider have already fired in
+    // flushPluginEventCleanups() above, but the bulk *Impls clears below guard
+    // against any impl entry that wasn't tracked through that path (e.g. a
+    // future re-bind that didn't refresh the disposer slot). The bulk calls
+    // are idempotent — already-cleared keys are silent no-ops. Provider and
+    // impl steps are split so a throw in the descriptor unregister doesn't
+    // strand the impl unregister and vice versa.
     runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
     runUnloadStep(pluginId, "unregisterPluginActions", () =>
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
-    runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () => {
-      unregisterPluginToolbarButtons(pluginId);
-      this.scheduleToolbarButtonsBroadcast(true);
-    });
+    runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () =>
+      unregisterPluginToolbarButtons(pluginId)
+    );
+    runUnloadStep(pluginId, "scheduleToolbarButtonsBroadcast", () =>
+      this.scheduleToolbarButtonsBroadcast(true)
+    );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)
     );
-    runUnloadStep(pluginId, "unregisterForgeProviders", () => {
-      unregisterForgeProviders(pluginId);
-      // Belt-and-suspenders: per-provider disposers pushed onto
-      // pluginEventCleanups by host.registerForgeProvider have already fired
-      // in flushPluginEventCleanups() above, but a direct bulk-clear guards
-      // against any impl entry that wasn't tracked through that path (e.g.
-      // a future re-bind that didn't refresh the disposer slot). The bulk
-      // call is idempotent — already-cleared keys are silent no-ops.
-      unregisterForgeProviderImpls(pluginId);
-    });
-    runUnloadStep(pluginId, "unregisterFileDecorationProviders", () => {
-      unregisterFileDecorationProviders(pluginId);
-      unregisterFileDecorationProviderImpls(pluginId);
-    });
+    runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
+    runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
+      unregisterForgeProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterFileDecorationProviders", () =>
+      unregisterFileDecorationProviders(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
+      unregisterFileDecorationProviderImpls(pluginId)
+    );
 
     this.plugins.delete(pluginId);
     this.pluginLoadErrors.delete(pluginId);

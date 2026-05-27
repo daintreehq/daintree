@@ -3063,7 +3063,7 @@ describe("Plugin exception containment (#9276)", () => {
       );
     });
 
-    it("continues past a throwing forge-provider unregister", async () => {
+    it("continues past a throwing forge-provider unregister AND still runs the impl unregister", async () => {
       await writePlugin("forge-throws", {
         name: "acme.forge-throws",
         version: "1.0.0",
@@ -3077,8 +3077,12 @@ describe("Plugin exception containment (#9276)", () => {
 
       service.unloadPlugin("acme.forge-throws");
 
-      // File decoration step still runs after the forge step throws.
+      // Critical: the impl unregister must run even if the provider unregister
+      // threw, otherwise impl entries leak across reload. Coupled steps under
+      // a single try/catch wrapper would have skipped this call.
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.forge-throws");
       expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.forge-throws");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith("acme.forge-throws");
       expect(service.hasPlugin("acme.forge-throws")).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -3086,6 +3090,118 @@ describe("Plugin exception containment (#9276)", () => {
         ),
         expect.any(Error)
       );
+    });
+
+    it("continues past a throwing fileDecoration-provider unregister AND still runs the impl unregister", async () => {
+      await writePlugin("file-decoration-throws", {
+        name: "acme.file-decoration-throws",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterFileDecorationProviders).mockImplementationOnce(() => {
+        throw new Error("file-decoration boom");
+      });
+
+      service.unloadPlugin("acme.file-decoration-throws");
+
+      // Same correctness check as the forge case: the impl unregister must
+      // not be stranded by a throw in the provider unregister.
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith(
+        "acme.file-decoration-throws"
+      );
+      expect(service.hasPlugin("acme.file-decoration-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterFileDecorationProviders" for "acme.file-decoration-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing removeHandlers, running every later registry step", async () => {
+      await writePlugin("remove-handlers-throws", {
+        name: "acme.remove-handlers-throws",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
+          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
+          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const removeHandlersSpy = vi
+        .spyOn(service as unknown as { removeHandlers: (id: string) => void }, "removeHandlers")
+        .mockImplementationOnce(() => {
+          throw new Error("removeHandlers boom");
+        });
+
+      service.unloadPlugin("acme.remove-handlers-throws");
+
+      // Even though the very first step threw, every later step ran.
+      expect(unregisterPluginMenuItems).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.remove-handlers-throws");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith(
+        "acme.remove-handlers-throws"
+      );
+      expect(service.hasPlugin("acme.remove-handlers-throws")).toBe(false);
+
+      removeHandlersSpy.mockRestore();
+    });
+  });
+
+  describe("Boundary 1 — non-Error throws", () => {
+    it("normalises a bare `throw undefined` into a string message", async () => {
+      const pluginDir = path.join(tmpDir, "throws-undefined");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-undefined", version: "1.0.0", main: "main.mjs" })
+      );
+      // `throw undefined` is a real footgun in plugin code — make sure the
+      // load-error record never sneaks an `undefined` into its `message`
+      // field, which would violate the type contract for the F19 / #9271
+      // consumer.
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw undefined; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const record = service.getPluginLoadError("acme.throws-undefined");
+      expect(record).toBeDefined();
+      expect(typeof record?.message).toBe("string");
+      expect(record?.message.length).toBeGreaterThan(0);
+    });
+
+    it("normalises a bare `throw null` into a string message", async () => {
+      const pluginDir = path.join(tmpDir, "throws-null");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-null", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw null; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const record = service.getPluginLoadError("acme.throws-null");
+      expect(record).toBeDefined();
+      expect(typeof record?.message).toBe("string");
+      expect(record?.message.length).toBeGreaterThan(0);
     });
   });
 });
