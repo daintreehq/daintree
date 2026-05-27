@@ -964,6 +964,19 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "webview:get-navigation-history": {
+    args: [webContentsId: number];
+    result: {
+      entries: import("../browser.js").BrowserNavigationHistoryEntry[];
+      activeIndex: number;
+      canGoBack: boolean;
+      canGoForward: boolean;
+    };
+  };
+  "webview:go-to-history-index": {
+    args: [webContentsId: number, index: number];
+    result: void;
+  };
   "worktree-config:dismiss-wsl-banner": {
     args: [payload: { worktreeId: string }];
     result: void;

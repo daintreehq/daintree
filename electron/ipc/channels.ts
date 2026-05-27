@@ -377,8 +377,6 @@ export const CHANNELS = {
   WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
-  WEBVIEW_GET_NAVIGATION_HISTORY: "webview:get-navigation-history",
-  WEBVIEW_GO_TO_HISTORY_INDEX: "webview:go-to-history-index",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",

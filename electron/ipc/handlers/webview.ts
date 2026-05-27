@@ -14,7 +14,6 @@ import type {
   CdpPropertyDescriptor,
 } from "../../../shared/types/ipc/webviewConsole.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { sanitizeUrlForHistory } from "../../../shared/utils/urlHistory.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
@@ -1065,68 +1064,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  const handleGetNavigationHistory = async (webContentsId: unknown) => {
-    if (typeof webContentsId !== "number") {
-      throw new Error("Invalid arguments: webContentsId must be number");
-    }
-
-    if (!getWebviewDialogService().getPanelId(webContentsId)) {
-      throw new Error("WebContents not registered as a browser panel");
-    }
-
-    const wc = webContents.fromId(webContentsId);
-    if (!wc || wc.isDestroyed()) {
-      throw new Error("WebContents not found or destroyed");
-    }
-
-    const nh = wc.navigationHistory;
-    const entries = nh.getAllEntries();
-    const activeIndex = nh.getActiveIndex();
-
-    const sanitized: import("../../../shared/types/browser.js").BrowserNavigationHistoryEntry[] =
-      [];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i]!;
-      const sanitizedUrl = sanitizeUrlForHistory(entry.url);
-      if (sanitizedUrl !== null) {
-        sanitized.push({
-          index: i,
-          url: sanitizedUrl,
-          title: entry.title || "",
-        });
-      }
-    }
-
-    return {
-      entries: sanitized,
-      activeIndex,
-      canGoBack: nh.canGoBack(),
-      canGoForward: nh.canGoForward(),
-    };
-  };
-
-  const handleGoToHistoryIndex = async (webContentsId: unknown, index: unknown): Promise<void> => {
-    if (typeof webContentsId !== "number" || typeof index !== "number") {
-      throw new Error("Invalid arguments: webContentsId and index must be numbers");
-    }
-
-    if (!getWebviewDialogService().getPanelId(webContentsId)) {
-      throw new Error("WebContents not registered as a browser panel");
-    }
-
-    const wc = webContents.fromId(webContentsId);
-    if (!wc || wc.isDestroyed()) {
-      throw new Error("WebContents not found or destroyed");
-    }
-
-    const nh = wc.navigationHistory;
-    if (index < 0 || index >= nh.length()) {
-      throw new Error(`Index ${index} out of bounds (length: ${nh.length()})`);
-    }
-
-    nh.goToIndex(index);
-  };
-
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
     typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
@@ -1140,8 +1077,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     typedHandle(CHANNELS.WEBVIEW_CANCEL_OAUTH_LOOPBACK, handleCancelOAuthLoopback),
     typedHandle(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, handleReloadIgnoringCache),
     typedHandle(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, handleGetScrollPosition),
-    typedHandle(CHANNELS.WEBVIEW_GET_NAVIGATION_HISTORY, handleGetNavigationHistory),
-    typedHandle(CHANNELS.WEBVIEW_GO_TO_HISTORY_INDEX, handleGoToHistoryIndex),
   ];
 
   return () => {

@@ -417,4 +417,12 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
+  webview: {
+    getNavigationHistory(
+      ...args: IpcInvokeMap["webview:get-navigation-history"]["args"]
+    ): Promise<IpcInvokeMap["webview:get-navigation-history"]["result"]>;
+    goToHistoryIndex(
+      ...args: IpcInvokeMap["webview:go-to-history-index"]["args"]
+    ): Promise<IpcInvokeMap["webview:go-to-history-index"]["result"]>;
+  };
 }
