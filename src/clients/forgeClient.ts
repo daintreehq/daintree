@@ -33,6 +33,10 @@ export const forgeClient = {
     return window.electron.forge.assignIssue({ cwd, issueNumber, username });
   },
 
+  unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> => {
+    return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
+  },
+
   validateToken: (token: string): Promise<AuthValidation> => {
     return window.electron.forge.validateToken(token);
   },

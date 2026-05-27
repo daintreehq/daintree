@@ -2,6 +2,7 @@
 import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
 import { typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { store } from "../../store.js";
 import {
   getForgeProviderImpl,
@@ -13,6 +14,40 @@ import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
+
+async function handleForgeUnassignIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+  username: string;
+}): Promise<void> {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  if (
+    typeof payload.issueNumber !== "number" ||
+    !Number.isInteger(payload.issueNumber) ||
+    payload.issueNumber <= 0
+  ) {
+    throw new Error("Invalid issue number");
+  }
+  const trimmedUsername = payload.username?.trim();
+  if (typeof payload.username !== "string" || !trimmedUsername) {
+    throw new Error("Invalid username");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await impl.unassignIssue(repoRef, payload.issueNumber, trimmedUsername);
+}
+
+export const forgeUnassignIssueNamespace = defineIpcNamespace({
+  name: "forgeUnassignIssue",
+  ops: {
+    unassignIssue: op(CHANNELS.FORGE_UNASSIGN_ISSUE, handleForgeUnassignIssue),
+  },
+});
 
 export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];
@@ -123,6 +158,8 @@ export function registerForgeHandlers(): () => void {
       }
     )
   );
+
+  cleanups.push(forgeUnassignIssueNamespace.register());
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {

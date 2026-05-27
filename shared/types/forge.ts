@@ -432,6 +432,7 @@ export interface ForgeProviderImpl {
 
   // Mutations — providers that don't support assignment throw "Not supported".
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+  unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   validateToken(token: string): Promise<AuthValidation>;
 
   // Host-visible rate-limit state, parsed from the provider's own transport.

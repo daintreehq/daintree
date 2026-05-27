@@ -1520,6 +1520,9 @@ const api: ElectronAPI = {
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
 
+    unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.GITHUB_UNASSIGN_ISSUE, { cwd, issueNumber, username }),
+
     getIssueTooltip: (cwd: string, issueNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
 
@@ -2232,6 +2235,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
     assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
+    unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
     validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),
     setCredential: (providerId: string, credentials: Record<string, string>) =>
       _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),

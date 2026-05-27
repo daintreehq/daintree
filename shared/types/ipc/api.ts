@@ -714,6 +714,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       sortOrder?: import("../github.js").GitHubSortOrder;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
     assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
+    unassignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
     getIssueTooltip(
       cwd: string,
       issueNumber: number
@@ -1272,6 +1273,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
     /** Assign an issue to a user via the resolved forge provider. */
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /** Unassign a user from an issue via the resolved forge provider. */
+    unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Validate a token against the global default forge provider. */
     validateToken(token: string): Promise<AuthValidation>;
     /**

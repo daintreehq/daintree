@@ -1132,6 +1132,31 @@ export const githubForgeProvider: ForgeProviderImpl = {
     }
   },
 
+  async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ assignees: [username] }),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to unassign issue #${issueNumber} from ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+  },
+
   async validateToken(token: string): Promise<AuthValidation> {
     if (!token || !token.trim()) {
       return { valid: false, error: "Token is required" };
