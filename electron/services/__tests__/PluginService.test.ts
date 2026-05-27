@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { fileURLToPath } from "node:url";
 import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.js";
 
 const appMock = vi.hoisted(() => ({
@@ -4004,5 +4005,30 @@ describe("Plugin exception containment (#9276)", () => {
       expect(typeof record?.message).toBe("string");
       expect(record?.message.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("hello-daintree sample fixture", () => {
+  const fixturePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../plugins/sample/hello-daintree/plugin.json"
+  );
+  const readManifest = async (): Promise<unknown> =>
+    JSON.parse(await fs.readFile(fixturePath, "utf8"));
+
+  it("validates against the manifest schema", async () => {
+    const result = PluginManifestSchema.safeParse(await readManifest());
+    expect(result.success).toBe(true);
+  });
+
+  it("declares the first-party name and the wired contribution points", async () => {
+    const manifest = PluginManifestSchema.parse(await readManifest());
+    expect(manifest.name).toBe("daintree.hello");
+    expect(manifest.engines?.daintree).toBe(">=0.11.0");
+    expect(manifest.contributes.toolbarButtons).toHaveLength(1);
+    expect(manifest.contributes.toolbarButtons[0].id).toBe("ping");
+    expect(manifest.contributes.menuItems).toHaveLength(1);
+    expect(manifest.contributes.fileDecorationProviders).toHaveLength(1);
+    expect(manifest.contributes.fileDecorationProviders[0].scopes).toEqual(["hello:*"]);
   });
 });
