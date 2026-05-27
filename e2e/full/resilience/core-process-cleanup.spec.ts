@@ -23,9 +23,15 @@ import { mkdtempSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-test.skip(process.platform === "win32", "Process cleanup tests are Unix-only");
-
 test.describe("Core: Process Cleanup", () => {
+  test.beforeAll(() => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Process cleanup tests are Unix-only",
+    });
+    test.skip(process.platform === "win32", "Process cleanup tests are Unix-only");
+  });
+
   test("clean exit kills PTY process tree", async () => {
     test.setTimeout(240_000);
 
@@ -186,14 +192,19 @@ test.describe("Core: Process Cleanup", () => {
 });
 
 test.describe.serial("Core: Process Cleanup on Shutdown", () => {
-  test.skip(process.platform === "win32", "Unix-only: uses pgrep for process tree verification");
-
   let ctx: AppContext;
   let fixtureDir: string;
   let fixtureCleanup: (() => void) | undefined;
   let trackedPids: number[] = [];
 
   test.beforeAll(async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Unix-only: uses pgrep for process tree verification",
+    });
+
+    test.skip(process.platform === "win32", "Unix-only: uses pgrep for process tree verification");
+
     ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "process-cleanup" }));
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(

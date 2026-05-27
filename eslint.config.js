@@ -4,6 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactCompiler from "eslint-plugin-react-compiler";
 import unicorn from "eslint-plugin-unicorn";
 import prettier from "eslint-config-prettier";
+import structuredTestSkipAnnotations from "./scripts/eslint-rules/structured-test-skip-annotations.js";
 
 export default tseslint.config(
   // Base JS recommended rules
@@ -1005,6 +1006,22 @@ export default tseslint.config(
           ],
         },
       ],
+    },
+  },
+
+  // E2E structured test-skip annotations — enforce that every test.skip()
+  // is preceded by test.info().annotations.push({ type, description })
+  // with a valid type and, for quarantine, a YYYY-MM-DD date prefix.
+  // See #9120.
+  {
+    files: ["e2e/**/*.spec.ts"],
+    plugins: {
+      "e2e-structured-skip": {
+        rules: { "structured-test-skip-annotations": structuredTestSkipAnnotations },
+      },
+    },
+    rules: {
+      "e2e-structured-skip/structured-test-skip-annotations": "error",
     },
   },
 

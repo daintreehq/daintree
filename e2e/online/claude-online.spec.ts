@@ -109,6 +109,11 @@ test.describe("Claude Online Flow", () => {
   });
 
   test("full Claude agent interaction", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ANTHROPIC_API_KEY is required for Claude online flow",
+    });
+
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for Claude online flow");
 
     await test.step("launch app", async () => {

@@ -143,6 +143,11 @@ test.describe("OpenCode Online Flow", () => {
   });
 
   test("full OpenCode agent interaction", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "online: requires OpenCode installed and OPENCODE_E2E_ENABLED=1",
+    });
+
     test.skip(
       !process.env.OPENCODE_E2E_ENABLED,
       "online: requires OpenCode installed and OPENCODE_E2E_ENABLED=1"

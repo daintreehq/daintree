@@ -10,8 +10,6 @@ import {
 } from "../../helpers/terminal";
 import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
-test.skip(process.platform === "win32", "Bulk-output regression uses Unix shell loop");
-
 let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
@@ -93,6 +91,12 @@ async function getPanelId(panelLocator: Locator): Promise<string> {
 test.describe
   .serial("Resilience: background terminal preserves grid coherence across visibility", () => {
   test.beforeAll(async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Bulk-output regression uses Unix shell loop",
+    });
+    test.skip(process.platform === "win32", "Bulk-output regression uses Unix shell loop");
+
     const { dir, cleanup } = createFixtureRepo({ name: "bg-bulk-output" });
     fixtureDir = dir;
     fixtureCleanup = cleanup;

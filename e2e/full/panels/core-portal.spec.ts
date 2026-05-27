@@ -32,14 +32,18 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
 }
 
 test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
-  test.skip(
-    process.platform === "win32" && !!process.env.CI,
-    "Windows CI: portal not supported with GPU disabled"
-  );
-
   let fixtureCleanup: (() => void) | undefined;
 
   test.beforeAll(async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Windows CI: portal not supported with GPU disabled",
+    });
+    test.skip(
+      process.platform === "win32" && !!process.env.CI,
+      "Windows CI: portal not supported with GPU disabled"
+    );
+
     server = createServer(handleRequest);
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => resolve());
@@ -70,6 +74,11 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
           .isVisible()
           .catch(() => false))
       ) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Required element or state not available in this launch",
+        });
+
         test.skip();
         return;
       }

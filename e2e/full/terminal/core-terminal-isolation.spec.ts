@@ -12,8 +12,6 @@ import {
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
-test.skip(process.platform === "win32", "Terminal isolation tests use Unix shell loops");
-
 let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
@@ -91,6 +89,12 @@ async function ptySubmit(page: import("@playwright/test").Page, panelId: string,
 
 test.describe.serial("Core: Terminal Isolation", () => {
   test.beforeAll(async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Terminal isolation tests use Unix shell loops",
+    });
+    test.skip(process.platform === "win32", "Terminal isolation tests use Unix shell loops");
+
     ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
       name: "terminal-isolation",
     }));

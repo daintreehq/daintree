@@ -193,6 +193,11 @@ test.describe.serial("Core: Browser Panel", () => {
     test("second browser panel has independent URL state", async () => {
       // Windows CI with GPU disabled cannot reliably create multiple BrowserViews;
       // the second webview panel never appears. macOS/Linux cover this scenario.
+      test.info().annotations.push({
+        type: "platform-skip",
+        description: "Windows CI: multiple browser panels not supported with GPU disabled",
+      });
+
       test.skip(
         process.platform === "win32" && !!process.env.CI,
         "Windows CI: multiple browser panels not supported with GPU disabled"
@@ -267,7 +272,13 @@ test.describe.serial("Core: Browser Panel", () => {
   // Find-in-page tests skipped: webview crashes in E2E after Console Capture cleanup.
   // The feature works in manual testing — investigate webview lifecycle in E2E context.
   test.describe.serial("Find in Page", () => {
-    test.skip(() => true, "webview instability causes Electron crash in E2E sequence");
+    test.beforeAll(() => {
+      test.info().annotations.push({
+        type: "quarantine",
+        description: "2026-05-27 webview instability causes Electron crash in E2E sequence",
+      });
+      test.skip(() => true, "webview instability causes Electron crash in E2E sequence");
+    });
 
     test.afterAll(async () => {
       try {

@@ -189,7 +189,17 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
   });
 
   test("PTY processes are killed after active close", async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "PTY PID checks not available on Windows",
+    });
+
     test.skip(process.platform === "win32", "PTY PID checks not available on Windows");
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Condition not met",
+    });
+
     test.skip(ptyPids.length === 0, "No PTY PIDs captured");
 
     for (const pid of ptyPids) {
@@ -324,7 +334,17 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
   });
 
   test("background project PTY processes are killed", async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "PTY PID checks not available on Windows",
+    });
+
     test.skip(process.platform === "win32", "PTY PID checks not available on Windows");
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Condition not met",
+    });
+
     test.skip(ptyPidB === null, "No PTY PID captured");
 
     await waitForProcessDeath(ptyPidB!, T_LONG);
