@@ -80,6 +80,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       hydrate: vi.fn(),
       flushNow: vi.fn(),
       appendRecord: vi.fn(),
+      appendGrantRecord: vi.fn(),
       recordAuth401: vi.fn(),
       getAuditStats: vi.fn(() => ({ auth401Count: 0 })),
     },
@@ -318,7 +319,43 @@ describe("HttpLifecycle", () => {
       );
     });
 
-    it("refuses downgrades silently and keeps current tier", () => {
+    it("writes a tier.elevated audit record with from/to tier and the bounded window (#9151)", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionTierMap.set("sess-aud", "workbench");
+      pinnedSession(deps, "sess-aud", 42);
+
+      const lc = new HttpLifecycle(deps);
+      lc.setSessionTier("sess-aud", "action");
+
+      expect(deps.auditService.appendGrantRecord).toHaveBeenCalledTimes(1);
+      const record = (deps.auditService.appendGrantRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]![0];
+      expect(record).toMatchObject({
+        type: "tier.elevated",
+        sessionId: "sess-aud",
+        toolId: "*",
+        tier: "action",
+        previousTier: "workbench",
+      });
+      expect(record.ttlMs).toBeGreaterThan(0);
+      expect(record.expiresAt).toBeGreaterThan(0);
+    });
+
+    it("does not audit a same-tier re-elevation (no actual privilege change, #9151)", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionTierMap.set("sess-same", "action");
+      pinnedSession(deps, "sess-same", 42);
+
+      const lc = new HttpLifecycle(deps);
+      const result = lc.setSessionTier("sess-same", "action");
+
+      expect(result.tier).toBe("action");
+      // Same tier in → nothing elevated → no audit row (would be a misleading
+      // action→action entry).
+      expect(deps.auditService.appendGrantRecord).not.toHaveBeenCalled();
+    });
+
+    it("refuses downgrades silently and keeps current tier without auditing", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionTierMap.set("sess-2", "system");
       pinnedSession(deps, "sess-2", 42);
@@ -328,6 +365,8 @@ describe("HttpLifecycle", () => {
 
       expect(result.tier).toBe("system");
       expect(deps.sessionStore.sessionTierMap.get("sess-2")).toBe("system");
+      // No mutation, no audit row — only accepted elevations are logged.
+      expect(deps.auditService.appendGrantRecord).not.toHaveBeenCalled();
     });
 
     it("throws for unknown sessions", () => {
@@ -480,15 +519,55 @@ describe("HttpLifecycle", () => {
       expect(bearers[0]).not.toHaveProperty("sessionIds");
     });
 
-    it("tracks only external-tier bearers, never internal (help/pane) tokens", () => {
-      const lc = new HttpLifecycle(fakeDeps());
+    it("hides internal (help/pane) bearers from the settings list but still tracks them (#9151)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
       const handle = lc as unknown as BearerTestHandle;
       handle.touchBearer(authA, "Help/1", "sess-help", "action");
       handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      // Filtered out of the External-clients settings row...
       expect(lc.listActiveBearers()).toHaveLength(0);
-      // A subsequent external bearer is still tracked.
+      // ...but tracked in the register so eager teardown can find them.
+      expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-help"]);
+      expect(lc.getBearerSessionIds(hashOf(authB))).toEqual(["sess-pane"]);
+      // Help-bearer handshakes don't push a runtime-state change (they never
+      // surface in the UI) — only the external bearer below does.
+      expect(deps.emitRuntimeStateChange).not.toHaveBeenCalled();
+      // A subsequent external bearer is still tracked AND listed.
       handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
       expect(lc.listActiveBearers()).toHaveLength(1);
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("findHelpBearerHash resolves a help token to its register key, ignoring external bearers (#9151)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      // Raw tokens are the part after "Bearer ".
+      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "action");
+      handle.touchBearer("Bearer ext-token-abc", "Claude/1", "sess-ext", "external");
+
+      expect(lc.findHelpBearerHash("help-token-xyz")).toBe(hashOf("Bearer help-token-xyz"));
+      // External bearers are not help sessions — never resolved by token here.
+      expect(lc.findHelpBearerHash("ext-token-abc")).toBeNull();
+      // Unknown token → null.
+      expect(lc.findHelpBearerHash("never-seen")).toBeNull();
+    });
+
+    it("findHelpBearerHash returns null after the help session detaches (#9151)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "action");
+      handle.detachBearerSession("sess-help");
+      expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
+    });
+
+    it("findHelpBearerHash returns null after clearBearer evicts the entry (server stop/restart, #9151)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      const auth = "Bearer help-token-xyz";
+      handle.touchBearer(auth, "Help/1", "sess-help", "action");
+      lc.clearBearer(hashOf(auth));
+      expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
 
     it("pushes a runtime-state change on connect and on final disconnect", () => {

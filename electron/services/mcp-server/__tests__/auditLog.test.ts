@@ -373,6 +373,70 @@ describe("AuditService hydrate — backward compat", () => {
   });
 });
 
+describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
+  it("persists tier.elevated with tier/previousTier and surfaces it in getLogRecords", () => {
+    const { service } = makeFixture();
+    service.appendGrantRecord({
+      type: "tier.elevated",
+      sessionId: "sess-1",
+      toolId: "*",
+      ttlMs: 1800000,
+      expiresAt: 5000,
+      tier: "action",
+      previousTier: "workbench",
+    });
+    const logRecords = service.getLogRecords();
+    expect(logRecords).toHaveLength(1);
+    const [record] = logRecords;
+    expect(record).toMatchObject({
+      type: "tier.elevated",
+      sessionId: "sess-1",
+      toolId: "*",
+      ttlMs: 1800000,
+      expiresAt: 5000,
+      tier: "action",
+      previousTier: "workbench",
+    });
+    // Tier records are grant records — excluded from the dispatch-only view.
+    expect(service.getRecords()).toHaveLength(0);
+  });
+
+  it("persists tier.decayed with the baseline it decayed to", () => {
+    const { service } = makeFixture();
+    service.appendGrantRecord({
+      type: "tier.decayed",
+      sessionId: "sess-2",
+      toolId: "*",
+      ttlMs: 0,
+      previousTier: "action",
+      tier: "workbench",
+    });
+    const [record] = service.getLogRecords();
+    expect(record).toMatchObject({
+      type: "tier.decayed",
+      sessionId: "sess-2",
+      previousTier: "action",
+      tier: "workbench",
+    });
+    // No expiresAt on decay — the elevation window already closed.
+    expect("expiresAt" in record!).toBe(false);
+  });
+
+  it("omits tier fields on grant.* records so legacy shapes are unchanged", () => {
+    const { service } = makeFixture();
+    service.appendGrantRecord({
+      type: "grant.issued",
+      sessionId: "sess-3",
+      toolId: "files.search",
+      ttlMs: 60000,
+      expiresAt: 9000,
+    });
+    const [record] = service.getLogRecords();
+    expect("tier" in record!).toBe(false);
+    expect("previousTier" in record!).toBe(false);
+  });
+});
+
 describe("AuditService.recordAuth401 / getAuditStats", () => {
   it("starts at zero", () => {
     const { service } = makeFixture();

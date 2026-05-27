@@ -45,6 +45,7 @@ import {
   RESTART_STABLE_RESET_MS,
   MCP_STOP_DRAIN_TIMEOUT_MS,
   MCP_SERVER_KEY,
+  MCP_TIER_ELEVATION_TTL_MS,
 } from "./shared.js";
 
 export interface HttpLifecycleDeps {
@@ -119,6 +120,21 @@ interface BearerEntry {
   lastActiveAt: number;
   requestsSinceLaunch: number;
   sessionIds: Set<string>;
+  /**
+   * True for renderer-pinned help-session bearers (any non-`external` tier).
+   * They are tracked in the register so {@link HttpLifecycle.findHelpBearerHash}
+   * can resolve a help session's live MCP sessions for eager teardown
+   * (#9151), but filtered out of {@link HttpLifecycle.listActiveBearers} so the
+   * External-clients settings row only ever lists genuine external clients.
+   */
+  isHelpSession: boolean;
+  /**
+   * The raw bearer token, retained only for help-session entries so the
+   * eager-teardown path can resolve `record.token` → this entry's
+   * `tokenHash` without reconstructing (and re-hashing) the exact
+   * `Authorization` header the agent sent. Never exposed across IPC.
+   */
+  helpToken?: string;
 }
 
 export class HttpLifecycle {
@@ -265,9 +281,14 @@ export class HttpLifecycle {
     sessionId: string,
     tier: McpTier
   ): void {
-    if (tier !== "external") return;
+    // Help-session bearers (any non-`external` tier) used to be skipped
+    // outright. They are now tracked so `revokeSession` can tear down their
+    // live MCP sessions eagerly (#9151); the `isHelpSession` flag keeps them
+    // out of the External-clients settings row.
+    const isHelpSession = tier !== "external";
+    const rawToken = extractBearerToken(authHeader);
     const tokenHash = createHash("sha256").update(authHeader).digest("hex");
-    const token4LastChars = extractBearerToken(authHeader)?.slice(-4) ?? "****";
+    const token4LastChars = rawToken?.slice(-4) ?? "****";
     const now = Date.now();
     let entry = this.bearerRegister.get(tokenHash);
     if (!entry) {
@@ -278,7 +299,9 @@ export class HttpLifecycle {
         lastActiveAt: now,
         requestsSinceLaunch: 0,
         sessionIds: new Set<string>(),
+        isHelpSession,
       };
+      if (isHelpSession && rawToken) entry.helpToken = rawToken;
       this.bearerRegister.set(tokenHash, entry);
     }
     entry.userAgent = userAgent;
@@ -286,7 +309,10 @@ export class HttpLifecycle {
     entry.requestsSinceLaunch += 1;
     entry.sessionIds.add(sessionId);
     this.sessionToTokenHash.set(sessionId, tokenHash);
-    this.deps.emitRuntimeStateChange();
+    // Only external bearers surface in the settings UI, so only their
+    // handshakes need a runtime-state push. Help bearers are filtered out of
+    // `listActiveBearers`; emitting for them would be needless IPC chatter.
+    if (!isHelpSession) this.deps.emitRuntimeStateChange();
   }
 
   /**
@@ -322,18 +348,46 @@ export class HttpLifecycle {
     if (entry.sessionIds.size === 0) {
       this.bearerRegister.delete(tokenHash);
     }
-    this.deps.emitRuntimeStateChange();
+    // Help bearers are filtered out of `listActiveBearers`, so their teardown
+    // changes nothing the settings UI shows — skip the runtime-state push to
+    // avoid needless IPC chatter (mirrors the `touchBearer` gate).
+    if (!entry.isHelpSession) this.deps.emitRuntimeStateChange();
   }
 
-  /** Live snapshot for the settings tab. The raw token is never exposed. */
+  /**
+   * Live snapshot for the settings tab. The raw token is never exposed.
+   * Renderer-pinned help-session bearers are filtered out — they are
+   * Daintree's own internal consumers, recursive to name in a dialog the
+   * user opens to disconnect external clients (#9151).
+   */
   listActiveBearers(): ActiveBearerRecord[] {
-    return Array.from(this.bearerRegister.values(), (entry) => ({
-      tokenHash: entry.tokenHash,
-      token4LastChars: entry.token4LastChars,
-      userAgent: entry.userAgent,
-      lastActiveAt: entry.lastActiveAt,
-      requestsSinceLaunch: entry.requestsSinceLaunch,
-    }));
+    const records: ActiveBearerRecord[] = [];
+    for (const entry of this.bearerRegister.values()) {
+      if (entry.isHelpSession) continue;
+      records.push({
+        tokenHash: entry.tokenHash,
+        token4LastChars: entry.token4LastChars,
+        userAgent: entry.userAgent,
+        lastActiveAt: entry.lastActiveAt,
+        requestsSinceLaunch: entry.requestsSinceLaunch,
+      });
+    }
+    return records;
+  }
+
+  /**
+   * Resolve a help-session bearer's raw token to its register key so the
+   * eager-teardown path (#9151) can hand it to {@link disconnectBearer}
+   * without re-hashing the original `Authorization` header (whose exact
+   * whitespace it no longer holds). Returns null when the token isn't
+   * currently tracked — the agent may never have connected, or already
+   * disconnected. O(n) over the small bearer register; only called on revoke.
+   */
+  findHelpBearerHash(rawToken: string): string | null {
+    for (const entry of this.bearerRegister.values()) {
+      if (entry.isHelpSession && entry.helpToken === rawToken) return entry.tokenHash;
+    }
+    return null;
   }
 
   /**
@@ -1184,6 +1238,27 @@ export class HttpLifecycle {
     // refreshes the window from now; a chained re-elevation preserves the
     // original baseline.
     this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
+    // Positive audit trail for the elevation (#9151): records who elevated
+    // (via the pinned session), the target tier, the pre-elevation tier, and
+    // the bounded window. Only genuine elevations are logged — a same-tier
+    // call (`newRank === currentRank`) arms no timer and changes nothing, so
+    // recording an `action → action` row would be misleading noise.
+    // Best-effort: an audit-write failure must never block the elevation.
+    if (newRank > currentRank) {
+      try {
+        this.deps.auditService.appendGrantRecord({
+          type: "tier.elevated",
+          sessionId,
+          toolId: "*",
+          ttlMs: MCP_TIER_ELEVATION_TTL_MS,
+          expiresAt: Date.now() + MCP_TIER_ELEVATION_TTL_MS,
+          tier,
+          previousTier: current,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append tier.elevated audit record:", err);
+      }
+    }
     return { sessionId, tier };
   }
 

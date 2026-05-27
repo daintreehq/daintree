@@ -159,8 +159,21 @@ export interface McpAuditRecord {
  * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
  *   teardown, or an idle reaper firing wiped the grant before its TTL
  *   elapsed. `revokedReason` distinguishes those sources.
+ * - `tier.elevated`: a renderer-approved session-tier elevation
+ *   (`HttpLifecycle.setSessionTier`) raised the session above its
+ *   token-resolved baseline. `tier` is the new tier, `previousTier` the
+ *   pre-elevation tier, `ttlMs`/`expiresAt` the bounded elevation window.
+ *   `toolId` is `"*"` — the elevation is session-scoped, not tool-scoped.
+ * - `tier.decayed`: a bounded elevation aged out (`SessionStore.decayTier`)
+ *   and the session silently fell back to its baseline. `tier` is the
+ *   baseline it decayed to, `previousTier` the elevated tier it left.
  */
-export type McpGrantRecordType = "grant.issued" | "grant.expired" | "grant.revoked";
+export type McpGrantRecordType =
+  | "grant.issued"
+  | "grant.expired"
+  | "grant.revoked"
+  | "tier.elevated"
+  | "tier.decayed";
 
 export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle";
 
@@ -180,6 +193,16 @@ export interface McpGrantRecord {
   expiresAt?: number;
   /** Source of the revocation; only set on `grant.revoked`. */
   revokedReason?: McpGrantRevokedReason;
+  /**
+   * Tier context for `tier.elevated`/`tier.decayed` records. `tier` is the
+   * tier the session moved *to* (the elevated tier on elevation, the
+   * baseline on decay); `previousTier` is the tier it moved *from*. Both are
+   * absent on the `grant.*` variants so existing on-disk rows deserialize
+   * unchanged. Typed as `string` to keep this shared shape free of the
+   * main-process `McpTier` union.
+   */
+  tier?: string;
+  previousTier?: string;
 }
 
 /**
