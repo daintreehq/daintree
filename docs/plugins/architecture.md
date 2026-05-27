@@ -177,7 +177,7 @@ Plugins consuming worktree events during `activate()` — before the WorkspaceCl
 
 ## Capability disclosure
 
-The `capabilities` field in the manifest is a **disclosure mechanism**, not a runtime sandbox. Daintree does not prevent a plugin from doing anything — a plugin declaring `capabilities: []` can still make network requests and write files.
+Capabilities are **disclosure-first with host-side policy effects** — a hybrid model. The host does not sandbox plugin code: a plugin declaring `capabilities: []` can still make network requests and write files via raw Node APIs. But declared capabilities are not purely advisory either. They drive host-side policy, most concretely danger classification on plugin-registered actions. See the [trust model](./trust-model.md) for the full decision record, decision matrix, and forthcoming schema.
 
 What disclosure does:
 
@@ -185,9 +185,12 @@ What disclosure does:
 - Installed plugins' detail views show the same list.
 - The install dialog shows the list in large, clear text before the user confirms.
 
-The purpose is to let users judge plugins by what they claim to need. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. This is the same reasoning Chrome extension permissions use — informational, pre-install, not post-install runtime gates.
+What the host derives from declared capabilities:
 
-Declaring honestly matters. A plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_PERMISSIONS` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- A compound-permission lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
+
+The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
 
 ## Signing and kill-switch
 
@@ -209,7 +212,7 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 **Why dual-path action binding (filesystem convention + imperative)?** The filesystem convention (Raycast-style: `commands[].name` → `src/{name}.ts` default export) is delightful for simple cases — zero boilerplate, co-located with declaration. Imperative registration via `host.registerAction` is needed for truly dynamic commands and matches the existing imperative pattern Daintree uses for its own ~258 built-in actions. Supporting both is cheap and handles both ends of the complexity spectrum.
 
-**Why no runtime permission enforcement?** The audience is power users who write their own plugins and trusted Daintree-authored plugins. Enforcing runtime permissions requires either Wasm sandboxing (Zed's approach — great DX cost) or iframe isolation (worse DX, breaks React integration) or permission prompts for every Node API call (unusable). For a curated-trust model, disclosure is the right fidelity.
+**Why no runtime permission enforcement?** There is no Node sandbox and there can't be one — plugins share the host's V8 + Node process, so a plugin bypasses any custom-API gate by calling `require("fs")` or `child_process.spawn` directly. Full enforcement would require Wasm sandboxing (Zed's approach — great DX cost), iframe isolation (worse DX, breaks React integration), or a prompt on every Node call (unusable). Instead of claiming enforcement we can't deliver, declared capabilities drive host-side policy effects (danger derivation today; the compound lattice and MCP consent forthcoming) while the model stays honest that it does not sandbox arbitrary code. See the [trust model](./trust-model.md).
 
 **Why no separate hooks contribution point (PreToolUse/PostToolUse)?** An MCP server can act as a proxy in front of other tools, intercepting and modifying tool calls. This uses the ecosystem we're already committed to (MCP) rather than inventing a parallel API. Plugins that genuinely need this can build it cleanly.
 

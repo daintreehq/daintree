@@ -136,7 +136,9 @@ Daintree is pre-1.0. Pin tightly during this phase — a plugin that works on Da
 
 ### `capabilities`
 
-Array of capability tokens the plugin wants. This is a **disclosure mechanism** shown to the user at install time, not a runtime sandbox. The plugin is not prevented from doing anything it claims not to need, and is not prevented from doing things it declares.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_PERMISSIONS` set. A forthcoming scoped object form (`{ name, scopes }`) and `mcp:*` tokens are not yet parsed. See the [trust model](./trust-model.md) for the full contract.
+
+> The current manifest field is `permissions` (`PluginPermission[]`) at the TypeScript level; the rename to `capabilities` and the discriminated-union schema are tracked in #9268.
 
 | Token                | Intent                                                   |
 | -------------------- | -------------------------------------------------------- |
@@ -153,7 +155,7 @@ Array of capability tokens the plugin wants. This is a **disclosure mechanism** 
 | `clipboard:write`    | Write to the system clipboard                            |
 | `shell:exec`         | Spawn subprocesses                                       |
 
-Declare honestly even though it's not enforced — the install UI lists what you've declared, and users judge plugins by what they ask for. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem.
+Declare honestly. The install UI lists what you've declared and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and nothing at runtime stops it, which is exactly why honest declaration matters.
 
 ### `contributes`
 
