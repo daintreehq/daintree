@@ -33,6 +33,7 @@ vi.mock("node:crypto", () => ({
 }));
 
 import { ipcMain } from "electron";
+import * as fsPromises from "node:fs/promises";
 import { registerClipboardHandlers } from "../clipboard.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
@@ -175,6 +176,151 @@ describe("clipboard:write-text handler", () => {
     cleanup();
     const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
     expect(removedChannels).toContain("clipboard:write-text");
+  });
+});
+
+describe("clipboard:save-image cleanup trigger", () => {
+  let cleanup: () => void;
+
+  const fakeClipboardImage = {
+    isEmpty: () => false,
+    toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89]) }),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboardMock.readImage.mockReturnValue(fakeClipboardImage);
+    vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("runs cleanup fire-and-forget after writing the image", async () => {
+    const handler = getHandler("clipboard:save-image");
+    await handler(fakeEvent);
+
+    expect(fsPromises.writeFile).toHaveBeenCalled();
+    // cleanup reads the clipboard dir; startup also runs it once, so assert it
+    // ran again after the save (≥2 invocations total).
+    expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not reject the save when cleanup fails", async () => {
+    vi.mocked(fsPromises.readdir).mockRejectedValue(new Error("disk gone"));
+    const handler = getHandler("clipboard:save-image");
+    await expect(handler(fakeEvent)).resolves.toMatchObject({
+      filePath: expect.any(String),
+      thumbnailDataUrl: expect.stringContaining("data:image/png;base64,"),
+    });
+  });
+});
+
+describe("clipboard:write-text size cap", () => {
+  const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("accepts text at exactly the 8 MB limit", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const text = "a".repeat(MAX_TEXT_BYTES);
+    await handler(fakeEvent, text);
+    expect(clipboardMock.writeText).toHaveBeenCalledWith(text);
+  });
+
+  it("rejects text one byte over the limit with PAYLOAD_TOO_LARGE", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const text = "a".repeat(MAX_TEXT_BYTES + 1);
+    await expect(handler(fakeEvent, text)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+  });
+
+  it("measures UTF-8 bytes, not string length, for multibyte input", async () => {
+    const handler = getHandler("clipboard:write-text");
+    // "😀" is 2 UTF-16 code units (.length 2) but 4 UTF-8 bytes. A string
+    // under the char limit can still exceed the byte limit.
+    const emojiCount = MAX_TEXT_BYTES / 4 + 1;
+    const text = "😀".repeat(emojiCount);
+    expect(text.length).toBeLessThan(MAX_TEXT_BYTES);
+    await expect(handler(fakeEvent, text)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("clipboard:write-image size cap", () => {
+  const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("rejects image data one byte over the limit before touching nativeImage", async () => {
+    const handler = getHandler("clipboard:write-image");
+    const pngData = new Uint8Array(MAX_IMAGE_BYTES + 1);
+    await expect(handler(fakeEvent, pngData)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts image data within the limit", async () => {
+    const fakeImage = { isEmpty: () => false };
+    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
+
+    const handler = getHandler("clipboard:write-image");
+    await handler(fakeEvent, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("accepts image data exactly at the 50 MB limit", async () => {
+    const fakeImage = { isEmpty: () => false };
+    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
+
+    const handler = getHandler("clipboard:write-image");
+    await handler(fakeEvent, new Uint8Array(MAX_IMAGE_BYTES));
+
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("rejects non-Uint8Array input with VALIDATION before any allocation", async () => {
+    const handler = getHandler("clipboard:write-image");
+    for (const bad of [null, new ArrayBuffer(8)]) {
+      await expect(handler(fakeEvent, bad as unknown as Uint8Array)).rejects.toMatchObject({
+        name: "AppError",
+        code: "VALIDATION",
+      });
+    }
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeImage).not.toHaveBeenCalled();
   });
 });
 
