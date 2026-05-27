@@ -27,6 +27,7 @@ import {
   MCP_DEDUP_ALLOWLIST,
   MCP_RATE_LIMITED_CODE,
   RATE_LIMIT_TIERS,
+  RATE_LIMIT_TOOL_MAP,
   unwrapDispatchResult,
 } from "../shared.js";
 import { SessionBindingError } from "../rendererBridge.js";
@@ -1905,5 +1906,47 @@ describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   it("stays bounded — does not blanket every mutation", () => {
     expect(MCP_DEDUP_ALLOWLIST.has("git.stageAll")).toBe(false);
     expect(MCP_DEDUP_ALLOWLIST.has("terminal.sendCommand")).toBe(false);
+  });
+});
+
+describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
+  const NEW_MUTATIONS = [
+    "worktree.delete",
+    "git.snapshotRevert",
+    "git.snapshotDelete",
+    "forge.assignIssue",
+  ];
+
+  it("adds the remaining destructive-mutation cohort", () => {
+    for (const tool of NEW_MUTATIONS) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
+    }
+  });
+
+  it("maps the new cohort to the mutation rate-limit tier", () => {
+    for (const tool of NEW_MUTATIONS) {
+      expect(RATE_LIMIT_TOOL_MAP.get(tool)).toBe(RATE_LIMIT_TIERS.mutation);
+    }
+  });
+
+  it("stays bounded — adjacent read-only tools remain excluded", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("git.snapshotGet")).toBe(false);
+    expect(RATE_LIMIT_TOOL_MAP.has("git.snapshotGet")).toBe(false);
+  });
+
+  it("dedups a post-completion duplicate of a newly-allowlisted mutation", async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("system"),
+      dispatchAction,
+    });
+    const server = createSessionServer("dedup-9156", deps);
+
+    const args = { worktreeId: "wt-test" };
+    const first = await callTool(server, { name: "worktree.delete", arguments: args });
+    const second = await callTool(server, { name: "worktree.delete", arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
   });
 });

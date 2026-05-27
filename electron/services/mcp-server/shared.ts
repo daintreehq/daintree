@@ -381,7 +381,10 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
  * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
  * `github.openPR`) now that the args-hash collision guard (#8429) is in
- * place to make the widening safe.
+ * place to make the widening safe. Widened further (#9156) to the remaining
+ * destructive mutations — `worktree.delete`, `git.snapshotRevert`,
+ * `git.snapshotDelete`, `forge.assignIssue` — so every side-effecting tool
+ * that an LLM might retry is covered.
  *
  * Deliberately bounded: blanket-applying dedup to all mutations would mask
  * legitimate "do it again" cases (re-running the same git command, etc.).
@@ -395,6 +398,10 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "git.push",
   "forge.openIssue",
   "github.openPR",
+  "worktree.delete",
+  "git.snapshotRevert",
+  "git.snapshotDelete",
+  "forge.assignIssue",
 ]);
 
 /**
@@ -449,7 +456,7 @@ export const RATE_LIMIT_TIERS = {
 /**
  * Per-tool tier overrides. Tools absent from this map fall back to
  * {@link RATE_LIMIT_TIERS.standard}. Keep the mutation cohort aligned with
- * {@link MCP_DEDUP_ALLOWLIST}'s git/forge entries.
+ * {@link MCP_DEDUP_ALLOWLIST}'s destructive mutation entries.
  */
 export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map([
   ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
@@ -459,6 +466,10 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
   ["github.openPR", RATE_LIMIT_TIERS.mutation],
+  ["worktree.delete", RATE_LIMIT_TIERS.mutation],
+  ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
+  ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
+  ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
 ] as Array<[string, RateLimitConfig]>);
 
 /**
