@@ -81,6 +81,7 @@ type DevServerState = {
     module?: string;
   } | null;
   start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
   restart: ReturnType<typeof vi.fn>;
   isRestarting: boolean;
 };
@@ -154,6 +155,7 @@ const {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     },
@@ -191,6 +193,38 @@ vi.mock("@/hooks/useDevServer", () => ({
   useDevServer: useDevServerMock,
 }));
 
+const { saveSettingsMock, projectClientGetSettingsMock } = vi.hoisted(() => {
+  const saveSettingsMock = vi.fn().mockResolvedValue(undefined);
+  const projectClientGetSettingsMock = vi.fn().mockResolvedValue({
+    devServerCommand: "npm run dev",
+    devServerAutoDetected: true,
+    devServerDismissed: false,
+    turbopackEnabled: true,
+  });
+  return { saveSettingsMock, projectClientGetSettingsMock };
+});
+
+vi.mock("@/hooks/useProjectSettings", () => ({
+  useProjectSettings: () => ({
+    saveSettings: saveSettingsMock,
+    settings: null,
+    detectedRunners: [],
+    allDetectedRunners: [],
+    isLoading: false,
+    error: null,
+    promoteToSaved: vi.fn().mockResolvedValue(undefined),
+    removeFromSaved: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
+vi.mock("@/clients", () => ({
+  projectClient: {
+    getSettings: projectClientGetSettingsMock,
+    detectRunners: vi.fn().mockResolvedValue([]),
+  },
+}));
+
 vi.mock("@/components/DragDrop", () => ({
   useIsDragging: useIsDraggingMock,
 }));
@@ -220,8 +254,17 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
 }));
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="content-panel">{children}</div>
+  ContentPanel: ({
+    children,
+    headerContent,
+  }: {
+    children: React.ReactNode;
+    headerContent?: React.ReactNode;
+  }) => (
+    <div data-testid="content-panel">
+      {headerContent && <div data-testid="panel-header-content">{headerContent}</div>}
+      {children}
+    </div>
   ),
 }));
 
@@ -328,6 +371,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
@@ -410,6 +454,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
@@ -1753,6 +1798,100 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("header script picker", () => {
+    beforeEach(() => {
+      projectClientGetSettingsMock.mockResolvedValue({
+        devServerCommand: "npm run dev",
+        devServerAutoDetected: true,
+        devServerDismissed: false,
+        turbopackEnabled: true,
+      });
+      saveSettingsMock.mockResolvedValue(undefined);
+      devServerStateRef.current.stop = vi.fn();
+    });
+
+    it("hidden when unconfigured (no devCommand)", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+      }));
+      render(<DevPreviewPane {...baseProps} />);
+      expect(screen.queryByTestId("panel-header-content")).toBeNull();
+    });
+
+    it("hidden when no candidates available", () => {
+      render(<DevPreviewPane {...baseProps} />);
+      expect(screen.queryByTestId("panel-header-content")).toBeNull();
+    });
+
+    it("visible when configured with candidates", () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: { API_URL: "http://localhost:9000" },
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      expect(screen.getByTestId("panel-header-content")).toBeTruthy();
+      expect(container.textContent).toContain("Dev");
+    });
+
+    it("shows raw command when no candidate matches", () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run custom",
+        devPreviewScrollPosition: scrollPositionRef.current,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run custom",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      expect(screen.getByTestId("panel-header-content")).toBeTruthy();
+      expect(container.textContent).toContain("npm run custom");
     });
   });
 });
