@@ -11,7 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1744,29 +1744,14 @@ export function DevPreviewPane({
             onStop={stop}
           />
         )}
-        <ConfirmDialog
+        <DevPreviewDestructiveConfirmDialog
+          panelId={id}
+          projectId={currentProjectId}
+          tier={pendingRestartTier}
           isOpen={isRestartConfirmOpen}
           onClose={handleRestartConfirmClose}
-          variant="destructive"
-          title={
-            pendingRestartTier === "restartAndClearCache"
-              ? "Clear cache and restart?"
-              : "Reinstall dependencies?"
-          }
-          description={
-            pendingRestartTier === "restartAndClearCache"
-              ? "This will delete framework build caches (.next, .vite, .turbo) and respawn the dev server. Source files and installed dependencies are not affected."
-              : "This will delete node_modules and reinstall all dependencies, then respawn the dev server. Source files and git state are not affected."
-          }
-          confirmLabel={
-            pendingRestartTier === "restartAndClearCache" ? "Clear cache" : "Reinstall dependencies"
-          }
           onConfirm={handleRestartConfirm}
-        >
-          {pendingRestartTier === "reinstallAndRestart" && (
-            <p className="text-xs text-daintree-text/50 font-mono break-all">{cwd}/node_modules</p>
-          )}
-        </ConfirmDialog>
+        />
       </div>
     </ContentPanel>
   );
