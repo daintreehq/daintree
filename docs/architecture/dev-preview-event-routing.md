@@ -1,6 +1,6 @@
 # Dev Preview Event Routing
 
-Canonical routing table for every user-visible dev-preview lifecycle event. Seven open PRs (#9090, #9091, #9093, #9094, #9097, #9101, #9102) each introduce one or more lifecycle signals; this document is the single source of truth so downstream call sites don't re-derive notification policy and reviewers have a fixed reference to check against. Precedent rows (#8274/#8275, #9088) are included for consistency with already-decided routing.
+Canonical routing table for the 7 open PRs (#9090, #9091, #9093, #9094, #9097, #9101, #9102) plus 3 precedent rows (#8274/#8275, #9088). Each open PR introduces one or more lifecycle signals; this document is the single source of truth so downstream call sites don't re-derive notification policy and reviewers have a fixed reference to check against. New PRs that add dev-preview signals must add their rows here (see Maintenance).
 
 CLAUDE.md carries the abbreviated Runtime Signals tier ladder; this file is the per-event audit and the rationale traceable to the `notify()` four-question gate.
 
@@ -53,7 +53,7 @@ Non-negotiables for any dev-preview signal call site. These are derived from CLA
 
 2. **No Tier 4 global banner for pane-local failures.** Tier 4 is reserved for host-level crashes that affect every panel. A dev-preview crash, OOM, or port conflict is pane-local — use Tier 2 (warning with recovery) or Tier 3 (error with recovery).
 
-3. **No `notify({ type: "error", priority: "low" })`.** CLAUDE.md explicitly bans this because the toast is silently dropped while the error is still real. The lint rule `no-restricted-syntax` enforces this at `src/lib/notify.ts`. If the error is actionable, it needs `priority: "high"` and a Tier 2 or Tier 3 surface. If it truly can't be acted on, it's Tier 0 (silent log), not a low-priority notification.
+3. **No `notify({ type: "error", priority: "low" })`.** CLAUDE.md explicitly bans this because the toast is silently dropped while the error is still real. The lint rule `no-restricted-syntax` in `eslint.config.js` (renderer block) enforces this across all renderer call sites. If the error is actionable, it needs `priority: "high"` and a Tier 2 or Tier 3 surface. If it truly can't be acted on, it's Tier 0 (silent log), not a low-priority notification.
 
 4. **Tier 2 (warning) for failures with explicit recovery context in the same pane.** When the user can fix the problem without leaving the panel — freeing a port, clicking Retry, canceling an idle-stop countdown — use an inline warning banner. The banner carries the action.
 
@@ -81,7 +81,7 @@ For each new dev-preview event, answer these before choosing a tier and surface.
 
 4. **Would a toast interrupt without adding recovery value?** If the user sees the toast, reads it, and can take no different action than they would have without it → demote to Tier 1 (inbox) or Tier 0. Toasts are the most restricted surface; use them only when interruption is warranted.
 
-5. **Is the event durable across relaunch?** If yes → inbox entry (`priority: "low"`) in addition to the frame state. The inbox survives session restart; the `panel-state-*` border does not.
+5. **Is the event durable across relaunch?** If yes → inbox entry (`priority: "low"`) in addition to the frame state. The inbox survives session restart; the `panel-state-*` border does not. (Note: `placement: "grid-bar"` bypasses priority routing and renders inline regardless; see `src/lib/notify.ts` line ~837.)
 
 6. **Does the event affect multiple worktrees or panes?** If yes → consider escalation. A single-pane port conflict is Tier 2; a port conflict that blocks every dev server in the project may warrant Tier 3 with a broader recovery message. The escalation test: does the user need to act differently because more than one pane is affected?
 
@@ -92,7 +92,7 @@ For each new dev-preview event, answer these before choosing a tier and surface.
 - **CLAUDE.md** — "Runtime Signals" tier ladder (Tier 0–4), `notify()` four-question gate, `panel-state-*` CSS vocabulary, and the `notify()` Usage checklist.
 - **`src/lib/notify.ts`** — `EVENT_POLICY` manifest (lines 75–132): `baseInterruption`, `preferredSurface`, `defaultDurationMs` per `NotificationEventKind`. `resolveEventPolicyDefaults()` (line 181) fills gaps only — explicit caller fields always win. `priority: "low"` routes inbox-only, never toasts. The `type: "error"` + `priority: "low"` combination is lint-banned.
 - **`src/index.css`** — `panel-state-working`, `panel-state-waiting`, `panel-state-hibernated` CSS classes (lines ~1786–1905). Each uses `color-mix` with a semantic token at a fixed opacity + concentric ring/outer layers. Suppressed under `prefers-reduced-motion` and given `forced-colors` fallbacks.
-- **`src/components/DevPreview/useDevPreviewLoadLifecycle.ts`** — Seven state signals (`isWebviewReady`, `isLoading`, `isSlowLoad`, `webviewLoadError`, `webviewCrashed`, `reconnectAttempt`) and nine webview event listeners that feed the lifecycle events in the routing table.
+- **`src/components/DevPreview/useDevPreviewLoadLifecycle.ts`** — Six state signals (`isWebviewReady`, `isLoading`, `isSlowLoad`, `webviewLoadError`, `webviewCrashed`, `reconnectAttempt`) and nine webview event listeners that feed the lifecycle events in the routing table.
 - **`src/components/DevPreview/DevPreviewPane.tsx`** — Signal surface wiring: `panel-state-working` CSS class, `DevPreviewStuckBanner`, reconnect indicator, load error overlay, `BlockedNavBanner`, crash banner, unresponsive banner, force-kill banner, console auto-open on error/stall.
 - **`src/hooks/useDevServer.ts`** — Dev server status states, `stuckTier`, `phaseLabel`, `forceKilled`.
 - **`src/components/Terminal/InlineStatusBanner.tsx`** — Reusable Tier 2/3 banner primitive used by `DevPreviewStuckBanner` and the crash/unresponsive/force-kill banners.
