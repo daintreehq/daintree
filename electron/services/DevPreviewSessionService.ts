@@ -539,6 +539,12 @@ export class DevPreviewSessionService {
       const session = this.sessions.get(key);
       if (!session) return;
 
+      // An explicit stop ends the session — clear the guard (and any pending
+      // backoff) so it can't auto-respawn behind the user's back. The terminal
+      // branch routes through stopSessionTerminal, but a stop arriving mid
+      // backoff has no live terminal and would otherwise skip the abort.
+      this.resetCrashLoopGuard(session);
+
       if (session.terminalId) {
         this.updateSession(session, { status: "stopping", isRestarting: false });
         const stopStartedAt = performance.now();
@@ -929,6 +935,14 @@ export class DevPreviewSessionService {
       this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
     }
 
+    // A tripped crash-loop guard halts auto-respawn until the user restarts
+    // explicitly. ensure() runs on every remount (dock↔grid, eviction
+    // rehydration) with unchanged config, so without this the pane would
+    // silently respawn a known-broken server on each transition. A config
+    // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
+    // restart() clears it before spawning, so only the automatic path is held.
+    if (session.crashLoopStopped) return;
+
     await this.spawnSessionTerminal(session);
   }
 
@@ -1200,6 +1214,11 @@ export class DevPreviewSessionService {
     this.clearStartupReplay(session);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
+    // Cancel a pending crash-loop backoff: otherwise the deferred re-install
+    // fires after the terminal is gone (and, on the delete paths, after the
+    // session is removed), spawning an orphan PTY on a stopped session.
+    session.backoffAbort?.abort();
+    session.backoffAbort = null;
     session.pendingUrl = null;
     session.markerSeen = false;
     this.clearCompiling(session);

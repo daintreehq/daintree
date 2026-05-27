@@ -1771,13 +1771,13 @@ export function DevPreviewPane({
           <InlineStatusBanner
             icon={OctagonAlert}
             title="Dev server stopped"
-            description="The server crashed and restarted several times in a row. Check the terminal output for the underlying error, then restart when it's fixed."
+            description="The server crashed and restarted several times in a row. Check your dev server config, then restart once it's fixed."
             severity="warning"
             onClose={() => setCrashLoopBannerDismissed(true)}
             actions={[
               {
                 id: "crash-loop-restart",
-                label: "Restart",
+                label: "Restart dev server",
                 icon: RotateCw,
                 variant: "danger",
                 onClick: handleRestartDevServer,

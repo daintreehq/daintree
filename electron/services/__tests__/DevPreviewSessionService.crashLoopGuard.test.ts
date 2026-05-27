@@ -315,4 +315,84 @@ describe("DevPreviewSessionService crash-loop guard", () => {
 
     expect(ptyClient.spawn.mock.calls.length).toBe(spawnsBeforeDispose);
   });
+
+  it("cancels a pending backoff install when the user stops the session", async () => {
+    const started = await service.ensure(baseRequest);
+    let devId: string | null = started.terminalId!;
+
+    // One immediate cycle, then crash again so a backoff re-install is pending.
+    devId = await crashThroughInstall(devId!);
+    ptyClient.emitData(devId!, "missing deps");
+    ptyClient.emitExit(devId!, 1);
+    expect(currentTerminalId()).toBeNull(); // backoff pending, no install yet
+
+    const stopped = await service.stop(stateRequest);
+    expect(stopped.status).toBe("stopped");
+
+    // The deferred install must not fire after the explicit stop.
+    const spawnsAfterStop = ptyClient.spawn.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsAfterStop);
+    expect(service.getState(stateRequest).status).toBe("stopped");
+  });
+
+  it("does not auto-respawn a crash-loop-stopped session on ensure with unchanged config", async () => {
+    const started = await service.ensure(baseRequest);
+    let devId: string | null = started.terminalId!;
+
+    for (let cycle = 0; cycle < 5; cycle++) {
+      devId = await crashThroughInstall(devId!);
+    }
+    expect(await crashThroughInstall(devId!)).toBeNull();
+    expect(service.getState(stateRequest).crashLoopStopped).toBe(true);
+
+    // A remount re-runs ensure() with the same config. The guard must hold —
+    // no fresh PTY, still stopped — until the user restarts explicitly.
+    const spawnsBeforeEnsure = ptyClient.spawn.mock.calls.length;
+    const reEnsured = await service.ensure(baseRequest);
+    await flushMicrotasks();
+
+    expect(reEnsured.status).toBe("stopped");
+    expect(reEnsured.crashLoopStopped).toBe(true);
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsBeforeEnsure);
+  });
+
+  it("clears the guard and respawns when ensure arrives with a changed config", async () => {
+    const started = await service.ensure(baseRequest);
+    let devId: string | null = started.terminalId!;
+
+    for (let cycle = 0; cycle < 5; cycle++) {
+      devId = await crashThroughInstall(devId!);
+    }
+    expect(await crashThroughInstall(devId!)).toBeNull();
+    expect(service.getState(stateRequest).crashLoopStopped).toBe(true);
+
+    // A different dev command is an explicit "try again" — the guard resets and
+    // the server spawns fresh.
+    const reEnsured = await service.ensure({ ...baseRequest, devCommand: "npm run dev:alt" });
+    expect(reEnsured.crashLoopStopped).toBeUndefined();
+    expect(reEnsured.status).toBe("starting");
+    expect(reEnsured.terminalId).toBeTruthy();
+  });
+
+  it("surfaces an install failure as an error without consuming guard budget", async () => {
+    const started = await service.ensure(baseRequest);
+    const devId = started.terminalId!;
+
+    ptyClient.emitData(devId, "missing deps");
+    ptyClient.emitExit(devId, 1);
+    const installId = currentTerminalId();
+    expect(installId).toBeTruthy();
+
+    // The install itself fails (nonzero exit) — handleExit reports an error and
+    // does not respawn. No backoff is scheduled.
+    const spawnsAfterInstall = ptyClient.spawn.mock.calls.length;
+    ptyClient.emitExit(installId!, 1);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const state = service.getState(stateRequest);
+    expect(state.status).toBe("error");
+    expect(state.crashLoopStopped).toBeUndefined();
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsAfterInstall);
+  });
 });
