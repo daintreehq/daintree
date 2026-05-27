@@ -240,7 +240,6 @@ export class PluginService {
    * partial/growing snapshot (concurrent load + deferred init) and must not.
    */
   private toolbarButtonsBroadcastComplete = false;
-  private provenanceBroadcastPending = false;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
 
@@ -1550,29 +1549,6 @@ export class PluginService {
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "plugin:toolbar-buttons-changed",
       payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
-    });
-  }
-
-  /**
-   * Coalesce provenance-record changes in the same microtask into a single
-   * `plugin:provenance-changed` broadcast. Follows the same pattern as
-   * {@link schedulePanelKindsBroadcast}.
-   */
-  private scheduleProvenanceBroadcast(): void {
-    if (this.disposed) return;
-    if (this.provenanceBroadcastPending) return;
-    this.provenanceBroadcastPending = true;
-    queueMicrotask(() => {
-      this.provenanceBroadcastPending = false;
-      if (this.disposed) return;
-      this.broadcastProvenanceChanged();
-    });
-  }
-
-  private broadcastProvenanceChanged(): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:provenance-changed",
-      payload: {},
     });
   }
 }
