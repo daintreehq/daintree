@@ -82,8 +82,8 @@ export {
 export {
   PluginManifestSchema,
   PanelContributionSchema,
-  PluginPermissionSchema,
+  PluginCapabilitySchema,
   type PluginManifest,
   type PanelContribution,
-  type PluginPermission,
+  type PluginCapability,
 } from "./plugin.js";

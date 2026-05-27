@@ -44,8 +44,8 @@ Declared capabilities are shown in the install dialog and the Settings detail vi
 
 Declared capabilities feed five derived effects. Be precise about what is live today versus what these sibling issues add — only the first is implemented.
 
-- **`effectiveDanger` raise — _live today._** When a plugin's manifest holds any token in `CONFIRM_TRIGGERING_PERMISSIONS` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"`, regardless of the `danger` the plugin self-declared. The host may only raise, never lower. **This affects Daintree's own action system** — it gates the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. It does **not** block the plugin from executing code or calling IPC directly. It is host-side UX policy, not a sandbox. (`PluginService.ts` — `CONFIRM_TRIGGERING_PERMISSIONS`, `effectiveDanger` derivation.)
-- **Compound-permission lattice — _forthcoming (#9247)._** Combinations that are individually benign but dangerous together — read-source + unconstrained-sink, or unconstrained-sink + local-write — raise `effectiveDanger` even when no single token triggers. This is the surface that catches the compound benign-permission attack class.
+- **`effectiveDanger` raise — _live today._** When a plugin's manifest holds any token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"`, regardless of the `danger` the plugin self-declared. The host may only raise, never lower. **This affects Daintree's own action system** — it gates the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. It does **not** block the plugin from executing code or calling IPC directly. It is host-side UX policy, not a sandbox. (`PluginService.ts` — `CONFIRM_TRIGGERING_CAPABILITIES`, `effectiveDanger` derivation.)
+- **Compound-capability lattice — _forthcoming (#9247)._** Combinations that are individually benign but dangerous together — read-source + unconstrained-sink, or unconstrained-sink + local-write — raise `effectiveDanger` even when no single token triggers. This is the surface that catches the compound benign-capability attack class.
 - **Scope attenuation — _forthcoming (#9247)._** `network:fetch` with a URL allowlist, `fs:project-write` with a glob allowlist. The schema rejects `*` and `**`. A scoped declaration skips lattice elevation because it has narrowed its own sink.
 - **MCP client-capability advertisement — _forthcoming (#9234)._** `elicitation` and `sampling` are advertised to a plugin-hosted MCP server in the `initialize` handshake only when the plugin declares `mcp:elicitation` / `mcp:sampling`. Default-deny.
 - **MCP tool advertisement — _forthcoming (#9234)._** The host refuses to expose tools whose declared scope exceeds the manifest. The manifest is the upper bound.
@@ -54,13 +54,13 @@ Declared capabilities feed five derived effects. Be precise about what is live t
 
 The host does not sandbox Node. A plugin can call `require("fs")` directly, spawn subprocesses, and open sockets regardless of what it declared. The capability list governs declared intent through host-side UX policy; it is not a kernel of enforcement against arbitrary code. Trust in a plugin's code is the user's responsibility — install only from sources you trust, and inspect plugins that request broad capabilities.
 
-## Schema shape (forthcoming — #9268)
+## Schema shape
 
-> The current parser accepts only flat string tokens (`PluginPermission = BuiltInPluginPermission` in `shared/types/plugin.ts`, exposed today as the manifest field `permissions`). The discriminated-union form below and the `mcp:*` tokens are **not yet parsed** — do not use the object form in a manifest today. The field rename (`permissions` → `capabilities`) and the schema extension are tracked in #9268.
+The manifest field is `capabilities` (`PluginCapability = BuiltInPluginCapability` in `shared/types/plugin.ts`). The discriminated-union form below and the `mcp:*` tokens are **not yet parsed** — only flat string tokens are accepted today. The schema extension to the discriminated-union form is tracked in #9247.
 
 ```ts
 capabilities: Array<
-  | BuiltInCapability // "shell:exec", "git:write", "fs:project-read", ...
+  | BuiltInPluginCapability // "shell:exec", "git:write", "fs:project-read", ...
   | { name: "network:fetch"; scopes: { allow: string[] } } // URL prefix allowlist
   | { name: "fs:project-write"; scopes: { allow: string[] } } // glob allowlist
   | { name: "mcp:elicitation" }
@@ -88,7 +88,7 @@ The chosen contract changes what these issues must do:
 
 - **#9268** — adopt `capabilities` as the field name and extend the element schema to the discriminated union above. The field rename and the non-guarantee both freeze here.
 - **#9228** — bake the canonical statement into the manifest contract before the SDK ships to npm; the field name and the non-guarantee must be frozen before external authors depend on them.
-- **#9247** — the compound-permission lattice and scope attenuation are load-bearing parts of this contract, not optional add-ons. Ship them in the same release as the schema.
+- **#9247** — the compound-capability lattice and scope attenuation are load-bearing parts of this contract, not optional add-ons. Ship them in the same release as the schema.
 - **#9234** — `elicitation` / `sampling` advertisement must be gated by `mcp:elicitation` / `mcp:sampling` capabilities; tool advertisement must be bounded by the manifest as the upper bound.
 
 ## Open questions

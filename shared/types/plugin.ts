@@ -30,7 +30,7 @@ export interface ToolbarButtonContribution {
 
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 
-export const BUILT_IN_PLUGIN_PERMISSIONS = [
+export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
   "fs:project-write",
   "fs:user-data-read",
@@ -45,9 +45,9 @@ export const BUILT_IN_PLUGIN_PERMISSIONS = [
   "shell:exec",
 ] as const;
 
-export type BuiltInPluginPermission = (typeof BUILT_IN_PLUGIN_PERMISSIONS)[number];
+export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 
-export type PluginPermission = BuiltInPluginPermission;
+export type PluginCapability = BuiltInPluginCapability;
 
 export interface MenuItemContribution {
   label: string;
@@ -96,7 +96,7 @@ export interface PluginManifest {
   engines?: {
     daintree?: string;
   };
-  permissions?: PluginPermission[];
+  capabilities?: PluginCapability[];
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
@@ -298,9 +298,9 @@ export interface PluginActionDescriptor extends PluginActionContribution {
   /**
    * Host-authoritative danger classification, computed in the main process by
    * {@link PluginService.registerPluginAction} from the plugin's declared
-   * manifest permissions. The plugin's self-reported `danger` is advisory
+   * manifest capabilities. The plugin's self-reported `danger` is advisory
    * only — the host raises it (never lowers it) when the plugin holds a
-   * high-risk permission, so a plugin cannot self-declare `"safe"` on a
+   * high-risk capability, so a plugin cannot self-declare `"safe"` on a
    * destructive action to bypass MRU exclusion, repeatLast eligibility, and
    * the user-source confirm dialog. The renderer must read this field — not
    * `danger` — for any classification decision, and fail safe to `"confirm"`

@@ -14,7 +14,7 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
-  BuiltInPluginPermission,
+  BuiltInPluginCapability,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -60,18 +60,18 @@ const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
 
 /**
- * Permissions whose presence in a plugin's manifest forces every action that
+ * Capabilities whose presence in a plugin's manifest forces every action that
  * plugin contributes up to `effectiveDanger: "confirm"`, regardless of the
- * `danger` the plugin self-declared. These are the permissions that grant
+ * `danger` the plugin self-declared. These are the capabilities that grant
  * irreversible or hard-to-undo side effects: arbitrary process execution,
  * git history mutation, project/user-config filesystem writes, and agent
- * invocation. Read-only or trivially-reversible permissions (`*-read`,
+ * invocation. Read-only or trivially-reversible capabilities (`*-read`,
  * `network:fetch`, `clipboard:*`) are intentionally excluded — promoting on
  * those would over-confirm and train users to dismiss the dialog. The host
  * may only raise danger; a plugin declaring `"confirm"` always stays
  * `"confirm"` even with none of these.
  */
-const CONFIRM_TRIGGERING_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
+const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Set([
   "shell:exec",
   "git:write",
   "fs:project-write",
@@ -435,9 +435,9 @@ export class PluginService {
       );
     }
 
-    if (manifest.permissions.length > 0) {
+    if (manifest.capabilities.length > 0) {
       console.log(
-        `[PluginService] Plugin "${manifest.name}" declares permissions: ${manifest.permissions.join(", ")}`
+        `[PluginService] Plugin "${manifest.name}" declares capabilities: ${manifest.capabilities.join(", ")}`
       );
     }
 
@@ -1145,14 +1145,14 @@ export class PluginService {
 
     // Host-authoritative danger: the plugin's self-reported `danger` is
     // advisory. Raise it to "confirm" (never lower) when the plugin holds a
-    // high-risk permission, so a plugin can't declare "safe" on a destructive
+    // high-risk capability, so a plugin can't declare "safe" on a destructive
     // action to slip past the renderer's confirm/MRU/repeatLast gates.
-    const manifestPermissions = this.plugins.get(pluginId)?.manifest.permissions ?? [];
-    const hasHighRiskPermission = manifestPermissions.some((p) =>
-      CONFIRM_TRIGGERING_PERMISSIONS.has(p)
+    const manifestCapabilities = this.plugins.get(pluginId)?.manifest.capabilities ?? [];
+    const hasHighRiskCapability = manifestCapabilities.some((p) =>
+      CONFIRM_TRIGGERING_CAPABILITIES.has(p)
     );
     const effectiveDanger: "safe" | "confirm" =
-      danger === "confirm" || hasHighRiskPermission ? "confirm" : "safe";
+      danger === "confirm" || hasHighRiskCapability ? "confirm" : "safe";
 
     const descriptor: PluginActionDescriptor = {
       pluginId,
