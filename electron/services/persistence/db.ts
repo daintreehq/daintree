@@ -21,9 +21,7 @@ export function getBackupPath(): string {
 }
 
 export function getMigrationsFolder(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "migrations")
-    : path.join(app.getAppPath(), "electron/services/persistence/migrations");
+  return path.join(app.getAppPath(), "electron/services/persistence/migrations");
 }
 
 export function getSharedDb(): AppDb {

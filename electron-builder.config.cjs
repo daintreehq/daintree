@@ -43,6 +43,7 @@ module.exports = async function () {
     files: [
       "dist/**/*",
       "dist-electron/**/*",
+      "electron/services/persistence/migrations/**/*",
       "!demo/**",
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
@@ -51,7 +52,6 @@ module.exports = async function () {
     extraResources: [
       { from: "help", to: "help" },
       { from: "electron/resources/sounds", to: "sounds" },
-      { from: "electron/services/persistence/migrations", to: "migrations" },
     ],
     // node-pty and better-sqlite3 contain native .node binaries that need
     // real filesystem access for `require()` — they cannot live inside the
@@ -78,7 +78,7 @@ module.exports = async function () {
     mac: {
       extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
       x64ArchFiles:
-        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
+        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
       notarize: true,
       binaries: [
