@@ -465,6 +465,7 @@ export function DevPreviewPane({
     if (timestamps.length < 2) {
       crashReloadRef.current();
     } else {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Preview process crashed repeatedly",
@@ -478,6 +479,7 @@ export function DevPreviewPane({
     }
     // id intentionally omitted from deps — stable for component lifetime.
     // Adding it would cause webview event listener churn through useDevPreviewLoadLifecycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const {

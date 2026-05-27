@@ -1538,10 +1538,10 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(notifyMock).toHaveBeenCalledTimes(2);
-      expect(notifyMock.mock.calls[0][0].supersedeKey).toBe(
+      expect(notifyMock.mock.calls[0]![0]!.supersedeKey).toBe(
         "dev-preview-crash-loop:dev-preview-panel-1"
       );
-      expect(notifyMock.mock.calls[1][0].supersedeKey).toBe(
+      expect(notifyMock.mock.calls[1]![0]!.supersedeKey).toBe(
         "dev-preview-crash-loop:dev-preview-panel-1"
       );
     });
