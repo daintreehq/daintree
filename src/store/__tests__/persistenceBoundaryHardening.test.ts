@@ -70,15 +70,7 @@ function clearPerfMarks(): void {
   delete (window as Window & typeof globalThis).__DAINTREE_PERF_MARKS__;
 }
 
-afterEach(async () => {
-  // safeStorage fires its permanent-fallback notification via an *unawaited*
-  // dynamic `import("@/lib/notify")`. Drain the microtask + macrotask queue
-  // here so each test's in-flight dispatch resolves against its own module
-  // registry before `resetModules` swaps it. Without this drain, a prior
-  // test's pending dispatch could land on the next test's freshly-installed
-  // notify spy — which made "notifies exactly once" flaky (it saw 2-3 calls
-  // under CI timing/ordering even though the per-instance guard is correct).
-  await new Promise((resolve) => setTimeout(resolve, 0));
+afterEach(() => {
   restoreLocalStorage();
   clearPerfMarks();
   vi.resetModules();
@@ -613,6 +605,16 @@ describe("persistence boundary hardening", () => {
     try {
       const { createSafeJSONStorage } = await import("../persistence/safeStorage");
       const storage = createSafeJSONStorage<{ value: number }>();
+
+      // Other tests in this suite also trigger permanent fallbacks, each firing
+      // notify via an *unawaited* dynamic `import("@/lib/notify")`. Those
+      // in-flight dispatches can resolve here — while our spy is the active
+      // mock — and inflate the count (seen as 2-6 under CI ordering). Drain the
+      // queue so any stragglers land, then clear the spy so we count only this
+      // instance's dispatch. The per-instance `hasNotifiedPermanentFallback`
+      // guard guarantees exactly one regardless.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      notifySpy.mockClear();
 
       storage.setItem("notify-key-1", { state: { value: 1 }, version: 1 });
       storage.setItem("notify-key-2", { state: { value: 2 }, version: 1 });
