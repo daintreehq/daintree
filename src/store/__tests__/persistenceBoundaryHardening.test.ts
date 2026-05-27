@@ -651,4 +651,137 @@ describe("persistence boundary hardening", () => {
 
     expect((window as Window & typeof globalThis).__DAINTREE_PERF_MARKS__).toBeUndefined();
   });
+
+  describe("createDebouncedSafeJSONStorage", () => {
+    it("coalesces rapid setItem calls into one underlying write per key", async () => {
+      const setItem = vi.fn();
+      installLocalStorage(
+        createStorageMock({
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("k", { state: { value: 1 }, version: 1 });
+      storage.setItem("k", { state: { value: 2 }, version: 1 });
+      storage.setItem("k", { state: { value: 3 }, version: 1 });
+
+      expect(setItem).toHaveBeenCalledTimes(0);
+
+      vi.advanceTimersByTime(300);
+
+      expect(setItem).toHaveBeenCalledTimes(1);
+      expect(setItem).toHaveBeenCalledWith("k", JSON.stringify({ state: { value: 3 }, version: 1 }));
+
+      vi.useRealTimers();
+    });
+
+    it("removeItem cancels any pending debounced write for the same key", async () => {
+      const setItem = vi.fn();
+      const removeItem = vi.fn();
+      installLocalStorage(
+        createStorageMock({
+          setItem,
+          removeItem,
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("k", { state: { value: 1 }, version: 1 });
+      storage.removeItem("k");
+      vi.advanceTimersByTime(1000);
+
+      expect(setItem).not.toHaveBeenCalled();
+      expect(removeItem).toHaveBeenCalledWith("k");
+
+      vi.useRealTimers();
+    });
+
+    it("getItem flushes any pending write so reads-after-writes are coherent", async () => {
+      const backing = new Map<string, string>();
+      const setItem = vi.fn((key: string, value: string) => {
+        backing.set(key, value);
+      });
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("k", { state: { value: 42 }, version: 1 });
+      // No timer advance — getItem must flush.
+      const result = storage.getItem("k");
+
+      expect(setItem).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ state: { value: 42 }, version: 1 });
+
+      vi.useRealTimers();
+    });
+
+    it("falls back to memory storage when localStorage.setItem throws", async () => {
+      const setItem = vi.fn(() => {
+        throw new Error("QuotaExceededError");
+      });
+      installLocalStorage(
+        createStorageMock({
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      expect(() => {
+        storage.setItem("k", { state: { value: 1 }, version: 1 });
+        vi.advanceTimersByTime(300);
+      }).not.toThrow();
+
+      // First write failed; resilient storage flips to memory. A subsequent
+      // write should land in memory without re-throwing.
+      storage.setItem("k", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      vi.useRealTimers();
+    });
+
+    it("debounce timers are scoped per key (independent flush windows)", async () => {
+      const setItem = vi.fn();
+      installLocalStorage(
+        createStorageMock({
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+      storage.setItem("a", { state: { value: 1 }, version: 1 });
+      vi.advanceTimersByTime(150);
+      storage.setItem("b", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(150);
+
+      // 'a' has flushed; 'b' has 150ms remaining
+      expect(setItem).toHaveBeenCalledTimes(1);
+      expect(setItem).toHaveBeenCalledWith("a", expect.any(String));
+
+      vi.advanceTimersByTime(150);
+      expect(setItem).toHaveBeenCalledTimes(2);
+      expect(setItem).toHaveBeenLastCalledWith("b", expect.any(String));
+
+      vi.useRealTimers();
+    });
+  });
 });
