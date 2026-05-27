@@ -95,9 +95,6 @@ jobs:
 
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: read
-      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -188,20 +185,6 @@ jobs:
             fi
           done
 
-      - name: Upload budget summaries
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: budget-summaries
-          path: |
-            dist/renderer-bundle-size-summary.md
-            dist/first-render-chunk-summary.md
-            dist/renderer-import-budget-summary.md
-            dist/import-budget-summary.md
-            dist/compiler-budget-summary.md
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Gate performance budgets
         if: always()
         env:
@@ -218,75 +201,6 @@ jobs:
           [ "$IMPORT_BUDGET" = "failure" ] && echo "::error::import-budget failed" && failed=1
           [ "$COMPILER_BUDGET" = "failure" ] && echo "::error::compiler-budget failed" && failed=1
           exit $failed
-
-      - name: Post first-render budget comment
-        if: always() && github.event_name == 'pull_request'
-        continue-on-error: true
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const summaryPath = 'dist/first-render-chunk-summary.md';
-            if (!fs.existsSync(summaryPath)) {
-              console.log('No first-render budget summary found — skipping comment.');
-              return;
-            }
-            const body = fs.readFileSync(summaryPath, 'utf8');
-            const markerMatch = body.match(/<!-- daintree-first-render-budget classification:"([^"]+)" delta:(-?\d+) -->/);
-            if (!markerMatch) {
-              console.log('No budget marker found in summary — skipping comment.');
-              return;
-            }
-            const currentClassification = markerMatch[1];
-            const currentDelta = parseInt(markerMatch[2], 10);
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const markerPrefix = '<!-- daintree-first-render-budget';
-            const existing = comments.find(c => c.body && c.body.includes(markerPrefix));
-            let shouldUpdate = false;
-            if (!existing) {
-              console.log('No existing budget comment — creating.');
-              shouldUpdate = true;
-            } else {
-              const priorMatch = existing.body.match(/<!-- daintree-first-render-budget classification:"([^"]+)" delta:(-?\d+) -->/);
-              if (!priorMatch) {
-                console.log('Existing comment has no parseable marker — updating.');
-                shouldUpdate = true;
-              } else {
-                const priorClassification = priorMatch[1];
-                const priorDelta = parseInt(priorMatch[2], 10);
-                if (priorClassification !== currentClassification) {
-                  console.log(`Classification changed: ${priorClassification} → ${currentClassification} — updating.`);
-                  shouldUpdate = true;
-                } else if (Math.abs(currentDelta - priorDelta) > 1024) {
-                  console.log(`Delta changed by ${Math.abs(currentDelta - priorDelta)} bytes (> 1024) — updating.`);
-                  shouldUpdate = true;
-                } else {
-                  console.log(`No significant change (classification: ${currentClassification}, delta drift: ${currentDelta - priorDelta} bytes) — skipping.`);
-                }
-              }
-            }
-            if (!shouldUpdate) return;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-              console.log(`Updated comment ${existing.id}.`);
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-              console.log('Created new budget comment.');
-            }
 
       - name: Smoke test
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
