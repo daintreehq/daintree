@@ -332,6 +332,7 @@ export function DevPreviewPane({
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const CLIPBOARD_FEEDBACK_MS = 2000;
   const [certCopied, setCertCopied] = useState(false);
   const certCopyTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleCopyMkcert = useCallback(async () => {
@@ -339,7 +340,7 @@ export function DevPreviewPane({
       await window.electron.clipboard.writeText("mkcert -install");
       setCertCopied(true);
       if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
-      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), 2000);
+      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), CLIPBOARD_FEEDBACK_MS);
     } catch {
       // clipboard unavailable — silently ignore
     }
