@@ -35,6 +35,7 @@ import type {
   DevPreviewDirMeta,
   DevPreviewDestructivePreviewMeta,
   DevPreviewDestructivePreviewSizes,
+  DevPreviewDestructivePreviewSizesRequest,
   DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
@@ -1318,10 +1319,11 @@ export class DevPreviewSessionService {
   }
 
   async getDestructivePreviewSizes(
-    request: DevPreviewSessionRequest
+    request: DevPreviewDestructivePreviewSizesRequest
   ): Promise<DevPreviewDestructivePreviewSizes> {
     validateSessionRequest(request);
     const cwd = this.resolveSessionCwd(request);
+    const skipNodeModules = request.skipNodeModules === true;
     const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
       Promise.all(
         CACHE_DIRS.map(async (relPath) => {
@@ -1329,7 +1331,7 @@ export class DevPreviewSessionService {
           return [relPath, size] as const;
         })
       ),
-      this.computeDirSize(path.join(cwd, "node_modules")),
+      skipNodeModules ? Promise.resolve(null) : this.computeDirSize(path.join(cwd, "node_modules")),
     ]);
     return {
       cacheDirSizes: Object.fromEntries(cacheDirEntries),

@@ -23,6 +23,11 @@ interface DevPreviewDestructiveConfirmDialogProps {
   onConfirm: () => void;
 }
 
+function joinNodeModulesPath(cwd: string): string {
+  const sep = cwd.includes("\\") && !cwd.includes("/") ? "\\" : "/";
+  return cwd.endsWith(sep) ? `${cwd}node_modules` : `${cwd}${sep}node_modules`;
+}
+
 const PACKAGE_MANAGER_LABELS: Record<DevPreviewPackageManager, string> = {
   npm: "npm",
   pnpm: "pnpm",
@@ -73,9 +78,10 @@ export function DevPreviewDestructiveConfirmDialog({
       { context: "DevPreviewDestructiveConfirmDialog: load meta" }
     );
 
+    const skipNodeModules = tier === "restartAndClearCache";
     safeFireAndForget(
       window.electron.devPreview
-        .getDestructivePreviewSizes({ panelId, projectId })
+        .getDestructivePreviewSizes({ panelId, projectId, skipNodeModules })
         .then((result) => {
           if (requestIdRef.current !== requestId) return;
           setSizes(result);
@@ -268,14 +274,16 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
               )}
               data-testid="dev-preview-destructive-node-modules-path"
             >
-              {meta.cwd}/node_modules
+              {joinNodeModulesPath(meta.cwd)}
             </span>
           ) : (
             <RowSkeleton width="w-48" />
           )}
         </Row>
         <Row label="Size">
-          {sizeBytes !== null ? (
+          {nodeModules?.exists === false ? (
+            <span className="text-[10px] text-daintree-text/35 italic">not present</span>
+          ) : sizeBytes !== null ? (
             <span className="tabular-nums text-daintree-text/80">
               {formatBytes(sizeBytes)}
               {isPnpm && (
@@ -284,8 +292,6 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
                 </span>
               )}
             </span>
-          ) : nodeModules?.exists === false ? (
-            <span className="text-[10px] text-daintree-text/35 italic">not present</span>
           ) : sizesPending ? (
             <RowSkeleton width="w-20" />
           ) : (

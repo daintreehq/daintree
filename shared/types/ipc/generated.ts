@@ -197,7 +197,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./devPreview.js").DevPreviewDestructivePreviewMeta;
   };
   "dev-preview:get-destructive-preview-sizes": {
-    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesRequest];
     result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
   };
   "dev-preview:get-state": {

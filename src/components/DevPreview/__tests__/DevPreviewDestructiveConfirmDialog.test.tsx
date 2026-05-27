@@ -251,6 +251,92 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     });
   });
 
+  it("passes panelId/projectId to both IPC calls and sets skipNodeModules for the cache tier", async () => {
+    const metaFn = vi.fn().mockResolvedValue(baseMeta);
+    const sizesFn = vi.fn().mockResolvedValue(baseSizes);
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: metaFn,
+      getDestructivePreviewSizes: sizesFn,
+    });
+
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-77"
+        projectId="project-99"
+        tier="restartAndClearCache"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(metaFn).toHaveBeenCalled());
+    expect(metaFn).toHaveBeenCalledWith({ panelId: "panel-77", projectId: "project-99" });
+    expect(sizesFn).toHaveBeenCalledWith({
+      panelId: "panel-77",
+      projectId: "project-99",
+      skipNodeModules: true,
+    });
+  });
+
+  it("does not skip node_modules for the reinstall tier", async () => {
+    const sizesFn = vi.fn().mockResolvedValue(baseSizes);
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: vi.fn().mockResolvedValue(baseMeta),
+      getDestructivePreviewSizes: sizesFn,
+    });
+
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-1"
+        projectId="project-1"
+        tier="reinstallAndRestart"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    await waitFor(() => expect(sizesFn).toHaveBeenCalled());
+    expect(sizesFn).toHaveBeenCalledWith({
+      panelId: "panel-1",
+      projectId: "project-1",
+      skipNodeModules: false,
+    });
+  });
+
+  it("shows 'not present' when nodeModules.exists is false even if a size value is somehow present", async () => {
+    const missingMeta: DevPreviewDestructivePreviewMeta = {
+      ...baseMeta,
+      nodeModules: { relPath: "node_modules", exists: false, mtimeMs: null },
+    };
+    stubDevPreviewIpc({
+      getDestructivePreviewMeta: vi.fn().mockResolvedValue(missingMeta),
+      // Pretend a size came back anyway (e.g. TOCTOU between meta + sizes).
+      // The UI must still render "not present" to match meta.
+      getDestructivePreviewSizes: vi.fn().mockResolvedValue({
+        cacheDirSizes: baseSizes.cacheDirSizes,
+        nodeModulesSizeBytes: 1_234_567,
+      } satisfies DevPreviewDestructivePreviewSizes),
+    });
+
+    render(
+      <DevPreviewDestructiveConfirmDialog
+        panelId="panel-1"
+        projectId="project-1"
+        tier="reinstallAndRestart"
+        isOpen={true}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("not present")).toBeTruthy();
+    });
+    expect(screen.queryByText(/1\.2 MB/)).toBeNull();
+  });
+
   it("does not fire IPC calls when projectId is missing", () => {
     const meta = vi.fn().mockResolvedValue(baseMeta);
     const sizes = vi.fn().mockResolvedValue(baseSizes);

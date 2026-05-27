@@ -229,5 +229,21 @@ describe("DevPreviewSessionService — destructive preview", () => {
         /No dev-preview session/
       );
     });
+
+    it("returns null for nodeModulesSizeBytes when skipNodeModules is true (cache tier)", async () => {
+      mkdirSync(path.join(tmpDir, "node_modules", "foo"), { recursive: true });
+      writeFileSync(path.join(tmpDir, "node_modules", "foo", "index.js"), "x");
+      mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
+      writeFileSync(path.join(tmpDir, ".next", "out"), "data");
+
+      await service.ensure(ensureRequest());
+      const sizes = await service.getDestructivePreviewSizes({
+        ...request(),
+        skipNodeModules: true,
+      });
+
+      expect(sizes.nodeModulesSizeBytes).toBeNull();
+      expect(typeof sizes.cacheDirSizes[".next"]).toBe("number");
+    });
   });
 });

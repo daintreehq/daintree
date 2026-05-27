@@ -67,6 +67,13 @@ export interface DevPreviewDestructivePreviewMeta {
   lockfileName: string | null;
 }
 
+export interface DevPreviewDestructivePreviewSizesRequest extends DevPreviewSessionRequest {
+  // When true, skip the (potentially multi-second) node_modules walk. The
+  // cache-clear tier only needs cache-dir sizes, so the reinstall-only walk
+  // is wasted wall-time otherwise.
+  skipNodeModules?: boolean;
+}
+
 export interface DevPreviewDestructivePreviewSizes {
   cacheDirSizes: Record<string, number | null>;
   nodeModulesSizeBytes: number | null;

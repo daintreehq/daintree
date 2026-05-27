@@ -9,6 +9,7 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
   DevPreviewGetByWorktreeRequest,
+  DevPreviewDestructivePreviewSizesRequest,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
@@ -103,7 +104,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
       ),
       getDestructivePreviewSizes: op(
         DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewSizes,
-        async (request: DevPreviewSessionRequest) => {
+        async (request: DevPreviewDestructivePreviewSizesRequest) => {
           const svc = await getSessionService();
           return svc.getDestructivePreviewSizes(request);
         }
