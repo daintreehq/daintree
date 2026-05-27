@@ -1240,20 +1240,24 @@ export class HttpLifecycle {
     this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
     // Positive audit trail for the elevation (#9151): records who elevated
     // (via the pinned session), the target tier, the pre-elevation tier, and
-    // the bounded window. Best-effort — an audit-write failure must never
-    // block the user-approved elevation.
-    try {
-      this.deps.auditService.appendGrantRecord({
-        type: "tier.elevated",
-        sessionId,
-        toolId: "*",
-        ttlMs: MCP_TIER_ELEVATION_TTL_MS,
-        expiresAt: Date.now() + MCP_TIER_ELEVATION_TTL_MS,
-        tier,
-        previousTier: current,
-      });
-    } catch (err) {
-      console.error("[MCP] Failed to append tier.elevated audit record:", err);
+    // the bounded window. Only genuine elevations are logged — a same-tier
+    // call (`newRank === currentRank`) arms no timer and changes nothing, so
+    // recording an `action → action` row would be misleading noise.
+    // Best-effort: an audit-write failure must never block the elevation.
+    if (newRank > currentRank) {
+      try {
+        this.deps.auditService.appendGrantRecord({
+          type: "tier.elevated",
+          sessionId,
+          toolId: "*",
+          ttlMs: MCP_TIER_ELEVATION_TTL_MS,
+          expiresAt: Date.now() + MCP_TIER_ELEVATION_TTL_MS,
+          tier,
+          previousTier: current,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append tier.elevated audit record:", err);
+      }
     }
     return { sessionId, tier };
   }

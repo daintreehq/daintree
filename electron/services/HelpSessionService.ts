@@ -970,6 +970,20 @@ export class HelpSessionService {
         this.terminalBySessionId.delete(prior.sessionId);
         this.killTerminal(terminalId, "help-session-displaced");
       }
+      // Tear down the displaced session's live MCP transport too (#9151).
+      // Displacement is just a same-project re-provision flavour of revoke —
+      // without this the old bearer keeps its tier/grants/pin until the
+      // 30-minute idle reaper, exactly the stale state this issue closes on
+      // the `revokeSession` path.
+      try {
+        this.onMcpSessionRevokedFn?.(prior.token);
+      } catch (err) {
+        console.warn(
+          "[HelpSessionService] MCP session teardown during displacement failed:",
+          prior.sessionId,
+          err
+        );
+      }
     }
     // Also clear any stale active-terminal binding the renderer never
     // confirmed via `markTerminalForToken` — leaving it would leak the

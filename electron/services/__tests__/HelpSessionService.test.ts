@@ -580,6 +580,19 @@ describe("HelpSessionService", () => {
     expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(result.token);
   });
 
+  it("tears down the displaced session's MCP transport on same-project re-provision (#9151)", async () => {
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected first provision");
+    mockMcpServerService.disconnectHelpBearer.mockClear();
+
+    // A second provision for the same project displaces the first — its live
+    // MCP session must be dropped, not left for the idle reaper.
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected second provision");
+
+    expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(first.token);
+  });
+
   it("revokeByWebContentsId drops the MCP session for each matched session (crash/eviction path, #9151)", async () => {
     // Distinct projects so neither provision displaces the other — we want
     // both sessions live and pinned to different WebContents.

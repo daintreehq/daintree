@@ -341,6 +341,20 @@ describe("HttpLifecycle", () => {
       expect(record.expiresAt).toBeGreaterThan(0);
     });
 
+    it("does not audit a same-tier re-elevation (no actual privilege change, #9151)", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionTierMap.set("sess-same", "action");
+      pinnedSession(deps, "sess-same", 42);
+
+      const lc = new HttpLifecycle(deps);
+      const result = lc.setSessionTier("sess-same", "action");
+
+      expect(result.tier).toBe("action");
+      // Same tier in → nothing elevated → no audit row (would be a misleading
+      // action→action entry).
+      expect(deps.auditService.appendGrantRecord).not.toHaveBeenCalled();
+    });
+
     it("refuses downgrades silently and keeps current tier without auditing", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionTierMap.set("sess-2", "system");
@@ -544,6 +558,15 @@ describe("HttpLifecycle", () => {
       const handle = lc as unknown as BearerTestHandle;
       handle.touchBearer("Bearer help-token-xyz", "Help/1", "sess-help", "action");
       handle.detachBearerSession("sess-help");
+      expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
+    });
+
+    it("findHelpBearerHash returns null after clearBearer evicts the entry (server stop/restart, #9151)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      const auth = "Bearer help-token-xyz";
+      handle.touchBearer(auth, "Help/1", "sess-help", "action");
+      lc.clearBearer(hashOf(auth));
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
 
