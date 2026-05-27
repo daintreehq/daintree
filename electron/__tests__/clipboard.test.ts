@@ -5,6 +5,7 @@ import * as path from "node:path";
 // Mock electron so importing the clipboard handler module doesn't pull in the
 // real native bindings. The cleanup logic under test never touches these.
 vi.mock("electron", () => ({
+  app: { getPath: vi.fn((key: string) => `/mock/electron/${key}`) },
   clipboard: { readImage: vi.fn(), writeImage: vi.fn(), writeText: vi.fn(), readText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn(), createFromPath: vi.fn() },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
