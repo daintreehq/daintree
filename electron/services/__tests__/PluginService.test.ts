@@ -652,9 +652,7 @@ describe("PluginService", () => {
 
   it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
     const service = new PluginService(tmpDir);
-    expect(() =>
-      service.setPluginArchiveHash("acme.nonexistent", "deadbeef")
-    ).not.toThrow();
+    expect(() => service.setPluginArchiveHash("acme.nonexistent", "deadbeef")).not.toThrow();
   });
 
   it("rejects manifest with empty name", async () => {

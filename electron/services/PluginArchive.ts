@@ -10,10 +10,7 @@ import type { PluginManifest } from "../../shared/types/plugin.js";
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 export const MAX_DNTR_BYTES = 30 * 1024 * 1024;
 
-const REQUIRED_EXCLUSIONS: readonly string[] = [
-  "node_modules/",
-  ".git/",
-];
+const REQUIRED_EXCLUSIONS: readonly string[] = ["node_modules/", ".git/"];
 
 const SOURCE_EXTS = new Set([".ts", ".tsx"]);
 const SOURCEMAP_EXTS = new Set([".js.map", ".mjs.map"]);
@@ -22,14 +19,16 @@ export interface PackOptions {
   sourcemaps?: boolean;
 }
 
-export type VerifyResult = {
-  valid: false;
-  error: string;
-} | {
-  valid: true;
-  manifest: PluginManifest;
-  entryCount: number;
-};
+export type VerifyResult =
+  | {
+      valid: false;
+      error: string;
+    }
+  | {
+      valid: true;
+      manifest: PluginManifest;
+      entryCount: number;
+    };
 
 function normalizePath(filePath: string): string {
   let normalised = filePath.replace(/\\/g, "/");
@@ -60,11 +59,7 @@ function matchesExclusionPattern(name: string, sourcemaps: boolean): boolean {
   return false;
 }
 
-async function collectFiles(
-  dir: string,
-  baseDir: string,
-  sourcemaps: boolean,
-): Promise<string[]> {
+async function collectFiles(dir: string, baseDir: string, sourcemaps: boolean): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
@@ -99,7 +94,7 @@ function sortEntries(files: string[]): string[] {
 export async function packPluginArchive(
   sourceDir: string,
   outputPath: string,
-  opts: PackOptions = {},
+  opts: PackOptions = {}
 ): Promise<string> {
   const sourcemaps = opts.sourcemaps ?? false;
   const files = await collectFiles(sourceDir, sourceDir, sourcemaps);
@@ -166,9 +161,7 @@ export async function packPluginArchive(
 export async function computeArchiveHash(archivePath: string): Promise<string> {
   const stat = await fs.stat(archivePath);
   if (stat.size > MAX_DNTR_BYTES) {
-    throw new Error(
-      `Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`
-    );
+    throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
   }
   const buf = await fs.readFile(archivePath);
   return createHash("sha256").update(buf).digest("hex");
@@ -203,9 +196,7 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
       if (name !== "plugin.json") {
         settled = true;
         zipfile.close();
-        return reject(
-          new Error(`First entry must be plugin.json, got "${entry.fileName}"`)
-        );
+        return reject(new Error(`First entry must be plugin.json, got "${entry.fileName}"`));
       }
 
       zipfile.openReadStream(entry, (err, stream) => {

@@ -58,7 +58,7 @@ This section is normative. Every tool that produces or consumes `.dntr` files (t
 A `.dntr` file is a standard ZIP archive (PKZIP 2.0, no ZIP64 unless the archive exceeds 4 GB — Daintree rejects archives larger than 30 MB at install time per the URL cap). The file extension is `.dntr` but the container is unmodified ZIP; any ZIP tool can inspect or extract it.
 
 | Parameter | Value |
-|---|---|
+| --- | --- |
 | **ZIP specification** | PKZIP 2.0 (APPNOTE 4.5) |
 | **Compression method** | DEFLATE (method 8) |
 | **Compression level** | 9 (maximum) |

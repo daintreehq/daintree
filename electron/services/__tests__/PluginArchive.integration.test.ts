@@ -29,10 +29,7 @@ function validManifest(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-async function createFixture(
-  baseDir: string,
-  files: Record<string, string>
-): Promise<void> {
+async function createFixture(baseDir: string, files: Record<string, string>): Promise<void> {
   for (const [filePath, content] of Object.entries(files)) {
     const fullPath = path.join(baseDir, filePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
@@ -137,9 +134,9 @@ describe("packPluginArchive", () => {
       "dist/index.js": "module.exports = {};",
     });
 
-    await expect(
-      packPluginArchive(sourceDir, path.join(tmpDir, "out.dntr"))
-    ).rejects.toThrow("plugin.json not found in source directory");
+    await expect(packPluginArchive(sourceDir, path.join(tmpDir, "out.dntr"))).rejects.toThrow(
+      "plugin.json not found in source directory"
+    );
   });
 
   it("handles deeply nested directories", async () => {
@@ -181,10 +178,12 @@ describe("readArchiveManifest", () => {
   it("reads and validates plugin.json from an archive", async () => {
     const sourceDir = path.join(tmpDir, "source");
     await createFixture(sourceDir, {
-      "plugin.json": JSON.stringify(validManifest({
-        displayName: "My Plugin",
-        description: "Does things",
-      })),
+      "plugin.json": JSON.stringify(
+        validManifest({
+          displayName: "My Plugin",
+          description: "Does things",
+        })
+      ),
       "dist/index.js": "ok",
     });
 
@@ -207,9 +206,7 @@ describe("readArchiveManifest", () => {
     const archivePath = path.join(tmpDir, "out.dntr");
     await packPluginArchive(sourceDir, archivePath);
 
-    await expect(readArchiveManifest(archivePath)).rejects.toThrow(
-      "plugin.json is not valid JSON"
-    );
+    await expect(readArchiveManifest(archivePath)).rejects.toThrow("plugin.json is not valid JSON");
   });
 });
 
