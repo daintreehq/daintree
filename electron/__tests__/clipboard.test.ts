@@ -10,6 +10,18 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
 }));
 
+// clipboard.ts imports projectStore from ProjectStore.js which imports
+// electron-store (from node_modules). node_modules deps bypass vitest's
+// transform pipeline, so electron-store's `import electron from 'electron'`
+// would load the real electron binary and fail. Mock the project-level import
+// to prevent the chain — cleanupOldClipboardImages never uses the store.
+vi.mock("../services/ProjectStore.js", () => ({
+  projectStore: {
+    getAllProjects: vi.fn(() => []),
+    getCurrentProjectId: vi.fn(() => null),
+  },
+}));
+
 // Redirect os.tmpdir() to a throwaway directory so the cleanup operates on real
 // files we control. The base dir is created inside the factory where the real
 // os module is still available.
