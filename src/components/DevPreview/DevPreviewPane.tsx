@@ -453,34 +453,34 @@ export function DevPreviewPane({
     return () => clearTimeout(timer);
   }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
 
-  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
-    const now = Date.now();
-    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-    timestamps.push(now);
-    crashTimestampsRef.current = timestamps;
+  const handleRenderProcessGone = useCallback(
+    (details: { reason: string; exitCode: number }) => {
+      const now = Date.now();
+      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+      timestamps.push(now);
+      crashTimestampsRef.current = timestamps;
 
-    setCrashDetails(details);
-    setCrashState("crashed");
+      setCrashDetails(details);
+      setCrashState("crashed");
 
-    if (timestamps.length < 2) {
-      crashReloadRef.current();
-    } else {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Preview process crashed repeatedly",
-        message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
-        priority: "high",
-        duration: 0,
-        context: { eventKind: "recovery", panelId: id },
-        supersedeKey: `dev-preview-crash-loop:${id}`,
-        correlationId: id,
-      });
-    }
-    // id intentionally omitted from deps — stable for component lifetime.
-    // Adding it would cause webview event listener churn through useDevPreviewLoadLifecycle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      if (timestamps.length < 2) {
+        crashReloadRef.current();
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Preview process crashed repeatedly",
+          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
+          priority: "high",
+          duration: 0,
+          context: { eventKind: "recovery", panelId: id },
+          supersedeKey: `dev-preview-crash-loop:${id}`,
+          correlationId: id,
+        });
+      }
+    },
+    [id]
+  );
 
   const {
     isWebviewReady,
