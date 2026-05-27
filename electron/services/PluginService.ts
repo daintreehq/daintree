@@ -14,6 +14,7 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginActionHandler,
   BuiltInPluginCapability,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -153,6 +154,16 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
+  /**
+   * Main-side action handlers bound via {@link PluginHostApi.registerAction},
+   * keyed by the fully-namespaced action id (`{pluginId}.{actionId}`) — the
+   * same key `pluginActions` uses. The renderer's synthetic action routes its
+   * `run()` back through `plugin:invoke` with this id as the channel, so
+   * {@link dispatchHandler} resolves the handler from here. The renderer IPC
+   * registration path (`plugin:actions-register`) never populates this map: it
+   * carries metadata only and has no handler closure to bind.
+   */
+  private actionHandlerMap = new Map<string, PluginActionHandler>();
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
    * Most recent activation error per plugin id. Populated by the catch in
@@ -801,6 +812,38 @@ export class PluginService {
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
         });
       },
+      registerAction: (descriptor, handler) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: registerAction called after activate() returned or timed out`
+          );
+        }
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(`Plugin "${pluginId}" registerAction: descriptor must be an object`);
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" registerAction: descriptor.id must be a non-empty string`
+          );
+        }
+        if (typeof handler !== "function") {
+          throw new Error(`Plugin "${pluginId}" registerAction: handler must be a function`);
+        }
+        // The plugin-supplied id omits the namespace; the host prepends it so
+        // the descriptor matches the `{pluginId}.{actionId}` routing key used
+        // everywhere else. Re-registering an id replaces silently (unlike the
+        // throw-on-duplicate IPC path), so build with "replace" semantics and
+        // overwrite both the descriptor and the handler in place.
+        const fullId = `${pluginId}.${descriptor.id}`;
+        const built = this.buildPluginActionDescriptor(
+          pluginId,
+          { ...descriptor, id: fullId },
+          "replace"
+        );
+        this.storePluginAction(built);
+        this.actionHandlerMap.set(fullId, handler);
+        this.broadcastPluginActions();
+      },
     };
     return {
       host,
@@ -940,6 +983,19 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Plugin actions registered via host.registerAction route here with the
+    // fully-namespaced action id as `channel`. Resolve those first, scoped to
+    // the calling plugin's namespace so a renderer can't dispatch another
+    // plugin's handler by passing a mismatched pluginId. Action handlers
+    // receive only the single args object the synthetic action forwards — the
+    // PluginIpcContext is not part of the action contract.
+    if (channel.startsWith(`${pluginId}.`)) {
+      const actionHandler = this.actionHandlerMap.get(channel);
+      if (actionHandler) {
+        return await actionHandler(args[0]);
+      }
+    }
+
     const key = `${pluginId}:${channel}`;
     const handler = this.handlerMap.get(key);
     if (!handler) {
@@ -1105,6 +1161,25 @@ export class PluginService {
    * Broadcasts the full action list to all renderers so windows stay in sync.
    */
   registerPluginAction(pluginId: string, contribution: PluginActionContribution): void {
+    const descriptor = this.buildPluginActionDescriptor(pluginId, contribution, "throw");
+    this.storePluginAction(descriptor);
+    this.broadcastPluginActions();
+  }
+
+  /**
+   * Validate a plugin action contribution and build its host-authoritative
+   * descriptor. Shared by the renderer IPC path ({@link registerPluginAction},
+   * `duplicateMode: "throw"`) and the main-side `host.registerAction`
+   * (`duplicateMode: "replace"`) so the id-format, namespace-ownership,
+   * `"restricted"`-danger rejection, and `effectiveDanger` promotion rules
+   * cannot drift between the two entry points. The caller is responsible for
+   * storing the result and broadcasting.
+   */
+  private buildPluginActionDescriptor(
+    pluginId: string,
+    contribution: PluginActionContribution,
+    duplicateMode: "throw" | "replace"
+  ): PluginActionDescriptor {
     if (!this.plugins.has(pluginId)) {
       throw new Error(`Unknown plugin: ${pluginId}`);
     }
@@ -1139,7 +1214,7 @@ export class PluginService {
         `Plugin action "${id}" has invalid danger "${danger}". Plugins may only register "safe" or "confirm" actions.`
       );
     }
-    if (this.pluginActions.has(id)) {
+    if (duplicateMode === "throw" && this.pluginActions.has(id)) {
       throw new Error(`Plugin action "${id}" is already registered`);
     }
 
@@ -1154,7 +1229,7 @@ export class PluginService {
     const effectiveDanger: "safe" | "confirm" =
       danger === "confirm" || hasHighRiskCapability ? "confirm" : "safe";
 
-    const descriptor: PluginActionDescriptor = {
+    return {
       pluginId,
       id,
       title,
@@ -1169,16 +1244,17 @@ export class PluginService {
           ? { ...contribution.inputSchema }
           : undefined,
     };
+  }
 
-    this.pluginActions.set(id, descriptor);
-    let owners = this.pluginActionOwners.get(pluginId);
+  /** Store a built descriptor in the action registry and track its owner. */
+  private storePluginAction(descriptor: PluginActionDescriptor): void {
+    this.pluginActions.set(descriptor.id, descriptor);
+    let owners = this.pluginActionOwners.get(descriptor.pluginId);
     if (!owners) {
       owners = new Set();
-      this.pluginActionOwners.set(pluginId, owners);
+      this.pluginActionOwners.set(descriptor.pluginId, owners);
     }
-    owners.add(id);
-
-    this.broadcastPluginActions();
+    owners.add(descriptor.id);
   }
 
   /** Remove a single plugin-registered action. Silent no-op if unknown. */
@@ -1187,6 +1263,7 @@ export class PluginService {
     if (!descriptor || descriptor.pluginId !== pluginId) return;
 
     this.pluginActions.delete(actionId);
+    this.actionHandlerMap.delete(actionId);
     const owners = this.pluginActionOwners.get(pluginId);
     if (owners) {
       owners.delete(actionId);
@@ -1203,6 +1280,7 @@ export class PluginService {
 
     for (const id of owners) {
       this.pluginActions.delete(id);
+      this.actionHandlerMap.delete(id);
     }
     this.pluginActionOwners.delete(pluginId);
 

@@ -268,6 +268,21 @@ export interface PluginHostApi {
    * unloaded.
    */
   invalidateFileDecorations(scope: string, paths?: string[]): void;
+  /**
+   * Bind a runtime action handler to a descriptor. The descriptor's `id` must
+   * NOT include the plugin prefix — the host namespaces it at runtime as
+   * `{pluginId}.{descriptor.id}`. The handler runs in main and is invoked when
+   * the synthetic renderer action dispatches back over `plugin:invoke`.
+   *
+   * Validation mirrors the renderer IPC registration path: id format, the
+   * `"restricted"`-danger rejection, and host-authoritative `effectiveDanger`
+   * promotion all apply. Returns `void` (not a disposer) — the handler is
+   * unregistered automatically on plugin unload. Calling this twice with the
+   * same `descriptor.id` replaces the prior descriptor and handler. Must be
+   * called during `activate()` — the host is revoked once activation resolves
+   * or times out.
+   */
+  registerAction(descriptor: PluginActionContribution, handler: PluginActionHandler): void;
 }
 
 export type PluginActivate = (
@@ -308,3 +323,12 @@ export interface PluginActionDescriptor extends PluginActionContribution {
    */
   effectiveDanger: "safe" | "confirm";
 }
+
+/**
+ * Runtime handler bound to a plugin action via {@link PluginHostApi.registerAction}.
+ * Handlers live only in main and never cross the IPC bridge. They receive the
+ * single `args` object the renderer's synthetic action passes through
+ * `plugin:invoke`, and may return any serializable value (or a Promise of one)
+ * that is relayed back to the dispatch caller.
+ */
+export type PluginActionHandler = (args: unknown) => unknown | Promise<unknown>;

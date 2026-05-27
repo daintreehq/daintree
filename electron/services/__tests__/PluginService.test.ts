@@ -1635,6 +1635,10 @@ type CreateHostShape = (pluginId: string) => {
     registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
+    registerAction: (
+      descriptor: Record<string, unknown>,
+      handler: (args: unknown) => unknown
+    ) => void;
   };
   revoke: () => void;
 };
@@ -1708,6 +1712,137 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
       /host revoked: registerForgeProvider/
     );
+    expect(() => host.registerAction({ id: "doThing" }, () => undefined)).toThrow(
+      /host revoked: registerAction/
+    );
+  });
+});
+
+describe("createHost — registerAction", () => {
+  const validDescriptor = () => ({
+    id: "doThing",
+    title: "Do Thing",
+    description: "Does a thing",
+    category: "plugin",
+    kind: "command" as const,
+    danger: "safe" as const,
+  });
+
+  async function makeHost(pluginId = "acme.act-host", manifest: Record<string, unknown> = {}) {
+    await writePlugin(pluginId.replace(/^acme\./, ""), {
+      name: pluginId,
+      version: "1.0.0",
+      ...manifest,
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(pluginId);
+    return { service, host };
+  }
+
+  it("namespaces the descriptor id and stores it in the action registry", async () => {
+    const { service, host } = await makeHost();
+    host.registerAction(validDescriptor(), () => "ok");
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.act-host",
+      id: "acme.act-host.doThing",
+      title: "Do Thing",
+      kind: "command",
+      danger: "safe",
+      effectiveDanger: "safe",
+    });
+  });
+
+  it("dispatches the handler with the single args object through dispatchHandler", async () => {
+    const { service, host } = await makeHost();
+    const handler = vi.fn().mockResolvedValue({ ok: true });
+    host.registerAction(validDescriptor(), handler);
+
+    const ctx = makeCtx("acme.act-host");
+    const result = await service.dispatchHandler("acme.act-host", "acme.act-host.doThing", ctx, [
+      { value: 42 },
+    ]);
+    expect(handler).toHaveBeenCalledWith({ value: 42 });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("reuses the shared validation: rejects restricted danger", async () => {
+    const { host } = await makeHost();
+    expect(() =>
+      host.registerAction({ ...validDescriptor(), danger: "restricted" }, () => undefined)
+    ).toThrow(/invalid danger/i);
+  });
+
+  it("rejects a non-function handler", async () => {
+    const { host } = await makeHost();
+    expect(() =>
+      host.registerAction(validDescriptor(), "not-a-function" as unknown as () => unknown)
+    ).toThrow(/handler must be a function/);
+  });
+
+  it("rejects a missing descriptor id", async () => {
+    const { host } = await makeHost();
+    expect(() => host.registerAction({ title: "x" }, () => undefined)).toThrow(
+      /descriptor.id must be a non-empty string/
+    );
+  });
+
+  it("raises effectiveDanger to confirm when the manifest grants a high-risk permission", async () => {
+    const { service, host } = await makeHost("acme.act-risky", {
+      permissions: ["fs:project-read", "shell:exec"],
+    });
+    host.registerAction(validDescriptor(), () => undefined);
+    expect(service.listPluginActions()[0].effectiveDanger).toBe("confirm");
+  });
+
+  it("replaces the descriptor and handler silently when the same id is re-registered", async () => {
+    const { service, host } = await makeHost();
+    const first = vi.fn().mockReturnValue("first");
+    const second = vi.fn().mockReturnValue("second");
+
+    host.registerAction(validDescriptor(), first);
+    host.registerAction({ ...validDescriptor(), title: "Updated" }, second);
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].title).toBe("Updated");
+
+    const result = await service.dispatchHandler(
+      "acme.act-host",
+      "acme.act-host.doThing",
+      makeCtx("acme.act-host"),
+      [{}]
+    );
+    expect(result).toBe("second");
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("does not let another plugin's namespace dispatch the handler", async () => {
+    const { service, host } = await makeHost();
+    host.registerAction(validDescriptor(), () => "ok");
+
+    await expect(
+      service.dispatchHandler("acme.other", "acme.act-host.doThing", makeCtx("acme.other"), [{}])
+    ).rejects.toThrow(/No plugin handler registered/);
+  });
+
+  it("clears the handler on plugin unload", async () => {
+    const { service, host } = await makeHost();
+    host.registerAction(validDescriptor(), () => "ok");
+    expect(service.listPluginActions()).toHaveLength(1);
+
+    service.unloadPlugin("acme.act-host");
+
+    expect(service.listPluginActions()).toHaveLength(0);
+    await expect(
+      service.dispatchHandler("acme.act-host", "acme.act-host.doThing", makeCtx("acme.act-host"), [
+        {},
+      ])
+    ).rejects.toThrow(/No plugin handler registered/);
   });
 });
 
