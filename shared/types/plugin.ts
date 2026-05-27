@@ -1,3 +1,6 @@
+// SDK BOUNDARY: New imports from ./forge.js must be classified in
+// shared/types/plugin-sdk.ts. See docs/plugins/architecture.md#sdk-surface.
+// eslint-disable-next-line no-restricted-imports -- existing forge imports are classified; the lint guard covers new additions
 import type {
   FileDecorationContribution,
   FileDecorationProviderDescriptor,

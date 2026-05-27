@@ -253,6 +253,103 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 **Why no separate hooks contribution point (PreToolUse/PostToolUse)?** An MCP server can act as a proxy in front of other tools, intercepting and modifying tool calls. This uses the ecosystem we're already committed to (MCP) rather than inventing a parallel API. Plugins that genuinely need this can build it cleanly.
 
+## SDK Surface
+
+The `@daintreehq/plugin-sdk` public type surface is defined in `shared/types/plugin-sdk.ts`. This module is the single source of truth — every symbol re-exported there is a frozen contract. Additions are non-breaking; removals are breaking.
+
+Two entry points:
+
+- `@daintreehq/plugin-sdk` — core types (manifest authoring, host API, forge providers, worktree projections)
+- `@daintreehq/plugin-sdk/react` — reserved for React hooks (F15/F36); no exports in v1
+
+### Manifest authoring
+
+Types a plugin author uses to write `plugin.json`:
+
+| Export | Source | Notes |
+| --- | --- | --- |
+| `PluginManifest` | `plugin.ts` | Root manifest shape |
+| `PanelContribution` | `plugin.ts` |  |
+| `ToolbarButtonContribution` | `plugin.ts` |  |
+| `MenuItemContribution` | `plugin.ts` |  |
+| `MenuItemLocation` | `plugin.ts` | `"terminal" \| "file" \| "view" \| "help"` |
+| `ViewContribution` | `plugin.ts` | Reserved — not yet implemented |
+| `ViewLocation` | `plugin.ts` | `"panel" \| "sidebar"` |
+| `McpServerContribution` | `plugin.ts` | Reserved — not yet implemented |
+| `PluginPermission` | `plugin.ts` | Expected rename to `PluginCapability` in #9268 |
+| `BuiltInPluginPermission` | `plugin.ts` | Expected rename to `BuiltInPluginCapability` in #9268 |
+| `PluginActionContribution` | `plugin.ts` | Shape for `host.registerAction` (F11) |
+
+### Host API
+
+Types a plugin consumes at runtime via `activate(host)`:
+
+| Export             | Source      | Notes                                        |
+| ------------------ | ----------- | -------------------------------------------- |
+| `PluginActivate`   | `plugin.ts` | Activation entry point signature             |
+| `PluginHostApi`    | `plugin.ts` | Host API surface passed to `activate`        |
+| `PluginIpcContext` | `plugin.ts` | Context passed to IPC handlers               |
+| `PluginIpcHandler` | `plugin.ts` | Handler signature for `host.registerHandler` |
+
+### Worktree projections
+
+Read-only, frozen snapshots exposed to plugins:
+
+| Export                      | Source      | Notes                             |
+| --------------------------- | ----------- | --------------------------------- |
+| `PluginWorktreeSnapshot`    | `plugin.ts` | Explicit allowlist — no spreading |
+| `PluginWorktreeLinked`      | `plugin.ts` | Provider-agnostic forge linkage   |
+| `PluginWorktreeLinkedIssue` | `plugin.ts` |                                   |
+| `PluginWorktreeLinkedPR`    | `plugin.ts` |                                   |
+
+### Forge provider contract
+
+Types a forge plugin implements and registers:
+
+| Export                      | Source     | Notes                                       |
+| --------------------------- | ---------- | ------------------------------------------- |
+| `ForgeProviderImpl`         | `forge.ts` | Runtime contract (~397-line interface)      |
+| `ForgeProviderDescriptor`   | `forge.ts` | Passed to `host.registerForgeProvider`      |
+| `ForgeProviderContribution` | `forge.ts` | Manifest `contributes.forgeProviders` entry |
+
+### File decoration provider contract
+
+Types a decoration plugin implements and registers:
+
+| Export | Source | Notes |
+| --- | --- | --- |
+| `FileDecorationProviderImpl` | `forge.ts` | Runtime contract |
+| `FileDecorationProviderDescriptor` | `forge.ts` | Passed to `host.registerFileDecorationProvider` |
+| `FileDecorationContribution` | `forge.ts` | Manifest `contributes.fileDecorationProviders` entry |
+
+### Forge projection types
+
+Types appearing in worktree-linked and CI-status projections:
+
+| Export              | Source     | Notes                                          |
+| ------------------- | ---------- | ---------------------------------------------- |
+| `NormalizedPRState` | `forge.ts` | `"open" \| "merged" \| "closed" \| "declined"` |
+| `ResourceRef`       | `forge.ts` | Provider-agnostic reference to an issue or PR  |
+| `CIStatus`          | `forge.ts` | CI roll-up used by `PluginWorktreeLinkedPR`    |
+
+### Host-internal (NOT exported from SDK)
+
+These types exist in `shared/types/plugin.ts` but are intentionally excluded from the SDK. Plugin authors should never reference them:
+
+| Symbol | Why internal |
+| --- | --- |
+| `BUILT_IN_PLUGIN_PERMISSIONS` | Runtime `const` array; host schema only |
+| `LoadedPluginInfo` | Host loading lifecycle; `isBuiltin` is host-private |
+| `PluginActionDescriptor` | Host-computed fields (`pluginId`, `effectiveDanger`); plugin never constructs one |
+
+### Adding a new export
+
+1. Add the type to `shared/types/plugin.ts` or `shared/types/forge.ts` as appropriate
+2. Classify it as SDK-public, SDK-react-public, or host-internal
+3. If SDK-public, re-export it from `shared/types/plugin-sdk.ts` and add a row to the table above
+4. If it's a new forge.js import in `plugin.ts`, the ESLint guard warns — the re-export in `plugin-sdk.ts` serves as the classification record
+5. Update `shared/types/__tests__/plugin-sdk.test.ts` with a type-level assertion
+
 ## Reference
 
 Key source locations for contributors:
