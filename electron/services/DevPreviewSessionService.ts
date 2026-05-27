@@ -64,6 +64,15 @@ interface DevPreviewSession extends DevPreviewSessionState {
   compilingEmitted: boolean;
   compilingTimer: ReturnType<typeof setTimeout> | null;
   forceKilled?: boolean;
+  // Crash-loop guard state. crashCount is the number of consecutive fast
+  // install→crash cycles in the current window; devSpawnedAt marks when the
+  // dev server (not an install) last spawned, used to graduate the counter
+  // once a spawn survives CRASH_LOOP_MIN_UPTIME_MS. backoffAbort cancels a
+  // pending delayed re-install when the user restarts or the service disposes.
+  crashCount: number;
+  devSpawnedAt: number | null;
+  backoffAbort: AbortController | null;
+  crashLoopStopped: boolean;
 }
 
 const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
@@ -88,6 +97,22 @@ const STALE_START_RECOVERY_MS = 10000;
 const STARTUP_REPLAY_DELAY_MS = 1500;
 const REPLAY_HISTORY_MAX_LINES = 300;
 const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
+
+// Per-session crash-loop guard. A broken config (missing deps that an install
+// can't fix) otherwise drives an unbounded install→crash→reinstall cycle that
+// burns CPU and battery. The guard counts consecutive fast cycles, backs off
+// geometrically between re-install attempts, and after CRASH_LOOP_MAX_ATTEMPTS
+// halts auto-respawn into a recoverable "stopped" state. A dev server that
+// survives CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Values
+// are tuned for a dev workflow (sub-3s cap) — not Kubernetes-style multi-minute
+// waits — so a developer who just fixed the bug isn't punished. The first
+// re-install in a fresh window runs immediately; backoff applies only to
+// repeats.
+const CRASH_LOOP_MIN_UPTIME_MS = 5000;
+const CRASH_LOOP_INITIAL_DELAY_MS = 500;
+const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
+const CRASH_LOOP_MAX_DELAY_MS = 3000;
+const CRASH_LOOP_MAX_ATTEMPTS = 5;
 
 export class DevPreviewSessionService {
   private readonly detector = new UrlDetector();
@@ -207,6 +232,7 @@ export class DevPreviewSessionService {
     for (const session of this.sessions.values()) {
       this.clearStartupReplay(session);
       session.readinessAbort?.abort();
+      session.backoffAbort?.abort();
       this.clearCompiling(session);
     }
     for (const terminalId of this.terminalToSession.keys()) {
@@ -258,6 +284,13 @@ export class DevPreviewSessionService {
         session.env = cloneEnv(request.env);
       }
 
+      // A config change is an explicit "try again with new settings" — clear a
+      // tripped crash-loop guard so the fresh config gets its full attempt
+      // budget instead of inheriting a stopped state from the old config.
+      if (configChanged) {
+        this.resetCrashLoopGuard(session);
+      }
+
       if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
         this.worktreeToSession.delete(prevWorktreeId);
       }
@@ -305,6 +338,10 @@ export class DevPreviewSessionService {
       await this.runLocked(key, async () => {
         const session = this.sessions.get(key);
         if (!session) return;
+
+        // User-initiated restart cancels any pending crash-loop backoff and
+        // clears the guard so this attempt starts from a clean slate.
+        this.resetCrashLoopGuard(session);
 
         const commandError = getInvalidCommandMessage(session.devCommand);
         if (commandError) {
@@ -355,6 +392,8 @@ export class DevPreviewSessionService {
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
       if (!session) return;
+
+      this.resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -415,6 +454,8 @@ export class DevPreviewSessionService {
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
       if (!session) return;
+
+      this.resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -497,6 +538,12 @@ export class DevPreviewSessionService {
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
       if (!session) return;
+
+      // An explicit stop ends the session — clear the guard (and any pending
+      // backoff) so it can't auto-respawn behind the user's back. The terminal
+      // branch routes through stopSessionTerminal, but a stop arriving mid
+      // backoff has no live terminal and would otherwise skip the abort.
+      this.resetCrashLoopGuard(session);
 
       if (session.terminalId) {
         this.updateSession(session, { status: "stopping", isRestarting: false });
@@ -737,6 +784,10 @@ export class DevPreviewSessionService {
       startupReplayTimer: null,
       compilingEmitted: false,
       compilingTimer: null,
+      crashCount: 0,
+      devSpawnedAt: null,
+      backoffAbort: null,
+      crashLoopStopped: false,
     };
     this.sessions.set(key, session);
     return session;
@@ -781,6 +832,7 @@ export class DevPreviewSessionService {
       updatedAt: session.updatedAt,
       phaseLabel: session.phaseLabel,
       forceKilled: session.forceKilled,
+      crashLoopStopped: session.crashLoopStopped || undefined,
     };
   }
 
@@ -799,6 +851,7 @@ export class DevPreviewSessionService {
         | "generation"
         | "phaseLabel"
         | "forceKilled"
+        | "crashLoopStopped"
       >
     >
   ): void {
@@ -814,6 +867,7 @@ export class DevPreviewSessionService {
     if (updates.generation !== undefined) session.generation = updates.generation;
     if ("phaseLabel" in updates) session.phaseLabel = updates.phaseLabel;
     if ("forceKilled" in updates) session.forceKilled = updates.forceKilled;
+    if (updates.crashLoopStopped !== undefined) session.crashLoopStopped = updates.crashLoopStopped;
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
     this.onStateChanged(this.toPublicState(session));
@@ -881,6 +935,14 @@ export class DevPreviewSessionService {
       this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
     }
 
+    // A tripped crash-loop guard halts auto-respawn until the user restarts
+    // explicitly. ensure() runs on every remount (dock↔grid, eviction
+    // rehydration) with unchanged config, so without this the pane would
+    // silently respawn a known-broken server on each transition. A config
+    // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
+    // restart() clears it before spawning, so only the automatic path is held.
+    if (session.crashLoopStopped) return;
+
     await this.spawnSessionTerminal(session);
   }
 
@@ -893,6 +955,91 @@ export class DevPreviewSessionService {
         error: formatErrorMessage(err, "Failed to replay terminal history"),
       });
     }
+  }
+
+  /**
+   * Clear the crash-loop guard for an explicit user- or config-driven restart:
+   * cancel any pending backoff, zero the counter, and lift the stopped flag.
+   * Callers must run this before spawning/installing so the broadcast that
+   * follows reports a fresh (non-crash-looped) state.
+   */
+  private resetCrashLoopGuard(session: DevPreviewSession): void {
+    session.backoffAbort?.abort();
+    session.backoffAbort = null;
+    session.crashCount = 0;
+    session.crashLoopStopped = false;
+  }
+
+  /**
+   * Decide whether to auto-respawn after a dev-server exit that wants a
+   * (re)install, applying the crash-loop guard. A server that survived
+   * CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Once
+   * CRASH_LOOP_MAX_ATTEMPTS consecutive fast cycles accumulate, auto-respawn
+   * halts and the session lands in a recoverable "stopped" state. Otherwise
+   * the install is scheduled — immediately for the first attempt in a window,
+   * with geometric backoff for repeats. Returns nothing; the caller must
+   * `return` after invoking it (it owns the respawn decision).
+   */
+  private guardedReinstall(session: DevPreviewSession): void {
+    const uptime =
+      session.devSpawnedAt !== null ? performance.now() - session.devSpawnedAt : Infinity;
+    if (uptime >= CRASH_LOOP_MIN_UPTIME_MS) {
+      session.crashCount = 0;
+    }
+    session.crashCount += 1;
+
+    if (session.crashCount > CRASH_LOOP_MAX_ATTEMPTS) {
+      this.updateSession(session, {
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        crashLoopStopped: true,
+        phaseLabel: undefined,
+      });
+      return;
+    }
+
+    const delayMs =
+      session.crashCount <= 1
+        ? 0
+        : Math.min(
+            CRASH_LOOP_INITIAL_DELAY_MS * CRASH_LOOP_BACKOFF_MULTIPLIER ** (session.crashCount - 2),
+            CRASH_LOOP_MAX_DELAY_MS
+          );
+
+    if (delayMs === 0) {
+      void this.runInstall(session);
+      return;
+    }
+    this.scheduleBackoffRespawn(session, delayMs, () => {
+      void this.runInstall(session);
+    });
+  }
+
+  /**
+   * Run `action` after `delayMs`, guarded so a user restart or dispose during
+   * the wait cancels it. The pending AbortController is parked on the session;
+   * resetCrashLoopGuard()/dispose() abort it to clear the timer, and the
+   * generation check rejects a respawn whose session moved on while waiting.
+   */
+  private scheduleBackoffRespawn(
+    session: DevPreviewSession,
+    delayMs: number,
+    action: () => void
+  ): void {
+    session.backoffAbort?.abort();
+    const abort = new AbortController();
+    session.backoffAbort = abort;
+    const generation = session.generation;
+    const timer = setTimeout(() => {
+      if (session.backoffAbort === abort) session.backoffAbort = null;
+      if (this.disposed || abort.signal.aborted || session.generation !== generation) return;
+      action();
+    }, delayMs);
+    abort.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
   }
 
   private async spawnSessionTerminal(session: DevPreviewSession): Promise<void> {
@@ -911,6 +1058,11 @@ export class DevPreviewSessionService {
     const predictedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
+
+    // Mark the dev-server spawn time for the crash-loop graduation check. Set
+    // only here (the dev server), never in runInstall — an install is part of
+    // recovery, not a crash, and must not count toward the survival window.
+    session.devSpawnedAt = performance.now();
 
     session.buffer = "";
     session.lastErrorKey = null;
@@ -1062,6 +1214,11 @@ export class DevPreviewSessionService {
     this.clearStartupReplay(session);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
+    // Cancel a pending crash-loop backoff: otherwise the deferred re-install
+    // fires after the terminal is gone (and, on the delete paths, after the
+    // session is removed), spawning an orphan PTY on a stopped session.
+    session.backoffAbort?.abort();
+    session.backoffAbort = null;
     session.pendingUrl = null;
     session.markerSeen = false;
     this.clearCompiling(session);
@@ -1324,7 +1481,7 @@ export class DevPreviewSessionService {
 
     if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
       session.needsInstall = false;
-      void this.runInstall(session);
+      this.guardedReinstall(session);
       return;
     }
     session.needsInstall = false;

@@ -277,6 +277,7 @@ export function DevPreviewPane({
     isRestarting,
     stuckTier,
     forceKilled,
+    crashLoopStopped,
   } = useDevServer({
     panelId: id,
     devCommand,
@@ -300,6 +301,14 @@ export function DevPreviewPane({
       setForceKillBannerDismissed(false);
     }
   }, [forceKilled]);
+
+  const [crashLoopBannerDismissed, setCrashLoopBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    if (crashLoopStopped) {
+      setCrashLoopBannerDismissed(false);
+    }
+  }, [crashLoopStopped]);
 
   const [history, setHistory] = useState<BrowserHistory>(() => {
     const saved = terminal?.browserHistory;
@@ -1756,6 +1765,25 @@ export function DevPreviewPane({
             severity="warning"
             onClose={() => setForceKillBannerDismissed(true)}
             actions={[]}
+          />
+        )}
+        {crashLoopStopped && status === "stopped" && !crashLoopBannerDismissed && (
+          <InlineStatusBanner
+            icon={OctagonAlert}
+            title="Dev server stopped"
+            description="The server crashed and restarted several times in a row. Check your dev server config, then restart once it's fixed."
+            severity="warning"
+            onClose={() => setCrashLoopBannerDismissed(true)}
+            actions={[
+              {
+                id: "crash-loop-restart",
+                label: "Restart dev server",
+                icon: RotateCw,
+                variant: "danger",
+                onClick: handleRestartDevServer,
+                ariaLabel: "Restart dev server",
+              },
+            ]}
           />
         )}
         {consoleTerminalId && (

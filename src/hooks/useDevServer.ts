@@ -45,6 +45,12 @@ export interface UseDevServerReturn extends UseDevServerState {
    */
   stuckTier: DevServerStuckTier;
   forceKilled?: boolean;
+  /**
+   * True when the PTY-layer crash-loop guard halted auto-respawn after repeated
+   * fast install→crash cycles. Pairs with `status === "stopped"` to surface a
+   * recoverable banner; an explicit restart clears it.
+   */
+  crashLoopStopped?: boolean;
 }
 
 /**
@@ -126,6 +132,7 @@ export function useDevServer({
   const [initialStateResolved, setInitialStateResolved] = useState(false);
   const [stuckTier, setStuckTier] = useState<DevServerStuckTier>(0);
   const [forceKilled, setForceKilled] = useState<boolean | undefined>(undefined);
+  const [crashLoopStopped, setCrashLoopStopped] = useState<boolean | undefined>(undefined);
   const latestSessionRef = useRef<{
     status: DevPreviewStatus;
     url: string | null;
@@ -201,6 +208,7 @@ export function useDevServer({
     setPhaseLabel(state.phaseLabel);
     setIsRestarting(state.isRestarting);
     setForceKilled(state.forceKilled);
+    setCrashLoopStopped(state.crashLoopStopped);
   }, []);
 
   const applyInvokeError = useCallback((err: unknown) => {
@@ -548,5 +556,6 @@ export function useDevServer({
     isRestarting,
     stuckTier,
     forceKilled,
+    crashLoopStopped,
   };
 }
