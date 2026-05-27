@@ -338,6 +338,59 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
   };
 }
 
+/**
+ * Like `createSafeJSONStorage`, but coalesces rapid `setItem` calls per key
+ * through a trailing-edge debounce. Reads stay synchronous so hydration is
+ * unaffected; `removeItem` cancels any pending write for the same key so a
+ * `clearAll` followed shortly by a tear-down can't be silently re-populated by
+ * a stale write timer.
+ */
+export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStorage<T> {
+  const raw = createResilientStorage(resolveLocalStorage());
+  const pending = new Map<string, { timer: ReturnType<typeof setTimeout>; value: string }>();
+
+  const flush = (name: string): void => {
+    const entry = pending.get(name);
+    if (!entry) return;
+    pending.delete(name);
+    raw.setItem(name, entry.value);
+  };
+
+  return {
+    getItem: (name) => {
+      // Flush any pending write so reads-after-writes are coherent.
+      flush(name);
+      const value = raw.getItem(name);
+      if (value instanceof Promise) return null;
+      if (value === null) return null;
+      try {
+        return JSON.parse(value) as StorageValue<T>;
+      } catch (error) {
+        console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
+          key: name,
+          error: formatErrorMessage(error, "Corrupt persisted state"),
+        });
+        return null;
+      }
+    },
+    setItem: (name, value) => {
+      const serialized = JSON.stringify(value);
+      const existing = pending.get(name);
+      if (existing) clearTimeout(existing.timer);
+      const timer = setTimeout(() => flush(name), delayMs);
+      pending.set(name, { timer, value: serialized });
+    },
+    removeItem: (name) => {
+      const existing = pending.get(name);
+      if (existing) {
+        clearTimeout(existing.timer);
+        pending.delete(name);
+      }
+      raw.removeItem(name);
+    },
+  };
+}
+
 export function readLocalStorageItemSafely(name: string): string | null {
   const storage = resolveLocalStorage();
   if (!storage) {

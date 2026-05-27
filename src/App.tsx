@@ -57,6 +57,7 @@ import {
   useOrchestrationMilestones,
   useAgentWaitingNudge,
   useFocusOnActivateIntent,
+  useNotificationHistoryPruning,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -504,6 +505,7 @@ function AppInner() {
   useStoreUpdateListener();
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
+  useNotificationHistoryPruning();
 
   useEffect(() => {
     if (!isStateLoaded) return;
