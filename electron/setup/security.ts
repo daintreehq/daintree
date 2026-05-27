@@ -11,7 +11,7 @@ import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { getCurrentCorrelationId } from "../services/TelemetryService.js";
 
 /**

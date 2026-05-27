@@ -4,7 +4,7 @@ import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import type { AgentHelpResult } from "../../shared/types/ipc/agent.js";
 import { SAFE_AGENT_ID_PATTERN } from "../../shared/types/index.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
 const execFileAsync = promisify(execFile);
 
