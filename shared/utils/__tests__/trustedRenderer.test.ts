@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isRecoveryPageUrl, isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
+import {
+  isMainAppRoute,
+  isRecoveryPageUrl,
+  isTrustedRendererUrl,
+  getTrustedOrigins,
+} from "../trustedRenderer.js";
 
 describe("trustedRenderer", () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -144,6 +149,56 @@ describe("trustedRenderer", () => {
       expect(isRecoveryPageUrl("http://localhost:5173/recovery.html")).toBe(false);
       expect(isRecoveryPageUrl("http://127.0.0.1:5173/recovery.html")).toBe(false);
       expect(isRecoveryPageUrl("app://daintree/recovery.html")).toBe(true);
+    });
+  });
+
+  describe("isMainAppRoute", () => {
+    it("accepts production index page URL", () => {
+      expect(isMainAppRoute("app://daintree/index.html")).toBe(true);
+    });
+
+    it("accepts production root path (no explicit index.html)", () => {
+      expect(isMainAppRoute("app://daintree")).toBe(true);
+      expect(isMainAppRoute("app://daintree/")).toBe(true);
+    });
+
+    it("accepts dev-server root and index URLs on both localhost and 127.0.0.1", () => {
+      expect(isMainAppRoute("http://localhost:5173/")).toBe(true);
+      expect(isMainAppRoute("http://localhost:5173/index.html")).toBe(true);
+      expect(isMainAppRoute("http://127.0.0.1:5173/")).toBe(true);
+      expect(isMainAppRoute("http://127.0.0.1:5173/index.html")).toBe(true);
+    });
+
+    it("accepts main app URL with query string and hash", () => {
+      expect(isMainAppRoute("app://daintree/index.html?projectId=abc")).toBe(true);
+      expect(isMainAppRoute("http://localhost:5173/?projectId=abc")).toBe(true);
+      expect(isMainAppRoute("app://daintree/#/settings")).toBe(true);
+    });
+
+    it("rejects the recovery page URL", () => {
+      expect(isMainAppRoute("app://daintree/recovery.html")).toBe(false);
+      expect(isMainAppRoute("http://localhost:5173/recovery.html")).toBe(false);
+    });
+
+    it("rejects other trusted-origin routes", () => {
+      expect(isMainAppRoute("app://daintree/other.html")).toBe(false);
+      expect(isMainAppRoute("app://daintree/subdir/index.html")).toBe(false);
+    });
+
+    it("rejects index.html on untrusted origins", () => {
+      expect(isMainAppRoute("https://evil.com/index.html")).toBe(false);
+      expect(isMainAppRoute("http://localhost:3000/index.html")).toBe(false);
+    });
+
+    it("rejects malformed URLs", () => {
+      expect(isMainAppRoute("")).toBe(false);
+      expect(isMainAppRoute("not-a-url")).toBe(false);
+    });
+
+    it("rejects localhost main-app URLs in production mode", () => {
+      process.env.NODE_ENV = "production";
+      expect(isMainAppRoute("http://localhost:5173/index.html")).toBe(false);
+      expect(isMainAppRoute("app://daintree/index.html")).toBe(true);
     });
   });
 });

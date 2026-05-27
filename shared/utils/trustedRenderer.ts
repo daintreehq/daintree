@@ -51,6 +51,28 @@ export function isRecoveryPageUrl(urlString: string): boolean {
   }
 }
 
+/**
+ * Returns true if the renderer URL is the main application entry point on a
+ * trusted origin. The main app loads at `app://daintree/index.html` in
+ * production and at the dev-server root (`http://localhost:5173/`) in
+ * development, so both the root path and `/index.html` count as the main app.
+ *
+ * This is the route-scoped complement to {@link isRecoveryPageUrl}: it
+ * identifies the full-surface route, while `isRecoveryPageUrl` identifies the
+ * narrow recovery surface. The preload uses `isRecoveryPageUrl` as the exposure
+ * discriminator so any future trusted route defaults to the full surface; this
+ * helper exists for callers that need to affirmatively recognise the main app.
+ */
+export function isMainAppRoute(urlString: string): boolean {
+  if (!isTrustedRendererUrl(urlString)) return false;
+  try {
+    const url = new URL(urlString);
+    return url.pathname === "" || url.pathname === "/" || url.pathname === "/index.html";
+  } catch {
+    return false;
+  }
+}
+
 export function getTrustedOrigins(): readonly string[] {
   return getTrustedRendererOrigins();
 }

@@ -10,7 +10,7 @@
  */
 
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
-import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
+import { isTrustedRendererUrl, isRecoveryPageUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
@@ -2522,26 +2522,39 @@ const api: ElectronAPI = {
     : {}),
 };
 
-// Expose the API to the renderer process only for trusted origins in the main frame
-if (window.top === window && isTrustedRendererUrl(window.location.href)) {
-  contextBridge.exposeInMainWorld("electron", api);
-  // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
-  // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
-  // forward envelopes to the main process (which owns the real DSN and HTTP
-  // transport). contextIsolation blocks Sentry's default preload injection,
-  // so we expose the bridge manually here — gated to the trusted main-frame
-  // origin just like the `electron` API above.
-  contextBridge.exposeInMainWorld("__SENTRY_IPC__", {
-    "sentry-ipc": {
-      sendRendererStart: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.start", ...args),
-      sendScope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.scope", ...args),
-      sendEnvelope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.envelope", ...args),
-      sendStatus: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.status", ...args),
-      sendStructuredLog: (...args: unknown[]) =>
-        ipcRenderer.send("sentry-ipc.structured-log", ...args),
-      sendMetric: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.metric", ...args),
-    },
-  });
+// Expose the API to the renderer process only for trusted origins in the main frame.
+// The recovery page (recovery.html) is a static crash-recovery surface whose sole
+// consumer (recovery-renderer.js) only touches `window.electron.recovery.*`. It gets
+// a narrow bridge exposing only the 4-method `recovery` namespace, so an XSS on that
+// page can't reach terminal.spawn, files.*, worktree.*, etc. Every other trusted
+// same-origin route (index.html, and any future route) gets the full surface — using
+// isRecoveryPageUrl as the discriminator keeps the full surface as the safe default.
+const rendererUrl = window.location.href;
+if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
+  if (isRecoveryPageUrl(rendererUrl)) {
+    contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
+    // __SENTRY_IPC__ is intentionally withheld here: recovery.html has no Sentry
+    // renderer SDK and exposing the transport would needlessly widen its surface.
+  } else {
+    contextBridge.exposeInMainWorld("electron", api);
+    // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
+    // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
+    // forward envelopes to the main process (which owns the real DSN and HTTP
+    // transport). contextIsolation blocks Sentry's default preload injection,
+    // so we expose the bridge manually here — gated to the trusted main-frame
+    // origin just like the `electron` API above.
+    contextBridge.exposeInMainWorld("__SENTRY_IPC__", {
+      "sentry-ipc": {
+        sendRendererStart: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.start", ...args),
+        sendScope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.scope", ...args),
+        sendEnvelope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.envelope", ...args),
+        sendStatus: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.status", ...args),
+        sendStructuredLog: (...args: unknown[]) =>
+          ipcRenderer.send("sentry-ipc.structured-log", ...args),
+        sendMetric: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.metric", ...args),
+      },
+    });
+  }
 } else {
   if (window.top !== window) {
     console.error(
