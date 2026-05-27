@@ -21,6 +21,10 @@ export class PortalManager {
   private activeTabId: string | null = null;
   private lruOrder = new Map<string, true>();
   private lastShownTabId: string | null = null;
+  // True while the active view is parked offscreen by hideAll(). Guards
+  // updateBounds() so a window resize during an open overlay does not pull
+  // the hidden view back on top of the overlay.
+  private hidden = false;
   private readonly backgroundColor: string;
   private readonly attachedViews = new Set<WebContentsView>();
   private readonly lastShownBounds = new Map<string, { width: number; height: number }>();
@@ -71,6 +75,7 @@ export class PortalManager {
     if (this.activeView === view) {
       this.activeView = null;
       this.activeTabId = null;
+      this.hidden = false;
     }
 
     // Flush storage before closing to prevent localStorage data loss
@@ -191,6 +196,7 @@ export class PortalManager {
         if (this.activeTabId === tabId) {
           this.activeView = null;
           this.activeTabId = null;
+          this.hidden = false;
         }
       });
 
@@ -362,6 +368,7 @@ export class PortalManager {
     });
     this.activeView = view;
     this.activeTabId = tabId;
+    this.hidden = false;
     this.touchLru(tabId);
     this.evictIfNeeded();
     this.lastShownTabId = tabId;
@@ -390,10 +397,30 @@ export class PortalManager {
     // protects the right tab from memory-pressure eviction.
     if (this.activeView) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
+      this.hidden = true;
+      // Return focus to the main app webContents. The old removeChildView
+      // path implicitly blurred the portal view; keep that behavior so
+      // keyboard input goes to the overlay's focus-trap (in the renderer's
+      // V8 context), not the now-hidden portal page.
+      if (!this.window.isDestroyed()) {
+        try {
+          const appWc = getAppWebContents(this.window);
+          if (!appWc.isDestroyed()) {
+            appWc.focus();
+          }
+        } catch {
+          // Best-effort focus return; never block overlay open on this.
+        }
+      }
     }
   }
 
   updateBounds(bounds: PortalBounds): void {
+    // Renderer-side syncBounds (PortalDock ResizeObserver + window resize
+    // listener) only gates on activeTabId, which is preserved across
+    // hideAll(). Without this guard a window resize while an overlay is open
+    // would re-show the parked view on top of the overlay.
+    if (this.hidden) return;
     if (this.activeView) {
       const validatedBounds = this.validateBounds(bounds);
       this.activeView.setBounds(validatedBounds);
@@ -475,6 +502,7 @@ export class PortalManager {
     this.activeView = null;
     this.activeTabId = null;
     this.lastShownTabId = null;
+    this.hidden = false;
     this.attachedViews.clear();
     this.lastShownBounds.clear();
   }

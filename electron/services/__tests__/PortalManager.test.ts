@@ -291,6 +291,71 @@ describe("PortalManager", () => {
       expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
     });
 
+    it("updateBounds is a no-op while parked offscreen", () => {
+      // Regression guard for #9207 follow-up: PortalDock's ResizeObserver and
+      // window-resize listener only gate on activeTabId, which is preserved
+      // across hideAll(). Without this guard a window resize while an overlay
+      // is open would re-show the parked view on top of the overlay.
+      const manager = new PortalManagerClass(mockWindow);
+
+      const addChildViewMock = mockWindow.contentView.addChildView as ReturnType<typeof vi.fn>;
+      manager.createTab("tab-resize", "http://localhost:3000");
+      manager.showTab("tab-resize", { x: 0, y: 0, width: 800, height: 600 });
+      const view = addChildViewMock.mock.calls.at(-1)?.[0] as {
+        setBounds: ReturnType<typeof vi.fn>;
+      };
+
+      manager.hideAll();
+      const setBoundsCallsAfterHide = view.setBounds.mock.calls.length;
+
+      // Simulate a window resize firing through PortalDock → portal.resize.
+      manager.updateBounds({ x: 0, y: 0, width: 1024, height: 768 });
+
+      // The view must remain offscreen — updateBounds was suppressed.
+      expect(view.setBounds.mock.calls.length).toBe(setBoundsCallsAfterHide);
+    });
+
+    it("updateBounds resumes after showTab re-shows the parked tab", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      const addChildViewMock = mockWindow.contentView.addChildView as ReturnType<typeof vi.fn>;
+      manager.createTab("tab-resume", "http://localhost:3000");
+      manager.showTab("tab-resume", { x: 0, y: 0, width: 800, height: 600 });
+      const view = addChildViewMock.mock.calls.at(-1)?.[0] as {
+        setBounds: ReturnType<typeof vi.fn>;
+      };
+
+      manager.hideAll();
+      manager.showTab("tab-resume", { x: 0, y: 0, width: 1024, height: 768 });
+
+      const setBoundsCallsBefore = view.setBounds.mock.calls.length;
+      manager.updateBounds({ x: 0, y: 0, width: 1200, height: 900 });
+
+      // updateBounds is no longer suppressed — view receives the new bounds.
+      expect(view.setBounds.mock.calls.length).toBe(setBoundsCallsBefore + 1);
+      const lastBounds = view.setBounds.mock.calls.at(-1)?.[0];
+      expect(lastBounds.width).toBe(1200);
+      expect(lastBounds.height).toBe(900);
+    });
+
+    it("hideAll returns focus to the main app webContents", () => {
+      // The old removeChildView path implicitly blurred the portal view.
+      // Keep that behavior so the overlay's renderer focus-trap receives
+      // keyboard input instead of the now-hidden portal page.
+      const manager = new PortalManagerClass(mockWindow);
+
+      // The window's webContents is the app WebContents in this test mock
+      // (single-WebContents BrowserWindow stand-in).
+      const focusMock = vi.fn();
+      (mockWindow.webContents as unknown as { focus: typeof focusMock }).focus = focusMock;
+
+      manager.createTab("tab-focus", "http://localhost:3000");
+      manager.showTab("tab-focus", { x: 0, y: 0, width: 800, height: 600 });
+      manager.hideAll();
+
+      expect(focusMock).toHaveBeenCalledTimes(1);
+    });
+
     it("is safe to call when no tab is active", () => {
       const manager = new PortalManagerClass(mockWindow);
 
