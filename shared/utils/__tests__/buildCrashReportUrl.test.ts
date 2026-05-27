@@ -39,6 +39,11 @@ function decodeBody(url: string): string {
   return match ? decodeURIComponent(match[1]!) : "";
 }
 
+function decodeTitle(url: string): string {
+  const match = url.match(/[?&]title=([^&]*)/);
+  return match ? decodeURIComponent(match[1]!) : "";
+}
+
 describe("buildCrashReportUrl", () => {
   it("fits a small report in the URL without clipboard fallback", () => {
     const result = buildCrashReportUrl(baseEntry());
@@ -135,6 +140,50 @@ describe("buildCrashReportUrl", () => {
     expect(() =>
       buildCrashReportUrl(baseEntry({ recentActions: [action({ args: circular })] }))
     ).not.toThrow();
+  });
+
+  it("does not throw on a corrupt action timestamp", () => {
+    expect(() =>
+      buildCrashReportUrl(baseEntry({ recentActions: [action({ timestamp: NaN })] }))
+    ).not.toThrow();
+  });
+
+  it("redacts user paths in the issue title", () => {
+    const result = buildCrashReportUrl(baseEntry({ errorMessage: "ENOENT /Users/alice/file.ts" }));
+    const title = decodeTitle(result.url);
+    expect(title).toContain("/Users/USER/file.ts");
+    expect(title).not.toContain("alice");
+  });
+
+  it("redacts secrets in the issue title", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: "token ghp_0123456789012345678901234567890123456789 rejected" })
+    );
+    expect(decodeTitle(result.url)).not.toContain("ghp_0123456789");
+  });
+
+  it("redacts Windows backslash paths inside JSON-stringified action args", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ recentActions: [action({ args: { cwd: "C:\\Users\\Carol\\repo" } })] })
+    );
+    const body = decodeBody(result.url);
+    expect(body).not.toContain("Carol");
+    expect(body).toContain("USER");
+  });
+
+  it("middle-truncates a long stack before falling back to the clipboard", () => {
+    // 200 frames push the full body well past the URL budget, but the 15-head +
+    // 5-tail truncation brings it back under, so this hits stage 3 (not the stub).
+    const frame = (i: number) =>
+      `  at deeplyNestedFunctionCall (/app/src/components/some/nested/module/file-${i}-.ts:${i}:7)`;
+    const stack = ["Error: boom", ...Array.from({ length: 200 }, (_, i) => frame(i))].join("\n");
+    const result = buildCrashReportUrl(baseEntry({ errorStack: stack }));
+    const body = decodeBody(result.url);
+    expect(result.usedClipboardFallback).toBe(false);
+    expect(body).toContain("middle frames truncated");
+    expect(body).toContain("file-0-.ts"); // head frame retained
+    expect(body).toContain("file-199-.ts"); // tail frame retained
+    expect(body).not.toContain("file-100-.ts"); // middle frame dropped
   });
 
   it("surfaces the watchdog cause in the title when there is no message", () => {

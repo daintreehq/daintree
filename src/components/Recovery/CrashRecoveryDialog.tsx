@@ -86,19 +86,25 @@ export function CrashRecoveryDialog({
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
   const reportTextRef = useRef<HTMLTextAreaElement>(null);
 
+  const recentActions = crash.entry.recentActions ?? [];
+  // The ring buffer is chronological; show newest-first so the most relevant
+  // pre-crash context is at the top.
+  const actionsNewestFirst = useMemo(() => [...recentActions].reverse(), [recentActions]);
+  const reportResult = useMemo(() => buildCrashReportUrl(crash.entry), [crash.entry]);
+
+  // Whether the (possibly edited) report exceeds the URL budget and must travel
+  // via the clipboard. Tracks the textarea so the note stays accurate as the user
+  // trims or pads the report.
+  const [clipboardFallback, setClipboardFallback] = useState(reportResult.usedClipboardFallback);
+
   // Reset the preview when a different crash is loaded into the dialog. The
   // textarea content resets for free via key={crash.entry.id}; this only clears
   // the surrounding open/error state (single effect, not a split init/reset).
   useEffect(() => {
     setShowReportPreview(false);
     setReportError(null);
-  }, [crash.entry.id]);
-
-  const recentActions = crash.entry.recentActions ?? [];
-  // The ring buffer is chronological; show newest-first so the most relevant
-  // pre-crash context is at the top.
-  const actionsNewestFirst = useMemo(() => [...recentActions].reverse(), [recentActions]);
-  const reportResult = useMemo(() => buildCrashReportUrl(crash.entry), [crash.entry]);
+    setClipboardFallback(reportResult.usedClipboardFallback);
+  }, [crash.entry.id, reportResult.usedClipboardFallback]);
 
   const selectedCount = selectedIds.size;
   const allSelected = selectedCount === panels.length;
@@ -487,10 +493,16 @@ export function CrashRecoveryDialog({
                       ref={reportTextRef}
                       defaultValue={reportResult.fullBody}
                       spellCheck={false}
+                      onChange={(e) =>
+                        setClipboardFallback(
+                          buildCrashReportUrlFromBody(crash.entry, e.target.value)
+                            .usedClipboardFallback
+                        )
+                      }
                       className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-daintree-border bg-overlay-soft p-2 font-mono text-xs text-daintree-text/80 select-text"
                       data-testid="report-textarea"
                     />
-                    {reportResult.usedClipboardFallback && (
+                    {clipboardFallback && (
                       <p
                         className="text-xs text-daintree-text/60"
                         data-testid="report-clipboard-note"

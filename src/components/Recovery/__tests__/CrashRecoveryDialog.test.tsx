@@ -714,6 +714,20 @@ describe("CrashRecoveryDialog", () => {
     );
   });
 
+  it("submits the edited textarea content, not the original report", async () => {
+    setup();
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    const textarea = screen.getByTestId("report-textarea") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Edited crash notes from the user" } });
+    fireEvent.click(screen.getByTestId("submit-report-button"));
+    await waitFor(() => expect(window.electron.system.openExternal).toHaveBeenCalled());
+    const url = (window.electron.system.openExternal as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as string;
+    const body = decodeURIComponent(url.match(/[?&]body=([^&]*)/)![1]!);
+    expect(body).toBe("Edited crash notes from the user");
+  });
+
   it("hides the preview when Cancel is clicked", () => {
     setup();
     fireEvent.click(screen.getByTestId("details-toggle"));

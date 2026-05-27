@@ -50,6 +50,14 @@ function stringifyArgs(args: Record<string, unknown>): string {
   }
 }
 
+// `new Date(bad).toISOString()` throws RangeError on a non-numeric/NaN timestamp.
+// A corrupt persisted crash log shouldn't crash the report builder (or the dialog
+// that computes the report in a render-time useMemo), so fall back to the raw value.
+function safeIsoTime(ts: number): string {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toISOString();
+}
+
 /**
  * Render the recent-action trail as a markdown table. Args are JSON-stringified
  * and run through `scrubReportText` so user paths and secrets in argument values
@@ -60,7 +68,7 @@ function stringifyArgs(args: Record<string, unknown>): string {
 export function formatRecentActions(actions: ActionBreadcrumb[] | undefined): string {
   if (!actions || actions.length === 0) return "";
   const rows = actions.map((a) => {
-    const time = new Date(a.timestamp).toISOString();
+    const time = safeIsoTime(a.timestamp);
     const danger = a.danger === "safe" ? "" : a.danger;
     const confirmed = a.confirmed ? "yes" : "";
     const count = a.count > 1 ? `×${a.count}` : "";
@@ -216,7 +224,11 @@ function makeUrl(title: string, body: string): string {
 }
 
 function makeCrashTitle(entry: CrashLogEntry): string {
-  return `Crash: ${entry.errorMessage || entry.cause || "Daintree closed unexpectedly"}`;
+  // Scrub the title too — it carries the error message, which can contain user
+  // paths or secrets that would otherwise leak in the URL's `title=` param.
+  return scrubReportText(
+    `Crash: ${entry.errorMessage || entry.cause || "Daintree closed unexpectedly"}`
+  );
 }
 
 /**
