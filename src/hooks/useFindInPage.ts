@@ -27,26 +27,25 @@ export function useFindInPage(
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
   const [matchCase, setMatchCase] = useState(false);
-  const matchCaseRef = useRef(matchCase);
-  matchCaseRef.current = matchCase;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
   const latestRequestIdRef = useRef<number | null>(null);
 
   const safeFind = useCallback(
-    (text: string, opts: { forward?: boolean; findNext?: boolean }) => {
+    (text: string, opts: { forward?: boolean; findNext?: boolean; matchCase?: boolean }) => {
       if (!webviewElement || !isWebviewReady || !text) return;
       try {
+        const { matchCase: explicitMatchCase, ...restOpts } = opts;
         const requestId = webviewElement.findInPage(text, {
-          ...opts,
-          matchCase: matchCaseRef.current,
+          ...restOpts,
+          matchCase: explicitMatchCase ?? matchCase,
         });
         latestRequestIdRef.current = requestId;
       } catch {
         // webview detached
       }
     },
-    [webviewElement, isWebviewReady]
+    [webviewElement, isWebviewReady, matchCase]
   );
 
   const safeStopFind = useCallback(() => {
@@ -103,12 +102,12 @@ export function useFindInPage(
   }, [query, safeFind]);
 
   const toggleMatchCase = useCallback(() => {
-    matchCaseRef.current = !matchCaseRef.current;
-    setMatchCase(matchCaseRef.current);
+    const next = !matchCase;
+    setMatchCase(next);
     if (query && isOpen) {
-      safeFind(query, { findNext: false });
+      safeFind(query, { findNext: false, matchCase: next });
     }
-  }, [query, isOpen, safeFind]);
+  }, [query, isOpen, matchCase, safeFind]);
 
   // Listen for found-in-page events
   useEffect(() => {

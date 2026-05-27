@@ -135,6 +135,9 @@ const DURABLE_ALLOWLIST = new Set([
 
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
+
+  // Find bar match-case toggle active state (single primary anchor per active focus region)
+  "src/components/Browser/FindBar.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
