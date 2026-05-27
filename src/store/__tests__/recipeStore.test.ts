@@ -60,14 +60,24 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const beginSpawnBatchMock = vi.fn(() => Symbol("spawn-batch"));
+const flushSpawnBatchMock = vi.fn();
+const setFocusedMock = vi.fn();
+
 const panelStoreState: {
   panelIds: string[];
   panelsById: Record<string, unknown>;
   addPanel: typeof addTerminalMock;
+  beginSpawnBatch: typeof beginSpawnBatchMock;
+  flushSpawnBatch: typeof flushSpawnBatchMock;
+  setFocused: typeof setFocusedMock;
 } = {
   panelIds: [],
   panelsById: {},
   addPanel: addTerminalMock,
+  beginSpawnBatch: beginSpawnBatchMock,
+  flushSpawnBatch: flushSpawnBatchMock,
+  setFocused: setFocusedMock,
 };
 
 vi.mock("../panelStore", () => ({
@@ -77,6 +87,7 @@ vi.mock("../panelStore", () => ({
 }));
 
 import { useRecipeStore } from "../recipeStore";
+import { usePanelLimitStore } from "../panelLimitStore";
 
 describe("recipeStore", () => {
   beforeEach(() => {
@@ -627,6 +638,131 @@ describe("recipeStore", () => {
       expect(addTerminalMock).toHaveBeenCalledTimes(1);
       expect(results.spawned).toHaveLength(1);
       expect(results.spawned[0]?.index).toBe(1);
+    });
+
+    it("opens one spawn batch and flushes it once, bypassing per-panel limits", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell 1", command: "a", env: {} },
+              { type: "terminal", title: "Shell 2", command: "b", env: {} },
+              { type: "terminal", title: "Shell 3", command: "c", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(beginSpawnBatchMock).toHaveBeenCalledTimes(1);
+      expect(flushSpawnBatchMock).toHaveBeenCalledTimes(1);
+      expect(flushSpawnBatchMock).toHaveBeenCalledWith(beginSpawnBatchMock.mock.results[0]?.value);
+      expect(addTerminalMock).toHaveBeenCalledWith(expect.objectContaining({ bypassLimits: true }));
+    });
+
+    it("focuses the last spawned grid panel after the batch flush", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell 1", command: "a", env: {} },
+              { type: "terminal", title: "Shell 2", command: "b", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(setFocusedMock).toHaveBeenCalledTimes(1);
+      expect(setFocusedMock).toHaveBeenCalledWith("terminal-2");
+    });
+
+    it("does not steal focus when focusPolicy is preserve", async () => {
+      addTerminalMock.mockResolvedValue("terminal-x");
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell 1", command: "a", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          focusPolicy: "preserve",
+        });
+
+      expect(setFocusedMock).not.toHaveBeenCalled();
+    });
+
+    it("caps the burst at the hard panel limit and reports overflow as failed", async () => {
+      const previousHardLimit = usePanelLimitStore.getState().hardLimit;
+      usePanelLimitStore.setState({ hardLimit: 2, warningsDisabled: true });
+      try {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+        useRecipeStore.setState({
+          recipes: [
+            {
+              id: "recipe-1",
+              name: "Test Recipe",
+              projectId: "project-1",
+              terminals: [
+                { type: "terminal", title: "Shell 1", command: "a", env: {} },
+                { type: "terminal", title: "Shell 2", command: "b", env: {} },
+                { type: "terminal", title: "Shell 3", command: "c", env: {} },
+              ],
+              createdAt: Date.now(),
+            },
+          ],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(2);
+        expect(results.spawned).toHaveLength(2);
+        expect(results.failed).toHaveLength(1);
+        expect(results.failed[0]).toEqual({ index: 2, error: "Panel limit reached" });
+      } finally {
+        usePanelLimitStore.setState({ hardLimit: previousHardLimit, warningsDisabled: false });
+      }
     });
   });
 

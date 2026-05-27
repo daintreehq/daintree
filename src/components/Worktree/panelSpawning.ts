@@ -3,6 +3,9 @@ import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
+import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
+import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 
 export interface SpawnPanelsOptions {
   terminals: RecipeTerminal[];
@@ -39,76 +42,143 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
     }
   }
 
+  if (signal?.aborted) return;
+
+  const store = usePanelStore.getState();
+
+  // Aggregate panel-limit gate before opening the batch. The batched `addPanel`
+  // path defers the `panelIds` append, so per-call limit checks would all read
+  // the same stale count; gate the whole burst once and pass `bypassLimits` on
+  // each call. (#9165)
+  const currentCount = store.panelIds.reduce(
+    (n, id) => (store.panelsById[id]?.location !== "trash" ? n + 1 : n),
+    0
+  );
+  const { allowed } = await preflightSpawnBatchLimit(currentCount, terminals.length);
+  if (signal?.aborted) return;
+
   const errors: { index: number; error: unknown }[] = [];
 
-  for (const [index, t] of terminals.entries()) {
-    if (signal?.aborted) return;
+  // Panels beyond the resolved limit can't spawn — report them as failures.
+  for (let index = allowed; index < terminals.length; index++) {
+    const err = new Error("Panel limit reached");
+    if (onPanelSpawned) {
+      onPanelSpawned(index, null, err);
+    } else {
+      errors.push({ index, error: err });
+    }
+  }
 
-    try {
-      let panelId: string | null;
+  // Capture focus intent before the batch (the batched path suppresses the
+  // per-panel focus mutation that would otherwise focus the last grid panel).
+  const suppressFocus = isMcpSpawnFocusSuppressed() || isAssistantFocused();
 
-      if (t.type === "dev-preview") {
-        panelId = await usePanelStore.getState().addPanel({
-          kind: "dev-preview",
-          title: t.title,
-          cwd,
-          worktreeId,
-          exitBehavior: t.exitBehavior,
-          devCommand: t.devCommand?.trim() || undefined,
-        });
-      } else if (t.type !== "terminal") {
-        const agentId = t.type;
-        const agentConfig = getAgentConfig(agentId);
-        const baseCommand = agentConfig?.command ?? "";
-        const entry = agentSettings?.agents?.[agentId] ?? {};
-        const command = generateAgentCommand(baseCommand, entry, agentId, {
-          clipboardDirectory,
-          modelId: t.agentModelId,
-        });
+  type Outcome = { index: number; panelId: string | null; error?: unknown; skipped?: boolean };
 
-        panelId = await usePanelStore.getState().addPanel({
-          kind: "terminal",
-          launchAgentId: agentId,
-          command,
-          title: t.title,
-          cwd,
-          worktreeId,
-          exitBehavior: t.exitBehavior,
-          agentModelId: t.agentModelId,
-          agentLaunchFlags: t.agentLaunchFlags,
-        });
-      } else {
-        panelId = await usePanelStore.getState().addPanel({
-          kind: "terminal",
-          title: t.title,
-          cwd,
-          worktreeId,
-          exitBehavior: t.exitBehavior,
-          command: t.command?.trim() || undefined,
-        });
-      }
+  // One batch for the whole burst: each `addPanel` commits `panelsById`
+  // immediately but defers the `panelIds` append, collapsing N grid reflows
+  // into one at flush. (#9165)
+  const batchToken = store.beginSpawnBatch();
+  let outcomes: Outcome[];
+  try {
+    outcomes = await Promise.all(
+      terminals.slice(0, allowed).map(async (t, index): Promise<Outcome> => {
+        // Re-check between (parallel) dispatches: a synchronous abort from an
+        // earlier panel's spawn still stops later panels from being created.
+        if (signal?.aborted) return { index, panelId: null, skipped: true };
 
-      if (panelId != null) {
         try {
-          onPanelSpawned?.(index, panelId);
-        } catch {
-          // Callback threw — it already fired once, nothing to do.
+          let panelId: string | null;
+
+          if (t.type === "dev-preview") {
+            panelId = await store.addPanel({
+              kind: "dev-preview",
+              title: t.title,
+              cwd,
+              worktreeId,
+              exitBehavior: t.exitBehavior,
+              devCommand: t.devCommand?.trim() || undefined,
+              bypassLimits: true,
+            });
+          } else if (t.type !== "terminal") {
+            const agentId = t.type;
+            const agentConfig = getAgentConfig(agentId);
+            const baseCommand = agentConfig?.command ?? "";
+            const entry = agentSettings?.agents?.[agentId] ?? {};
+            const command = generateAgentCommand(baseCommand, entry, agentId, {
+              clipboardDirectory,
+              modelId: t.agentModelId,
+            });
+
+            panelId = await store.addPanel({
+              kind: "terminal",
+              launchAgentId: agentId,
+              command,
+              title: t.title,
+              cwd,
+              worktreeId,
+              exitBehavior: t.exitBehavior,
+              agentModelId: t.agentModelId,
+              agentLaunchFlags: t.agentLaunchFlags,
+              bypassLimits: true,
+            });
+          } else {
+            panelId = await store.addPanel({
+              kind: "terminal",
+              title: t.title,
+              cwd,
+              worktreeId,
+              exitBehavior: t.exitBehavior,
+              command: t.command?.trim() || undefined,
+              bypassLimits: true,
+            });
+          }
+
+          return { index, panelId };
+        } catch (error) {
+          return { index, panelId: null, error };
         }
-      } else {
-        const err = new Error("addPanel returned null");
-        if (onPanelSpawned) {
-          onPanelSpawned(index, null, err);
-        } else {
-          errors.push({ index, error: err });
-        }
-      }
-    } catch (err) {
+      })
+    );
+  } finally {
+    store.flushSpawnBatch(batchToken);
+  }
+
+  // Report in index order (parallel settle order is non-deterministic).
+  let lastSpawnedId: string | null = null;
+  for (const outcome of outcomes) {
+    if (outcome.skipped) continue;
+
+    if (outcome.error !== undefined) {
       if (onPanelSpawned) {
-        onPanelSpawned(index, null, err);
+        onPanelSpawned(outcome.index, null, outcome.error);
       } else {
-        errors.push({ index, error: err });
+        errors.push({ index: outcome.index, error: outcome.error });
+      }
+      continue;
+    }
+
+    if (outcome.panelId != null) {
+      lastSpawnedId = outcome.panelId;
+      try {
+        onPanelSpawned?.(outcome.index, outcome.panelId);
+      } catch {
+        // Callback threw — it already fired once, nothing to do.
+      }
+    } else {
+      const err = new Error("addPanel returned null");
+      if (onPanelSpawned) {
+        onPanelSpawned(outcome.index, null, err);
+      } else {
+        errors.push({ index: outcome.index, error: err });
       }
     }
+  }
+
+  // Restore the per-panel focus the batch suppressed: focus the last spawned
+  // grid panel, matching the prior serial behaviour.
+  if (!suppressFocus && lastSpawnedId !== null) {
+    store.setFocused(lastSpawnedId);
   }
 
   if (errors.length > 0) {

@@ -1,6 +1,9 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { usePanelStore } from "./panelStore";
+import { preflightSpawnBatchLimit } from "./panelLimitStore";
+import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
+import { isAssistantFocused } from "./macroFocusStore";
 import {
   isDevPreviewPanel,
   isPtyPanel,
@@ -642,69 +645,94 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const results: RecipeSpawnResults = { spawned: [], failed: [] };
 
+    // Split out-of-bounds indices before anything else so they're reported
+    // regardless of how the limit gate or batch resolves.
+    const validIndices: number[] = [];
     for (const index of indicesToSpawn) {
-      const terminal = recipe.terminals[index];
-      if (!terminal) {
+      if (recipe.terminals[index]) {
+        validIndices.push(index);
+      } else {
         results.failed.push({ index, error: `Terminal index ${index} out of bounds` });
-        continue;
       }
-      try {
-        // Handle dev-preview terminals
-        if (terminal.type === "dev-preview") {
-          const terminalId = await terminalStore.addPanel({
-            kind: "dev-preview",
-            title: terminal.title || "Dev Server",
-            cwd: worktreePath,
-            worktreeId: worktreeId,
-            devCommand: terminal.devCommand?.trim() || undefined,
-            env: terminal.env,
-            exitBehavior: terminal.exitBehavior,
-            spawnedBy,
-            focusPolicy,
-          });
-          if (terminalId) {
-            results.spawned.push({ index, terminalId });
-          } else {
-            results.failed.push({ index, error: "Panel limit reached" });
+    }
+
+    // Aggregate panel-limit gate BEFORE opening the batch. The batched path
+    // defers the `panelIds` append, so per-call limit checks would all read the
+    // same stale count and under-enforce the ceiling; gate the whole burst once
+    // here and pass `bypassLimits` on each individual call. (#9165)
+    const currentCount = terminalStore.panelIds.reduce(
+      (n, id) => (terminalStore.panelsById[id]?.location !== "trash" ? n + 1 : n),
+      0
+    );
+    const { allowed } = await preflightSpawnBatchLimit(currentCount, validIndices.length);
+    const spawnIndices = validIndices.slice(0, allowed);
+    for (const index of validIndices.slice(allowed)) {
+      results.failed.push({ index, error: "Panel limit reached" });
+    }
+
+    // Capture focus intent synchronously before the batch. The batched
+    // `addPanel` path suppresses the per-panel focus mutation (it would defeat
+    // the single commit), so focus is restored once after flush. Mirror
+    // panelStore.addPanel's gates so a recipe run can't steal focus from the
+    // assistant or an in-flight MCP dispatch.
+    const suppressFocus =
+      focusPolicy === "preserve" || isMcpSpawnFocusSuppressed() || isAssistantFocused();
+
+    // Open one batch for the whole burst: each `addPanel` commits its
+    // `panelsById` entry immediately but defers the `panelIds` append, so N
+    // panels trigger a single grid reflow at flush instead of N. (#9165)
+    const batchToken = terminalStore.beginSpawnBatch();
+    try {
+      const settled = await Promise.allSettled(
+        spawnIndices.map(async (index) => {
+          const terminal = recipe.terminals[index]!;
+
+          if (terminal.type === "dev-preview") {
+            return terminalStore.addPanel({
+              kind: "dev-preview",
+              title: terminal.title || "Dev Server",
+              cwd: worktreePath,
+              worktreeId: worktreeId,
+              devCommand: terminal.devCommand?.trim() || undefined,
+              env: terminal.env,
+              exitBehavior: terminal.exitBehavior,
+              spawnedBy,
+              focusPolicy,
+              bypassLimits: true,
+            });
           }
-          continue;
-        }
 
-        const isAgent = isAgentRecipeType(terminal.type);
-        let terminalId: string | null;
+          if (isAgentRecipeType(terminal.type)) {
+            const agentId = terminal.type as string;
+            const agentConfig = getAgentConfig(agentId);
+            const baseCommand = agentConfig?.command ?? "";
+            const rawPrompt = terminal.initialPrompt?.trim();
+            const resolvedContext: RecipeContext = { ...context, worktreePath };
+            const initialPrompt = rawPrompt
+              ? replaceRecipeVariables(rawPrompt, resolvedContext)
+              : undefined;
+            const entry = agentSettings?.agents?.[agentId] ?? {};
+            const command = generateAgentCommand(baseCommand, entry, agentId, {
+              initialPrompt,
+              clipboardDirectory,
+              recipeArgs: terminal.args?.trim() || undefined,
+            });
+            return terminalStore.addPanel({
+              kind: "terminal",
+              launchAgentId: agentId,
+              command,
+              title: terminal.title,
+              cwd: worktreePath,
+              worktreeId: worktreeId,
+              env: terminal.env,
+              exitBehavior: terminal.exitBehavior,
+              spawnedBy,
+              focusPolicy,
+              bypassLimits: true,
+            });
+          }
 
-        if (isAgent) {
-          const agentId = terminal.type as string;
-          const agentConfig = getAgentConfig(agentId);
-          const baseCommand = agentConfig?.command ?? "";
-          const rawPrompt = terminal.initialPrompt?.trim();
-          const resolvedContext: RecipeContext = {
-            ...context,
-            worktreePath,
-          };
-          const initialPrompt = rawPrompt
-            ? replaceRecipeVariables(rawPrompt, resolvedContext)
-            : undefined;
-          const entry = agentSettings?.agents?.[agentId] ?? {};
-          const command = generateAgentCommand(baseCommand, entry, agentId, {
-            initialPrompt,
-            clipboardDirectory,
-            recipeArgs: terminal.args?.trim() || undefined,
-          });
-          terminalId = await terminalStore.addPanel({
-            kind: "terminal",
-            launchAgentId: agentId,
-            command,
-            title: terminal.title,
-            cwd: worktreePath,
-            worktreeId: worktreeId,
-            env: terminal.env,
-            exitBehavior: terminal.exitBehavior,
-            spawnedBy,
-            focusPolicy,
-          });
-        } else {
-          terminalId = await terminalStore.addPanel({
+          return terminalStore.addPanel({
             kind: "terminal",
             title: terminal.title,
             cwd: worktreePath,
@@ -714,18 +742,40 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             exitBehavior: terminal.exitBehavior,
             spawnedBy,
             focusPolicy,
+            bypassLimits: true,
           });
-        }
-        if (terminalId) {
-          results.spawned.push({ index, terminalId });
+        })
+      );
+
+      settled.forEach((outcome, i) => {
+        const index = spawnIndices[i]!;
+        if (outcome.status === "fulfilled") {
+          if (outcome.value) {
+            results.spawned.push({ index, terminalId: outcome.value });
+          } else {
+            results.failed.push({ index, error: "Panel limit reached" });
+          }
         } else {
-          results.failed.push({ index, error: "Panel limit reached" });
+          const message = formatErrorMessage(outcome.reason, "Failed to spawn terminal");
+          logError(`Failed to spawn terminal for recipe ${recipeId}`, outcome.reason);
+          results.failed.push({ index, error: message });
         }
-      } catch (error) {
-        const message = formatErrorMessage(error, "Failed to spawn terminal");
-        logError(`Failed to spawn terminal for recipe ${recipeId}`, error);
-        results.failed.push({ index, error: message });
-      }
+      });
+    } finally {
+      // Always flush so the batch can never be left open (a no-op for a `null`
+      // token when a concurrent run already owns the active batch).
+      terminalStore.flushSpawnBatch(batchToken);
+    }
+
+    // Keep the index-ordered contract callers rely on; parallel settle order
+    // and the limit/out-of-bounds prepends would otherwise scramble it.
+    results.spawned.sort((a, b) => a.index - b.index);
+    results.failed.sort((a, b) => a.index - b.index);
+
+    // Restore the per-panel focus the batch suppressed: focus the last spawned
+    // grid panel, matching the prior serial behaviour (last `addPanel` won).
+    if (!suppressFocus && results.spawned.length > 0) {
+      terminalStore.setFocused(results.spawned[results.spawned.length - 1]!.terminalId);
     }
 
     return results;

@@ -17,11 +17,38 @@ import {
 } from "./helpers";
 import type { TrashExpiryHelpers } from "./trash";
 import { logError, logWarn } from "@/utils/logger";
-import { beginBatch, consumeBatch } from "./hydrationBatch";
+import { beginBatch, beginSpawnBatch, consumeBatch } from "./hydrationBatch";
+import type { HydrationBatchToken } from "./types";
 import { removeFromWorktreeIndex } from "./worktreeIndex";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
+
+/**
+ * Append all panel ids collected since the batch opened in a single `set()`.
+ * Shared by both the hydration and spawn batch flushes — the deferred
+ * `panelIds` reveal + one-time persist is identical; only how the batch was
+ * opened differs. A token mismatch (superseded or already flushed, or a `null`
+ * token from `beginSpawnBatch` declining to open a nested batch) is a no-op.
+ */
+function applyBatchFlush(set: Set, token: HydrationBatchToken | null): void {
+  const pendingIds = consumeBatch(token);
+  if (pendingIds === null) return;
+
+  set((state) => {
+    // `panelsById` was already updated per panel during the batch, so this
+    // final `set` only reveals `panelIds` to subscribers and persists once.
+    // Filter: reconnect ids are already in `panelIds`, and a failed addPanel
+    // might have been collected but never landed in `panelsById`.
+    const existing = new Set(state.panelIds);
+    const additions = pendingIds.filter(
+      (id) => !existing.has(id) && state.panelsById[id] !== undefined
+    );
+    const newIds = additions.length > 0 ? [...state.panelIds, ...additions] : state.panelIds;
+    saveNormalized(state.panelsById, newIds);
+    return additions.length > 0 ? { panelIds: newIds } : {};
+  });
+}
 
 export const createCorePanelActions = (
   set: Set,
@@ -32,6 +59,8 @@ export const createCorePanelActions = (
   PanelRegistrySlice,
   | "beginHydrationBatch"
   | "flushHydrationBatch"
+  | "beginSpawnBatch"
+  | "flushSpawnBatch"
   | "removePanel"
   | "updateTitle"
   | "updateLastObservedTitle"
@@ -48,25 +77,11 @@ export const createCorePanelActions = (
 > => ({
   beginHydrationBatch: () => beginBatch(),
 
-  flushHydrationBatch: (token) => {
-    const pendingIds = consumeBatch(token);
-    // Token mismatch means the batch was superseded or already flushed — ignore.
-    if (pendingIds === null) return;
+  flushHydrationBatch: (token) => applyBatchFlush(set, token),
 
-    set((state) => {
-      // `panelsById` was already updated per panel during the batch, so this
-      // final `set` only reveals `panelIds` to subscribers and persists once.
-      // Filter: reconnect ids are already in `panelIds`, and a failed addPanel
-      // might have been collected but never landed in `panelsById`.
-      const existing = new Set(state.panelIds);
-      const additions = pendingIds.filter(
-        (id) => !existing.has(id) && state.panelsById[id] !== undefined
-      );
-      const newIds = additions.length > 0 ? [...state.panelIds, ...additions] : state.panelIds;
-      saveNormalized(state.panelsById, newIds);
-      return additions.length > 0 ? { panelIds: newIds } : {};
-    });
-  },
+  beginSpawnBatch: () => beginSpawnBatch(),
+
+  flushSpawnBatch: (token) => applyBatchFlush(set, token),
 
   removePanel: (id) => {
     clearTrashExpiryTimer(id);

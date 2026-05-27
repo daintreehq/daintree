@@ -49,11 +49,26 @@ export function beginBatch(): HydrationBatchToken {
 }
 
 /**
+ * Open a batch for a recipe/worktree spawn burst, but only if none is already
+ * active. Recipe runs are user-triggered and can overlap (two worktree cards,
+ * a double-click, or a run landing mid-hydration), so — unlike `beginBatch` —
+ * this never supersedes an in-flight batch. Returning `null` tells the caller
+ * to skip its own flush; any panels it adds during the window are still
+ * collected into the active batch and swept up by that batch's flush, where the
+ * dedup-on-flush guard appends each id exactly once. This keeps the single
+ * `panelIds` commit while staying safe under concurrent spawns. See issue #9165.
+ */
+export function beginSpawnBatch(): HydrationBatchToken | null {
+  if (activeHydrationBatch !== null) return null;
+  return beginBatch();
+}
+
+/**
  * Close the active batch if `token` matches and return its pending panel ids.
  * Returns `null` when the token was already consumed or superseded — callers
  * should treat that as a no-op flush.
  */
-export function consumeBatch(token: HydrationBatchToken): string[] | null {
+export function consumeBatch(token: HydrationBatchToken | null): string[] | null {
   if (activeHydrationBatch === null || activeHydrationBatch.token !== token) return null;
   const pendingIds = activeHydrationBatch.pendingIds;
   activeHydrationBatch = null;
