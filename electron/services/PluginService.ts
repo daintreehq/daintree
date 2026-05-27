@@ -1030,8 +1030,15 @@ export class PluginService {
     }
 
     // Untyped registrations keep the legacy raw passthrough — no envelope.
+    // Exception containment (#9276): log and rethrow the original so the
+    // caller still rejects with the handler's own error.
     if (!entry.argsSchema) {
-      return await entry.handler(ctx, ...args);
+      try {
+        return await entry.handler(ctx, ...args);
+      } catch (err) {
+        console.error(`Handler "${key}" threw:`, err);
+        throw err;
+      }
     }
 
     // Capability gate: deny dispatch (failing closed) when the channel declares
@@ -1067,6 +1074,9 @@ export class PluginService {
     try {
       result = await entry.handler(ctx, parsed.data);
     } catch (err) {
+      // Same exception-containment observability as the untyped path (#9276),
+      // but the typed contract returns the failure rather than rethrowing.
+      console.error(`Handler "${key}" threw:`, err);
       return {
         ok: false,
         code: "HANDLER_ERROR",
