@@ -546,12 +546,10 @@ describe("getVoiceSettings migration", () => {
       getVoiceSettings();
       // The store.set call path only fires when legacy fields or stale model exist;
       // the env override itself must never call store.set.
-      const setCalls = vi.mocked(store.set).mock.calls;
-      const envPersistCall = setCalls.some(([, value]) =>
-        typeof value === "object" && value !== null && "openaiApiKey" in value
-          ? (value as Record<string, unknown>).openaiApiKey === "sk-env"
-          : false
-      );
+      const setCalls = vi.mocked(store.set).mock.calls as unknown as Array<
+        [string, Record<string, unknown>?]
+      >;
+      const envPersistCall = setCalls.some(([, value]) => value?.openaiApiKey === "sk-env");
       expect(envPersistCall).toBe(false);
     } finally {
       delete process.env.WHISPER_API_KEY;
