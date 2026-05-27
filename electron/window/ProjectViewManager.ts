@@ -26,7 +26,11 @@ import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { injectSkeletonCss } from "./skeletonCss.js";
+import {
+  injectSkeletonCss,
+  resolveInitialColorSchemeId,
+  INITIAL_COLOR_SCHEME_ARG,
+} from "./skeletonCss.js";
 import { CHANNELS } from "../ipc/channels.js";
 import {
   attachRendererConsoleCapture,
@@ -973,6 +977,10 @@ export class ProjectViewManager {
         webviewTag: true,
         navigateOnDragDrop: false,
         v8CacheOptions: "code",
+        // Seed the renderer with the persisted theme so project-switch cold
+        // starts and LRU-evicted views paint the saved scheme on first frame
+        // instead of a prefers-color-scheme default (#9169).
+        additionalArguments: [`${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`],
       },
     });
   }

@@ -1,13 +1,5 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
-import {
-  app,
-  BrowserWindow,
-  WebContentsView,
-  dialog,
-  ipcMain,
-  session,
-  nativeTheme,
-} from "electron";
+import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
 import {
   getWindowForWebContents,
   registerWebContents,
@@ -34,7 +26,11 @@ import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { injectSkeletonCss } from "./skeletonCss.js";
+import {
+  injectSkeletonCss,
+  resolveInitialColorSchemeId,
+  INITIAL_COLOR_SCHEME_ARG,
+} from "./skeletonCss.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
@@ -144,25 +140,10 @@ export function setupBrowserWindow(
   // Resolve the saved theme to set the correct background color at construction time,
   // avoiding a dark flash when a light theme is active.
   const themeConfig = store.get("appTheme");
-  let colorSchemeId: string;
-  if (
-    themeConfig &&
-    typeof themeConfig === "object" &&
-    !Array.isArray(themeConfig) &&
-    "colorSchemeId" in themeConfig &&
-    typeof themeConfig.colorSchemeId === "string" &&
-    themeConfig.colorSchemeId
-  ) {
-    colorSchemeId = themeConfig.colorSchemeId.trim();
-  } else {
-    // Daintree always defaults to its dark theme on first run, regardless of
-    // the OS color-scheme preference. Users who want light or system-following
-    // behavior can opt in via Settings → Appearance.
-    colorSchemeId =
-      process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
-        ? "daintree"
-        : "bondi";
-  }
+  // Daintree always defaults to its dark theme on first run, regardless of the
+  // OS color-scheme preference. Users who want light or system-following
+  // behavior can opt in via Settings → Appearance.
+  const colorSchemeId = resolveInitialColorSchemeId();
 
   // Apply lazy migration for legacy string-encoded customSchemes
   let customSchemes: AppColorScheme[] = [];
@@ -259,6 +240,9 @@ export function setupBrowserWindow(
       webviewTag: true,
       navigateOnDragDrop: false,
       v8CacheOptions: "code",
+      // Seed the renderer with the persisted theme so first paint applies the
+      // saved scheme instead of a prefers-color-scheme default (#9169).
+      additionalArguments: [`${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`],
     },
   });
 

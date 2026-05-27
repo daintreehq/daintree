@@ -82,6 +82,8 @@ vi.mock("../../ipc/errorHandlers.js", () => ({
 
 vi.mock("../skeletonCss.js", () => ({
   injectSkeletonCss: vi.fn(),
+  INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
+  resolveInitialColorSchemeId: vi.fn(() => "daintree"),
 }));
 
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
