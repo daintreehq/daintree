@@ -870,5 +870,133 @@ describe("FileViewerModal", () => {
 
       expect(disconnectSpy).toHaveBeenCalled();
     });
+
+    it("handles bidirectional observer tracking", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+      const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
+
+      // Show hunk 1 as most visible
+      observer.callback(
+        [
+          {
+            target: hunk1Row!,
+            intersectionRatio: 1.0,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+        ],
+        observer as unknown as IntersectionObserver
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
+      });
+
+      // Scroll back — hunk 0 becomes most visible, hunk 1 fades
+      observer.callback(
+        [
+          {
+            target: hunk0Row!,
+            intersectionRatio: 0.95,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+          {
+            target: hunk1Row!,
+            intersectionRatio: 0.3,
+            isIntersecting: true,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          },
+        ],
+        observer as unknown as IntersectionObserver
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
+      });
+    });
+
+    it("survives zero-ratio entries without crashing", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+
+      // Fire callback with all hunks at ratio 0 (fully scrolled out)
+      expect(() => {
+        observer.callback(
+          [
+            {
+              target: hunk0Row!,
+              intersectionRatio: 0,
+              isIntersecting: false,
+              boundingClientRect: {} as DOMRectReadOnly,
+              intersectionRect: {} as DOMRectReadOnly,
+              rootBounds: null,
+              time: 0,
+            },
+          ],
+          observer as unknown as IntersectionObserver
+        );
+      }).not.toThrow();
+    });
+
+    it("ignores late observer callback after unmount", async () => {
+      const { unmount } = render(
+        <FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      expect(mockObserverInstances.length).toBe(1);
+      const [observer] = mockObserverInstances;
+      const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
+
+      unmount();
+
+      // Fire callback after unmount — must not throw or trigger state update warning
+      expect(() => {
+        observer.callback(
+          [
+            {
+              target: hunk0Row!,
+              intersectionRatio: 1.0,
+              isIntersecting: true,
+              boundingClientRect: {} as DOMRectReadOnly,
+              intersectionRect: {} as DOMRectReadOnly,
+              rootBounds: null,
+              time: 0,
+            },
+          ],
+          observer as unknown as IntersectionObserver
+        );
+      }).not.toThrow();
+    });
   });
 });

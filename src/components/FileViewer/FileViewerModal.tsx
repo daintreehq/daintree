@@ -335,7 +335,20 @@ export function FileViewerModal({
     }
 
     const container = diffViewerRef.current;
-    if (!container) return;
+    if (!container) {
+      setActiveHunkIndex(-1);
+      setHunkCount(0);
+      return;
+    }
+
+    // The diff-viewer div sizes to content (no height constraint). The actual
+    // scroll container is AppDialog.BodyScroll, its direct parent.
+    const scrollRoot = container.parentElement;
+    if (!scrollRoot) {
+      setActiveHunkIndex(-1);
+      setHunkCount(0);
+      return;
+    }
 
     const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
     const count = hunks.length;
@@ -383,7 +396,7 @@ export function FileViewerModal({
           currentHunkIndexRef.current = bestIdx;
         }
       },
-      { root: container, threshold: [0, 0.2, 0.4, 0.6, 0.8, 1.0] }
+      { root: scrollRoot, threshold: [0, 0.2, 0.4, 0.6, 0.8, 1.0] }
     );
 
     hunks.forEach((hunk, index) => {
