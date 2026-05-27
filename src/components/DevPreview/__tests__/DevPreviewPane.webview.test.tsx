@@ -454,6 +454,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       terminalId: "dev-terminal-1",
       error: null,
       start: vi.fn(),
+      stop: vi.fn(),
       restart: vi.fn().mockResolvedValue(undefined),
       isRestarting: false,
     };
@@ -1830,28 +1831,27 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     it("visible when configured with candidates", () => {
-      useProjectSettingsStoreMock.mockImplementation(
-        (selector: (state: Record<string, unknown>) => unknown) => {
-          const state = {
-            projectId: "project-1",
-            settings: {
-              devServerCommand: "npm run dev",
-              environmentVariables: { API_URL: "http://localhost:9000" },
-              runCommands: [],
-            },
-            detectedRunners: [],
-            allDetectedRunners: [
-              { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
-              { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
-            ],
-            isLoading: false,
-            error: null,
-            loadSettings: vi.fn(),
-            setSettings: vi.fn(),
-          };
-          return selector(state);
-        }
-      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: { API_URL: "http://localhost:9000" },
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
 
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
@@ -1868,27 +1868,26 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         devCommand: "npm run custom",
         devPreviewScrollPosition: scrollPositionRef.current,
       }));
-      useProjectSettingsStoreMock.mockImplementation(
-        (selector: (state: Record<string, unknown>) => unknown) => {
-          const state = {
-            projectId: "project-1",
-            settings: {
-              devServerCommand: "npm run custom",
-              environmentVariables: {},
-              runCommands: [],
-            },
-            detectedRunners: [],
-            allDetectedRunners: [
-              { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
-            ],
-            isLoading: false,
-            error: null,
-            loadSettings: vi.fn(),
-            setSettings: vi.fn(),
-          };
-          return selector(state);
-        }
-      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run custom",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
 
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
