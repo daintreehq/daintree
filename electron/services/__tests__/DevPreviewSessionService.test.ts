@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
+import * as portAllocator from "../DevPreviewPortAllocator.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
 
@@ -834,6 +835,92 @@ describe("DevPreviewSessionService", () => {
 
     // Replay should not be called since URL was already detected
     expect(ptyClient.replayHistoryAsync).not.toHaveBeenCalled();
+  });
+
+  it("transitions to error when port doesn't release after stop", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    const waitSpy = vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValueOnce(false);
+
+    const result = await service.stop({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    expect(waitSpy).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("error");
+    expect(result.error?.type).toBe("port-conflict");
+    expect(result.error?.port).toBeDefined();
+    expect(result.terminalId).toBeNull();
+
+    // After a port-free timeout the registry entry is released so the next
+    // ensure() picks a fresh candidate via allocatePort.
+    const restarted = await service.ensure(baseRequest);
+    expect(restarted.assignedUrl).not.toBe(started.assignedUrl);
+  });
+
+  it("transitions to stopped when waitForPortFree succeeds", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    const waitSpy = vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValueOnce(true);
+
+    const result = await service.stop({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    expect(waitSpy).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("stopped");
+    expect(result.error).toBeNull();
+  });
+
+  it("does not wait for port-free when stopping a session with no terminal", async () => {
+    const waitSpy = vi.spyOn(portAllocator, "waitForPortFree");
+
+    const result = await service.stop({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    expect(waitSpy).not.toHaveBeenCalled();
+    expect(result.status).toBe("stopped");
+  });
+
+  it("transitions to error when port doesn't release before restart", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+    const initialSpawnCount = ptyClient.spawn.mock.calls.length;
+
+    vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValueOnce(false);
+
+    const result = await service.restart({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error?.type).toBe("port-conflict");
+    // Spawn must not run when port is still occupied.
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(initialSpawnCount);
+  });
+
+  it("transitions to error when port doesn't release before restart-and-clear-cache", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+    const initialSpawnCount = ptyClient.spawn.mock.calls.length;
+
+    vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValueOnce(false);
+
+    const result = await service.restartAndClearCache({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error?.type).toBe("port-conflict");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(initialSpawnCount);
   });
 
   it("continues stop-by-panel cleanup when one session stop fails", async () => {

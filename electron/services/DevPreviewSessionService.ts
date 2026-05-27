@@ -5,7 +5,12 @@ import {
   getInvalidCommandMessage,
   normalizeNextjsDevCommand,
 } from "./DevPreviewCommandNormalizer.js";
-import { allocatePort, releasePort } from "./DevPreviewPortAllocator.js";
+import {
+  allocatePort,
+  releasePort,
+  waitForPortFree,
+  PORT_FREE_TIMEOUT_MS,
+} from "./DevPreviewPortAllocator.js";
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
 import {
   createSessionKey,
@@ -254,6 +259,10 @@ export class DevPreviewSessionService {
         });
 
         await this.stopSessionTerminal(session, "restart");
+        if (!(await this.waitForRegisteredPortFree(session, key))) {
+          state = this.getSessionState(request.projectId, request.panelId);
+          return;
+        }
         await this.spawnSessionTerminal(session);
         state = this.getSessionState(request.projectId, request.panelId);
       });
@@ -301,6 +310,10 @@ export class DevPreviewSessionService {
       // Next.js hold file handles on these directories, and a live process
       // causes EPERM on Windows.
       await this.stopSessionTerminal(session, "restart-clear-cache");
+
+      if (!(await this.waitForRegisteredPortFree(session, key))) {
+        return;
+      }
 
       const deletionError = await this.clearCacheDirs(session.cwd);
       if (deletionError) {
@@ -417,6 +430,33 @@ export class DevPreviewSessionService {
         const stopStartedAt = performance.now();
         await this.stopSessionTerminal(session, "stop", DEV_PREVIEW_STOP_ESCALATION_MS);
         const forceKilled = performance.now() - stopStartedAt >= DEV_PREVIEW_STOP_ESCALATION_MS;
+
+        const port = this.portRegistry.get(key);
+        if (port !== undefined) {
+          const portAbort = new AbortController();
+          const portFree = await waitForPortFree(port, portAbort.signal);
+          if (!portFree) {
+            // Release the registry entry so a subsequent ensure() picks a fresh
+            // port via allocatePort instead of immediately re-hitting the busy one.
+            releasePort(this.portRegistry, key);
+            this.updateSession(session, {
+              status: "error",
+              url: null,
+              assignedUrl: null,
+              error: {
+                type: "port-conflict",
+                message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s after stopping. Retry to start again.`,
+                port: String(port),
+              },
+              terminalId: null,
+              isRestarting: false,
+              forceKilled,
+              phaseLabel: undefined,
+            });
+            return;
+          }
+        }
+
         this.updateSession(session, {
           status: "stopped",
           url: null,
@@ -911,6 +951,41 @@ export class DevPreviewSessionService {
       normalized.includes("terminal not found") ||
       normalized.includes("unknown terminal")
     );
+  }
+
+  /**
+   * Wait for the session's registered port to release before respawning. On
+   * Windows a force-killed dev server can hold the socket in TIME_WAIT, which
+   * would otherwise cause the next spawn to fail with EADDRINUSE on the same
+   * port (allocatePort returns the registered port without re-probing).
+   * Returns true if free (or no port registered); on timeout, releases the
+   * port from the registry so a subsequent allocate picks a fresh candidate
+   * and surfaces an error state.
+   */
+  private async waitForRegisteredPortFree(
+    session: DevPreviewSession,
+    key: string
+  ): Promise<boolean> {
+    const port = this.portRegistry.get(key);
+    if (port === undefined) return true;
+    const abort = new AbortController();
+    const free = await waitForPortFree(port, abort.signal);
+    if (free) return true;
+    releasePort(this.portRegistry, key);
+    this.updateSession(session, {
+      status: "error",
+      url: null,
+      assignedUrl: null,
+      error: {
+        type: "port-conflict",
+        message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s. Retry to start again.`,
+        port: String(port),
+      },
+      terminalId: null,
+      isRestarting: false,
+      phaseLabel: undefined,
+    });
+    return false;
   }
 
   private async waitForTerminalGone(
