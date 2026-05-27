@@ -2196,6 +2196,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Settings/PluginsTab.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Settings/PortalSettingsTab.tsx": {
     "success": 3,
     "skip": 0,
