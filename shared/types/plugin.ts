@@ -1,3 +1,5 @@
+// SDK BOUNDARY: New imports from ./forge.js must be classified in
+// shared/types/plugin-sdk.ts. See docs/plugins/architecture.md#sdk-surface.
 import type {
   FileDecorationContribution,
   FileDecorationProviderDescriptor,
