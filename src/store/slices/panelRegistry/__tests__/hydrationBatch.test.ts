@@ -495,5 +495,19 @@ describe("hydration batch (#5196)", () => {
       flushSpawnBatch(tokenA);
       expect(usePanelStore.getState().panelIds).toEqual(["a-1", "b-1"]);
     });
+
+    it("clears an unflushed batch on panelStore.reset() so the next batch can open", async () => {
+      const { beginSpawnBatch } = usePanelStore.getState();
+
+      // Open a batch but never flush it (simulates a reset/throw mid-batch).
+      expect(beginSpawnBatch()).not.toBeNull();
+      // While it's open, a second begin is declined.
+      expect(usePanelStore.getState().beginSpawnBatch()).toBeNull();
+
+      await usePanelStore.getState().reset();
+
+      // reset() discarded the stale batch — a fresh batch opens cleanly.
+      expect(usePanelStore.getState().beginSpawnBatch()).not.toBeNull();
+    });
   });
 });

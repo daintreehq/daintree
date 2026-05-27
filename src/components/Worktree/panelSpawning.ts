@@ -77,8 +77,8 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
 
   // One batch for the whole burst: each `addPanel` commits `panelsById`
   // immediately but defers the `panelIds` append, collapsing N grid reflows
-  // into one at flush. (#9165)
-  const batchToken = store.beginSpawnBatch();
+  // into one at flush. Skip opening it when the limit leaves no room. (#9165)
+  const batchToken = allowed > 0 ? store.beginSpawnBatch() : null;
   let outcomes: Outcome[];
   try {
     outcomes = await Promise.all(

@@ -680,8 +680,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     // Open one batch for the whole burst: each `addPanel` commits its
     // `panelsById` entry immediately but defers the `panelIds` append, so N
-    // panels trigger a single grid reflow at flush instead of N. (#9165)
-    const batchToken = terminalStore.beginSpawnBatch();
+    // panels trigger a single grid reflow at flush instead of N. Skip opening
+    // the batch when nothing will spawn (hard limit hit or all indices invalid)
+    // so `isHydrationBatchActive()` never briefly flips for unrelated work. (#9165)
+    const batchToken = spawnIndices.length > 0 ? terminalStore.beginSpawnBatch() : null;
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {

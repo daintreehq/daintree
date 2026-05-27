@@ -340,8 +340,12 @@ describe("spawnPanelsFromRecipe", () => {
     // Flush receives the token returned by begin.
     expect(mockFlushSpawnBatch).toHaveBeenCalledWith(mockBeginSpawnBatch.mock.results[0]?.value);
     expect(mockAddPanel).toHaveBeenCalledTimes(2);
-    // Each panel bypasses the per-call limit (the batch gated the whole burst).
-    expect(mockAddPanel).toHaveBeenCalledWith(expect.objectContaining({ bypassLimits: true }));
+    // EVERY panel bypasses the per-call limit (the batch gated the whole burst).
+    expect(
+      mockAddPanel.mock.calls.every(
+        (c) => (c[0] as { bypassLimits?: boolean })?.bypassLimits === true
+      )
+    ).toBe(true);
   });
 
   it("flushes the spawn batch even when a panel spawn throws", async () => {

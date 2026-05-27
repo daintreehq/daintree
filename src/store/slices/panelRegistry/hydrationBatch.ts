@@ -74,3 +74,13 @@ export function consumeBatch(token: HydrationBatchToken | null): string[] | null
   activeHydrationBatch = null;
   return pendingIds;
 }
+
+/**
+ * Force-clear any in-flight batch. Called from `panelStore.reset()` so a batch
+ * that was opened but never flushed (a store reset, project switch, or a test
+ * that threw mid-batch) can't leave `isHydrationBatchActive()` stuck `true` and
+ * make the next `beginSpawnBatch()` decline to open.
+ */
+export function resetBatchState(): void {
+  activeHydrationBatch = null;
+}

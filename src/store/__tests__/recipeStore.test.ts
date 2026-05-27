@@ -669,7 +669,15 @@ describe("recipeStore", () => {
       expect(beginSpawnBatchMock).toHaveBeenCalledTimes(1);
       expect(flushSpawnBatchMock).toHaveBeenCalledTimes(1);
       expect(flushSpawnBatchMock).toHaveBeenCalledWith(beginSpawnBatchMock.mock.results[0]?.value);
-      expect(addTerminalMock).toHaveBeenCalledWith(expect.objectContaining({ bypassLimits: true }));
+      expect(addTerminalMock).toHaveBeenCalledTimes(3);
+      // EVERY panel in the burst must bypass the per-call limit (the batch gated
+      // the whole burst); dropping it on one panel would re-introduce the
+      // stale-count under-enforcement.
+      expect(
+        addTerminalMock.mock.calls.every(
+          (c) => (c[0] as { bypassLimits?: boolean })?.bypassLimits === true
+        )
+      ).toBe(true);
     });
 
     it("focuses the last spawned grid panel after the batch flush", async () => {
@@ -757,6 +765,11 @@ describe("recipeStore", () => {
           .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
 
         expect(addTerminalMock).toHaveBeenCalledTimes(2);
+        expect(
+          addTerminalMock.mock.calls.every(
+            (c) => (c[0] as { bypassLimits?: boolean })?.bypassLimits === true
+          )
+        ).toBe(true);
         expect(results.spawned).toHaveLength(2);
         expect(results.failed).toHaveLength(1);
         expect(results.failed[0]).toEqual({ index: 2, error: "Panel limit reached" });
