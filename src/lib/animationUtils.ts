@@ -140,6 +140,15 @@ export const PANEL_RESTORE_DURATION = DURATION_200;
 export const BANNER_ENTER_DURATION = DURATION_250;
 export const BANNER_EXIT_DURATION = DURATION_200;
 
+/** Screen-reader buffer flush delay for live-region content swaps. When a
+ *  `role="status"` / `aria-live` region's text changes synchronously, VoiceOver
+ *  on macOS Sequoia and iOS 18 has been observed to drop the announcement.
+ *  The APG mitigation is clear-then-add-on-next-tick: clear the region, wait
+ *  ~150ms, then render new content. Below the 400ms Doherty threshold so
+ *  sighted users perceive it as instant. Not a motion token — must not be
+ *  gated on `prefers-reduced-motion`. */
+export const LIVE_REGION_SWAP_DELAY = DURATION_150;
+
 export const DRAG_GHOST_OPACITY = 0.4;
 export const DRAG_GHOST_EASING = "easeOut";
 export const DRAG_OVERLAY_ENTRY_SCALE = 0.95;
