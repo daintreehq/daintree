@@ -2,13 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- V8 JIT compilation in Electron -->
+    <!-- V8 JIT compilation in Electron 41. allow-unsigned-executable-memory
+         was dropped in Electron 12 (PR #26331) and is not needed here. -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <!-- Required for loading native modules like node-pty -->
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <!-- Loading Electron framework libraries -->
+    <!-- Loading native .node modules at runtime (pty.node, better_sqlite3.node).
+         Retained until CI TeamIdentifier audit (scripts/ci/verify-team-identifier.sh)
+         confirms every Mach-O in the bundle shares the expected Team ID. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
