@@ -127,6 +127,8 @@ describe("plugin-sdk boundary", () => {
           menuItems: [],
           experimental_views: [],
           experimental_mcpServers: [],
+          keybindings: [],
+          contextMenus: [],
           forgeProviders: [],
           fileDecorationProviders: [],
         },
