@@ -735,6 +735,39 @@ describe("recipeStore", () => {
       expect(setFocusedMock).not.toHaveBeenCalled();
     });
 
+    it("reports out-of-bounds terminalIndices as structured failures without throwing", async () => {
+      // Regression: previously, recipe.terminals[i]! with a bad index handed
+      // `undefined` to the hasAgent loop and threw TypeError on `.type`. Now
+      // validation runs first and out-of-bounds indices go straight to failed.
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell 1", command: "a", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          terminalIndices: [0, 99, -1],
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(1);
+      expect(results.spawned).toHaveLength(1);
+      expect(results.spawned[0]?.index).toBe(0);
+      expect(results.failed).toHaveLength(2);
+      expect(results.failed.map((f) => f.index).sort()).toEqual([-1, 99]);
+      expect(results.failed.every((f) => f.error.includes("out of bounds"))).toBe(true);
+    });
+
     it("caps the burst at the hard panel limit and reports overflow as failed", async () => {
       const previousHardLimit = usePanelLimitStore.getState().hardLimit;
       usePanelLimitStore.setState({ hardLimit: 2, warningsDisabled: true });

@@ -623,10 +623,26 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // WorktreeCard); MCP-initiated runs already get "preserve" via panelStore.
     const focusPolicy = options?.focusPolicy;
 
+    const results: RecipeSpawnResults = { spawned: [], failed: [] };
+
+    // Split out-of-bounds indices before anything else so they're reported
+    // regardless of how the limit gate or batch resolves. Must run before
+    // building `terminalsToSpawn`: `recipe.terminals[i]!` would otherwise
+    // pass `undefined` into the `hasAgent` check for any bad index and throw
+    // on `.type`, masking the structured failure path entirely.
+    const validIndices: number[] = [];
+    for (const index of indicesToSpawn) {
+      if (recipe.terminals[index]) {
+        validIndices.push(index);
+      } else {
+        results.failed.push({ index, error: `Terminal index ${index} out of bounds` });
+      }
+    }
+
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
     let clipboardDirectory: string | undefined;
-    const terminalsToSpawn = indicesToSpawn.map((i) => recipe.terminals[i]!);
+    const terminalsToSpawn = validIndices.map((i) => recipe.terminals[i]!);
     const hasAgent = terminalsToSpawn.some(
       (t) => t.type !== "terminal" && t.type !== "dev-preview"
     );
@@ -640,19 +656,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
       } catch (error) {
         logError("Failed to fetch agent settings for recipe", error);
-      }
-    }
-
-    const results: RecipeSpawnResults = { spawned: [], failed: [] };
-
-    // Split out-of-bounds indices before anything else so they're reported
-    // regardless of how the limit gate or batch resolves.
-    const validIndices: number[] = [];
-    for (const index of indicesToSpawn) {
-      if (recipe.terminals[index]) {
-        validIndices.push(index);
-      } else {
-        results.failed.push({ index, error: `Terminal index ${index} out of bounds` });
       }
     }
 

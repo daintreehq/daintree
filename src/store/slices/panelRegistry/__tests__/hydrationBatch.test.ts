@@ -509,5 +509,59 @@ describe("hydration batch (#5196)", () => {
       // reset() discarded the stale batch — a fresh batch opens cleanly.
       expect(usePanelStore.getState().beginSpawnBatch()).not.toBeNull();
     });
+
+    it("clears an unflushed batch on clearTerminalStoreForSwitch so a new project's batch can open", () => {
+      const { beginSpawnBatch, clearTerminalStoreForSwitch } = usePanelStore.getState();
+
+      // Spawn opens a batch on the outgoing project and never flushes (project switch fires).
+      expect(beginSpawnBatch()).not.toBeNull();
+      clearTerminalStoreForSwitch();
+
+      // The incoming project's first recipe run must be able to open its own batch.
+      expect(usePanelStore.getState().beginSpawnBatch()).not.toBeNull();
+    });
+
+    it("commits an in-flight spawn batch's ids when hydration starts mid-spawn", async () => {
+      const {
+        beginSpawnBatch,
+        beginHydrationBatch,
+        flushHydrationBatch,
+        flushSpawnBatch,
+        addPanel,
+      } = usePanelStore.getState();
+
+      // Spawn opens a batch and adds one panel.
+      const spawnToken = beginSpawnBatch();
+      expect(spawnToken).not.toBeNull();
+      await addPanel({
+        kind: "browser",
+        requestedId: "spawn-panel",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+      expect(usePanelStore.getState().panelIds).toEqual([]);
+
+      // Hydration starts before the spawn's flush — it must inherit the spawn's
+      // collected ids rather than silently strand them in panelsById.
+      const hydrationToken = beginHydrationBatch();
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel"]);
+
+      // The stranded spawn token now sees a mismatch — its flush is a no-op,
+      // and the spawn panel does not get re-appended.
+      flushSpawnBatch(spawnToken);
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel"]);
+
+      // Hydration's own panels flush in its turn, with no duplication.
+      await addPanel({
+        kind: "browser",
+        requestedId: "hydration-panel",
+        cwd: "/",
+        bypassLimits: true,
+        browserUrl: "about:blank",
+      });
+      flushHydrationBatch(hydrationToken);
+      expect(usePanelStore.getState().panelIds).toEqual(["spawn-panel", "hydration-panel"]);
+    });
   });
 });

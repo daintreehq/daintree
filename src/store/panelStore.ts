@@ -817,6 +817,11 @@ export const usePanelStore = create<PanelGridState>()(
       },
 
       clearTerminalStoreForSwitch: () => {
+        // Discard any in-flight spawn/hydration batch so a project switch mid-batch
+        // can't strand `isHydrationBatchActive()` true and make the next
+        // `beginSpawnBatch()` decline to open on the incoming project. (#9165)
+        resetBatchState();
+
         set({
           panelsById: {},
           panelIds: [],
