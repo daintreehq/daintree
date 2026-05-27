@@ -3,6 +3,14 @@ import { create } from "zustand";
 interface NotificationSettingsState {
   enabled: boolean;
   hydrated: boolean;
+  // Per-kind toggles, mirrored from IPC settings so the notification center can
+  // compute a "what will fire right now" summary without a per-open IPC round
+  // trip. These gate the main-process completion/waiting notifications and the
+  // working-pulse / UI-feedback sounds — they are display-only here.
+  completedEnabled: boolean;
+  waitingEnabled: boolean;
+  workingPulseEnabled: boolean;
+  uiFeedbackSoundEnabled: boolean;
   quietHoursEnabled: boolean;
   quietHoursStartMin: number;
   quietHoursEndMin: number;
@@ -24,6 +32,13 @@ interface NotificationSettingsState {
 export const useNotificationSettingsStore = create<NotificationSettingsState>((set, get) => ({
   enabled: true,
   hydrated: false,
+  // Pre-hydration defaults mirror the main-process persisted defaults
+  // (electron/store.ts) so the summary doesn't flash a wrong state before
+  // hydrate() settles.
+  completedEnabled: false,
+  waitingEnabled: true,
+  workingPulseEnabled: false,
+  uiFeedbackSoundEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 8 * 60,
@@ -38,6 +53,10 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
       if (settings) {
         set({
           enabled: settings.enabled !== false,
+          completedEnabled: settings.completedEnabled === true,
+          waitingEnabled: settings.waitingEnabled !== false,
+          workingPulseEnabled: settings.workingPulseEnabled === true,
+          uiFeedbackSoundEnabled: settings.uiFeedbackSoundEnabled === true,
           quietHoursEnabled: settings.quietHoursEnabled === true,
           quietHoursStartMin:
             typeof settings.quietHoursStartMin === "number" ? settings.quietHoursStartMin : 22 * 60,

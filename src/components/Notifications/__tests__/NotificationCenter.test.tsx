@@ -15,16 +15,23 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock, get: getMock },
 }));
 
-vi.mock("@/lib/notify", () => ({
-  isNotificationEventKind: vi.fn(
-    (v: string | undefined) =>
-      v === "completed" || v === "waiting" || v === "workingPulse" || v === "uiFeedback"
-  ),
-  muteForDuration: vi.fn(),
-  muteUntilNextMorning: vi.fn().mockReturnValue(Date.now() + 3600_000),
-  notify: vi.fn(),
-  setSessionQuietUntil: vi.fn(),
-}));
+vi.mock("@/lib/notify", async (importActual) => {
+  // Preserve the real EVENT_POLICY / EVENT_KIND_* constants — the notification
+  // center's effective-state summary reads them — while stubbing the
+  // side-effecting functions the tests assert against.
+  const actual = await importActual<typeof import("@/lib/notify")>();
+  return {
+    ...actual,
+    isNotificationEventKind: vi.fn(
+      (v: string | undefined) =>
+        v === "completed" || v === "waiting" || v === "workingPulse" || v === "uiFeedback"
+    ),
+    muteForDuration: vi.fn(),
+    muteUntilNextMorning: vi.fn().mockReturnValue(Date.now() + 3600_000),
+    notify: vi.fn(),
+    setSessionQuietUntil: vi.fn(),
+  };
+});
 
 const worktreeStoreMock = vi.hoisted(() => ({
   worktrees: new Map<string, { worktreeId: string; name: string }>(),
@@ -60,6 +67,11 @@ function setEntries(entries: NotificationHistoryEntry[]) {
 beforeEach(() => {
   useNotificationHistoryStore.getState().clearAll();
   useNotificationSettingsStore.setState({
+    enabled: true,
+    completedEnabled: true,
+    waitingEnabled: true,
+    workingPulseEnabled: false,
+    uiFeedbackSoundEnabled: false,
     quietUntil: 0,
     quietHoursEnabled: false,
     quietHoursStartMin: 22 * 60,
@@ -543,6 +555,78 @@ describe("NotificationCenter muted pill", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("leads the muted pill with a 'what will fire' hero line naming only what breaks through", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({ quietUntil: until });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    // Session mute holds active kinds; waiting pages through (OS layer) and the
+    // time-sensitive System kind toasts.
+    expect(pill.textContent).toContain("Will interrupt you: Waiting, System");
+    // Provenance line is preserved alongside the hero summary.
+    expect(pill.textContent).toMatch(/Muted until /);
+  });
+
+  it("reads 'Nothing will interrupt you' when notifications are globally off during a mute", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({ quietUntil: until, enabled: false });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).toContain("Nothing will interrupt you right now");
+    expect(pill.textContent).not.toContain("Will interrupt you:");
+  });
+
+  it("lists kind-off notifications but not off sound kinds when both are off", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({
+      quietUntil: until,
+      completedEnabled: false,
+      waitingEnabled: false,
+      workingPulseEnabled: false,
+      uiFeedbackSoundEnabled: false,
+    });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).toContain("Off: Completed, Waiting");
+    expect(pill.textContent).not.toContain("Working pulse");
+    expect(pill.textContent).not.toContain("UI sounds");
+  });
+
+  it("surfaces switched-off notification kinds in the muted pill summary", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({
+      quietUntil: until,
+      completedEnabled: false,
+      waitingEnabled: false,
+    });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).toContain("Off: Completed, Waiting");
+  });
+
+  it("does not list off-by-default sound kinds as switched off", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    // Sound kinds default off — they are preferences, not user-silenced notifications.
+    useNotificationSettingsStore.setState({
+      quietUntil: until,
+      workingPulseEnabled: false,
+      uiFeedbackSoundEnabled: false,
+    });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).not.toContain("Off:");
   });
 
   it("renders a scheduled-only pill without a Resume ✕ button", () => {
