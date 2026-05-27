@@ -38,7 +38,7 @@ A minimal `plugin.json` looks like:
   "description": "An example Daintree plugin.",
   "main": "dist/index.js",
   "engines": { "daintree": "^0.8.0" },
-  "capabilities": [],
+  "permissions": [],
   "contributes": {
     "commands": [
       {

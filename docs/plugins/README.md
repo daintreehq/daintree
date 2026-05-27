@@ -46,7 +46,7 @@ The `engines.daintree` field in your manifest controls host compatibility. Plugi
 
 ## Security and trust
 
-Plugin code runs with full Node.js privileges. Daintree does not sandbox plugins at runtime. The plugin manifest's `capabilities` field is a **disclosure mechanism** — it tells the user what the plugin can do, but it is not enforced. A plugin that declares `capabilities: ["fs:project-read"]` is not prevented from making network requests.
+Plugin code runs with full Node.js privileges. Daintree does not sandbox plugins at runtime, so a plugin that declares `permissions: ["fs:project-read"]` is not blocked from making network requests. The declared-capability field (`permissions` today, renamed to `capabilities` in #9268) is **disclosure-first with host-side policy effects**: it tells the user what the plugin claims to need, and high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) raise the plugin's actions to a confirm dialog. It is not an enforcement boundary against malicious code. See the [trust model](./trust-model.md) for the full contract.
 
 Install only plugins from sources you trust. For plugins you author yourself, this is trivially true. For plugins you install from URLs or files, inspect the code before running it — especially if it requests broad capabilities like `shell:exec` or `network:fetch`.
 
