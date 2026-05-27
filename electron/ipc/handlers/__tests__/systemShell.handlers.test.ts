@@ -65,7 +65,6 @@ vi.mock("../../utils.js", () => ({
   },
 }));
 
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerSystemShellHandlers } from "../systemShell.js";
 import type { HandlerDependencies } from "../../types.js";
