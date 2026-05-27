@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
@@ -374,6 +375,18 @@ export function WorktreeCard({
       { source: "user" }
     );
   };
+
+  const handleStopDevServer = useCallback((worktreeId: string) => {
+    safeFireAndForget(window.electron.devPreview.stopDevServerByWorktree({ worktreeId }), {
+      context: "Stop dev server for worktree",
+    });
+  }, []);
+
+  const handleRestartDevServer = useCallback((worktreeId: string) => {
+    safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
+      context: "Restart dev server for worktree",
+    });
+  }, []);
 
   const handleResourceResume = () => {
     void actionService.dispatch(
@@ -951,6 +964,8 @@ export function WorktreeCard({
                     : undefined,
                   onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
                   onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+                  onStopDevServer: handleStopDevServer,
+                  onRestartDevServer: handleRestartDevServer,
                 }}
               />
 
@@ -1105,6 +1120,8 @@ export function WorktreeCard({
           onResourceConnect={worktree.resourceConnectCommand ? handleResourceConnect : undefined}
           onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
           onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+          onStopDevServer={handleStopDevServer}
+          onRestartDevServer={handleRestartDevServer}
         />
       </ContextMenuContent>
     </ContextMenu>

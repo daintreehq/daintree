@@ -216,6 +216,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "dev-preview:restart-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewRestartByWorktreeRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
+  };
   "dev-preview:stop": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
@@ -227,6 +231,10 @@ export interface GeneratedIpcInvokeMap {
   "dev-preview:stop-by-worktree": {
     args: [request: import("./devPreview.js").DevPreviewStopByWorktreeRequest];
     result: void;
+  };
+  "dev-preview:stop-dev-server-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
+    result: import("./devPreview.js").DevPreviewSessionState;
   };
   "editor:discover": {
     args: [];

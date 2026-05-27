@@ -105,6 +105,9 @@ export interface GeneratedElectronAPI {
     restartAndClearCache(
       ...args: IpcInvokeMap["dev-preview:restart-and-clear-cache"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:restart-and-clear-cache"]["result"]>;
+    restartByWorktree(
+      ...args: IpcInvokeMap["dev-preview:restart-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:restart-by-worktree"]["result"]>;
     stop(
       ...args: IpcInvokeMap["dev-preview:stop"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop"]["result"]>;
@@ -114,6 +117,9 @@ export interface GeneratedElectronAPI {
     stopByWorktree(
       ...args: IpcInvokeMap["dev-preview:stop-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop-by-worktree"]["result"]>;
+    stopDevServerByWorktree(
+      ...args: IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["result"]>;
   };
   eventInspector: {
     clear(

@@ -685,6 +685,86 @@ export class DevPreviewSessionService {
     this.persistManifest();
   }
 
+  async stopDevServerByWorktree(worktreeId: string): Promise<DevPreviewSessionState> {
+    const key = this.worktreeToSession.get(worktreeId);
+    if (!key) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    const session = this.sessions.get(key);
+    if (!session) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    return this.stop({ panelId: session.panelId, projectId: session.projectId });
+  }
+
+  async restartByWorktree(worktreeId: string): Promise<DevPreviewSessionState> {
+    const key = this.worktreeToSession.get(worktreeId);
+    if (!key) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    const session = this.sessions.get(key);
+    if (!session) {
+      return {
+        panelId: "",
+        projectId: "",
+        worktreeId: undefined,
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        generation: 0,
+        updatedAt: Date.now(),
+        forceKilled: undefined,
+        phaseLabel: undefined,
+      };
+    }
+    return this.restart({ panelId: session.panelId, projectId: session.projectId });
+  }
+
   // Called from the renderer's worktree delete path BEFORE `git worktree
   // remove` runs. On Windows the dev server holds a directory lock — if the
   // session isn't stopped first, the removal fails outright (#9084). The
