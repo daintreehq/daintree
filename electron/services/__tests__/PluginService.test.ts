@@ -4005,6 +4005,9 @@ describe("Plugin exception containment (#9276)", () => {
       expect(typeof record?.message).toBe("string");
       expect(record?.message.length).toBeGreaterThan(0);
     });
+  });
+});
+
 describe("hello-daintree sample fixture", () => {
   const fixturePath = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
