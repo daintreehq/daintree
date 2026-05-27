@@ -261,8 +261,8 @@ describe("GridNotificationBar animation", () => {
     // But the button still exists in the bar as a sibling.
     const allButtons = container.querySelectorAll("button");
     expect(allButtons).toHaveLength(1);
-    expect(allButtons[0].textContent).toBe("Confirm");
-    expect(live!.contains(allButtons[0])).toBe(false);
+    expect(allButtons[0]?.textContent).toBe("Confirm");
+    expect(live!.contains(allButtons[0]!)).toBe(false);
   });
 
   it("renders the dismiss button as a sibling of the live region", () => {
