@@ -20,6 +20,16 @@ const RED_GREEN_OVERRIDES: Record<string, string> = {
   "--theme-terminal-bright-green": "#48c9a0",
   "--theme-terminal-magenta": "#cc79a7",
   "--theme-terminal-bright-magenta": "#d98fc4",
+  "--theme-syntax-comment": "#999999",
+  "--theme-syntax-punctuation": "#555555",
+  "--theme-syntax-number": "#0072B2",
+  "--theme-syntax-string": "#E69F00",
+  "--theme-syntax-operator": "#555555",
+  "--theme-syntax-keyword": "#D55E00",
+  "--theme-syntax-function": "#0072B2",
+  "--theme-syntax-link": "#0072B2",
+  "--theme-syntax-quote": "#009E73",
+  "--theme-syntax-chip": "#CC79A7",
   "--theme-category-blue": "#0072b2",
   "--theme-category-orange": "#e69f00",
   "--theme-category-teal": "#009e73",
@@ -38,6 +48,17 @@ const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
   "--theme-terminal-blue": "#0072b2",
   "--theme-terminal-bright-yellow": "#d98fc4",
   "--theme-terminal-bright-blue": "#56b4e9",
+  "--theme-status-info": "#333333",
+  "--theme-syntax-comment": "#999999",
+  "--theme-syntax-punctuation": "#555555",
+  "--theme-syntax-number": "#CC79A7",
+  "--theme-syntax-string": "#E69F00",
+  "--theme-syntax-operator": "#555555",
+  "--theme-syntax-keyword": "#D55E00",
+  "--theme-syntax-function": "#56B4E9",
+  "--theme-syntax-link": "#0072B2",
+  "--theme-syntax-quote": "#F0E442",
+  "--theme-syntax-chip": "#009E73",
   "--theme-category-blue": "#dc267f",
   "--theme-category-orange": "#fe6100",
   "--theme-category-teal": "#009e73",
@@ -48,7 +69,7 @@ const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
   "--theme-category-cyan": "#228833",
 };
 
-const ALL_CVD_TOKENS = new Set([
+export const ALL_CVD_TOKENS = new Set([
   ...Object.keys(RED_GREEN_OVERRIDES),
   ...Object.keys(BLUE_YELLOW_OVERRIDES),
 ]);
