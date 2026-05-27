@@ -513,8 +513,8 @@ export function useDevServer({
     // When the backend signals a compile is in progress, downgrade any
     // existing Tier 2 "no signal" banner to Tier 1 (benign pulse). The
     // compile IS the signal — the user doesn't need both warnings.
-    if (phaseLabel === "Compiling" && stuckTier >= 2) {
-      setStuckTier(1);
+    if (phaseLabel === "Compiling") {
+      setStuckTier((prev) => (prev >= 2 ? 1 : prev));
     }
 
     const requestVersion = requestVersionRef.current;
