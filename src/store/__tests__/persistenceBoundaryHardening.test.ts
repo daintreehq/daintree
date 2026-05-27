@@ -431,6 +431,116 @@ describe("persistence boundary hardening", () => {
     expect(getMarks[0]?.meta?.ok).toBe(true);
   });
 
+  it("createSafeJSONStorage.getItem recovers from the backup key when the primary blob is corrupt", async () => {
+    const backup = JSON.stringify({ state: { value: 99 }, version: 1 });
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => {
+          if (key === "recover-key") return "{corrupt";
+          if (key === "recover-key.__bak") return backup;
+          return null;
+        },
+      })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const storage = createSafeJSONStorage<{ value: number }>();
+
+    expect(storage.getItem("recover-key")).toEqual({ state: { value: 99 }, version: 1 });
+    const recoveredWarn = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes("recovered from backup")
+    );
+    expect(recoveredWarn).toBeDefined();
+  });
+
+  it("createSafeJSONStorage.setItem writes a backup copy alongside the primary key", async () => {
+    const mock = createStorageMock();
+    installLocalStorage(mock);
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const storage = createSafeJSONStorage<{ value: number }>();
+
+    storage.setItem("backup-write-key", { state: { value: 5 }, version: 1 });
+
+    expect(mock.getItem("backup-write-key.__bak")).toBe(
+      JSON.stringify({ state: { value: 5 }, version: 1 })
+    );
+  });
+
+  it("createSafeJSONStorage.getItem returns null when both primary and backup are corrupt", async () => {
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) =>
+          key === "both-corrupt" ? "{corrupt" : key === "both-corrupt.__bak" ? "{also-bad" : null,
+      })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const storage = createSafeJSONStorage<{ value: number }>();
+
+    expect(storage.getItem("both-corrupt")).toBeNull();
+    const resetWarn = warnSpy.mock.calls.find((call) =>
+      String(call[0]).includes("resetting to defaults")
+    );
+    expect(resetWarn).toBeDefined();
+  });
+
+  it("createResilientStorage treats QuotaExceededError as transient and keeps using localStorage", async () => {
+    let setCalls = 0;
+    const written = new Map<string, string>();
+    installLocalStorage(
+      createStorageMock({
+        setItem: (key, value) => {
+          setCalls += 1;
+          if (setCalls === 1) {
+            throw new DOMException("Quota exceeded", "QuotaExceededError");
+          }
+          written.set(key, value);
+        },
+      })
+    );
+    const marks = seedPerfMarks();
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const storage = createSafeJSONStorage<{ value: number }>();
+
+    storage.setItem("quota-key-1", { state: { value: 1 }, version: 1 });
+    storage.setItem("quota-key-2", { state: { value: 2 }, version: 1 });
+
+    const setMarks = marks.filter((m) => m.mark === "persistence_localstorage_set");
+    // Second write must still target localStorage — no permanent memory fallback.
+    expect(setMarks[1]?.meta?.storage).toBe("localStorage");
+    expect(setMarks[1]?.meta?.ok).toBe(true);
+    expect(written.get("quota-key-2")).toBe(JSON.stringify({ state: { value: 2 }, version: 1 }));
+  });
+
+  it("preferencesStore clamps a corrupt closed-set field at the current version via merge", async () => {
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) =>
+          key === "daintree-preferences"
+            ? JSON.stringify({
+                state: {
+                  dockDensity: "dense",
+                  diffViewType: "side-by-side",
+                  skipPushConfirmByWorktreePath: "all",
+                },
+                version: 9,
+              })
+            : null,
+      })
+    );
+
+    const { usePreferencesStore } = await import("../preferencesStore");
+
+    const state = usePreferencesStore.getState();
+    expect(state.dockDensity).toBe("normal");
+    expect(state.diffViewType).toBe("split");
+    expect(state.skipPushConfirmByWorktreePath).toEqual({});
+  });
+
   it("createResilientStorage emits no marks when DAINTREE_PERF_MARKS is absent and capture is disabled", async () => {
     installLocalStorage(createStorageMock());
 

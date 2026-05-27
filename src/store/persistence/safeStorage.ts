@@ -1,8 +1,25 @@
 import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notify } from "@/lib/notify";
 
 const fallbackStorageData = new Map<string, string>();
+
+const BACKUP_KEY_SUFFIX = ".__bak";
+
+/**
+ * A `QuotaExceededError` (or its Firefox alias) is transient: the write was
+ * too large, but storage is still healthy, so smaller subsequent writes can
+ * succeed. We must NOT permanently route a store to in-memory storage on quota
+ * — that would silently drop every later write for the session (issue #9170).
+ */
+function isQuotaExceededError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
+  );
+}
 
 function shouldCollectPersistencePerf(): boolean {
   if (typeof window === "undefined") return false;
@@ -56,12 +73,48 @@ function resolveLocalStorage(): StateStorage | undefined {
   return hasStorageApi ? (candidate as StateStorage) : undefined;
 }
 
-function createResilientStorage(baseStorage: StateStorage | undefined): StateStorage {
+/**
+ * Resilient storage augmented with best-effort backup operations. The backup
+ * methods write/read a sibling `${key}.__bak` entry directly on the real
+ * localStorage — bypassing the perf-marked primary path and skipping entirely
+ * once a permanent in-memory fallback is active (a backup in memory buys
+ * nothing and would needlessly re-hit broken localStorage).
+ */
+interface ResilientStorage extends StateStorage {
+  writeBackup: (name: string, value: string) => void;
+  readBackup: (name: string) => string | null;
+  removeBackup: (name: string) => void;
+}
+
+function createResilientStorage(baseStorage: StateStorage | undefined): ResilientStorage {
   let activeStorage = baseStorage ?? memoryStorage;
+  let hasNotifiedPermanentFallback = false;
 
   const switchToMemoryStorage = (): StateStorage => {
     activeStorage = memoryStorage;
     return activeStorage;
+  };
+
+  const backupKeyFor = (name: string): string => `${name}${BACKUP_KEY_SUFFIX}`;
+
+  // Fire exactly once per storage instance when a structural failure forces a
+  // permanent in-memory fallback. Until then writes never reach localStorage,
+  // so changes this session are lost on restart — a degradation the user can't
+  // otherwise observe. Quota errors are transient and never reach here.
+  const notifyPermanentFallbackOnce = (): void => {
+    if (hasNotifiedPermanentFallback) return;
+    hasNotifiedPermanentFallback = true;
+    try {
+      notify({
+        type: "warning",
+        title: "Settings won't be saved",
+        message:
+          "Couldn't write to local storage, so changes made this session won't persist after restart.",
+        context: { eventKind: "settings" },
+      });
+    } catch {
+      // The notification surface is best-effort — never let it break persistence.
+    }
   };
 
   return {
@@ -112,7 +165,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
             storage,
           });
         }
-      } catch {
+      } catch (error) {
         if (collectPerf) {
           markRendererPerformance("persistence_localstorage_set", {
             key: name,
@@ -122,14 +175,57 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
             storage,
           });
         }
+        if (isQuotaExceededError(error)) {
+          // Transient: keep localStorage active so later (smaller) writes retry
+          // it. Mirror this write into memory so the value isn't lost outright.
+          console.warn("[safeStorage] storage quota exceeded, skipping persistent write", {
+            key: name,
+            error: formatErrorMessage(error, "Storage quota exceeded"),
+          });
+          memoryStorage.setItem(name, value);
+          return;
+        }
         switchToMemoryStorage().setItem(name, value);
+        notifyPermanentFallbackOnce();
       }
     },
     removeItem: (name) => {
       try {
         activeStorage.removeItem(name);
-      } catch {
+      } catch (error) {
+        if (isQuotaExceededError(error)) {
+          memoryStorage.removeItem(name);
+          return;
+        }
         switchToMemoryStorage().removeItem(name);
+        notifyPermanentFallbackOnce();
+      }
+    },
+    writeBackup: (name, value) => {
+      // Skip while in memory fallback: localStorage is known broken, so a write
+      // here would just re-hit it (and a memory backup duplicates live state).
+      if (activeStorage === memoryStorage || !baseStorage) return;
+      try {
+        baseStorage.setItem(backupKeyFor(name), value);
+      } catch {
+        // Backup is opportunistic — losing it is acceptable.
+      }
+    },
+    readBackup: (name) => {
+      if (!baseStorage) return null;
+      try {
+        const value = baseStorage.getItem(backupKeyFor(name));
+        return value instanceof Promise ? null : value;
+      } catch {
+        return null;
+      }
+    },
+    removeBackup: (name) => {
+      if (!baseStorage) return;
+      try {
+        baseStorage.removeItem(backupKeyFor(name));
+      } catch {
+        // Best-effort cleanup.
       }
     },
   };
@@ -158,6 +254,19 @@ export function safeJSONParse<T>(
   }
 }
 
+/**
+ * Parse a recovered backup blob, returning null when it is absent or itself
+ * corrupt so the caller falls through to a clean reset.
+ */
+function parseBackup<T>(raw: string | null): StorageValue<T> | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as StorageValue<T>;
+  } catch {
+    return null;
+  }
+}
+
 export function createSafeJSONStorage<T>(): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
 
@@ -169,6 +278,16 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
       try {
         return JSON.parse(value) as StorageValue<T>;
       } catch (error) {
+        // The live blob is corrupt but present — try the last known-good backup
+        // before discarding the user's config to defaults (issue #9170).
+        const recovered = parseBackup<T>(raw.readBackup(name));
+        if (recovered !== null) {
+          console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
+            key: name,
+            error: formatErrorMessage(error, "Corrupt persisted state"),
+          });
+          return recovered;
+        }
         console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
           key: name,
           error: formatErrorMessage(error, "Corrupt persisted state"),
@@ -177,10 +296,13 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
       }
     },
     setItem: (name, value) => {
-      raw.setItem(name, JSON.stringify(value));
+      const serialized = JSON.stringify(value);
+      raw.setItem(name, serialized);
+      raw.writeBackup(name, serialized);
     },
     removeItem: (name) => {
       raw.removeItem(name);
+      raw.removeBackup(name);
     },
   };
 }
