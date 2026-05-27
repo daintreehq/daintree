@@ -327,10 +327,10 @@ describe("hydration batch (#5196)", () => {
     expect(after?.activityHeadline).toBe("writing code");
   });
 
-  it("removes the optimistic placeholder when the background spawn rejects", async () => {
-    // #5789: addPanel is optimistic — the panel lands in panelsById before spawn
-    // resolves. If spawn rejects, the placeholder must be cleaned up so the grid
-    // doesn't end up with a zombie panel that has no live PTY.
+  it("keeps the optimistic placeholder with spawnStatus 'failed' when spawn rejects", async () => {
+    // #9166: addPanel is optimistic — the panel lands in panelsById before spawn
+    // resolves. If spawn rejects, the panel stays with spawnStatus "failed" so
+    // per-cell error chrome can render.
     const { beginHydrationBatch, flushHydrationBatch, addPanel } = usePanelStore.getState();
 
     const { terminalClient } = (await import("@/clients")) as unknown as {
@@ -356,22 +356,23 @@ describe("hydration batch (#5196)", () => {
       bypassLimits: true,
     });
 
-    // Drain microtasks so the failed spawn's rejection handler runs removePanel.
-    // The background spawn promise chains through Promise.all(env) → spawn → .then,
-    // which takes several ticks.
     for (let i = 0; i < 20; i++) await Promise.resolve();
 
     saveNormalizedMock.mockClear();
     flushHydrationBatch(token);
 
-    // The failed id is evicted from panelsById by removePanel; the flush filter
-    // only appends ids that still exist in panelsById, so panelIds gets just ok-1.
-    expect(usePanelStore.getState().panelIds).toEqual(["ok-1"]);
-    expect(usePanelStore.getState().panelsById["fail-1"]).toBeUndefined();
+    // Both panels persist: the failed panel stays with spawnStatus "failed",
+    // the successful one with spawnStatus "ready".
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["fail-1", "ok-1"]);
+    expect(state.panelsById["fail-1"]).toBeDefined();
+    expect(
+      (state.panelsById["fail-1"] as import("@shared/types/panel").PtyPanelData).spawnStatus
+    ).toBe("failed");
 
     expect(saveNormalizedMock).toHaveBeenCalled();
     const lastCall = saveNormalizedMock.mock.calls.at(-1) as [Record<string, unknown>, string[]];
-    expect(lastCall[1]).toEqual(["ok-1"]);
+    expect(lastCall[1]).toEqual(["fail-1", "ok-1"]);
   });
 
   it("collapses N panel additions into a single panelIds render", async () => {

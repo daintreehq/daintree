@@ -191,6 +191,10 @@ export const createRestartActions = (
     cancelReconnectErrorDebounce(id);
 
     // Also set the store flag for UI and other consumers
+    // Track whether we're restarting from a failed spawn so we can clear
+    // spawnStatus (allowing XtermAdapter to mount) and restore it on failure.
+    const ptyPanel = get().panelsById[id] as import("@shared/types/panel").PtyPanelData | undefined; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- narrow to PtyPanelData for spawnStatus access
+    const wasFailed = ptyPanel?.spawnStatus === "failed";
     set((state) =>
       updateTerminal(state, id, (t) => ({
         ...t,
@@ -199,6 +203,7 @@ export const createRestartActions = (
         spawnError: undefined,
         scrollbackRestoreError: undefined,
         isRestarting: true,
+        ...(wasFailed ? { spawnStatus: undefined } : {}),
       }))
     );
 
@@ -243,7 +248,12 @@ export const createRestartActions = (
 
       unmarkTerminalRestarting(id);
       set((state) =>
-        updateTerminal(state, id, (t) => ({ ...t, isRestarting: false, restartError }))
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError,
+          ...(wasFailed ? { spawnStatus: "failed" as const } : {}),
+        }))
       );
       logWarn("[TerminalStore] Restart validation failed for terminal", { id, restartError });
       return;
@@ -576,6 +586,7 @@ export const createRestartActions = (
           restartError,
           // Restore session ID so user can retry resume
           ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
+          ...(wasFailed ? { spawnStatus: "failed" as const } : {}),
         }))
       );
 
