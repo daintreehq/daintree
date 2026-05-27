@@ -9,8 +9,9 @@ import {
 } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
-import { type Extension, StateEffect, StateField } from "@codemirror/state";
-import { LanguageDescription } from "@codemirror/language";
+import { type Extension, StateEffect, StateField, EditorState } from "@codemirror/state";
+import { LanguageDescription, syntaxTree } from "@codemirror/language";
+import { type SyntaxNode } from "@lezer/common";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { daintreeTheme } from "./editorTheme";
 import { editorSearchHighlightTheme } from "./editorSearchTheme";
@@ -112,11 +113,78 @@ const searchPanelTheme = EditorView.theme({
 const BASE_EXTENSIONS: Extension[] = [
   highlightedLineField,
   highlightLineTheme,
+  EditorState.readOnly.of(true),
   search({ top: true }),
   keymap.of([{ key: "Mod-l", run: gotoLine }]),
   searchPanelTheme,
   editorSearchHighlightTheme,
 ];
+
+const SCOPE_NODE_TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
+  JavaScript: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
+  TypeScript: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
+  Python: new Set(["FunctionDefinition", "ClassDefinition"]),
+  Go: new Set(["FunctionDecl", "MethodDecl", "TypeDecl"]),
+  Rust: new Set([
+    "FunctionItem",
+    "StructItem",
+    "ImplItem",
+    "TraitItem",
+    "EnumItem",
+    "ModItem",
+    "UnionItem",
+  ]),
+  Java: new Set([
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+  ]),
+  TSX: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
+  JSX: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
+  "C++": new Set(["FunctionDefinition", "ClassSpecifier", "StructSpecifier"]),
+  C: new Set(["FunctionDefinition", "ClassSpecifier", "StructSpecifier"]),
+};
 
 export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function CodeViewer(
   { content, filePath, initialLine, className },
@@ -124,19 +192,38 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
 ) {
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const stickyScopeRef = useRef<string | null>(null);
+  const [stickyScope, setStickyScope] = useState<string | null>(null);
+  const [cmLineHeight, setCmLineHeight] = useState<number>(24);
 
-  useImperativeHandle(ref, () => ({
-    openSearch() {
-      if (viewRef.current) {
-        openSearchPanel(viewRef.current);
-      }
-    },
-    openGotoLine() {
-      if (viewRef.current) {
-        gotoLine(viewRef.current);
-      }
-    },
-  }));
+  useImperativeHandle(
+    ref,
+    () => ({
+      openSearch() {
+        if (viewRef.current) {
+          openSearchPanel(viewRef.current);
+        }
+      },
+      openGotoLine() {
+        if (viewRef.current) {
+          gotoLine(viewRef.current);
+        }
+      },
+    }),
+    []
+  );
+
+  const langName = useMemo(() => {
+    const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
+    return LanguageDescription.matchFilename(CODEMIRROR_LANGUAGES, basename)?.name ?? null;
+  }, [filePath]);
+
+  const scopeTypes = useMemo(
+    () => (langName ? (SCOPE_NODE_TYPES_BY_LANGUAGE[langName] ?? null) : null),
+    [langName]
+  );
 
   useEffect(() => {
     const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
@@ -164,9 +251,78 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     [langExtension]
   );
 
+  const handleScroll = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const view = viewRef.current;
+      const wrapper = scrollRef.current;
+      if (!view || !wrapper) return;
+      if (wrapper.scrollTop <= 0) {
+        stickyScopeRef.current = null;
+        setStickyScope(null);
+        return;
+      }
+      if (!scopeTypes || scopeTypes.size === 0) {
+        stickyScopeRef.current = null;
+        setStickyScope(null);
+        return;
+      }
+      try {
+        const cmScrollTop = wrapper.getBoundingClientRect().top - view.documentTop;
+        const line = view.lineBlockAtHeight(Math.max(0, cmScrollTop));
+        const tree = syntaxTree(view.state);
+        let node: SyntaxNode | null = tree.resolve(line.from, -1);
+        let found: { from: number } | null = null;
+        while (node && node !== tree.topNode) {
+          if (scopeTypes.has(node.type.name)) {
+            found = { from: node.from };
+            break;
+          }
+          node = node.parent;
+        }
+        if (found) {
+          const text = view.state.doc.lineAt(found.from).text.trimEnd();
+          if (stickyScopeRef.current !== text) {
+            stickyScopeRef.current = text;
+            setStickyScope(text);
+          }
+        } else {
+          if (stickyScopeRef.current !== null) {
+            stickyScopeRef.current = null;
+            setStickyScope(null);
+          }
+        }
+      } catch {
+        if (stickyScopeRef.current !== null) {
+          stickyScopeRef.current = null;
+          setStickyScope(null);
+        }
+      }
+    });
+  }, [scopeTypes]);
+
+  useEffect(() => {
+    handleScroll();
+  }, [content, handleScroll]);
+
+  useEffect(() => {
+    handleScroll();
+  }, [langExtension, handleScroll]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
+
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
       viewRef.current = view;
+      setCmLineHeight(view.defaultLineHeight);
       if (initialLine === undefined || initialLine < 1) return;
       const lineNum = Math.min(initialLine, view.state.doc.lines);
 
@@ -192,11 +348,27 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
 
   return (
     <div
+      ref={scrollRef}
+      onScroll={handleScroll}
       className={cn(
         "overflow-auto text-[13px] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
         className
       )}
     >
+      <div
+        className={cn(
+          "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
+          stickyScope !== null
+            ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
+            : "border-transparent bg-transparent text-transparent"
+        )}
+        style={{
+          height: `${cmLineHeight}px`,
+          lineHeight: `${cmLineHeight}px`,
+        }}
+      >
+        {stickyScope ?? " "}
+      </div>
       <CodeMirror
         value={content}
         theme={daintreeTheme}
