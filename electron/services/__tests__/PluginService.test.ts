@@ -620,6 +620,42 @@ describe("PluginService", () => {
     expect(Object.keys(plugins[0])).not.toContain("resolvedMain");
   });
 
+  it("listPlugins includes archiveHash when set on a loaded plugin", async () => {
+    await writePlugin("hashed", {
+      name: "acme.hashed",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    service.setPluginArchiveHash("acme.hashed", "abc123def456");
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].archiveHash).toBe("abc123def456");
+  });
+
+  it("listPlugins returns undefined archiveHash when not set", async () => {
+    await writePlugin("unhashed", {
+      name: "acme.unhashed",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].archiveHash).toBeUndefined();
+  });
+
+  it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
+    const service = new PluginService(tmpDir);
+    expect(() =>
+      service.setPluginArchiveHash("acme.nonexistent", "deadbeef")
+    ).not.toThrow();
+  });
+
   it("rejects manifest with empty name", async () => {
     await writePlugin("empty-name", { name: "", version: "1.0.0" });
 

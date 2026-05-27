@@ -118,6 +118,14 @@ export interface LoadedPluginInfo {
    * Determined by load path, never declared in the manifest.
    */
   isBuiltin: boolean;
+  /**
+   * SHA-256 hex digest of the `.dntr` archive bytes, computed at install time
+   * by {@link PluginArchive.computeArchiveHash}. Undefined for sideloaded
+   * plugins (loaded from a directory, not an archive). Populated by the
+   * installer flow (F21) — TODO(#9271): migrate to the provenance record when
+   * that lands.
+   */
+  archiveHash?: string;
 }
 
 export interface PluginIpcContext {
