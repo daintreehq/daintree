@@ -16,6 +16,8 @@ import type {
   DevPreviewGetByWorktreeRequest,
   DevPreviewDestructivePreviewSizesRequest,
   DevPreviewStopByWorktreeRequest,
+  DevPreviewRestartByWorktreeRequest,
+  DevPreviewStopDevServerByWorktreeRequest,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
@@ -144,6 +146,26 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           // the service just to no-op.
           if (!sessionService) return;
           await sessionService.stopByWorktree(request.worktreeId);
+        }
+      ),
+      restartByWorktree: op(
+        DEV_PREVIEW_METHOD_CHANNELS.restartByWorktree,
+        async (request: DevPreviewRestartByWorktreeRequest) => {
+          if (!request || typeof request.worktreeId !== "string" || !request.worktreeId.trim()) {
+            throw new Error("worktreeId is required");
+          }
+          const svc = await getSessionService();
+          return svc.restartByWorktree(request.worktreeId);
+        }
+      ),
+      stopDevServerByWorktree: op(
+        DEV_PREVIEW_METHOD_CHANNELS.stopDevServerByWorktree,
+        async (request: DevPreviewStopDevServerByWorktreeRequest) => {
+          if (!request || typeof request.worktreeId !== "string" || !request.worktreeId.trim()) {
+            throw new Error("worktreeId is required");
+          }
+          const svc = await getSessionService();
+          return svc.stopDevServerByWorktree(request.worktreeId);
         }
       ),
     },

@@ -375,6 +375,14 @@ export function WorktreeCard({
     );
   };
 
+  const handleStopDevServer = useCallback((worktreeId: string) => {
+    void window.electron.devPreview.stopDevServerByWorktree({ worktreeId });
+  }, []);
+
+  const handleRestartDevServer = useCallback((worktreeId: string) => {
+    void window.electron.devPreview.restartByWorktree({ worktreeId });
+  }, []);
+
   const handleResourceResume = () => {
     void actionService.dispatch(
       "worktree.resource.resume",
@@ -951,6 +959,8 @@ export function WorktreeCard({
                     : undefined,
                   onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
                   onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+                  onStopDevServer: handleStopDevServer,
+                  onRestartDevServer: handleRestartDevServer,
                 }}
               />
 
@@ -1105,6 +1115,8 @@ export function WorktreeCard({
           onResourceConnect={worktree.resourceConnectCommand ? handleResourceConnect : undefined}
           onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
           onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+          onStopDevServer={handleStopDevServer}
+          onRestartDevServer={handleRestartDevServer}
         />
       </ContextMenuContent>
     </ContextMenu>

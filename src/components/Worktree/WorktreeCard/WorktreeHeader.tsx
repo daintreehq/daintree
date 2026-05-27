@@ -114,6 +114,8 @@ export interface WorktreeHeaderProps {
     onResourceConnect?: () => void;
     onResourceStatus?: () => void;
     onResourceTeardown?: () => void;
+    onStopDevServer?: (worktreeId: string) => void;
+    onRestartDevServer?: (worktreeId: string) => void;
   };
 }
 

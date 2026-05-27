@@ -91,3 +91,11 @@ export interface DevPreviewDestructivePreviewSizes {
 export interface DevPreviewStopByWorktreeRequest {
   worktreeId: string;
 }
+
+export interface DevPreviewRestartByWorktreeRequest {
+  worktreeId: string;
+}
+
+export interface DevPreviewStopDevServerByWorktreeRequest {
+  worktreeId: string;
+}
