@@ -249,6 +249,13 @@ export function VoiceInputSettingsTab() {
               helpLabel="Get API key"
             />
 
+            {settings.openaiApiKey && (
+              <p className="text-xs text-daintree-text/50 mt-1">
+                Your API key is stored locally in plain text. Set billing limits on your OpenAI
+                account to cap exposure.
+              </p>
+            )}
+
             <SettingsSelect
               label="Language"
               value={settings.language}

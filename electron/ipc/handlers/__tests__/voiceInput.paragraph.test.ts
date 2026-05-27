@@ -126,7 +126,7 @@ vi.mock("../../channels.js", () => ({
 }));
 
 // ── Module import (once) ───────────────────────────────────────────────────
-import { registerVoiceInputHandlers, getVoiceSettings } from "../voiceInput.js";
+import { registerVoiceInputHandlers, getVoiceSettings, validateOpenAIKey } from "../voiceInput.js";
 import { ValidationError } from "../../validationError.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -516,5 +516,240 @@ describe("getVoiceSettings migration", () => {
     getVoiceSettings();
 
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("overrides stored openaiApiKey when WHISPER_API_KEY env var is set", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "sk-env-override";
+    try {
+      const settings = getVoiceSettings();
+      expect(settings.openaiApiKey).toBe("sk-env-override");
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+
+  it("env override is NOT persisted to store", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "sk-env";
+    try {
+      getVoiceSettings();
+      // The store.set call path only fires when legacy fields or stale model exist;
+      // the env override itself must never call store.set.
+      const setCalls = vi.mocked(store.set).mock.calls;
+      const envPersistCall = setCalls.some(([, value]) =>
+        typeof value === "object" && value !== null && "openaiApiKey" in value
+          ? (value as Record<string, unknown>).openaiApiKey === "sk-env"
+          : false
+      );
+      expect(envPersistCall).toBe(false);
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+
+  it("skips env override when WHISPER_API_KEY is empty string", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-stored",
+    });
+
+    process.env.WHISPER_API_KEY = "";
+    try {
+      const settings = getVoiceSettings();
+      expect(settings.openaiApiKey).toBe("sk-stored");
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
+});
+
+describe("validateOpenAIKey", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns invalid for empty key", async () => {
+    const result = await validateOpenAIKey("");
+    expect(result).toEqual({ valid: false, error: "API key is required" });
+  });
+
+  it("returns valid for a 200 OK response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [] }), { status: 200 })
+    );
+
+    const result = await validateOpenAIKey("sk-valid");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns invalid for 401 with JSON body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Incorrect API key provided", code: null } }),
+        { status: 401, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-bad");
+    expect(result).toEqual({ valid: false, error: "Incorrect API key provided" });
+  });
+
+  it("falls back to default message for 401 with HTML body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>Unauthorized</html>", {
+        status: 401,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-bad");
+    expect(result).toEqual({ valid: false, error: "Invalid API key" });
+  });
+
+  it("returns invalid for 429 insufficient_quota", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "You exceeded your current quota, please check your plan and billing details.",
+            type: "insufficient_quota",
+            code: "insufficient_quota",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-no-credits");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("no credits");
+  });
+
+  it("returns valid for 429 rate_limit_exceeded", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Rate limit reached for requests",
+            type: "tokens",
+            code: "rate_limit_exceeded",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-ratelimited");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns valid for 429 with unknown code", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Too many requests", code: "unknown_429_code" } }),
+        { status: 429, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-whatever");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns valid for 429 with HTML body (proxy gateway)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>429 Too Many Requests</html>", {
+        status: 429,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-proxy");
+    expect(result).toEqual({ valid: true });
+  });
+
+  it("returns invalid for 403 unsupported_country_region_territory", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Country, region, or territory not supported",
+            type: "request_forbidden",
+            code: "unsupported_country_region_territory",
+          },
+        }),
+        { status: 403, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-blocked-region");
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("region");
+  });
+
+  it("returns invalid for 403 with JSON body and unknown code", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "Access denied by policy", code: "policy_violation" } }),
+        { status: 403, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-policy");
+    expect(result).toEqual({ valid: false, error: "Access denied by policy" });
+  });
+
+  it("surfaces server error message for 500", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { message: "The server had an error processing your request" } }),
+        { status: 500, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await validateOpenAIKey("sk-500");
+    expect(result).toEqual({
+      valid: false,
+      error: "The server had an error processing your request",
+    });
+  });
+
+  it("falls back to status text for 500 with HTML body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("<html>Server Error</html>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      })
+    );
+
+    const result = await validateOpenAIKey("sk-500-html");
+    expect(result).toEqual({ valid: false, error: "API returned status 500" });
+  });
+
+  it("returns timeout error on AbortError", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      Object.defineProperty(new Error("Timeout"), "name", { value: "AbortError" })
+    );
+
+    const result = await validateOpenAIKey("sk-timeout");
+    expect(result).toEqual({ valid: false, error: "Connection timed out" });
+  });
+
+  it("returns connection error on generic fetch failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("ENOTFOUND"));
+
+    const result = await validateOpenAIKey("sk-no-net");
+    expect(result).toEqual({ valid: false, error: "Failed to connect to OpenAI" });
   });
 });

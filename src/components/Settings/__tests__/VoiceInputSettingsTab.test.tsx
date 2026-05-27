@@ -152,6 +152,7 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
   });
 
@@ -180,6 +181,7 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.queryByText(/stored locally in plain text/)).toBeNull();
     });
   });
 });
