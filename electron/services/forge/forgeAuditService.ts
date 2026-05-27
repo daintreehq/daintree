@@ -1,0 +1,82 @@
+import type {
+  ForgeAuditRecord,
+  ForgeAuditResult,
+  ForgeProviderMethodName,
+} from "../../../shared/types/ipc/forge.js";
+import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
+import { store } from "../../store.js";
+import { ForgeAuditService } from "./auditLog.js";
+
+export { summarizeForgeArgs } from "./auditLog.js";
+
+/**
+ * Process-global forge audit singleton. Forge provider calls originate from
+ * any window's IPC, so the audit ring accumulates cross-window — a module-level
+ * singleton, never per-window (lesson #4624). The pure {@link ForgeAuditService}
+ * class lives in `auditLog.ts` (store-free, unit-testable); this thin wrapper
+ * wires it to the `forgeAudit` store key, mirroring `McpServerService`'s
+ * separation of the class from its persistence callbacks.
+ */
+const FORGE_AUDIT_CONFIG_DEFAULTS = {
+  auditEnabled: true,
+  auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
+} as const;
+
+function getConfig(): Record<string, unknown> {
+  // Defensive `?? {}`: the store default always supplies `forgeAudit`, but a
+  // test harness mocking the store may not — readConfig must never be undefined.
+  return (store.get("forgeAudit") as Record<string, unknown> | undefined) ?? {};
+}
+
+function persistConfig(patch: Record<string, unknown>): void {
+  // Known-key merge guard mirrors `McpServerService.persistConfig`: a partial
+  // patch (e.g. `{ auditEnabled }`) must never drop the persisted `auditLog`.
+  const current = store.get("forgeAudit") ?? FORGE_AUDIT_CONFIG_DEFAULTS;
+  store.set("forgeAudit", {
+    ...current,
+    ...patch,
+    auditLog: ("auditLog" in patch ? patch.auditLog : current.auditLog) as
+      | ForgeAuditRecord[]
+      | undefined,
+  });
+}
+
+export const forgeAuditService = new ForgeAuditService(persistConfig, getConfig);
+
+/**
+ * Time and audit a single forge-provider method call. Wraps only the provider
+ * call thunk — callers place it INSIDE any singleflight `run()` closure and
+ * AFTER `resolveForCwd`, so the recorded duration measures the provider call,
+ * not resolution or coalescing wait. Failures still rethrow: auditing is
+ * transparent to callers (#8442 — record even when the UI banner is silenced).
+ */
+export async function auditForgeCall<T>(
+  meta: {
+    providerId: string;
+    methodName: ForgeProviderMethodName | (string & {});
+    repoOwner?: string;
+    repoName?: string;
+    argsSummary?: string;
+  },
+  run: () => Promise<T>,
+  classify?: (value: T) => ForgeAuditResult
+): Promise<T> {
+  const start = Date.now();
+  try {
+    const value = await run();
+    forgeAuditService.appendRecord({
+      ...meta,
+      durationMs: Date.now() - start,
+      result: classify ? classify(value) : "success",
+    });
+    return value;
+  } catch (err) {
+    forgeAuditService.appendRecord({
+      ...meta,
+      durationMs: Date.now() - start,
+      result: "error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}

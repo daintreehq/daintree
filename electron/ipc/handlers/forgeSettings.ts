@@ -13,6 +13,7 @@ import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
+import { auditForgeCall } from "../../services/forge/forgeAuditService.js";
 import type { AuthValidation, CredentialField } from "../../../shared/types/forge.js";
 
 /**
@@ -181,7 +182,10 @@ export function registerForgeSettingsHandlers(): () => void {
           return { valid: false, error: "Provider not activated. Open it in Settings first." };
         }
 
-        const validation = await impl.validateToken(primaryValue);
+        const validation = await auditForgeCall(
+          { providerId, methodName: "validateToken", argsSummary: "" },
+          () => impl.validateToken(primaryValue)
+        );
         if (!validation.valid) {
           return validation;
         }

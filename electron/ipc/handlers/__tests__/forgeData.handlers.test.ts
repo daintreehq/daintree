@@ -33,7 +33,24 @@ vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
 }));
 
+// The handlers transitively import the forge audit singleton, which imports
+// the electron-store. Mock it so the singleton's read/write callbacks hit an
+// in-memory map rather than constructing a real store under a mocked electron.
+const storeMock = vi.hoisted(() => {
+  const data: Record<string, unknown> = {};
+  return {
+    get: vi.fn((key: string) => data[key]),
+    set: vi.fn((key: string, value: unknown) => {
+      data[key] = value;
+    }),
+    _data: data,
+  };
+});
+
+vi.mock("../../../store.js", () => ({ store: storeMock }));
+
 import { registerForgeDataHandlers } from "../forgeData.js";
+import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
   const entry = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channel);
@@ -296,5 +313,84 @@ describe("registerForgeDataHandlers", () => {
     await expect(findHandler("forge:list-issues")(null, { cwd: "/repo" })).rejects.toThrow(
       "No forge provider registered"
     );
+  });
+
+  describe("audit instrumentation", () => {
+    let appendSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    });
+
+    it("emits one success record per resolved provider call", async () => {
+      fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      registerForgeDataHandlers();
+      await findHandler("forge:list-issues")(null, { cwd: "/repo", opts: { state: "open" } });
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerId: "fake.provider",
+          methodName: "listIssues",
+          result: "success",
+          repoOwner: "acme",
+          repoName: "widgets",
+        })
+      );
+    });
+
+    it("classifies a null getIssue lookup as not-found", async () => {
+      fakeImpl.getIssue.mockResolvedValue(null);
+      registerForgeDataHandlers();
+      await findHandler("forge:get-issue")(null, { cwd: "/repo", issueNumber: 99 });
+
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getIssue", result: "not-found" })
+      );
+    });
+
+    it("records an error result and still rethrows when the provider throws", async () => {
+      fakeImpl.getRepoMetadata.mockRejectedValue(new Error("rate limited"));
+      registerForgeDataHandlers();
+
+      await expect(findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" })).rejects.toThrow(
+        "rate limited"
+      );
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getRepoMetadata",
+          result: "error",
+          errorMessage: "rate limited",
+        })
+      );
+    });
+
+    it("emits exactly one record for coalesced concurrent calls", async () => {
+      let resolveGetPR!: (pr: PR) => void;
+      fakeImpl.getPR.mockReturnValue(new Promise<PR>((resolve) => (resolveGetPR = resolve)));
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-pr");
+
+      const p1 = handler(null, { cwd: "/repo", prNumber: 5 });
+      const p2 = handler(null, { cwd: "/repo", prNumber: 5 });
+      resolveGetPR(makePR(5));
+      await Promise.all([p1, p2]);
+
+      // Audit lives inside the singleflight run() closure, so coalesced callers
+      // share the single provider call and its single record — no double-count.
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("never includes the assignee in the list args summary", async () => {
+      fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      registerForgeDataHandlers();
+      await findHandler("forge:list-issues")(null, {
+        cwd: "/repo",
+        opts: { state: "open", assignee: "secret-user" },
+      });
+
+      const summary = (appendSpy.mock.calls[0]![0] as { argsSummary?: string }).argsSummary ?? "";
+      expect(summary).not.toContain("secret-user");
+    });
   });
 });

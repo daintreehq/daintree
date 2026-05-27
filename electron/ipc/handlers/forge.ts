@@ -9,6 +9,7 @@ import {
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
+import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type { PushErrorClassification } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
@@ -39,7 +40,16 @@ async function handleForgeUnassignIssue(payload: {
   }
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await impl.unassignIssue(repoRef, payload.issueNumber, trimmedUsername);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "unassignIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("unassignIssue", payload.issueNumber),
+    },
+    () => impl.unassignIssue(repoRef, payload.issueNumber, trimmedUsername)
+  );
 }
 
 export const forgeUnassignIssueNamespace = defineIpcNamespace({
@@ -154,7 +164,16 @@ export function registerForgeHandlers(): () => void {
         }
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
-        await impl.assignIssue(repoRef, payload.issueNumber, trimmedUsername);
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "assignIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("assignIssue", payload.issueNumber),
+          },
+          () => impl.assignIssue(repoRef, payload.issueNumber, trimmedUsername)
+        );
       }
     )
   );
@@ -194,7 +213,10 @@ export function registerForgeHandlers(): () => void {
           error: `Forge provider "${entry.contribution.id}" not activated`,
         };
       }
-      return impl.validateToken(token.trim());
+      return auditForgeCall(
+        { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
+        () => impl.validateToken(token.trim())
+      );
     })
   );
 

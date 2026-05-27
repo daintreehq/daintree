@@ -60,6 +60,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 }));
 
 import { registerForgeSettingsHandlers } from "../forgeSettings.js";
+import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
   const entry = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channel);
@@ -446,6 +447,47 @@ describe("registerForgeSettingsHandlers", () => {
     expect(getStatus(null, "acme.empty")).toEqual({ hasCredential: false });
     expect(getStatus(null, "acme.absent")).toEqual({ hasCredential: false });
     expect(getStatus(null, "")).toEqual({ hasCredential: false });
+  });
+
+  it("setCredential audits the validateToken call with an empty args summary on success", async () => {
+    const appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: true }),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", { token: "secret-token" });
+
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "acme.gitea",
+        methodName: "validateToken",
+        result: "success",
+        argsSummary: "",
+      })
+    );
+    // The raw token must never reach the audit record under any field.
+    const summary = (appendSpy.mock.calls[0]![0] as { argsSummary?: string }).argsSummary ?? "";
+    expect(summary).not.toContain("secret-token");
+    appendSpy.mockRestore();
+  });
+
+  it("setCredential audits a thrown validateToken as an error and rethrows", async () => {
+    const appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    registerGiteaProvider();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockRejectedValue(new Error("network down")),
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await expect(setCredential(null, "acme.gitea", { token: "x" })).rejects.toThrow("network down");
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ methodName: "validateToken", result: "error" })
+    );
+    appendSpy.mockRestore();
   });
 
   it("clearCredential removes only the targeted provider and syncs a null credential", async () => {

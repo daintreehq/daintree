@@ -16,6 +16,8 @@ import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mc
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
 import type { PluginActionAuditRecord } from "../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudit.js";
+import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
@@ -340,6 +342,20 @@ export interface StoreSchema {
    * equivalent) — deliberately not encrypted.
    */
   forgeCredentials?: Record<string, string>;
+  /**
+   * Audit ring buffer for `ForgeProviderImpl` method calls. Parallel to
+   * `mcpServer.auditLog` but scoped to host-side forge invocations — slow
+   * providers, credential failures, and malformed responses leave a trail
+   * here. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
+   * `auditEnabled` is the kill switch. Read defensively (`?? {}` defaults
+   * applied by electron-store) — the on-disk shape is owned by
+   * `ForgeAuditService`.
+   */
+  forgeAudit: {
+    auditEnabled: boolean;
+    auditMaxRecords: number;
+    auditLog?: ForgeAuditRecord[];
+  };
 }
 
 const storeOptions = {
@@ -492,6 +508,10 @@ const storeOptions = {
       disabledBuiltins: [],
       auditEnabled: true,
       auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    forgeAudit: {
+      auditEnabled: true,
+      auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
     },
   },
   cwd: process.env.DAINTREE_USER_DATA,
