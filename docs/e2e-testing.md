@@ -25,7 +25,7 @@ PWDEBUG=1 npx playwright test --project=core                         # Debug mod
 
 Tests are split into nine Playwright projects:
 
-- **core** — Lightweight deterministic release-gate smoke (5 specs).
+- **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
 - **full-worktree** — Worktree lifecycle, project switching, git detection, cross-project flows.
 - **full-presets** — Agent presets, recipes, onboarding, CCR.
@@ -174,3 +174,34 @@ Releases run as three independent per-OS workflows (`release-macos.yml`, `releas
 `e2e/helpers/launch.ts` adds flags when `CI=true` on Linux:
 
 - `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`
+
+## `test:smoke` vs Playwright `core`
+
+Two distinct smoke checks run at different points in the pipeline:
+
+| Command | What runs | When | Where |
+| --- | --- | --- | --- |
+| `npm run test:smoke` | `scripts/run-smoke.mjs` — Electron stability soak | Push (Linux only) | `.github/workflows/ci.yml` |
+| `npm run test:e2e:core` | Playwright `core` project (5 e2e specs) | Release (all 3 OSes) | `release-{linux,macos,windows}.yml` |
+
+`npm run test:smoke` launches the built Electron binary in `--smoke-test` mode and validates stability markers: node-pty native module load, renderer `did-finish-load`, IPC bridge round-trip, terminal stress rounds, and project persistence stress. It is a single-run soak (with configurable retries) — not a Playwright suite.
+
+`npm run test:e2e:core` runs the 5 Playwright specs in `e2e/core/` against the Electron app. These are deterministic release-gate tests that gate every OS publish.
+
+## Smoke Audit Cadence
+
+The `core` Playwright project is the release-gate smoke — 5 specs that gate every OS publish. To ensure these 5 specs stay calibrated against real regressions, run a quarterly "kill rate" audit:
+
+1. Pull the last 10 release-blocking incidents:
+   ```bash
+   gh issue list --label "regression" --state closed --limit 10
+   ```
+   If the `regression` label doesn't exist yet, create it and apply retroactively to known release-blocking regressions. Use `--search "release-blocking in:title"` as a fallback query.
+2. For each incident, revert the fix on a local branch.
+3. Run `npm run test:e2e:core`.
+4. Log every escape where the smoke stays green despite a reverted regression fix as a coverage gap. File a follow-up issue per gap with the `testing` label.
+5. Time-box the exercise to one day. If all 10 incidents can't be processed, process the most recent N that fit the box.
+
+If the quarterly cadence proves too heavy for the team, downgrade the trigger to **on every P0 incident** instead — run the audit for each new release-blocking incident as part of postmortem.
+
+The audit is a documentation exercise: no test or workflow code changes are required. The output is a set of follow-up issues identifying gaps in the smoke coverage.
