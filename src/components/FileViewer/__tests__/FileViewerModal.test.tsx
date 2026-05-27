@@ -47,19 +47,26 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { FileViewerModal } from "../FileViewerModal";
 
+const { capturedDialogProps } = vi.hoisted(() => ({
+  capturedDialogProps: { restoreFocusTo: undefined as unknown },
+}));
+
 vi.mock("@/components/ui/AppDialog", () => {
   interface MockProps {
     isOpen: boolean;
     children: ReactNode;
     onClose: () => void;
+    restoreFocusTo?: unknown;
   }
   interface SectionProps {
     children: ReactNode;
     className?: string;
   }
 
-  const AppDialog = ({ isOpen, children }: MockProps) =>
-    isOpen ? <div data-testid="app-dialog">{children}</div> : null;
+  const AppDialog = ({ isOpen, children, restoreFocusTo }: MockProps) => {
+    capturedDialogProps.restoreFocusTo = restoreFocusTo;
+    return isOpen ? <div data-testid="app-dialog">{children}</div> : null;
+  };
 
   AppDialog.Header = ({ children, className }: SectionProps) => (
     <div className={className}>{children}</div>
@@ -908,6 +915,181 @@ describe("FileViewerModal", () => {
       expect(() => {
         fireObserver(observer, [makeEntry(hunk0Row!, 1.0)]);
       }).not.toThrow();
+    });
+  });
+
+  describe("file stepping (#9217)", () => {
+    const stepProps = {
+      totalFileCount: 3,
+      onNavigateFile: vi.fn(),
+    };
+
+    it("does not render the position indicator or nav buttons for a single file", async () => {
+      render(<FileViewerModal {...defaultProps} totalFileCount={1} onNavigateFile={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      expect(screen.queryByTestId("file-position-indicator")).toBeNull();
+      expect(screen.queryByLabelText("Previous file")).toBeNull();
+    });
+
+    it("does not render nav controls when onNavigateFile is omitted", async () => {
+      render(<FileViewerModal {...defaultProps} totalFileCount={3} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      expect(screen.queryByTestId("file-position-indicator")).toBeNull();
+    });
+
+    it("renders the position indicator and nav buttons across a multi-file set", async () => {
+      render(<FileViewerModal {...defaultProps} {...stepProps} currentFileIndex={1} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("file-position-indicator")).toBeTruthy();
+      });
+
+      expect(screen.getByTestId("file-position-indicator").textContent).toBe("2 of 3");
+      expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(false);
+      expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("disables Previous at the first file", async () => {
+      render(<FileViewerModal {...defaultProps} {...stepProps} currentFileIndex={0} />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Previous file")).toBeTruthy();
+      });
+
+      expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(true);
+      expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("disables Next at the last file", async () => {
+      render(<FileViewerModal {...defaultProps} {...stepProps} currentFileIndex={2} />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Next file")).toBeTruthy();
+      });
+
+      expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(true);
+      expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("calls onNavigateFile(1) on `]` and (-1) on `[`", async () => {
+      const onNavigateFile = vi.fn();
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          totalFileCount={3}
+          currentFileIndex={1}
+          onNavigateFile={onNavigateFile}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("file-position-indicator")).toBeTruthy();
+      });
+
+      fireEvent.keyDown(window, { key: "]" });
+      expect(onNavigateFile).toHaveBeenCalledWith(1);
+
+      fireEvent.keyDown(window, { key: "[" });
+      expect(onNavigateFile).toHaveBeenCalledWith(-1);
+    });
+
+    it("does not step past the boundaries via keyboard", async () => {
+      const onNavigateFile = vi.fn();
+      const { rerender } = render(
+        <FileViewerModal
+          {...defaultProps}
+          totalFileCount={3}
+          currentFileIndex={0}
+          onNavigateFile={onNavigateFile}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("file-position-indicator")).toBeTruthy();
+      });
+
+      // `[` at the first file is a no-op
+      fireEvent.keyDown(window, { key: "[" });
+      expect(onNavigateFile).not.toHaveBeenCalled();
+
+      rerender(
+        <FileViewerModal
+          {...defaultProps}
+          totalFileCount={3}
+          currentFileIndex={2}
+          onNavigateFile={onNavigateFile}
+        />
+      );
+
+      // `]` at the last file is a no-op
+      fireEvent.keyDown(window, { key: "]" });
+      expect(onNavigateFile).not.toHaveBeenCalled();
+    });
+
+    it("clicking the nav buttons calls onNavigateFile with the right delta", async () => {
+      const onNavigateFile = vi.fn();
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          totalFileCount={3}
+          currentFileIndex={1}
+          onNavigateFile={onNavigateFile}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Next file")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByLabelText("Next file"));
+      expect(onNavigateFile).toHaveBeenCalledWith(1);
+
+      fireEvent.click(screen.getByLabelText("Previous file"));
+      expect(onNavigateFile).toHaveBeenCalledWith(-1);
+    });
+
+    it("ignores `[`/`]` when focus is in an input", async () => {
+      const onNavigateFile = vi.fn();
+      render(
+        <>
+          <input data-testid="other-input" />
+          <FileViewerModal
+            {...defaultProps}
+            totalFileCount={3}
+            currentFileIndex={1}
+            onNavigateFile={onNavigateFile}
+          />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("file-position-indicator")).toBeTruthy();
+      });
+
+      const input = screen.getByTestId("other-input") as HTMLInputElement;
+      input.focus();
+      fireEvent.keyDown(input, { key: "]" });
+
+      expect(onNavigateFile).not.toHaveBeenCalled();
+    });
+
+    it("forwards restoreFocusTo to AppDialog", async () => {
+      const ref = { current: document.createElement("div") };
+      render(<FileViewerModal {...defaultProps} restoreFocusTo={ref} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      expect(capturedDialogProps.restoreFocusTo).toBe(ref);
     });
   });
 });

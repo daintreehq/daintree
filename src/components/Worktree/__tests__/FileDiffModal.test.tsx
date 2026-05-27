@@ -8,7 +8,13 @@ import { FileDiffModal } from "../FileDiffModal";
 // what `fetchDiff` resolves to for each dispatch outcome.
 const { mockDispatch, capturedProps } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
-  capturedProps: { diff: undefined as string | undefined },
+  capturedProps: {
+    diff: undefined as string | undefined,
+    restoreFocusTo: undefined as unknown,
+    currentFileIndex: undefined as number | undefined,
+    totalFileCount: undefined as number | undefined,
+    onNavigateFile: undefined as ((delta: -1 | 1) => void) | undefined,
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -18,8 +24,18 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/components/FileViewer/FileViewerModal", () => ({
-  FileViewerModal: (props: { diff?: string }) => {
+  FileViewerModal: (props: {
+    diff?: string;
+    restoreFocusTo?: unknown;
+    currentFileIndex?: number;
+    totalFileCount?: number;
+    onNavigateFile?: (delta: -1 | 1) => void;
+  }) => {
     capturedProps.diff = props.diff;
+    capturedProps.restoreFocusTo = props.restoreFocusTo;
+    capturedProps.currentFileIndex = props.currentFileIndex;
+    capturedProps.totalFileCount = props.totalFileCount;
+    capturedProps.onNavigateFile = props.onNavigateFile;
     return <div data-testid="file-viewer-modal-stub" />;
   },
 }));
@@ -40,6 +56,10 @@ describe("FileDiffModal", () => {
   beforeEach(() => {
     mockDispatch.mockReset();
     capturedProps.diff = undefined;
+    capturedProps.restoreFocusTo = undefined;
+    capturedProps.currentFileIndex = undefined;
+    capturedProps.totalFileCount = undefined;
+    capturedProps.onNavigateFile = undefined;
   });
 
   it("unwraps the { content } envelope and passes the diff string to the viewer", async () => {
@@ -80,5 +100,27 @@ describe("FileDiffModal", () => {
     await waitFor(() => {
       expect(capturedProps.diff).toBe("ERROR");
     });
+  });
+
+  it("threads focus-restore and file-stepping props through to the viewer (#9217)", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const ref = { current: document.createElement("div") };
+    const onNavigateFile = vi.fn();
+    render(
+      <FileDiffModal
+        {...baseProps}
+        restoreFocusTo={ref}
+        currentFileIndex={2}
+        totalFileCount={5}
+        onNavigateFile={onNavigateFile}
+      />
+    );
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+    expect(capturedProps.restoreFocusTo).toBe(ref);
+    expect(capturedProps.currentFileIndex).toBe(2);
+    expect(capturedProps.totalFileCount).toBe(5);
+    expect(capturedProps.onNavigateFile).toBe(onNavigateFile);
   });
 });

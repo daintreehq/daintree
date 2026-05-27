@@ -38,16 +38,30 @@ export function ReviewHub({
   autoStageOnOpen,
 }: ReviewHubProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Element focused when the hub opened. ReviewHub is hand-rolled (no AppDialog),
+  // so it restores focus on close itself. A ref — not state — avoids the
+  // re-render churn that bit #4220.
+  const previousActiveElementRef = useRef<HTMLElement | null>(null);
 
   useOverlayState(isOpen);
 
   useEffect(() => {
     if (!isOpen) return;
+    // Capture the trigger before focus moves into the dialog (the rAF below).
+    const opener = document.activeElement;
+    previousActiveElementRef.current = opener instanceof HTMLElement ? opener : null;
     requestAnimationFrame(() => {
       if (dialogRef.current && !dialogRef.current.contains(document.activeElement)) {
         dialogRef.current.focus();
       }
     });
+    return () => {
+      const target = previousActiveElementRef.current;
+      previousActiveElementRef.current = null;
+      if (target && document.contains(target)) {
+        target.focus();
+      }
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;

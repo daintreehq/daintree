@@ -993,6 +993,52 @@ describe("ReviewHub", () => {
     });
   });
 
+  describe("focus restore on close (#9217)", () => {
+    function renderWithOpener(isOpen: boolean) {
+      return (
+        <>
+          <button type="button" data-testid="opener">
+            open
+          </button>
+          <ReviewHub isOpen={isOpen} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        </>
+      );
+    }
+
+    it("returns focus to the element that opened the hub", async () => {
+      const { rerender } = render(renderWithOpener(false));
+      const opener = screen.getByTestId("opener") as HTMLButtonElement;
+      act(() => opener.focus());
+      expect(document.activeElement).toBe(opener);
+
+      // Open captures the opener as the previously-focused element.
+      rerender(renderWithOpener(true));
+      await waitFor(() => screen.getByText("index.ts"));
+
+      // Close restores focus to the opener.
+      act(() => {
+        rerender(renderWithOpener(false));
+      });
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it("does not throw when the opener was removed before close", async () => {
+      const { rerender } = render(renderWithOpener(false));
+      const opener = screen.getByTestId("opener") as HTMLButtonElement;
+      act(() => opener.focus());
+
+      rerender(renderWithOpener(true));
+      await waitFor(() => screen.getByText("index.ts"));
+
+      // Drop the opener from the tree, then close — restore must guard on
+      // document.contains and skip the detached node without throwing.
+      act(() => {
+        rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      });
+      expect(document.contains(opener)).toBe(false);
+    });
+  });
+
   describe("PR state indicator", () => {
     function setWorktreePR(prData: {
       prNumber: number;

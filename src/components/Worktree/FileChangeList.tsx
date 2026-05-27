@@ -87,6 +87,11 @@ export function FileChangeList({
   isStale = false,
 }: FileChangeListProps) {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // Holds the row element that opened the modal so focus can return to it on
+  // close. Identity-stable across renders so AppDialog's restore logic doesn't
+  // spuriously re-fire (the ref is the fallback for an unmounted trigger).
+  const triggerElementRef = useRef<HTMLElement | null>(null);
 
   const sortedChanges = useMemo(() => {
     return [...changes]
@@ -112,6 +117,15 @@ export function FileChangeList({
         return a.path.localeCompare(b.path);
       });
   }, [changes, rootPath]);
+
+  // Map each row key to its position in `sortedChanges` so file stepping spans
+  // the whole change set (not just the visible cap) and grouped rows resolve to
+  // the same deterministic order as the flat list.
+  const indexByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    sortedChanges.forEach((change, index) => map.set(rowKey(change), index));
+    return map;
+  }, [sortedChanges]);
 
   const visibleChanges = useMemo(
     () => sortedChanges.slice(0, maxVisible),
@@ -176,15 +190,32 @@ export function FileChangeList({
     return null;
   }
 
-  const handleFileClick = (change: FileChangeWithRelativePath) => {
-    setSelectedFile({
-      path: change.relativePath,
-      status: change.status,
-    });
+  const openFileAt = (index: number, triggerEl: HTMLElement | null) => {
+    const change = sortedChanges[index];
+    if (!change) return;
+    triggerElementRef.current = triggerEl;
+    setSelectedFile({ path: change.relativePath, status: change.status });
+    setSelectedIndex(index);
   };
 
   const closeModal = () => {
     setSelectedFile(null);
+    setSelectedIndex(null);
+  };
+
+  const navigateFile = (delta: -1 | 1) => {
+    setSelectedIndex((current) => {
+      if (current === null) return current;
+      // Clamp against the live length first — a worktree refresh can shrink the
+      // set while the modal is open, leaving the index stale.
+      const safeCurrent = Math.min(current, sortedChanges.length - 1);
+      const next = Math.min(Math.max(safeCurrent + delta, 0), sortedChanges.length - 1);
+      const change = sortedChanges[next];
+      if (change) {
+        setSelectedFile({ path: change.relativePath, status: change.status });
+      }
+      return next;
+    });
   };
 
   const renderFileItem = (change: FileChangeWithRelativePath, showDir: boolean) => {
@@ -193,17 +224,28 @@ export function FileChangeList({
     const displayDir = formatDirForDisplay(dir);
     const key = rowKey(change);
     const isNew = newRowKeys.has(key);
+    const index = indexByKey.get(key) ?? 0;
 
     return (
       <Tooltip key={key}>
         <TooltipTrigger asChild>
           <div
             data-recency-new={isNew ? "true" : undefined}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open ${change.relativePath}`}
             className={cn(
               "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent",
               isNew && "file-change-row-new"
             )}
-            onClick={() => handleFileClick(change)}
+            onClick={(e) => openFileAt(index, e.currentTarget)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openFileAt(index, e.currentTarget);
+              }
+            }}
           >
             <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
 
@@ -274,6 +316,10 @@ export function FileChangeList({
           status={selectedFile?.status ?? "modified"}
           worktreePath={rootPath}
           onClose={closeModal}
+          restoreFocusTo={triggerElementRef}
+          currentFileIndex={selectedIndex ?? undefined}
+          totalFileCount={sortedChanges.length}
+          onNavigateFile={navigateFile}
         />
       </>
     );
@@ -309,6 +355,10 @@ export function FileChangeList({
         status={selectedFile?.status ?? "modified"}
         worktreePath={rootPath}
         onClose={closeModal}
+        restoreFocusTo={triggerElementRef}
+        currentFileIndex={selectedIndex ?? undefined}
+        totalFileCount={sortedChanges.length}
+        onNavigateFile={navigateFile}
       />
     </>
   );

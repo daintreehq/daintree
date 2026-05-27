@@ -1,12 +1,41 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, render, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { act, render, cleanup, fireEvent } from "@testing-library/react";
 import type { FileChangeDetail } from "../../../types";
 
+const { capturedModalProps } = vi.hoisted(() => ({
+  capturedModalProps: {
+    isOpen: false as boolean,
+    filePath: "" as string,
+    restoreFocusTo: undefined as unknown,
+    currentFileIndex: undefined as number | undefined,
+    totalFileCount: undefined as number | undefined,
+    onNavigateFile: undefined as ((delta: -1 | 1) => void) | undefined,
+    onClose: undefined as (() => void) | undefined,
+  },
+}));
+
 vi.mock("../FileDiffModal", () => ({
-  FileDiffModal: () => null,
+  FileDiffModal: (props: {
+    isOpen: boolean;
+    filePath: string;
+    restoreFocusTo?: unknown;
+    currentFileIndex?: number;
+    totalFileCount?: number;
+    onNavigateFile?: (delta: -1 | 1) => void;
+    onClose: () => void;
+  }) => {
+    capturedModalProps.isOpen = props.isOpen;
+    capturedModalProps.filePath = props.filePath;
+    capturedModalProps.restoreFocusTo = props.restoreFocusTo;
+    capturedModalProps.currentFileIndex = props.currentFileIndex;
+    capturedModalProps.totalFileCount = props.totalFileCount;
+    capturedModalProps.onNavigateFile = props.onNavigateFile;
+    capturedModalProps.onClose = props.onClose;
+    return null;
+  },
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -238,5 +267,134 @@ describe("FileChangeList — stale state (#8069)", () => {
     const el = scroll(container);
     expect(el.classList.contains("surface-stale")).toBe(false);
     expect(el.getAttribute("aria-busy")).toBeNull();
+  });
+});
+
+describe("FileChangeList — focus restore & file stepping (#9217)", () => {
+  beforeEach(() => {
+    capturedModalProps.isOpen = false;
+    capturedModalProps.filePath = "";
+    capturedModalProps.restoreFocusTo = undefined;
+    capturedModalProps.currentFileIndex = undefined;
+    capturedModalProps.totalFileCount = undefined;
+    capturedModalProps.onNavigateFile = undefined;
+    capturedModalProps.onClose = undefined;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function rows(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]'));
+  }
+
+  it("makes each row a focusable button with an accessible label", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+    );
+    const [first] = rows(container);
+    expect(first).toBeTruthy();
+    expect(first!.getAttribute("role")).toBe("button");
+    expect(first!.getAttribute("tabindex")).toBe("0");
+    expect(first!.getAttribute("aria-label")).toContain("a.ts");
+  });
+
+  it("opens the modal on Enter and passes the row as the focus-restore target", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+    );
+    const [first] = rows(container);
+    fireEvent.keyDown(first!, { key: "Enter" });
+
+    expect(capturedModalProps.isOpen).toBe(true);
+    expect(capturedModalProps.filePath).toBe("a.ts");
+    // restoreFocusTo is the identity-stable ref; its current points at the row.
+    const ref = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
+    expect(ref.current).toBe(first);
+  });
+
+  it("opens the modal on Space", () => {
+    const { container } = render(<FileChangeList changes={[file("a.ts")]} rootPath={ROOT} />);
+    fireEvent.keyDown(rows(container)[0]!, { key: " " });
+    expect(capturedModalProps.isOpen).toBe(true);
+  });
+
+  it("opens the modal on click and reports the file index and total count", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts"), file("c.ts")]} rootPath={ROOT} />
+    );
+    // Sorted alphabetically (equal churn): a, b, c. Click the second row.
+    fireEvent.click(rows(container)[1]!);
+
+    expect(capturedModalProps.isOpen).toBe(true);
+    expect(capturedModalProps.filePath).toBe("b.ts");
+    expect(capturedModalProps.currentFileIndex).toBe(1);
+    expect(capturedModalProps.totalFileCount).toBe(3);
+  });
+
+  it("steps to the next and previous file across the whole sorted set", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts"), file("c.ts")]} rootPath={ROOT} />
+    );
+    fireEvent.click(rows(container)[0]!);
+    expect(capturedModalProps.currentFileIndex).toBe(0);
+
+    act(() => capturedModalProps.onNavigateFile!(1));
+    expect(capturedModalProps.currentFileIndex).toBe(1);
+    expect(capturedModalProps.filePath).toBe("b.ts");
+
+    act(() => capturedModalProps.onNavigateFile!(1));
+    expect(capturedModalProps.currentFileIndex).toBe(2);
+    expect(capturedModalProps.filePath).toBe("c.ts");
+
+    act(() => capturedModalProps.onNavigateFile!(-1));
+    expect(capturedModalProps.currentFileIndex).toBe(1);
+    expect(capturedModalProps.filePath).toBe("b.ts");
+  });
+
+  it("clamps stepping at the boundaries", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+    );
+    fireEvent.click(rows(container)[0]!);
+
+    // Step back from the first file stays at index 0.
+    act(() => capturedModalProps.onNavigateFile!(-1));
+    expect(capturedModalProps.currentFileIndex).toBe(0);
+
+    // Step forward to the last, then past it — stays at the last index.
+    act(() => capturedModalProps.onNavigateFile!(1));
+    act(() => capturedModalProps.onNavigateFile!(1));
+    expect(capturedModalProps.currentFileIndex).toBe(1);
+    expect(capturedModalProps.filePath).toBe("b.ts");
+  });
+
+  it("can step into files beyond the visible cap", () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      // Descending churn so the sort order matches the construction order.
+      ({ ...file(`file-${String(i).padStart(2, "0")}.ts`), insertions: 100 - i })
+    );
+    const { container } = render(<FileChangeList changes={many} rootPath={ROOT} maxVisible={8} />);
+    // Only 8 rows render, but stepping spans all 12.
+    expect(rows(container).length).toBe(8);
+    fireEvent.click(rows(container)[7]!);
+    expect(capturedModalProps.currentFileIndex).toBe(7);
+    expect(capturedModalProps.totalFileCount).toBe(12);
+
+    act(() => capturedModalProps.onNavigateFile!(1));
+    expect(capturedModalProps.currentFileIndex).toBe(8);
+    expect(capturedModalProps.filePath).toBe("file-08.ts");
+  });
+
+  it("closing the modal clears the open state and selected index", () => {
+    const { container } = render(<FileChangeList changes={[file("a.ts")]} rootPath={ROOT} />);
+    fireEvent.click(rows(container)[0]!);
+    expect(capturedModalProps.isOpen).toBe(true);
+    expect(capturedModalProps.currentFileIndex).toBe(0);
+
+    act(() => capturedModalProps.onClose!());
+    expect(capturedModalProps.isOpen).toBe(false);
+    expect(capturedModalProps.currentFileIndex).toBeUndefined();
   });
 });
