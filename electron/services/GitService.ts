@@ -393,7 +393,15 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           range,
         ]),
         this.git
-          .raw(["diff", "--no-ext-diff", "--no-renames", "--numstat", "--end-of-options", range])
+          .raw([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--numstat",
+            "--end-of-options",
+            range,
+          ])
           .catch((error) => {
             logWarn(
               "Failed to read numstat for cross-worktree comparison; continuing without churn",
