@@ -63,16 +63,14 @@ export function getSuspectPanelBannerTitle(count: number, deselected: boolean): 
 }
 
 /**
- * Per-panel reason text shown on the suspect badge. Returns `undefined` for
- * reasons with no user-facing copy yet (e.g. `repeated-suspect`), which the
- * row renders as an icon-only badge with no tooltip.
+ * Per-panel reason text shown on the suspect badge. Reasons with no
+ * user-facing copy yet (and unknown/future values) return `undefined`, which
+ * the row renders as an icon-only badge with no tooltip.
  */
 export function getPanelSuspectReasonTitle(reason?: PanelSuspectReason): string | undefined {
   switch (reason) {
     case "crash-window":
       return "Created within 30 seconds of the crash";
-    case "repeated-suspect":
-      return "Flagged across multiple crash sessions";
     default:
       return undefined;
   }

@@ -251,6 +251,44 @@ describe("CrashRecoveryDialog", () => {
       expect(badge.getAttribute("title")).toBeNull();
     });
 
+    it("renders an icon-only badge with no title for an unknown suspectReason", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: true,
+              suspectReason: "some-future-reason" as never,
+            },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
+    });
+
+    it("renders no suspect badge when suspectReason is set but isSuspect is false", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: false,
+              suspectReason: "crash-window" as const,
+            },
+          ],
+        },
+      });
+      expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
     it("shows agent state for agent panels and not for non-agent panels", () => {
       setup();
       expect(screen.getByTestId("agent-state-t2")).toBeTruthy();

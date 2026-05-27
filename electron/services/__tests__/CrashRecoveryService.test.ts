@@ -1015,6 +1015,59 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels![1].suspectReason).toBe("crash-window");
     });
 
+    it("pins the suspect window boundary against the crash entry timestamp", () => {
+      const crashTime = Date.now();
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const terminals = [
+        {
+          id: "inside",
+          kind: "terminal",
+          title: "Inside",
+          location: "grid",
+          createdAt: crashTime - 29_000,
+        },
+        {
+          id: "outside",
+          kind: "terminal",
+          title: "Outside",
+          location: "grid",
+          createdAt: crashTime - 31_000,
+        },
+      ];
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals } })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: crashTime - 600_000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      const ref = pending!.entry.timestamp;
+      const inside = pending!.panels!.find((p) => p.id === "inside")!;
+      const outside = pending!.panels!.find((p) => p.id === "outside")!;
+      // Reference must be the crash entry timestamp, not sessionStartMs (set 10m earlier).
+      expect(Math.abs(ref - (crashTime - 29_000))).toBeLessThan(30_000);
+      expect(Math.abs(ref - (crashTime - 31_000))).toBeGreaterThanOrEqual(30_000);
+      expect(inside.isSuspect).toBe(true);
+      expect(inside.suspectReason).toBe("crash-window");
+      expect(outside.isSuspect).toBe(false);
+      expect(outside.suspectReason).toBeUndefined();
+    });
+
     it("includes agent state in panel summaries", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
