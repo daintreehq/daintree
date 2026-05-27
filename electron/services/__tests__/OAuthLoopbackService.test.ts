@@ -102,6 +102,24 @@ describe("OAuthLoopbackService", () => {
       expect(shell.openExternal).not.toHaveBeenCalled();
     });
 
+    it("never opens a disallowed scheme even with a valid redirect_uri", async () => {
+      const redirect = encodeURIComponent("http://localhost:3000/auth/callback");
+
+      const fileResult = await startOAuthLoopback(
+        `file:///etc/passwd?redirect_uri=${redirect}`,
+        "test-panel"
+      );
+      expect(fileResult).toEqual({ success: false, cause: "open-external-failed" });
+
+      const customResult = await startOAuthLoopback(
+        `myapp://auth?redirect_uri=${redirect}`,
+        "test-panel"
+      );
+      expect(customResult).toEqual({ success: false, cause: "open-external-failed" });
+
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    });
+
     it("starts a loopback server and rewrites redirect_uri", async () => {
       const authUrl =
         "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback&state=xyz123";

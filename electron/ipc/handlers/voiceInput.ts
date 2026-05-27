@@ -1,5 +1,5 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
-import { ipcMain, systemPreferences, shell } from "electron";
+import { ipcMain, systemPreferences } from "electron";
 import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -13,6 +13,7 @@ import { applyDictationCommands } from "../../services/voiceDictationCommands.js
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import {
   VoiceInputCorrectPayloadSchema,
   type VoiceInputCorrectPayload,
@@ -123,12 +124,17 @@ async function requestMicPermission(): Promise<boolean> {
 }
 
 function openMicSettings(): void {
+  const logOpenFailure = (err: unknown) =>
+    logDebug("[VoiceInput] Failed to open mic settings", {
+      error: (err as Error)?.message ?? String(err),
+    });
+
   if (process.platform === "darwin") {
-    void shell.openExternal(
+    void openExternalUrl(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    );
+    ).catch(logOpenFailure);
   } else if (process.platform === "win32") {
-    void shell.openExternal("ms-settings:privacy-microphone");
+    void openExternalUrl("ms-settings:privacy-microphone").catch(logOpenFailure);
   } else {
     // Linux: try gnome-control-center, fall back silently
     try {

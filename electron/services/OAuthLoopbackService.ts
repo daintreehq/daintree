@@ -1,12 +1,13 @@
 /**
  * RFC 8252 OAuth loopback flow for dev-preview panels.
  * Ephemeral HTTP server on 127.0.0.1:0 captures the IdP callback after
- * shell.openExternal handles the authorization in the system browser.
+ * the system browser (via openExternalUrl) handles the authorization.
  * Requires the IdP to accept http://127.0.0.1:* as a redirect_uri (RFC 8252 §7.3).
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
-import { app, shell } from "electron";
+import { app } from "electron";
+import { openExternalUrl } from "../utils/openExternal.js";
 
 export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
 export type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
@@ -135,7 +136,11 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
           `Original redirect: ${originalRedirectUri} → Loopback: ${capturedLoopbackUri}`
       );
 
-      void shell.openExternal(parsed.toString()).catch((err) => {
+      // Funnel through the protocol allowlist — `authUrl` is renderer-supplied,
+      // so a disallowed scheme (file:, javascript:, …) must not reach the
+      // system browser. `openExternalUrl` throws on a disallowed protocol,
+      // which the `.catch` below settles as an open-external failure.
+      void openExternalUrl(parsed.toString()).catch((err) => {
         console.error("[OAuthLoopback] Failed to open system browser:", err);
         settle({ success: false, cause: "open-external-failed" });
       });

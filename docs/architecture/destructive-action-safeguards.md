@@ -195,6 +195,24 @@ The MCP server is a shared surface: while it's running, external clients (Claude
 | `McpServerSettingsTab.tsx` `handleToggle` → `mcpServer.setEnabled(false)` (bypass — direct IPC) | confirm-when-connected | **Yes** — `ConfirmDialog` (default variant) names each connected external client (user-agent + relative connect time) before the stop fires; gated on `listActiveClients().length > 0`, zero clients disables immediately (#8779) | n/a (bypass) | shared-state (live external sessions severed; recovery is re-enable + each client reconnects) | every connected external client | D2 (D0 when no external clients) | Done (#8779) — confirm wired at the toggle call site; the named-client preview satisfies the "content, not count" rule; in-flight calls drain gracefully on the server side | — |
 | `DaintreeAssistantSettingsTab.tsx` `toggleDaintreeControl` → `helpAssistant.setSettings({ daintreeControl: false })` (bypass — direct IPC) | safe | n/a — turning off Daintree control does not stop the MCP server (the auto-couple is one-directional: turning it _on_ enables MCP, turning it _off_ leaves the server up for any other clients) | n/a (bypass) | reversible (toggle back on) | the assistant's own consumer only | D0 | Leave — no MCP side-effect on disable, so no clients are severed and no confirm is warranted (#8779) | — |
 
+## External launch surfaces (`shell.openExternal` / `shell.openPath` / `execFile`)
+
+These open URLs, files, or processes outside the app. The blast radius isn't app state — it's whatever the OS does with renderer-influenced input, so the gate is an **allowlist**, not a `ConfirmDialog`. The standing invariant: **every `shell.openExternal` call routes through `openExternalUrl`** (`electron/utils/openExternal.ts`), which rejects any protocol outside the platform-conditional `ALLOWED_PROTOCOLS` set (`http:`, `https:`, `mailto:` everywhere; `ms-windows-store:` / `ms-settings:` on win32; `x-apple.systempreferences:` on darwin). No call site may call `shell.openExternal` directly — the regression check is `grep -rn "shell\.openExternal" electron/` returning only `openExternal.ts` itself (#9155).
+
+`shell.openPath` takes a filesystem path (not a URL), so the protocol allowlist doesn't apply; the gate there is that every path is app-derived (log files, the app's own log dir) or validated absolute before the call. `execFile` callers that aren't reachable from the renderer (clone/version probes, smoke tests) are out of scope for this audit.
+
+| Call site | Sink | Input source | Gate | Tier |
+| --- | --- | --- | --- | --- |
+| `electron/services/OAuthLoopbackService.ts` `startOAuthLoopback` | `openExternalUrl` | renderer-supplied `authUrl` (webview) | protocol allowlist (`https:` etc.); disallowed scheme settles `open-external-failed` (#9155) | D2 |
+| `electron/ipc/handlers/github.ts` `handleGitHubOpenPR` | `openExternalUrl` | renderer-supplied `prUrl` | allowlist **plus** inline `github.com` / `*.github.com` hostname gate (second layer, preserved) | D1 |
+| `electron/ipc/handlers/github.ts` open issues / prs / commits / issue | `openExternalUrl` | `getRepoUrl(cwd)` (git-derived) | protocol allowlist | D1 |
+| `electron/ipc/handlers/forge.ts` open issues / prs / commits / issue | `openExternalUrl` | `ForgeProvider.build*Url()` (git-derived; typed `string`) | protocol allowlist | D1 |
+| `electron/ipc/handlers/voiceInput.ts` `openMicSettings` | `openExternalUrl` | hardcoded `x-apple.systempreferences:` (darwin) / `ms-settings:` (win32) | platform-conditional allowlist; rejection logged via `logDebug` | D0 |
+| `electron/menu.ts` "Learn More" | `openExternalUrl` | hardcoded `https://github.com/daintreehq/daintree` | protocol allowlist | D0 |
+| `electron/setup/protocols.ts`, `electron/window/createWindow.ts`, `electron/window/ProjectViewManager.ts`, `electron/services/PortalManager.ts`, `electron/ipc/handlers/systemShell.ts` | `openExternalUrl` | navigation / link intercepts | protocol allowlist (already funneled pre-#9155) | D1 |
+| `electron/ipc/handlers/logs.ts`, `electron/ipc/errorHandlers.ts`, `electron/ipc/handlers/recovery.ts` | `shell.openPath` | app log file/dir paths | app-derived path (no URL surface) | D0 |
+| `electron/ipc/handlers/systemShell.ts`, `electron/services/EditorService.ts` | `shell.openPath` | validated absolute path | absolute-path check before call | D0 |
+
 ## Known bypasses
 
 Direct `window.electron.*` IPC calls that skip `ActionService`. These are the highest-risk locations because the action's `danger` rating cannot gate them — the confirmation must live in the component itself.

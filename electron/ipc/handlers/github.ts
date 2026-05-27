@@ -1,7 +1,7 @@
-import { shell } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
@@ -227,7 +227,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     const q = buildGitHubSearchQuery(query, state, "issue");
     const url = q ? `${repoUrl}/issues?q=${encodeURIComponent(q)}` : `${repoUrl}/issues`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUES, handleGitHubOpenIssues));
 
@@ -246,7 +246,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     const q = buildGitHubSearchQuery(query, state, "pr");
     const url = q ? `${repoUrl}/pulls?q=${encodeURIComponent(q)}` : `${repoUrl}/pulls`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs));
 
@@ -267,7 +267,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Not a GitHub repository");
     }
     const url = branch ? `${repoUrl}/commits/${encodeURIComponent(branch)}` : `${repoUrl}/commits`;
-    await shell.openExternal(url);
+    await openExternalUrl(url);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits));
 
@@ -294,7 +294,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!issueUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(issueUrl);
+    await openExternalUrl(issueUrl);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_ISSUE, handleGitHubOpenIssue));
 
@@ -315,7 +315,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     } catch (error) {
       throw new Error(formatErrorMessage(error, "Invalid PR URL"), { cause: error });
     }
-    await shell.openExternal(prUrl);
+    // The hostname/protocol gate above is the narrower second layer; the funnel
+    // through `openExternalUrl` keeps the global protocol allowlist authoritative.
+    await openExternalUrl(prUrl);
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_OPEN_PR, handleGitHubOpenPR));
 
