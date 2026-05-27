@@ -471,7 +471,7 @@ export function DevPreviewPane({
         message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
         priority: "high",
         duration: 0,
-        context: { eventKind: "recovery" },
+        context: { eventKind: "recovery", panelId: id },
         supersedeKey: `dev-preview-crash-loop:${id}`,
         correlationId: id,
       });

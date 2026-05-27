@@ -1484,7 +1484,10 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           duration: 0,
           supersedeKey: "dev-preview-crash-loop:dev-preview-panel-1",
           correlationId: "dev-preview-panel-1",
-          context: { eventKind: "recovery" },
+          context: expect.objectContaining({
+            eventKind: "recovery",
+            panelId: "dev-preview-panel-1",
+          }),
         })
       );
     });
