@@ -155,12 +155,18 @@ vi.mock("@/store/worktreeStore", () => ({
 
 let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
 const mockAddPanel = vi.fn();
+const mockBeginSpawnBatch = vi.fn(() => Symbol("test-spawn-batch"));
+const mockFlushSpawnBatch = vi.fn();
+const mockSetFocused = vi.fn();
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
       panelIds: mockTerminals.map((t) => t.id),
       addPanel: (...args: unknown[]) => mockAddPanel(...args),
+      beginSpawnBatch: () => mockBeginSpawnBatch(),
+      flushSpawnBatch: (token: unknown) => mockFlushSpawnBatch(token),
+      setFocused: (id: string) => mockSetFocused(id),
     }),
   },
 }));
