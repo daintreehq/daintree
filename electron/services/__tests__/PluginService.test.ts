@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "fs/promises";
+import { createWriteStream } from "fs";
+import { ZipArchive } from "archiver";
 import path from "path";
 import os from "os";
 import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.js";
@@ -3301,5 +3303,251 @@ describe("Plugin exception containment (#9276)", () => {
       expect(typeof record?.message).toBe("string");
       expect(record?.message.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("PluginService.installPlugin", () => {
+  const validManifest = (name: string, version = "1.0.0") => ({
+    name,
+    version,
+    displayName: "Test plugin",
+  });
+
+  async function makeSourceDir(label: string, manifest: Record<string, unknown>): Promise<string> {
+    const dir = path.join(tmpDir, "src", label);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+    return dir;
+  }
+
+  async function makeArchive(srcDir: string, outPath: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const output = createWriteStream(outPath);
+      const archive = new ZipArchive({ zlib: { level: 1 } });
+      output.on("close", () => resolve());
+      output.on("error", reject);
+      archive.on("error", reject);
+      archive.pipe(output);
+      archive.directory(srcDir, false);
+      void archive.finalize();
+    });
+  }
+
+  function pluginsRoot(): string {
+    return path.join(tmpDir, "plugins");
+  }
+
+  it("installs a plugin from a directory and registers it", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("alpha", validManifest("acme.alpha"));
+
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.name).toBe("acme.alpha");
+      expect(result.archiveHash).toBeNull();
+    }
+    expect(service.hasPlugin("acme.alpha")).toBe(true);
+    const installed = JSON.parse(
+      await fs.readFile(path.join(pluginsRoot(), "acme.alpha", "plugin.json"), "utf-8")
+    );
+    expect(installed.name).toBe("acme.alpha");
+    const entries = await fs.readdir(pluginsRoot());
+    expect(entries.some((e) => e.startsWith(".tmp"))).toBe(false);
+    service.dispose();
+  });
+
+  it("persists install provenance to the store", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("provenance", validManifest("acme.provenance"));
+
+    await service.installPlugin({ sourcePath: src });
+
+    const plugins = storeMock._state.get("plugins") as {
+      installed?: Record<
+        string,
+        { archiveHash: string | null; sourcePath: string; installedAt: string }
+      >;
+    };
+    const record = plugins?.installed?.["acme.provenance"];
+    expect(record).toBeDefined();
+    expect(record?.archiveHash).toBeNull();
+    expect(record?.sourcePath).toBe(src);
+    expect(typeof record?.installedAt).toBe("string");
+    service.dispose();
+  });
+
+  it("installs from a .dntr archive and records a sha-256 archive hash", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("beta-src", validManifest("acme.beta"));
+    const archivePath = path.join(tmpDir, "acme.beta.dntr");
+    await makeArchive(src, archivePath);
+
+    const result = await service.installPlugin({ sourcePath: archivePath });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.archiveHash).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(service.hasPlugin("acme.beta")).toBe(true);
+    service.dispose();
+  });
+
+  it("rejects a sideload claiming the reserved daintree.* namespace", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("evil", validManifest("daintree.evil"));
+
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("NAMESPACE_CONFLICT");
+      if (result.error.code === "NAMESPACE_CONFLICT") {
+        expect(result.error.pluginName).toBe("daintree.evil");
+      }
+    }
+    expect(service.hasPlugin("daintree.evil")).toBe(false);
+    service.dispose();
+  });
+
+  it("returns structured schema validation issues for a bad manifest", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("bad", { name: "invalidname", version: "1.0.0" });
+
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SCHEMA_VALIDATION");
+      if (result.error.code === "SCHEMA_VALIDATION") {
+        expect(result.error.issues.length).toBeGreaterThan(0);
+        for (const issue of result.error.issues) {
+          expect(typeof issue.path).toBe("string");
+          expect(typeof issue.code).toBe("string");
+          expect(typeof issue.message).toBe("string");
+        }
+      }
+    }
+    service.dispose();
+  });
+
+  it("reports missing plugin.json as a structured error", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const emptyDir = path.join(tmpDir, "src", "empty");
+    await fs.mkdir(emptyDir, { recursive: true });
+
+    const result = await service.installPlugin({ sourcePath: emptyDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SCHEMA_VALIDATION");
+    }
+    service.dispose();
+  });
+
+  it("refuses to install over a built-in plugin name", async () => {
+    const builtinRoot = path.join(tmpDir, "builtin");
+    await fs.mkdir(path.join(builtinRoot, "core"), { recursive: true });
+    await fs.writeFile(
+      path.join(builtinRoot, "core", "plugin.json"),
+      JSON.stringify(validManifest("acme.shared"))
+    );
+    const service = new PluginService(pluginsRoot(), undefined, {
+      builtinPluginsRoot: builtinRoot,
+    });
+    await service.initialize();
+    expect(service.hasPlugin("acme.shared")).toBe(true);
+
+    const src = await makeSourceDir("shadow", validManifest("acme.shared", "2.0.0"));
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("DUPLICATE_NAME");
+    }
+    service.dispose();
+  });
+
+  it("re-installs an existing user plugin, replacing the prior version", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const v1 = await makeSourceDir("v1", validManifest("acme.upgrade", "1.0.0"));
+    await service.installPlugin({ sourcePath: v1 });
+    expect(service.hasPlugin("acme.upgrade")).toBe(true);
+
+    const v2 = await makeSourceDir("v2", validManifest("acme.upgrade", "2.0.0"));
+    const result = await service.installPlugin({ sourcePath: v2 });
+
+    expect(result.ok).toBe(true);
+    const listed = service.listPlugins().filter((p) => p.manifest.name === "acme.upgrade");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.version).toBe("2.0.0");
+    service.dispose();
+  });
+
+  it("rejects engine-incompatible plugins before any swap", async () => {
+    appMock.getVersion.mockReturnValue("0.5.0");
+    const service = new PluginService(pluginsRoot(), "0.5.0");
+    await service.initialize();
+    const src = await makeSourceDir("engine", {
+      ...validManifest("acme.engine"),
+      engines: { daintree: ">=1.0.0" },
+    });
+
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("ENGINE_MISMATCH");
+    }
+    expect(service.hasPlugin("acme.engine")).toBe(false);
+    service.dispose();
+  });
+
+  it("rejects a relative source path", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+
+    const result = await service.installPlugin({ sourcePath: "relative/plugin" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("INVALID_SOURCE");
+    service.dispose();
+  });
+
+  it("rejects a non-existent source directory", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+
+    const result = await service.installPlugin({
+      sourcePath: path.join(tmpDir, "does-not-exist"),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("INVALID_SOURCE");
+    service.dispose();
+  });
+
+  it("coalesces concurrent installs of the same source", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeSourceDir("concurrent", validManifest("acme.concurrent"));
+
+    const [a, b] = await Promise.all([
+      service.installPlugin({ sourcePath: src }),
+      service.installPlugin({ sourcePath: src }),
+    ]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(service.hasPlugin("acme.concurrent")).toBe(true);
+    service.dispose();
   });
 });

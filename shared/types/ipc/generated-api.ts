@@ -326,6 +326,9 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    install(
+      ...args: IpcInvokeMap["plugin:install"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;

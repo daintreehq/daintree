@@ -129,6 +129,59 @@ export interface LoadedPluginInfo {
   archiveHash?: string;
 }
 
+/** Source kind for {@link PluginInstallRequest}. `archive` is a `.dntr` zip; `directory` is a pre-extracted plugin folder. */
+export type PluginInstallSourceType = "archive" | "directory";
+
+export interface PluginInstallRequest {
+  /** Absolute path to a `.dntr` archive or a pre-extracted plugin directory. */
+  sourcePath: string;
+  /** Defaults to `archive` when `sourcePath` ends with `.dntr`, otherwise `directory`. */
+  sourceType?: PluginInstallSourceType;
+}
+
+/**
+ * Minimal install provenance persisted to electron-store under
+ * `plugins.installed[name]`. The richer provenance schema (origin URL, source
+ * channel, load-error tracking) lands with #9271 — this is the forward-compatible
+ * subset the atomic installer needs today.
+ */
+export interface PluginInstallProvenance {
+  /** ISO-8601 timestamp of the successful install. */
+  installedAt: string;
+  /** SHA-256 of the source archive, or `null` for directory installs (#9274 owns the directory tree hash). */
+  archiveHash: string | null;
+  /** Absolute path the plugin was installed from. */
+  sourcePath: string;
+}
+
+/** A single structured validation issue — a serializable projection of a Zod issue, safe to send over IPC. */
+export interface PluginInstallIssue {
+  /** Dotted manifest path the issue applies to (e.g. `contributes.panels.0.id`), or `""` for the root. */
+  path: string;
+  code: string;
+  message: string;
+}
+
+/**
+ * Structured install failure. Each variant carries enough context for an
+ * install dialog to render a specific message rather than a bare string —
+ * never a stringified exception.
+ */
+export type PluginInstallError =
+  | { code: "INVALID_SOURCE"; message: string }
+  | { code: "EXTRACTION_FAILED"; message: string }
+  | { code: "SCHEMA_VALIDATION"; message: string; issues: PluginInstallIssue[] }
+  | { code: "NAMESPACE_CONFLICT"; message: string; pluginName: string }
+  | { code: "DUPLICATE_NAME"; message: string; pluginName: string }
+  | { code: "ENGINE_MISMATCH"; message: string; required: string; actual: string }
+  | { code: "LOCK_HELD"; message: string }
+  | { code: "LOAD_FAILED"; message: string }
+  | { code: "IO_ERROR"; message: string };
+
+export type PluginInstallResult =
+  | { ok: true; manifest: PluginManifest; archiveHash: string | null }
+  | { ok: false; error: PluginInstallError };
+
 export interface PluginIpcContext {
   projectId: string | null;
   worktreeId: string | null;

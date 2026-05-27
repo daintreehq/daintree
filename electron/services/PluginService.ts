@@ -1,10 +1,15 @@
 // eager-import-allow: reads plugin settings via store.get synchronously during service init
 import fs from "fs/promises";
+import { createReadStream } from "fs";
+import { createHash, randomUUID } from "crypto";
+import { pipeline } from "stream/promises";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import extractZip from "extract-zip";
+import * as lockfile from "proper-lockfile";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -15,6 +20,10 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   BuiltInPluginPermission,
+  PluginInstallRequest,
+  PluginInstallResult,
+  PluginInstallProvenance,
+  PluginInstallIssue,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -47,6 +56,7 @@ import {
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -145,6 +155,50 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   }
 }
 
+/**
+ * Publisher segment reserved for first-party built-in plugins. A sideloaded
+ * (`isBuiltin: false`) plugin whose `name` claims this namespace is rejected at
+ * install time — it can't impersonate a trusted built-in. The manifest schema
+ * already enforces the `publisher.name` shape; this is the ownership check on
+ * top of it.
+ */
+const RESERVED_PUBLISHER = "daintree";
+
+/**
+ * Cross-process advisory lock TTL. A crashed installer stops refreshing its
+ * lock's mtime; after this window the next caller treats the lock as stale and
+ * steals it. `proper-lockfile` enforces a 5s floor and auto-refreshes at
+ * `stale/2`.
+ */
+const INSTALL_LOCK_STALE_MS = 30000;
+
+const INSTALL_LOCK_RETRIES = { retries: 5, minTimeout: 200, maxTimeout: 1000 } as const;
+
+/** Stream a file through SHA-256 without buffering it in memory. */
+async function hashFileSha256(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(filePath), hash);
+  return hash.digest("hex");
+}
+
+/** Project Zod issues into a serializable shape safe to send over IPC. */
+function toInstallIssues(issues: import("zod").ZodIssue[]): PluginInstallIssue[] {
+  return issues.map((issue) => ({
+    path: issue.path.join("."),
+    code: issue.code,
+    message: issue.message,
+  }));
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
 export class PluginService {
@@ -175,6 +229,15 @@ export class PluginService {
     activate: (client: WorkspaceClient) => void;
   }> = [];
   private initialized = false;
+  /**
+   * Same-process install de-duplication keyed by source path. The cross-process
+   * `proper-lockfile` already serializes installs, but a rapid double-invoke of
+   * the same source (e.g. a double-clicked install button) would otherwise make
+   * the second call fail with `LOCK_HELD`. Returning the in-flight promise makes
+   * the duplicate a no-op that shares the first call's result. Cleared in a
+   * `.finally()` once the install settles.
+   */
+  private installInFlight = new Map<string, Promise<PluginInstallResult>>();
   /**
    * Plugin ids that are owned by a built-in plugin but currently disabled in
    * Preferences. Held alongside `this.plugins` so the user-dir scan cannot
@@ -347,7 +410,12 @@ export class PluginService {
       throw err;
     }
 
-    const pluginDirs = entries.filter((e) => e.isDirectory());
+    // Skip dot-prefixed directories: these are install scratch dirs
+    // (`.tmp-install-*`, `.tmp-old-*`) that a crash mid-install could leave
+    // behind. A `.tmp-old-*` remnant holds a complete plugin (manifest and
+    // all), so without this guard a crash-recovery scan would re-register it
+    // under its manifest name from the wrong directory.
+    const pluginDirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
     const disabled = opts.isBuiltin ? this.getDisabledBuiltinIds() : null;
     const results = await Promise.allSettled(
       pluginDirs.map((d) => this.loadPlugin(root, d.name, { isBuiltin: opts.isBuiltin, disabled }))
@@ -1058,6 +1126,384 @@ export class PluginService {
       } catch (err) {
         console.error(`[PluginService] Event cleanup for "${pluginId}" threw during unload:`, err);
       }
+    }
+  }
+
+  /**
+   * Atomically install a sideloaded plugin from a `.dntr` archive or a
+   * pre-extracted directory. This is the only sanctioned write path to the
+   * user plugins root — direct filesystem mutation of `~/.daintree/plugins/`
+   * from IPC handlers is a review blocker.
+   *
+   * The pipeline: acquire a cross-process lock → extract/copy into a temp dir
+   * on the same filesystem as the final location → validate the manifest
+   * (strict schema + namespace ownership + engine range) → compute the archive
+   * hash → atomically swap the temp dir into place (unloading and preserving
+   * any prior version for rollback) → load the new plugin. Any failure rolls
+   * back fully and returns a structured {@link PluginInstallError}; nothing is
+   * left half-committed.
+   */
+  async installPlugin(request: PluginInstallRequest): Promise<PluginInstallResult> {
+    const sourcePath = request?.sourcePath;
+    if (typeof sourcePath !== "string" || sourcePath.trim().length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_SOURCE",
+          message: "Install source path must be a non-empty string",
+        },
+      };
+    }
+    if (!path.isAbsolute(sourcePath)) {
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_SOURCE",
+          message: `Install source path must be absolute: ${sourcePath}`,
+        },
+      };
+    }
+
+    // Coalesce same-process duplicate invocations for the same source so a
+    // double-click doesn't turn the second call into a spurious LOCK_HELD.
+    const existing = this.installInFlight.get(sourcePath);
+    if (existing) return existing;
+
+    const promise = this.runInstall(sourcePath, request.sourceType).finally(() => {
+      this.installInFlight.delete(sourcePath);
+    });
+    this.installInFlight.set(sourcePath, promise);
+    return promise;
+  }
+
+  private async runInstall(
+    sourcePath: string,
+    sourceTypeHint: PluginInstallRequest["sourceType"]
+  ): Promise<PluginInstallResult> {
+    const sourceType =
+      sourceTypeHint ?? (sourcePath.toLowerCase().endsWith(".dntr") ? "archive" : "directory");
+
+    // The plugins root must exist before locking — the lock sentinel lives
+    // inside it, and `proper-lockfile` won't create the parent directory.
+    try {
+      await fs.mkdir(this.pluginsRoot, { recursive: true });
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: "IO_ERROR",
+          message: formatErrorMessage(err, "Couldn't prepare the plugins directory"),
+        },
+      };
+    }
+
+    let release: () => Promise<void>;
+    try {
+      release = await lockfile.lock(path.join(this.pluginsRoot, "install.lock"), {
+        realpath: false,
+        stale: INSTALL_LOCK_STALE_MS,
+        retries: INSTALL_LOCK_RETRIES,
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === "ELOCKED") {
+        return {
+          ok: false,
+          error: { code: "LOCK_HELD", message: "Another plugin install is in progress" },
+        };
+      }
+      return {
+        ok: false,
+        error: {
+          code: "IO_ERROR",
+          message: formatErrorMessage(err, "Couldn't acquire the install lock"),
+        },
+      };
+    }
+
+    // Temp dir lives UNDER the plugins root so the final rename into place is on
+    // the same filesystem and therefore atomic (no cross-volume EXDEV).
+    const tempDir = path.join(this.pluginsRoot, `.tmp-install-${randomUUID()}`);
+    // `oldDir` holds a superseded version parked aside during the swap;
+    // `finalPath` is its restore target. Both feed the catch-block rollback.
+    let oldDir: string | null = null;
+    let finalPath: string | null = null;
+    try {
+      // 1. Extract (or copy) the source into the temp directory.
+      let archiveHash: string | null = null;
+      if (sourceType === "archive") {
+        try {
+          // Hash the archive bytes before extraction so the provenance hash
+          // reflects exactly what was delivered.
+          archiveHash = await hashFileSha256(sourcePath);
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: "INVALID_SOURCE",
+              message: formatErrorMessage(err, "Couldn't read the plugin archive"),
+            },
+          };
+        }
+        try {
+          await fs.mkdir(tempDir, { recursive: true });
+          // extract-zip validates each entry resolves within `dir` (zip-slip).
+          await extractZip(sourcePath, { dir: tempDir });
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: "EXTRACTION_FAILED",
+              message: formatErrorMessage(err, "Couldn't extract the plugin archive"),
+            },
+          };
+        }
+      } else {
+        try {
+          const stat = await fs.stat(sourcePath);
+          if (!stat.isDirectory()) {
+            return {
+              ok: false,
+              error: { code: "INVALID_SOURCE", message: `Not a directory: ${sourcePath}` },
+            };
+          }
+          await fs.cp(sourcePath, tempDir, { recursive: true });
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: "INVALID_SOURCE",
+              message: formatErrorMessage(err, "Couldn't read the plugin source directory"),
+            },
+          };
+        }
+        // Directory installs have no canonical archive; #9274 owns the
+        // deterministic tree hash for those. Leave null until then.
+      }
+
+      // 2. Read and validate the manifest from the temp directory root.
+      const manifestPath = path.join(tempDir, "plugin.json");
+      let content: string;
+      try {
+        content = await fs.readFile(manifestPath, "utf-8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return {
+            ok: false,
+            error: {
+              code: "SCHEMA_VALIDATION",
+              message: "plugin.json not found at the root of the plugin",
+              issues: [{ path: "", code: "missing_manifest", message: "plugin.json is required" }],
+            },
+          };
+        }
+        return {
+          ok: false,
+          error: {
+            code: "IO_ERROR",
+            message: formatErrorMessage(err, "Couldn't read the plugin manifest"),
+          },
+        };
+      }
+
+      let json: unknown;
+      try {
+        json = JSON.parse(content);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            code: "SCHEMA_VALIDATION",
+            message: "plugin.json is not valid JSON",
+            issues: [{ path: "", code: "invalid_json", message: "plugin.json must be valid JSON" }],
+          },
+        };
+      }
+
+      const parseResult = PluginManifestSchema.safeParse(json);
+      if (!parseResult.success) {
+        return {
+          ok: false,
+          error: {
+            code: "SCHEMA_VALIDATION",
+            message: "Plugin manifest failed validation",
+            issues: toInstallIssues(parseResult.error.issues),
+          },
+        };
+      }
+      const manifest = parseResult.data;
+
+      // 3. Namespace ownership: a sideloaded plugin cannot claim the reserved
+      // first-party publisher segment.
+      const publisher = manifest.name.split(".")[0];
+      if (publisher === RESERVED_PUBLISHER) {
+        return {
+          ok: false,
+          error: {
+            code: "NAMESPACE_CONFLICT",
+            message: `Plugin name "${manifest.name}" uses the reserved "${RESERVED_PUBLISHER}" publisher namespace`,
+            pluginName: manifest.name,
+          },
+        };
+      }
+
+      // 4. Engine compatibility — reject before any swap so an incompatible
+      // plugin never partially registers.
+      const requiredRange = manifest.engines?.daintree;
+      if (
+        requiredRange &&
+        !semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "ENGINE_MISMATCH",
+            message: `Plugin "${manifest.name}" requires Daintree ${requiredRange} but the current version is ${this.appVersion}`,
+            required: requiredRange,
+            actual: this.appVersion,
+          },
+        };
+      }
+
+      // 5. A built-in owns this name (loaded or disabled-but-reserved) — a
+      // sideload may never shadow a trusted first-party plugin.
+      const current = this.plugins.get(manifest.name);
+      if (current?.isBuiltin || this.reservedBuiltinNames.has(manifest.name)) {
+        return {
+          ok: false,
+          error: {
+            code: "DUPLICATE_NAME",
+            message: `Plugin name "${manifest.name}" is owned by a built-in plugin`,
+            pluginName: manifest.name,
+          },
+        };
+      }
+
+      // 6. Swap. Unload any existing user version and move its directory aside
+      // so a load failure can roll back to it.
+      finalPath = path.join(this.pluginsRoot, manifest.name);
+      if (current) {
+        this.unloadPlugin(manifest.name);
+        oldDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
+        await fs.rename(current.dir, oldDir);
+      } else if (await pathExists(finalPath)) {
+        // On-disk remnant from a prior crash that never registered. Move it
+        // aside too so the rename target is clear.
+        oldDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
+        await fs.rename(finalPath, oldDir);
+      }
+
+      try {
+        await fs.rename(tempDir, finalPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          console.warn(
+            "[PluginService] Non-atomic plugin install (EXDEV) — temp dir is not on the same filesystem as the plugins root"
+          );
+          await fs.cp(tempDir, finalPath, { recursive: true });
+        } else {
+          throw err;
+        }
+      }
+
+      // 7. Load the freshly-installed plugin. On failure, roll back to the
+      // previous version (if any).
+      const loaded = await this.loadPlugin(this.pluginsRoot, manifest.name, {
+        isBuiltin: false,
+        disabled: null,
+      });
+      if (!loaded) {
+        await fs.rm(finalPath, { recursive: true, force: true }).catch(() => {});
+        if (oldDir) {
+          try {
+            await fs.rename(oldDir, finalPath);
+            oldDir = null;
+            await this.loadPlugin(this.pluginsRoot, manifest.name, {
+              isBuiltin: false,
+              disabled: null,
+            });
+          } catch (err) {
+            console.error(
+              `[PluginService] Rollback failed restoring previous "${manifest.name}":`,
+              err
+            );
+          }
+        }
+        return {
+          ok: false,
+          error: {
+            code: "LOAD_FAILED",
+            message: `Plugin "${manifest.name}" was installed but failed to load`,
+          },
+        };
+      }
+
+      // 8. Persist minimal provenance (richer schema lands with #9271).
+      this.persistInstallProvenance(manifest.name, {
+        installedAt: new Date().toISOString(),
+        archiveHash,
+        sourcePath,
+      });
+
+      // 9. Best-effort cleanup of the superseded version.
+      if (oldDir) {
+        const consumed = oldDir;
+        oldDir = null;
+        fs.rm(consumed, { recursive: true, force: true }).catch((err) =>
+          console.warn(`[PluginService] Failed to remove old plugin dir ${consumed}:`, err)
+        );
+      }
+
+      return { ok: true, manifest, archiveHash };
+    } catch (err) {
+      // An exception escaped after the swap began (e.g. a rename failed). If a
+      // previous version was parked, restore it so the user isn't left with a
+      // missing plugin; the partially-installed dir is cleared first.
+      if (oldDir && finalPath) {
+        const restoreTarget = finalPath;
+        try {
+          await fs.rm(restoreTarget, { recursive: true, force: true }).catch(() => {});
+          await fs.rename(oldDir, restoreTarget);
+          oldDir = null;
+          await this.loadPlugin(this.pluginsRoot, path.basename(restoreTarget), {
+            isBuiltin: false,
+            disabled: null,
+          }).catch(() => {});
+        } catch (restoreErr) {
+          console.error("[PluginService] Rollback failed restoring previous plugin:", restoreErr);
+        }
+      }
+      return {
+        ok: false,
+        error: { code: "IO_ERROR", message: formatErrorMessage(err, "Plugin install failed") },
+      };
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      // Any oldDir still set here is an orphaned park dir (restore already ran
+      // or wasn't needed) — sweep it best-effort.
+      if (oldDir) {
+        await fs.rm(oldDir, { recursive: true, force: true }).catch(() => {});
+      }
+      await release().catch(() => {});
+    }
+  }
+
+  /**
+   * Persist install provenance under `plugins.installed[name]` in electron-store.
+   * Best-effort: a write failure logs but never fails the install (the plugin is
+   * already on disk and loaded). #9271 supersedes this with a richer schema.
+   */
+  private persistInstallProvenance(name: string, provenance: PluginInstallProvenance): void {
+    try {
+      const current = (store.get("plugins") as Record<string, unknown> | undefined) ?? {};
+      const installedRaw = current.installed;
+      const installed: Record<string, PluginInstallProvenance> =
+        installedRaw && typeof installedRaw === "object"
+          ? { ...(installedRaw as Record<string, PluginInstallProvenance>) }
+          : {};
+      installed[name] = provenance;
+      store.set("plugins", { ...current, installed });
+    } catch (err) {
+      console.warn(`[PluginService] Failed to persist install provenance for "${name}":`, err);
     }
   }
 

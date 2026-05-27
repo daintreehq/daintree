@@ -575,6 +575,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginAudit.js").PluginActionAuditRecord[];
   };
+  "plugin:install": {
+    args: [request: import("../plugin.js").PluginInstallRequest];
+    result: { manifest: import("../plugin.js").PluginManifest; archiveHash: string | null };
+  };
   "plugin:list": {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];

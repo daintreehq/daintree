@@ -7,6 +7,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 // (allowlisted in `ipcHandleCoverage.test.ts`).
 export const PLUGIN_METHOD_CHANNELS = {
   list: "plugin:list",
+  install: "plugin:install",
   toolbarButtons: "plugin:toolbar-buttons",
   menuItems: "plugin:menu-items",
   validateActionIds: "plugin:validate-action-ids",

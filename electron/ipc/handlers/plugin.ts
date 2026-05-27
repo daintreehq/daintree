@@ -33,12 +33,66 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginInstallRequest,
+  PluginManifest,
+  PluginInstallError,
 } from "../../../shared/types/plugin.js";
+import type { AppErrorCode } from "../../../shared/types/appError.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 
 async function handleList(): Promise<LoadedPluginInfo[]> {
   return pluginService.listPlugins();
+}
+
+/**
+ * Map a structured install-error code to the closest {@link AppErrorCode}. Only
+ * `code`/`message`/`userMessage` survive the packaged-build error strip (see
+ * `electron/setup/security.ts`), so the precise install code also travels in
+ * the thrown error's `context.installError` for dev/debug; the full structured
+ * result with per-issue paths is the service return value consumed in-process.
+ */
+function installErrorToAppCode(code: PluginInstallError["code"]): AppErrorCode {
+  switch (code) {
+    case "LOCK_HELD":
+      return "RATE_LIMITED";
+    case "LOAD_FAILED":
+    case "IO_ERROR":
+      return "INTERNAL";
+    default:
+      return "VALIDATION";
+  }
+}
+
+/**
+ * Install a sideloaded plugin. The handler forwards to
+ * `PluginService.installPlugin` — the single sanctioned write path to the user
+ * plugins root — and translates a structured failure into a thrown
+ * {@link AppError} (per #6020, typed handlers must throw rather than return an
+ * `ok`/`success` envelope). The request shape is validated defensively since
+ * IPC payloads are untrusted.
+ */
+async function handleInstall(
+  request: PluginInstallRequest
+): Promise<{ manifest: PluginManifest; archiveHash: string | null }> {
+  if (!request || typeof request !== "object" || typeof request.sourcePath !== "string") {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "Install request must include a sourcePath string",
+      userMessage: "Couldn't install plugin — no source path provided",
+    });
+  }
+  const result = await pluginService.installPlugin(request);
+  if (result.ok) {
+    return { manifest: result.manifest, archiveHash: result.archiveHash };
+  }
+  throw new AppError({
+    code: installErrorToAppCode(result.error.code),
+    message: result.error.message,
+    userMessage: result.error.message,
+    context: { installError: result.error },
+  });
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
@@ -275,6 +329,7 @@ export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
     list: op(PLUGIN_METHOD_CHANNELS.list, handleList),
+    install: op(PLUGIN_METHOD_CHANNELS.install, handleInstall),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
