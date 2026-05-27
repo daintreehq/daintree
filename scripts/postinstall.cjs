@@ -30,6 +30,7 @@ async function runPostinstall() {
   try {
     execSync("node node_modules/node-pty/scripts/post-install.js", {
       stdio: "inherit",
+      cwd: buildPath,
     });
   } catch (err) {
     failures.push({ module: "node-pty post-install", error: err });
@@ -38,7 +39,7 @@ async function runPostinstall() {
   if (failures.length > 0) {
     console.error(`\nRebuild failures (${failures.length}/${NATIVE_MODULES.length + 1}):`);
     for (const { module: mod, error } of failures) {
-      console.error(`  ${mod}: ${error.message}`);
+      console.error(`  ${mod}: ${error?.message ?? String(error)}`);
     }
     process.exitCode = 1;
   }

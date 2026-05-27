@@ -13,6 +13,7 @@ const originalExitCode = process.exitCode;
 afterAll(() => {
   consoleErrorSpy.mockRestore();
   consoleLogSpy.mockRestore();
+  process.exitCode = originalExitCode;
 });
 
 describe("postinstall", () => {
@@ -117,7 +118,7 @@ describe("postinstall", () => {
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(mockExecSync).toHaveBeenCalledWith(
       "node node_modules/node-pty/scripts/post-install.js",
-      { stdio: "inherit" }
+      { stdio: "inherit", cwd: expect.any(String) }
     );
     expect(process.exitCode).toBeUndefined();
   });
@@ -134,7 +135,7 @@ describe("postinstall", () => {
   });
 
   it("should continue rebuilding when a middle module fails", async () => {
-    mockRebuild.mockRejectedValueOnce(new Error("node-pty OK"));
+    mockRebuild.mockResolvedValueOnce(undefined);
     mockRebuild.mockRejectedValueOnce(new Error("better-sqlite3 failed"));
 
     await runPostinstall();
@@ -142,6 +143,10 @@ describe("postinstall", () => {
     expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/better-sqlite3/);
+    expect(errorCalls).not.toMatch(/node-pty/);
   });
 
   it("should continue when the last module fails", async () => {
@@ -187,6 +192,10 @@ describe("postinstall", () => {
     expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty post-install/);
+    expect(errorCalls).toMatch(/ConPTY fetch failed/);
   });
 
   it("should exit 0 when everything succeeds", async () => {
