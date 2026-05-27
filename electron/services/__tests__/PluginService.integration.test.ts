@@ -44,6 +44,9 @@ vi.mock("../../store.js", () => ({
     set: (key: string, value: unknown) => storeState.set(key, value),
   },
 }));
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getCurrentProject: vi.fn(() => null) },
+}));
 
 import { PluginService } from "../PluginService.js";
 import type { PluginIpcContext } from "../../../shared/types/plugin.js";

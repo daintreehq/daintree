@@ -46,7 +46,7 @@ interface PluginHostApi {
   ): () => void;
   onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
 
-  // Settings (planned)
+  // Settings
   settings: SettingsApi;
 
   // UI helpers
@@ -208,26 +208,43 @@ const dispose = host.registerForgeProvider({ id: "linear", name: "Linear" }, imp
 
 For the end-to-end walkthrough — manifest entry, implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
-## `settings` — _Planned_
+## `settings`
 
-Reads and subscribes to plugin-declared settings.
+Reads, writes, and subscribes to plugin-declared settings.
 
 ```ts
-// Current value
-const token = await host.settings.get<string>("linear.apiToken");
+// Read the current value (user scope by default)
+const token = await host.settings.get<string>("apiToken");
 
-// Update (user scope usually not writable from plugin code)
-await host.settings.set("linear.defaultTeam", "engineering");
+// Write a value — the key must be declared in contributes.settings
+await host.settings.set("defaultTeam", "engineering");
 
-// Subscribe to changes
-const dispose = host.settings.onDidChange("linear.apiToken", (newValue) => {
+// Project scope
+await host.settings.set("defaultTeam", "platform", { scope: "project" });
+
+// Subscribe to in-process changes
+const dispose = host.settings.onDidChange<string>("apiToken", (newValue) => {
   reconnect(newValue);
 });
 ```
 
-Scope resolution: `project` scope reads from the active project's config; if no project is active, returns undefined. `user` scope reads from Daintree's global config.
+**Declaration:** every key a plugin writes must be declared in `contributes.settings`:
 
-Secret-type settings are stored in the OS keychain via `keytar`. They're returned from `get()` transparently but never logged or included in error reports.
+```json
+{
+  "contributes": {
+    "settings": [{ "key": "apiToken", "type": "string", "secret": true }]
+  }
+}
+```
+
+`set()` rejects keys that aren't declared. `get()` and `onDidChange()` accept any key (a plugin may read or subscribe before the first write). `set()` also rejects an `undefined` value — JSON can't round-trip it and deletion is out of scope.
+
+**Scope:** `scope` defaults to `"user"`. User-scoped settings persist to `~/.daintree/plugin-settings/{pluginId}.json`; project-scoped settings persist to `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` for the currently-active project. Project-scoped reads return `undefined` and writes reject when no project is active.
+
+**Storage:** settings are stored as plaintext JSON, one file per plugin per scope, written with `0o600` permissions on macOS/Linux (skipped on Windows). There is no OS keychain — the `secret` flag on a setting is advisory only (it lets the UI surface a warning); the host does not encrypt secret values. Don't store credentials you wouldn't accept on disk in plaintext.
+
+**Change notifications:** `onDidChange` fires only for writes made through this app instance for the same key and scope. External edits to the JSON file don't trigger the callback. The returned disposer is idempotent, and all subscriptions are automatically disposed when the plugin is unloaded.
 
 ## `showToast`
 

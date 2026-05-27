@@ -87,6 +87,27 @@ export interface McpServerContribution {
   env?: Record<string, string>;
 }
 
+export type SettingType = "string" | "number" | "boolean" | "object" | "array";
+
+/**
+ * Declares a single setting key a plugin may persist via `host.settings`.
+ * `set()` rejects keys not declared here; `get()` / `onDidChange()` accept
+ * any key (a plugin may read or subscribe before the first write).
+ */
+export interface SettingContribution {
+  key: string;
+  type: SettingType;
+  description?: string;
+  default?: unknown;
+  /**
+   * Advisory marker for sensitive values. Storage is unchanged — every
+   * setting is persisted as plaintext JSON with `0o600` perms — this flag
+   * only lets the UI surface a warning. The host never treats secrets
+   * specially at the storage layer (no keychain; see issue #9167).
+   */
+  secret?: boolean;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -105,6 +126,7 @@ export interface PluginManifest {
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    settings: SettingContribution[];
   };
 }
 
@@ -189,8 +211,56 @@ export interface PluginWorktreeSnapshot {
   readonly createdAt?: number;
 }
 
+export type SettingsScope = "user" | "project";
+
+export interface SettingsAccessOptions {
+  /**
+   * Where the setting lives. `"user"` (default) persists to
+   * `~/.daintree/plugin-settings/{pluginId}.json`; `"project"` persists to
+   * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` for the
+   * currently-active project. Project-scoped reads return `undefined` and
+   * writes reject when no project is active.
+   */
+  scope?: SettingsScope;
+}
+
+/**
+ * Per-plugin persistent settings. Values are stored as plaintext JSON, one
+ * file per plugin per scope, written with `0o600` permissions on POSIX. No
+ * OS keychain is used (see issue #9167).
+ */
+export interface SettingsApi {
+  /** Read a setting. Returns `undefined` for unset keys and for project scope with no active project. */
+  get<T>(key: string, options?: SettingsAccessOptions): Promise<T | undefined>;
+  /**
+   * Write a setting. The key must be declared in `contributes.settings` or
+   * the call rejects. `value` must not be `undefined` (JSON cannot round-trip
+   * it; deletion is out of scope). Fires `onDidChange` listeners for the same
+   * key and scope in-process after the write lands.
+   */
+  set<T>(key: string, value: T, options?: SettingsAccessOptions): Promise<void>;
+  /**
+   * Subscribe to in-process writes for `key` at the given scope (default
+   * `"user"`). Fires only on writes made through this app instance — external
+   * edits to the JSON file do not trigger the callback. Returns a disposer;
+   * calling it more than once is a no-op. All subscriptions are automatically
+   * disposed when the plugin is unloaded.
+   */
+  onDidChange<T>(
+    key: string,
+    callback: (value: T | undefined) => void,
+    options?: SettingsAccessOptions
+  ): () => void;
+}
+
 export interface PluginHostApi {
   readonly pluginId: string;
+  /**
+   * Per-plugin persistent settings (plaintext JSON, `0o600` on POSIX). Not
+   * revoke-guarded — usable for the plugin's whole lifetime, including from
+   * post-activation callbacks.
+   */
+  readonly settings: SettingsApi;
   registerHandler(channel: string, handler: PluginIpcHandler): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
   /**

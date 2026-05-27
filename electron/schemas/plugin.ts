@@ -9,6 +9,7 @@ import type {
   ViewContribution,
   McpServerContribution,
   PluginPermission,
+  SettingContribution,
 } from "../../shared/types/plugin.js";
 import type {
   FileDecorationContribution,
@@ -113,6 +114,21 @@ export const FileDecorationContributionSchema = z
   })
   .strict();
 
+/**
+ * `settings` manifest entry. Declares the keys a plugin may persist via
+ * `host.settings.set()` (undeclared keys are rejected at write time). Strict
+ * so unknown fields from plugin authors are rejected loudly.
+ */
+export const SettingContributionSchema = z
+  .object({
+    key: z.string().min(1).max(128).regex(SAFE_ID_PATTERN),
+    type: z.enum(["string", "number", "boolean", "object", "array"]),
+    description: z.string().optional(),
+    default: z.any().optional(),
+    secret: z.boolean().optional(),
+  })
+  .strict();
+
 export const PluginPermissionSchema = z.enum(BUILT_IN_PLUGIN_PERMISSIONS);
 
 export const PluginManifestSchema = z
@@ -146,6 +162,7 @@ export const PluginManifestSchema = z
         experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
         forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
         fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
+        settings: z.array(SettingContributionSchema).default([]),
       })
       .default({
         panels: [],
@@ -155,6 +172,7 @@ export const PluginManifestSchema = z
         experimental_mcpServers: [],
         forgeProviders: [],
         fileDecorationProviders: [],
+        settings: [],
       }),
   })
   .strict();
@@ -167,5 +185,6 @@ export type {
   ViewContribution,
   McpServerContribution,
   PluginPermission,
+  SettingContribution,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

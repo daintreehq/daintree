@@ -63,6 +63,9 @@ vi.mock("../fileDecorationRegistry.js", () => ({
   unregisterFileDecorationProviderImpl: vi.fn(),
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
 }));
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getCurrentProject: vi.fn(() => null) },
+}));
 
 import { PluginService } from "../PluginService.js";
 import { PluginManifestSchema } from "../../schemas/plugin.js";

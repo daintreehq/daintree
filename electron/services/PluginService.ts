@@ -15,6 +15,8 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   BuiltInPluginPermission,
+  SettingContribution,
+  SettingsScope,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
@@ -52,6 +54,8 @@ import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { store } from "../store.js";
+import { projectStore } from "./ProjectStore.js";
+import { resilientAtomicWriteFile } from "../utils/fs.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
@@ -159,6 +163,22 @@ export class PluginService {
    * {@link getPluginLoadError} for Settings diagnostics and IPC introspection.
    */
   private pluginLoadErrors = new Map<string, PluginLoadErrorRecord>();
+  /**
+   * Per-plugin map of declared setting keys (from `contributes.settings`),
+   * built at `loadPlugin()` time. `host.settings.set()` rejects keys absent
+   * here. Cleared in `unloadPlugin()`.
+   */
+  private pluginSettingKeys = new Map<string, Map<string, SettingContribution>>();
+  /**
+   * In-process `host.settings.onDidChange` listeners, keyed
+   * pluginId → settingKey → scope → callbacks. A plain Set per leaf (not an
+   * EventEmitter) avoids the 10-listener MaxListeners warning. Disposers also
+   * register into `pluginEventCleanups` so unload tears them down.
+   */
+  private settingsListeners = new Map<
+    string,
+    Map<string, Map<SettingsScope, Set<(value: unknown) => void>>>
+  >();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -511,6 +531,14 @@ export class PluginService {
       registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
     }
 
+    if (manifest.contributes.settings.length > 0) {
+      const keyMap = new Map<string, SettingContribution>();
+      for (const setting of manifest.contributes.settings) {
+        keyMap.set(setting.key, setting);
+      }
+      this.pluginSettingKeys.set(manifest.name, keyMap);
+    }
+
     // Insert the plugin into the registry BEFORE importing its main module so
     // synchronous host-API calls made during module evaluation (e.g., a plugin
     // that calls host.registerAction/registerHandler at import time) see the
@@ -558,6 +586,121 @@ export class PluginService {
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
+      },
+      // NOT revoke-guarded: settings are read/written and subscribed across the
+      // plugin's whole lifetime, including from post-activation callbacks. The
+      // liveness guard is plugin membership — once unloaded, get() returns
+      // undefined and set() throws.
+      settings: {
+        get: async <T>(
+          key: string,
+          options?: { scope?: SettingsScope }
+        ): Promise<T | undefined> => {
+          if (!this.plugins.has(pluginId)) return undefined;
+          if (typeof key !== "string" || key.length === 0) {
+            throw new Error(`Plugin "${pluginId}" settings.get: key must be a non-empty string`);
+          }
+          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          const filePath = this.getSettingsFilePath(pluginId, scope);
+          if (!filePath) return undefined; // project scope with no active project
+          const data = await this.readSettingsFile(filePath);
+          return (key in data ? data[key] : undefined) as T | undefined;
+        },
+        set: async <T>(
+          key: string,
+          value: T,
+          options?: { scope?: SettingsScope }
+        ): Promise<void> => {
+          if (!this.plugins.has(pluginId)) {
+            throw new Error(`Plugin "${pluginId}" settings.set: plugin is not loaded`);
+          }
+          if (typeof key !== "string" || key.length === 0) {
+            throw new Error(`Plugin "${pluginId}" settings.set: key must be a non-empty string`);
+          }
+          if (value === undefined) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: value for key "${key}" must not be undefined`
+            );
+          }
+          const declared = this.pluginSettingKeys.get(pluginId);
+          if (!declared || !declared.has(key)) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: key "${key}" is not declared in contributes.settings`
+            );
+          }
+          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          const filePath = this.getSettingsFilePath(pluginId, scope);
+          if (!filePath) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: cannot write project-scoped key "${key}" — no active project`
+            );
+          }
+          const data = await this.readSettingsFile(filePath);
+          data[key] = value;
+          await this.writeSettingsFile(filePath, data);
+          this.emitSettingsChange(pluginId, scope, key, value);
+        },
+        onDidChange: <T>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          options?: { scope?: SettingsScope }
+        ): (() => void) => {
+          if (typeof key !== "string" || key.length === 0) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.onDidChange: key must be a non-empty string`
+            );
+          }
+          if (typeof callback !== "function") {
+            throw new Error(
+              `Plugin "${pluginId}" settings.onDidChange: callback must be a function`
+            );
+          }
+          const scope: SettingsScope = options?.scope === "project" ? "project" : "user";
+          const typedCallback = callback as (value: unknown) => void;
+
+          let byPlugin = this.settingsListeners.get(pluginId);
+          if (!byPlugin) {
+            byPlugin = new Map();
+            this.settingsListeners.set(pluginId, byPlugin);
+          }
+          let byKey = byPlugin.get(key);
+          if (!byKey) {
+            byKey = new Map();
+            byPlugin.set(key, byKey);
+          }
+          let byScope = byKey.get(scope);
+          if (!byScope) {
+            byScope = new Set();
+            byKey.set(scope, byScope);
+          }
+          byScope.add(typedCallback);
+
+          let disposed = false;
+          const dispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            const pluginMap = this.settingsListeners.get(pluginId);
+            const keyMap = pluginMap?.get(key);
+            const scopeSet = keyMap?.get(scope);
+            scopeSet?.delete(typedCallback);
+            if (scopeSet && scopeSet.size === 0) keyMap?.delete(scope);
+            if (keyMap && keyMap.size === 0) pluginMap?.delete(key);
+            if (pluginMap && pluginMap.size === 0) this.settingsListeners.delete(pluginId);
+            const list = this.pluginEventCleanups.get(pluginId);
+            if (!list) return;
+            const idx = list.indexOf(dispose);
+            if (idx >= 0) list.splice(idx, 1);
+            if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+          };
+
+          let list = this.pluginEventCleanups.get(pluginId);
+          if (!list) {
+            list = [];
+            this.pluginEventCleanups.set(pluginId, list);
+          }
+          list.push(dispose);
+          return dispose;
+        },
       },
       registerHandler: (channel, handler) => {
         if (revoked) {
@@ -808,6 +951,83 @@ export class PluginService {
     };
   }
 
+  /**
+   * Resolve the settings file path for a plugin and scope. Returns `undefined`
+   * for project scope when no project is active (callers translate that into a
+   * `get` returning `undefined` / a `set` rejection). The pluginId is already
+   * validated by `SCOPED_PLUGIN_NAME_PATTERN` (alphanumeric + dot + hyphen),
+   * so it is filesystem-safe as a filename without further sanitization.
+   */
+  private getSettingsFilePath(pluginId: string, scope: SettingsScope): string | undefined {
+    if (scope === "project") {
+      const projectPath = projectStore.getCurrentProject()?.path;
+      if (!projectPath) return undefined;
+      return path.join(projectPath, ".daintree", "plugin-settings", `${pluginId}.json`);
+    }
+    return path.join(os.homedir(), ".daintree", "plugin-settings", `${pluginId}.json`);
+  }
+
+  /**
+   * Read a plugin's settings file as a flat object. Returns `{}` when the file
+   * does not exist yet. Throws a descriptive error when the file exists but is
+   * not parseable JSON or is not a JSON object — corruption should surface to
+   * the plugin rather than be silently swallowed.
+   */
+  private async readSettingsFile(filePath: string): Promise<Record<string, unknown>> {
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw err;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `Failed to parse plugin settings file at ${filePath}: ${(err as Error).message}`
+      );
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`Plugin settings file at ${filePath} is not a JSON object`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  /**
+   * Atomically write a plugin's settings object with `0o600` perms (POSIX).
+   * `resilientAtomicWriteFile` applies the mode to the temp file before rename
+   * and skips it on Windows.
+   */
+  private async writeSettingsFile(filePath: string, data: Record<string, unknown>): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await resilientAtomicWriteFile(filePath, JSON.stringify(data, null, 2), "utf-8", {
+      mode: 0o600,
+    });
+  }
+
+  /** Fire in-process onDidChange listeners for a plugin's key+scope after a write. */
+  private emitSettingsChange(
+    pluginId: string,
+    scope: SettingsScope,
+    key: string,
+    value: unknown
+  ): void {
+    const listeners = this.settingsListeners.get(pluginId)?.get(key)?.get(scope);
+    if (!listeners || listeners.size === 0) return;
+    for (const cb of [...listeners]) {
+      try {
+        cb(value);
+      } catch (err) {
+        console.error(
+          `[PluginService] settings.onDidChange callback for "${pluginId}" key "${key}" threw:`,
+          err
+        );
+      }
+    }
+  }
+
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
     const client = this.workspaceClient;
     if (!client) return [];
@@ -1024,6 +1244,13 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
+    );
+    // onDidChange disposers in pluginEventCleanups already fired above; the
+    // explicit deletes drop the declared-key table and any leftover listener
+    // maps (belt-and-suspenders for entries not torn down through a disposer).
+    runUnloadStep(pluginId, "clearSettingKeys", () => this.pluginSettingKeys.delete(pluginId));
+    runUnloadStep(pluginId, "clearSettingsListeners", () =>
+      this.settingsListeners.delete(pluginId)
     );
 
     this.plugins.delete(pluginId);
