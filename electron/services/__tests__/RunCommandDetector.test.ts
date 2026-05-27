@@ -1173,6 +1173,45 @@ describe("RunCommandDetector", () => {
       const commands = await detector.detect(tempDir);
       expect(npmNames(commands)).toEqual(["build", "lint"]);
     });
+
+    it("does not promote `start` for CRA when the start body does not invoke react-scripts", async () => {
+      await writePkg({
+        name: "cra-stale-deps",
+        scripts: { start: "node server.js", dev: "vite", build: "vite build" },
+        dependencies: { "react-scripts": "5.0.1" },
+        devDependencies: { vite: "8.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["dev", "start", "build"]);
+    });
+
+    it("preserves declaration order when framework dep is present but the canonical script body does not invoke it", async () => {
+      await writePkg({
+        name: "next-stale-dep-only",
+        scripts: { start: "node ./build/index.js", dev: "node --watch ./src/index.js" },
+        dependencies: { next: "15.0.0" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      expect(npmNames(commands)).toEqual(["start", "dev"]);
+      expect(commands.find((c) => c.id.startsWith("npm-"))?.isFrameworkDefault).toBeUndefined();
+    });
+
+    it("marks the promoted script with isFrameworkDefault", async () => {
+      await writePkg({
+        name: "cra-marked",
+        scripts: { dev: "echo unrelated", start: "react-scripts start" },
+        dependencies: { "react-scripts": "5.0.1" },
+      });
+
+      const commands = await detector.detect(tempDir);
+      const npm = commands.filter((c) => c.id.startsWith("npm-"));
+      expect(npm[0]?.name).toBe("start");
+      expect(npm[0]?.isFrameworkDefault).toBe(true);
+      // Non-promoted scripts must not carry the flag.
+      expect(npm[1]?.isFrameworkDefault).toBeUndefined();
+    });
   });
 
   describe("caching", () => {

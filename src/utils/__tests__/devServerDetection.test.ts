@@ -182,4 +182,34 @@ describe("findAllDevServerCandidates", () => {
     const runners = [runner("serve", "npm run serve"), runner("dev", "npm run dev", "vite")];
     expect(findDevServerCandidate(runners)?.name).toBe("dev");
   });
+
+  describe("isFrameworkDefault honoring", () => {
+    it("promotes the framework default ahead of name-priority matches", () => {
+      const runners = [
+        { ...runner("start", "npm run start", "react-scripts start"), isFrameworkDefault: true },
+        runner("dev", "npm run dev", "echo unrelated"),
+      ];
+      const result = findAllDevServerCandidates(runners);
+      expect(result.map((r) => r.name)).toEqual(["start", "dev"]);
+    });
+
+    it("falls back to name-priority when no framework default is set", () => {
+      const runners = [
+        runner("start", "npm run start", "node server.js"),
+        runner("dev", "npm run dev", "vite"),
+      ];
+      const result = findAllDevServerCandidates(runners);
+      expect(result.map((r) => r.name)).toEqual(["dev", "start"]);
+    });
+
+    it("keeps the framework default first even when array order is unchanged", () => {
+      const runners = [
+        runner("build", "npm run build"),
+        { ...runner("start", "npm run start", "react-scripts start"), isFrameworkDefault: true },
+        runner("dev", "npm run dev", "echo unrelated"),
+      ];
+      const result = findAllDevServerCandidates(runners);
+      expect(result.map((r) => r.name)).toEqual(["start", "dev", "build"]);
+    });
+  });
 });

@@ -29,20 +29,31 @@ function isSafeScriptName(name: string): boolean {
 type NpmFrameworkSignature = {
   readonly packages: readonly string[];
   readonly canonicalScript: "dev" | "start";
+  // The canonical script body must contain at least one of these tokens to
+  // count as a match. Guards against repos that list a framework as a dep
+  // but whose dev/start script does something unrelated (e.g. CRA listed in
+  // deps but `start: "node server.js"`); without this we'd promote the wrong
+  // script and regress vs. plain name-priority order.
+  readonly bodyTokens: readonly RegExp[];
 };
 
 // Ordered most-specific to least-specific. Full-stack frameworks beat generic
 // bundlers when multiple are present (e.g. a Next.js repo that also lists vite
 // as a transitive devDep should still pick `next dev`).
 const NPM_FRAMEWORK_PRIORITY: readonly NpmFrameworkSignature[] = [
-  { packages: ["next"], canonicalScript: "dev" },
-  { packages: ["@remix-run/dev"], canonicalScript: "dev" },
-  { packages: ["@react-router/dev"], canonicalScript: "dev" },
-  { packages: ["nuxt"], canonicalScript: "dev" },
-  { packages: ["@sveltejs/kit"], canonicalScript: "dev" },
-  { packages: ["astro"], canonicalScript: "dev" },
-  { packages: ["react-scripts"], canonicalScript: "start" },
-  { packages: ["vite"], canonicalScript: "dev" },
+  { packages: ["next"], canonicalScript: "dev", bodyTokens: [/\bnext\b/] },
+  { packages: ["@remix-run/dev"], canonicalScript: "dev", bodyTokens: [/\bremix\b/] },
+  { packages: ["@react-router/dev"], canonicalScript: "dev", bodyTokens: [/\breact-router\b/] },
+  { packages: ["nuxt"], canonicalScript: "dev", bodyTokens: [/\bnuxt\b/, /\bnuxi\b/] },
+  {
+    packages: ["@sveltejs/kit"],
+    canonicalScript: "dev",
+    // SvelteKit v1 used `svelte-kit dev`; v2+ runs via `vite dev`.
+    bodyTokens: [/\bvite\b/, /\bsvelte-kit\b/],
+  },
+  { packages: ["astro"], canonicalScript: "dev", bodyTokens: [/\bastro\b/] },
+  { packages: ["react-scripts"], canonicalScript: "start", bodyTokens: [/\breact-scripts\b/] },
+  { packages: ["vite"], canonicalScript: "dev", bodyTokens: [/\bvite\b/] },
 ];
 
 function detectNpmFrameworkCanonicalScript(
@@ -59,9 +70,10 @@ function detectNpmFrameworkCanonicalScript(
 
   for (const signature of NPM_FRAMEWORK_PRIORITY) {
     if (!signature.packages.some(hasDep)) continue;
-    if (typeof scripts[signature.canonicalScript] === "string") {
-      return signature.canonicalScript;
-    }
+    const body = scripts[signature.canonicalScript];
+    if (typeof body !== "string") continue;
+    if (!signature.bodyTokens.some((re) => re.test(body))) continue;
+    return signature.canonicalScript;
   }
   return undefined;
 }
@@ -139,9 +151,12 @@ export class RunCommandDetector {
       );
       if (canonicalScript) {
         const idx = commands.findIndex((cmd) => cmd.name === canonicalScript);
-        if (idx > 0) {
-          const [promoted] = commands.splice(idx, 1);
-          commands.unshift(promoted);
+        if (idx >= 0) {
+          commands[idx] = { ...commands[idx], isFrameworkDefault: true };
+          if (idx > 0) {
+            const [promoted] = commands.splice(idx, 1);
+            commands.unshift(promoted);
+          }
         }
       }
 
