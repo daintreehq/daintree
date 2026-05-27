@@ -551,9 +551,17 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:clear-audit-log": {
+    args: [];
+    result: void;
+  };
   "plugin:context-menu-items": {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
+  };
+  "plugin:export-audit-log": {
+    args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
+    result: boolean;
   };
   "plugin:file-decorations-get": {
     args: [scope: string, paths: string[]];
@@ -562,6 +570,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:forge-providers-get": {
     args: [];
     result: import("../forge.js").RegisteredForgeProvider[];
+  };
+  "plugin:get-audit-config": {
+    args: [];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:get-audit-records": {
+    args: [];
+    result: import("./pluginAudit.js").PluginActionAuditRecord[];
   };
   "plugin:keybindings": {
     args: [];
@@ -578,6 +594,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+  };
+  "plugin:set-audit-enabled": {
+    args: [enabled: boolean];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:set-audit-max-records": {
+    args: [max: number];
+    result: import("./pluginAudit.js").PluginAuditConfig;
+  };
+  "plugin:set-enabled": {
+    args: [pluginId: string, enabled: boolean];
+    result: void;
   };
   "plugin:toolbar-buttons": {
     args: [];
