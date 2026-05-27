@@ -4,11 +4,10 @@ import { broadcastToRenderer } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { DEV_PREVIEW_METHOD_CHANNELS } from "./devPreview.preload.js";
 import type { HandlerDependencies } from "../types.js";
-import {
-  readAndClearDevPreviewManifest,
-  writeDevPreviewManifest,
-  type DevPreviewManifestEntry,
-} from "../../services/DevPreviewManifestService.js";
+// Type-only import: the manifest service does sync fs work, so its runtime
+// module is loaded lazily alongside DevPreviewSessionService (below) to keep it
+// off the eager main-process boot path.
+import type { DevPreviewManifestEntry } from "../../services/DevPreviewManifestService.js";
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
@@ -28,26 +27,29 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   async function getSessionService(): Promise<DevPreviewSessionServiceType> {
     if (sessionService) return sessionService;
     if (!sessionServicePromise) {
-      sessionServicePromise = import("../../services/DevPreviewSessionService.js")
-        .then((mod) => {
+      sessionServicePromise = Promise.all([
+        import("../../services/DevPreviewSessionService.js"),
+        import("../../services/DevPreviewManifestService.js"),
+      ])
+        .then(([sessionMod, manifestMod]) => {
           // Read (and clear) the restore manifest the previous session left
           // behind. The in-memory copy owns restore state for this launch, so
           // a corrupt or stale file degrades to "no restore" rather than
           // re-prompting forever.
           let restoredEntries: DevPreviewManifestEntry[] = [];
           try {
-            restoredEntries = readAndClearDevPreviewManifest(app.getPath("userData"));
+            restoredEntries = manifestMod.readAndClearDevPreviewManifest(app.getPath("userData"));
           } catch (err) {
             console.warn("[DevPreview] Failed to read restore manifest:", err);
           }
-          sessionService = new mod.DevPreviewSessionService(
+          sessionService = new sessionMod.DevPreviewSessionService(
             deps.ptyClient!,
             (state) => {
               const payload: DevPreviewStateChangedPayload = { state };
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
             },
             restoredEntries,
-            (entries) => writeDevPreviewManifest(app.getPath("userData"), entries)
+            (entries) => manifestMod.writeDevPreviewManifest(app.getPath("userData"), entries)
           );
           return sessionService;
         })

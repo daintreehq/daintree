@@ -1,5 +1,3 @@
-// eager-import-allow: reads/writes the dev-preview restore manifest via sync fs
-// during early startup (first devPreview IPC) and at shutdown (pre-backup tick).
 import fs from "node:fs";
 import path from "node:path";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
