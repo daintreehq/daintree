@@ -86,7 +86,7 @@ export function CrashRecoveryDialog({
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
   const reportTextRef = useRef<HTMLTextAreaElement>(null);
 
-  const recentActions = crash.entry.recentActions ?? [];
+  const recentActions = useMemo(() => crash.entry.recentActions ?? [], [crash.entry.recentActions]);
   // The ring buffer is chronological; show newest-first so the most relevant
   // pre-crash context is at the top.
   const actionsNewestFirst = useMemo(() => [...recentActions].reverse(), [recentActions]);
