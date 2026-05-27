@@ -10,7 +10,7 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { type Extension, StateEffect, StateField, EditorState } from "@codemirror/state";
-import { LanguageDescription, syntaxTree } from "@codemirror/language";
+import { LanguageDescription, syntaxTree, type SyntaxNode } from "@codemirror/language";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { daintreeTheme } from "./editorTheme";
 import { editorSearchHighlightTheme } from "./editorSearchTheme";
@@ -159,6 +159,28 @@ const SCOPE_NODE_TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
     "InterfaceDeclaration",
     "EnumDeclaration",
   ]),
+  TSX: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
+  JSX: new Set([
+    "FunctionDeclaration",
+    "ClassDeclaration",
+    "MethodDeclaration",
+    "ArrowFunction",
+    "FunctionExpression",
+    "ClassExpression",
+    "InterfaceDeclaration",
+    "EnumDeclaration",
+    "NamespaceDeclaration",
+  ]),
   "C++": new Set(["FunctionDefinition", "ClassSpecifier", "StructSpecifier"]),
   C: new Set(["FunctionDefinition", "ClassSpecifier", "StructSpecifier"]),
 };
@@ -245,22 +267,17 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
         return;
       }
       try {
-        const wrapperRect = wrapper.getBoundingClientRect();
-        const editorTop = view.dom.getBoundingClientRect().top - wrapperRect.top;
-        const adjustedScrollTop = wrapper.scrollTop - editorTop;
-        const line = view.lineBlockAtHeight(adjustedScrollTop);
+        const cmScrollTop = wrapper.getBoundingClientRect().top - view.documentTop;
+        const line = view.lineBlockAtHeight(Math.max(0, cmScrollTop));
         const tree = syntaxTree(view.state);
-        let node = tree.resolve(line.from, -1);
+        let node: SyntaxNode | null = tree.resolve(line.from, -1);
         let found: { from: number } | null = null;
         while (node && node !== tree.topNode) {
           if (scopeTypes.has(node.type.name)) {
             found = { from: node.from };
-          }
-          if (node.parent) {
-            node = node.parent;
-          } else {
             break;
           }
+          node = node.parent;
         }
         if (found) {
           const text = view.state.doc.lineAt(found.from).text.trimEnd();
@@ -286,6 +303,10 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   useEffect(() => {
     handleScroll();
   }, [content, handleScroll]);
+
+  useEffect(() => {
+    handleScroll();
+  }, [langExtension, handleScroll]);
 
   useEffect(() => {
     return () => {
@@ -331,17 +352,20 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
         className
       )}
     >
-      {stickyScope !== null && (
-        <div
-          className="sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)] whitespace-pre"
-          style={{
-            height: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
-            lineHeight: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
-          }}
-        >
-          {stickyScope}
-        </div>
-      )}
+      <div
+        className={cn(
+          "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
+          stickyScope !== null
+            ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
+            : "border-transparent bg-transparent text-transparent"
+        )}
+        style={{
+          height: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
+          lineHeight: viewRef.current ? `${viewRef.current.defaultLineHeight}px` : "1.5em",
+        }}
+      >
+        {stickyScope ?? " "}
+      </div>
       <CodeMirror
         value={content}
         theme={daintreeTheme}
