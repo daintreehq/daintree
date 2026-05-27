@@ -23,8 +23,8 @@ export const theme: BuiltInThemeSource = {
       inverse: "#161D1B",
     },
     border: "#2A3A35",
-    accent: "#4A9E7F",
-    accentSecondary: "#5BA38E",
+    accent: "#2698A8",
+    accentSecondary: "#B57845",
     status: {
       success: "#5A8068",
       warning: "#C99F59",

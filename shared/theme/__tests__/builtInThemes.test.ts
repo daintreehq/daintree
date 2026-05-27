@@ -5,6 +5,30 @@ import { getSurfaceRampMetrics, hexToOklchL } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
+const normalizeHex = (hex: string): string => hex.trim().toUpperCase();
+
+const hexToOklab = (hex: string): [number, number, number] => {
+  const normalized = normalizeHex(hex).replace(/^#/, "");
+  const r = parseInt(normalized.slice(0, 2), 16) / 255;
+  const g = parseInt(normalized.slice(2, 4), 16) / 255;
+  const b = parseInt(normalized.slice(4, 6), 16) / 255;
+  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const lr = lin(r);
+  const lg = lin(g);
+  const lb = lin(b);
+  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
+  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
+  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+};
+
+const oklabDistance = (a: [number, number, number], b: [number, number, number]): number =>
+  Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
+
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
     expect(BUILT_IN_THEME_SOURCES.length).toBeGreaterThan(0);
@@ -21,6 +45,49 @@ describe("built-in themes", () => {
   it("all theme IDs are unique", () => {
     const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("no two built-in themes share an identical primary accent hex", () => {
+    const seen = new Map<string, string>();
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const hex = normalizeHex(source.palette.accent);
+      const prior = seen.get(hex);
+      expect(prior, `${source.id} primary accent ${hex} duplicates ${prior}`).toBeUndefined();
+      seen.set(hex, source.id);
+    }
+  });
+
+  it("no two built-in themes share an identical accentSecondary hex", () => {
+    const seen = new Map<string, string>();
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const hex = normalizeHex(source.palette.accentSecondary);
+      const prior = seen.get(hex);
+      expect(prior, `${source.id} accentSecondary ${hex} duplicates ${prior}`).toBeUndefined();
+      seen.set(hex, source.id);
+    }
+  });
+
+  it("all pairwise primary accent OKLab distances are perceptually distinct", () => {
+    // Guards against the #9225 regression: galapagos `#4A9E7F` and redwoods `#4E9A53` were
+    // 0.056 apart in OKLab, which sits below the categorical-distinctness floor for a
+    // 14-theme palette set. The 0.065 threshold gates that pair without failing on the
+    // pre-existing fiordland/namib pair (≈0.068), which is out of scope for this issue.
+    const THRESHOLD = 0.065;
+    const labs = BUILT_IN_THEME_SOURCES.map((source) => ({
+      id: source.id,
+      hex: normalizeHex(source.palette.accent),
+      lab: hexToOklab(source.palette.accent),
+    }));
+    for (let i = 0; i < labs.length; i++) {
+      for (let j = i + 1; j < labs.length; j++) {
+        const distance = oklabDistance(labs[i].lab, labs[j].lab);
+        expect(
+          distance,
+          `${labs[i].id} (${labs[i].hex}) and ${labs[j].id} (${labs[j].hex}) primary accents are ` +
+            `${distance.toFixed(3)} apart in OKLab — below the ${THRESHOLD} categorical floor`
+        ).toBeGreaterThanOrEqual(THRESHOLD);
+      }
+    }
   });
 
   it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const))(

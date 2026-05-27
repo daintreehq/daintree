@@ -24,7 +24,7 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#C8C0B5",
     accent: "#A8456E",
-    accentSecondary: "#6B8F71",
+    accentSecondary: "#4E7BA8",
     status: {
       success: "#4A7356",
       warning: "#9A6525",
@@ -77,8 +77,6 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "accent-muted": "rgba(168,69,110,0.25)",
-    "accent-secondary-muted": "rgba(107,143,113,0.25)",
-    "accent-secondary-soft": "rgba(107,143,113,0.12)",
     "accent-soft": "rgba(168,69,110,0.12)",
     "border-divider": "rgba(60,48,38,0.05)",
     "border-interactive": "rgba(60,48,38,0.10)",
