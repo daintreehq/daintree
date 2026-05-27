@@ -2,12 +2,14 @@ import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "r
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import {
   AlertTriangle,
-  RotateCw,
+  Check,
   ChevronDown,
+  Copy,
   ExternalLink,
-  Settings,
   OctagonAlert,
   Play,
+  RotateCw,
+  Settings,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -330,6 +332,24 @@ export function DevPreviewPane({
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const CLIPBOARD_FEEDBACK_MS = 2000;
+  const [certCopied, setCertCopied] = useState(false);
+  const certCopyTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const handleCopyMkcert = useCallback(async () => {
+    try {
+      await window.electron.clipboard.writeText("mkcert -install");
+      setCertCopied(true);
+      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
+      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), CLIPBOARD_FEEDBACK_MS);
+    } catch {
+      // clipboard unavailable — silently ignore
+    }
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
+    };
+  }, []);
   const lastSetUrlRef = useRef<string>("");
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   // Generation token to invalidate in-flight async scroll captures when the
@@ -1568,12 +1588,32 @@ export function DevPreviewPane({
                                 ? "Couldn't resolve address"
                                 : webviewLoadError.code === "internet_disconnected"
                                   ? "No internet connection"
-                                  : "Page load failed"}
+                                  : webviewLoadError.code === "cert" ||
+                                      webviewLoadError.code === "ssl_protocol"
+                                    ? "Certificate Error"
+                                    : "Page load failed"}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                         {webviewLoadError.message}
                       </p>
                       <div className="flex items-center gap-1">
+                        {webviewLoadError.code === "cert" && (
+                          <Button
+                            onClick={handleCopyMkcert}
+                            variant="ghost"
+                            size="sm"
+                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                          >
+                            {certCopied ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" />
+                            )}
+                            <span className="text-xs">
+                              {certCopied ? "Copied" : "Copy `mkcert -install`"}
+                            </span>
+                          </Button>
+                        )}
                         {webviewLoadError.code === "connection_refused" ? (
                           <>
                             <Tooltip>
