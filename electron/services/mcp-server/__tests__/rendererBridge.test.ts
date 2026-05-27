@@ -335,4 +335,32 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
     expect(sentPayload).toBeDefined();
     expect(sentPayload?.callerInfo).toBeUndefined();
   });
+
+  it("the pinned dispatch path leaves callerInfo undefined (provenance-free)", async () => {
+    // Pinned (help-session) dispatch must stay provenance-free. Mirrors the
+    // `context: undefined` convention — the key is present but undefined, which
+    // structured clone strips at the IPC boundary so the renderer sees nothing.
+    const wc = makeWebContents(803);
+    mockWebContentsRegistry.set(803, wc);
+    const bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bridge.setupListeners([]);
+
+    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as { requestId: string; callerInfo?: unknown };
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 803 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(803, "actions.list", {}, false);
+
+    expect(sentPayload).toBeDefined();
+    expect(sentPayload?.callerInfo).toBeUndefined();
+  });
 });

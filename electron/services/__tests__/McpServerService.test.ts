@@ -180,6 +180,7 @@ type DispatchRequest = {
   actionId: string;
   args?: unknown;
   confirmed?: boolean;
+  callerInfo?: { token4LastChars: string; userAgent: string };
 };
 
 type TextToolResult = {
@@ -881,6 +882,44 @@ describe("McpServerService", () => {
         confirmed: false,
       })
     );
+  });
+
+  it("threads the external bearer's identity through to the renderer dispatch payload (#9157)", async () => {
+    // Regression guard: the production `dispatchAction` wrapper in
+    // McpServerService must forward the 4th `callerInfo` argument computed by
+    // HttpLifecycle — dropping it silently broke the "Requested by" row while
+    // every mocked unit test still passed.
+    const dispatchMock = vi.fn(
+      (): ActionDispatchResult => ({ ok: true, result: { listed: true } })
+    );
+
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "List available actions",
+          danger: "safe",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    await service.start(window);
+    const apiKey = service.getStatus().apiKey;
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    await client.callTool({ name: "actions.list", arguments: {} });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const payload = dispatchMock.mock.calls[0]![0] as DispatchRequest;
+    // External (api-key) dispatch carries display-only identity: the 4-char
+    // token suffix and a non-empty user-agent. The raw key never crosses.
+    expect(payload.callerInfo).toBeDefined();
+    expect(payload.callerInfo?.token4LastChars).toBe(apiKey.slice(-4));
+    expect(typeof payload.callerInfo?.userAgent).toBe("string");
+    expect(payload.callerInfo?.userAgent.length).toBeGreaterThan(0);
   });
 
   it("strips legacy `_meta.confirmed=true` from arguments instead of bypassing confirmation", async () => {

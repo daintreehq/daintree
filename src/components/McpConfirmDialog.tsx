@@ -22,6 +22,20 @@ const CONFIRMATION_TIMEOUT_MS = 28_000;
 const CONFIRM_COOLDOWN_MS = 1_200;
 
 /**
+ * Upper bound for the user-agent shown in the "Requested by" row. An external
+ * client controls its own `User-Agent` header (capped at Node's ~8 KB header
+ * limit, not at a sane length), so clamp the display value here so an oversized
+ * string can't push the Arguments block and confirm button below the fold.
+ */
+const MAX_USER_AGENT_DISPLAY = 120;
+
+function truncateUserAgent(userAgent: string): string {
+  return userAgent.length > MAX_USER_AGENT_DISPLAY
+    ? `${userAgent.slice(0, MAX_USER_AGENT_DISPLAY - 1)}…`
+    : userAgent;
+}
+
+/**
  * Singleton dialog driven by the MCP confirmation queue. Mounted once near
  * the top of `App.tsx`. Reads `current` from `useMcpConfirmStore` and
  * surfaces one `ConfirmDialog` at a time — concurrent agent calls queue
@@ -116,7 +130,7 @@ export function McpConfirmDialog() {
                 Requested by
               </div>
               <div className="text-xs text-daintree-text/80 break-words">
-                …{callerInfo.token4LastChars} · {callerInfo.userAgent}
+                …{callerInfo.token4LastChars} · {truncateUserAgent(callerInfo.userAgent)}
               </div>
             </div>
           )}
