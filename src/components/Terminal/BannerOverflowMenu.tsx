@@ -36,13 +36,16 @@ export function BannerOverflowMenu({ actions, ariaLabel = "More options" }: Bann
       <PopoverContent align="end" sideOffset={8} className="p-1 min-w-44 text-xs">
         {actions.map((item) => {
           const isDanger = item.variant === "danger" || item.variant === "dangerFilled";
+          const isDisabled = item.disabled || item.loading;
           return (
             <button
               key={item.id}
               type="button"
-              disabled={item.disabled}
+              disabled={isDisabled}
+              aria-busy={item.loading || undefined}
               aria-label={item.ariaLabel}
               onClick={() => {
+                if (isDisabled) return;
                 setOpen(false);
                 item.onClick();
               }}
@@ -52,7 +55,7 @@ export function BannerOverflowMenu({ actions, ariaLabel = "More options" }: Bann
                 isDanger
                   ? "text-status-error hover:bg-status-error/10"
                   : "text-daintree-text hover:bg-daintree-border/50",
-                item.disabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
+                isDisabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
               )}
             >
               {item.icon && <item.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}

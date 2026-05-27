@@ -168,4 +168,15 @@ describe("SpawnErrorBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: /retry starting terminal/i }));
     expect(onRetry).toHaveBeenCalledWith("t-1");
   });
+
+  it("disables the demoted overflow Retry while restarting and does not invoke onRetry", () => {
+    const onRetry = vi.fn();
+    // ENOTDIR makes Change directory the primary, so Retry is demoted to overflow.
+    renderBanner("ENOTDIR", { isRestarting: true, onRetry });
+    const retry = screen.getByRole("button", { name: /retry starting terminal/i });
+    expect(overflow().contains(retry)).toBe(true);
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(retry);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
 });
