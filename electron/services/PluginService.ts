@@ -5,6 +5,7 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import Ajv, { type ValidateFunction } from "ajv/dist/2020";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -153,6 +154,8 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
+  private actionValidators = new Map<string, ValidateFunction>();
+  private ajv: Ajv | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
    * Most recent activation error per plugin id. Populated by the catch in
@@ -945,6 +948,26 @@ export class PluginService {
     if (!handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
+
+    const descriptor = this.pluginActions.get(channel);
+    if (descriptor?.inputSchema) {
+      let validator = this.actionValidators.get(channel);
+      if (!validator) {
+        if (!this.ajv) this.ajv = new Ajv();
+        validator = this.ajv.compile(descriptor.inputSchema);
+        this.actionValidators.set(channel, validator);
+      }
+      const argsObj = args.length > 0 ? args[0] : {};
+      if (!validator(argsObj)) {
+        const details = validator.errors
+          ?.map((e) => `${e.instancePath || "/"} ${e.message}`)
+          .join("; ");
+        throw new Error(
+          `Invalid arguments for plugin action "${channel}": ${details ?? "unknown error"}`
+        );
+      }
+    }
+
     try {
       return await handler(ctx, ...args);
     } catch (err) {
@@ -964,6 +987,7 @@ export class PluginService {
     for (const key of [...this.handlerMap.keys()]) {
       if (key.startsWith(prefix)) {
         this.handlerMap.delete(key);
+        this.actionValidators.delete(key.slice(prefix.length));
       }
     }
   }
@@ -1203,6 +1227,7 @@ export class PluginService {
 
     for (const id of owners) {
       this.pluginActions.delete(id);
+      this.actionValidators.delete(id);
     }
     this.pluginActionOwners.delete(pluginId);
 

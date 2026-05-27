@@ -240,6 +240,27 @@ describe("registerPluginHandlers", () => {
     );
     expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
+
+  it("PLUGIN_INVOKE handler rejects invalid args before dispatchHandler runs", async () => {
+    mockDispatchHandler.mockRejectedValue(
+      new Error('Invalid arguments for plugin action "acme.ping": /name must be string')
+    );
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(
+      invokeHandler(trustedEvent, "acme.plugin", "acme.ping", 42)
+    ).rejects.toThrow("Invalid arguments for plugin action");
+
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {

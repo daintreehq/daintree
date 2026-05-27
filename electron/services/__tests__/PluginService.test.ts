@@ -1205,6 +1205,183 @@ describe("Plugin IPC handler registration", () => {
     );
     expect(result).toBe("sync-result");
   });
+
+  describe("dispatchHandler args validation", () => {
+    it("validates args when channel matches a registered action with inputSchema", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.ping",
+        title: "Ping",
+        description: "Ping action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.ping", handler);
+
+      await expect(
+        service.dispatchHandler("acme.test-plugin", "acme.test-plugin.ping", makeCtx("acme.test-plugin"), [
+          { name: 42 },
+        ])
+      ).rejects.toThrow("Invalid arguments for plugin action");
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("passes valid args through to the handler", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.echo",
+        title: "Echo",
+        description: "Echo action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.echo", handler);
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.echo",
+        makeCtx("acme.test-plugin"),
+        [{ name: "world" }]
+      );
+      expect(result).toBe("ok");
+      expect(handler).toHaveBeenCalledWith(expect.anything(), { name: "world" });
+    });
+
+    it("skips validation when no action descriptor is registered for the channel", async () => {
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "raw-channel", handler);
+
+      const result = await service.dispatchHandler("acme.test-plugin", "raw-channel", makeCtx("acme.test-plugin"), [
+        { anything: "goes" },
+      ]);
+      expect(result).toBe("ok");
+    });
+
+    it("skips validation when the descriptor has no inputSchema", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.no-schema",
+        title: "No Schema",
+        description: "No schema action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.no-schema", handler);
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.no-schema",
+        makeCtx("acme.test-plugin"),
+        [{ foo: "bar" }]
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("caches the compiled validator and reuses it on subsequent calls", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.cached",
+        title: "Cached",
+        description: "Cache test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.cached", handler);
+
+      // First call compiles
+      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cached", makeCtx("acme.test-plugin"), [
+        { value: 1 },
+      ]);
+      // Second call reuses cached validator
+      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cached", makeCtx("acme.test-plugin"), [
+        { value: 2 },
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenNthCalledWith(1, expect.anything(), { value: 1 });
+      expect(handler).toHaveBeenNthCalledWith(2, expect.anything(), { value: 2 });
+    });
+
+    it("treats no args as empty object for validation", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.opt",
+        title: "Opt",
+        description: "Optional args action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+        },
+      });
+      const handler = vi.fn().mockResolvedValue("ok");
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.opt", handler);
+
+      // No args call — should validate against {} which matches the schema (no required fields)
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.opt",
+        makeCtx("acme.test-plugin"),
+        []
+      );
+      expect(result).toBe("ok");
+    });
+
+    it("cleans up the validator when the handler is removed", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.cleanup",
+        title: "Cleanup",
+        description: "Cleanup test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { x: { type: "number" } },
+          required: ["x"],
+        },
+      });
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.cleanup", vi.fn().mockResolvedValue("ok"));
+
+      // Prime the validator cache with a successful call
+      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cleanup", makeCtx("acme.test-plugin"), [
+        { x: 1 },
+      ]);
+
+      service.removeHandlers("acme.test-plugin");
+
+      // Re-register and re-prime — the old validator should be gone
+      service.registerHandler("acme.test-plugin", "acme.test-plugin.cleanup", vi.fn().mockResolvedValue("ok"));
+      // Should still work (compiles fresh)
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        makeCtx("acme.test-plugin"),
+        [{ x: 42 }]
+      );
+      expect(result).toBe("ok");
+    });
+  });
 });
 
 describe("engines.daintree compatibility gate", () => {

@@ -121,6 +121,7 @@
     "@parcel/watcher": "2.5.6",
     "@radix-ui/react-select": "^2.2.6",
     "@xterm/addon-webgl": "^0.19.0",
+    "ajv": "^8.20.0",
     "archiver": "^8.0.0",
     "better-sqlite3": "^12.10.0",
     "copytree": "^0.14.2",
