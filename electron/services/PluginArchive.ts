@@ -160,9 +160,16 @@ export async function packPluginArchive(
 
 /**
  * Compute the SHA-256 hash of a `.dntr` archive.
- * Read into a buffer (archives are ≤ 30 MB) and hash the raw bytes.
+ * Rejects archives larger than {@link MAX_DNTR_BYTES} to guard against
+ * unbounded memory allocation.
  */
 export async function computeArchiveHash(archivePath: string): Promise<string> {
+  const stat = await fs.stat(archivePath);
+  if (stat.size > MAX_DNTR_BYTES) {
+    throw new Error(
+      `Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`
+    );
+  }
   const buf = await fs.readFile(archivePath);
   return createHash("sha256").update(buf).digest("hex");
 }
@@ -254,7 +261,7 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
 /**
  * Verify a `.dntr` archive against the format spec.
  * Checks: max size, first entry is plugin.json, path validity,
- * exclusion patterns, zip64, encryption.
+ * exclusion patterns, manifest schema.
  */
 export async function verifyPluginArchive(archivePath: string): Promise<VerifyResult> {
   let stat: import("fs").Stats;
@@ -275,15 +282,38 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
     };
   }
 
-  const zipfile = await openZip(archivePath);
+  let zipfile: yauzl.ZipFile;
+  try {
+    zipfile = await openZip(archivePath);
+  } catch (err) {
+    return {
+      valid: false,
+      error: `Not a valid ZIP file: ${(err as Error).message}`,
+    };
+  }
+
   let entryIndex = 0;
   let manifest: PluginManifest | null = null;
 
   return new Promise((resolve) => {
+    let settled = false;
+
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const name = normalizePath(entry.fileName);
 
+      // Validate the raw entry name before any normalization — backslashes
+      // and absolute paths in the raw name are always invalid.
+      if (entry.fileName !== name) {
+        settled = true;
+        zipfile.close();
+        return resolve({
+          valid: false,
+          error: `Invalid entry path "${entry.fileName}": path must use forward slashes, no leading / or drive letters`,
+        });
+      }
+
       if (entryIndex === 0 && name !== "plugin.json") {
+        settled = true;
         zipfile.close();
         return resolve({
           valid: false,
@@ -293,6 +323,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
 
       const pathErr = isValidEntryName(name);
       if (pathErr) {
+        settled = true;
         zipfile.close();
         return resolve({
           valid: false,
@@ -301,6 +332,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
       }
 
       if (matchesExclusionPattern(name, true)) {
+        settled = true;
         zipfile.close();
         return resolve({
           valid: false,
@@ -311,6 +343,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
       if (entryIndex === 0) {
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) {
+            settled = true;
             zipfile.close();
             return resolve({ valid: false, error: `Failed to read plugin.json: ${err.message}` });
           }
@@ -321,10 +354,14 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
             try {
               json = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
             } catch {
+              settled = true;
+              zipfile.close();
               return resolve({ valid: false, error: "plugin.json is not valid JSON" });
             }
             const parseResult = PluginManifestSchema.safeParse(json);
             if (!parseResult.success) {
+              settled = true;
+              zipfile.close();
               return resolve({
                 valid: false,
                 error: `plugin.json schema validation failed: ${parseResult.error.message}`,
@@ -334,6 +371,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
             zipfile.readEntry();
           });
           stream.on("error", (streamErr) => {
+            settled = true;
             zipfile.close();
             resolve({ valid: false, error: `Failed to read plugin.json: ${streamErr.message}` });
           });
@@ -353,7 +391,10 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
     });
 
     zipfile.on("error", (err) => {
-      resolve({ valid: false, error: `ZIP read error: ${err.message}` });
+      if (!settled) {
+        settled = true;
+        resolve({ valid: false, error: `ZIP read error: ${err.message}` });
+      }
     });
 
     zipfile.readEntry();

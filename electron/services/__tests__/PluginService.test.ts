@@ -629,10 +629,11 @@ describe("PluginService", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    service.setPluginArchiveHash("acme.hashed", "abc123def456");
+    const validHash = "a".repeat(64);
+    service.setPluginArchiveHash("acme.hashed", validHash);
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    expect(plugins[0].archiveHash).toBe("abc123def456");
+    expect(plugins[0].archiveHash).toBe(validHash);
   });
 
   it("listPlugins returns undefined archiveHash when not set", async () => {
