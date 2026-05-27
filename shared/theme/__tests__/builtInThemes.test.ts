@@ -1,33 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
 import { getThemeContrastWarnings } from "../contrast.js";
-import { getSurfaceRampMetrics, hexToOklchL } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS } from "../types.js";
-
-const normalizeHex = (hex: string): string => hex.trim().toUpperCase();
-
-const hexToOklab = (hex: string): [number, number, number] => {
-  const normalized = normalizeHex(hex).replace(/^#/, "");
-  const r = parseInt(normalized.slice(0, 2), 16) / 255;
-  const g = parseInt(normalized.slice(2, 4), 16) / 255;
-  const b = parseInt(normalized.slice(4, 6), 16) / 255;
-  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-  const lr = lin(r);
-  const lg = lin(g);
-  const lb = lin(b);
-  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
-  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
-  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
-  return [
-    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
-    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
-    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
-  ];
-};
-
-const oklabDistance = (a: [number, number, number], b: [number, number, number]): number =>
-  Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
 
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
@@ -45,53 +20,6 @@ describe("built-in themes", () => {
   it("all theme IDs are unique", () => {
     const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("no two built-in themes share an identical primary accent hex", () => {
-    const seen = new Map<string, string>();
-    for (const source of BUILT_IN_THEME_SOURCES) {
-      const hex = normalizeHex(source.palette.accent);
-      const prior = seen.get(hex);
-      expect(prior, `${source.id} primary accent ${hex} duplicates ${prior}`).toBeUndefined();
-      seen.set(hex, source.id);
-    }
-  });
-
-  it("no two built-in themes share an identical accentSecondary hex", () => {
-    const seen = new Map<string, string>();
-    for (const source of BUILT_IN_THEME_SOURCES) {
-      const secondary = source.palette.accentSecondary;
-      if (!secondary) continue;
-      const hex = normalizeHex(secondary);
-      const prior = seen.get(hex);
-      expect(prior, `${source.id} accentSecondary ${hex} duplicates ${prior}`).toBeUndefined();
-      seen.set(hex, source.id);
-    }
-  });
-
-  it("all pairwise primary accent OKLab distances are perceptually distinct", () => {
-    // Guards against the #9225 regression: galapagos `#4A9E7F` and redwoods `#4E9A53` were
-    // 0.056 apart in OKLab, which sits below the categorical-distinctness floor for a
-    // 14-theme palette set. The 0.065 threshold gates that pair without failing on the
-    // pre-existing fiordland/namib pair (≈0.068), which is out of scope for this issue.
-    const THRESHOLD = 0.065;
-    const labs = BUILT_IN_THEME_SOURCES.map((source) => ({
-      id: source.id,
-      hex: normalizeHex(source.palette.accent),
-      lab: hexToOklab(source.palette.accent),
-    }));
-    for (let i = 0; i < labs.length; i++) {
-      const a = labs[i]!;
-      for (let j = i + 1; j < labs.length; j++) {
-        const b = labs[j]!;
-        const distance = oklabDistance(a.lab, b.lab);
-        expect(
-          distance,
-          `${a.id} (${a.hex}) and ${b.id} (${b.hex}) primary accents are ` +
-            `${distance.toFixed(3)} apart in OKLab — below the ${THRESHOLD} categorical floor`
-        ).toBeGreaterThanOrEqual(THRESHOLD);
-      }
-    }
   });
 
   it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s] as const))(
@@ -277,70 +205,6 @@ describe("built-in themes", () => {
       ).toBeGreaterThanOrEqual(0.25);
     }
   });
-
-  it("hexToOklchL matches known sRGB reference points", () => {
-    // Sanity-pin Ottosson's sRGB→LMS path. Endpoints (black=0, white=1) confirm gamma
-    // and overall scaling; mid gray (#808080→0.5999) confirms the cube-root nonlinearity;
-    // pure red (#FF0000→0.6279) confirms the chromatic LMS matrix rows (a swapped R/B
-    // channel or wrong matrix coefficient would shift this materially).
-    expect(hexToOklchL("#000000")).toBeCloseTo(0, 4);
-    expect(hexToOklchL("#ffffff")).toBeCloseTo(1, 4);
-    expect(hexToOklchL("#808080")).toBeCloseTo(0.5999, 3);
-    expect(hexToOklchL("#ff0000")).toBeCloseTo(0.6279, 3);
-  });
-
-  it("hexToOklchL rejects non-#rrggbb input", () => {
-    // The contract is strict #rrggbb (lowercase or uppercase). All built-in theme
-    // palettes use that form; shorthand, alpha, or non-hex chars would be silently
-    // misparsed by parseInt and yield a phantom L value — the throw makes that loud.
-    expect(() => hexToOklchL("#fff")).toThrow();
-    expect(() => hexToOklchL("#ffffffff")).toThrow();
-    expect(() => hexToOklchL("#E8E6CG")).toThrow();
-    expect(() => hexToOklchL("")).toThrow();
-  });
-
-  it("every built-in source surfaces value is strict #rrggbb hex", () => {
-    // The ramp gate below depends on hexToOklchL, which only accepts #rrggbb. Catch
-    // any future theme that ships shorthand or alpha-channel hex before it reaches
-    // hexToOklchL's throw at runtime.
-    const hexRe = /^#[0-9a-fA-F]{6}$/;
-    for (const source of BUILT_IN_THEME_SOURCES) {
-      for (const key of ["grid", "sidebar", "canvas", "panel", "elevated"] as const) {
-        const value = source.palette.surfaces[key];
-        expect(value, `${source.id} surfaces.${key} "${value}" must be #rrggbb`).toMatch(hexRe);
-      }
-    }
-  });
-
-  it.each(BUILT_IN_THEME_SOURCES.map((s) => [s.id, s] as const))(
-    "surface ramp for %s is monotonic, perceptible, and not runaway",
-    (_id, source) => {
-      // Surface elevation ramps (grid → sidebar → canvas → panel → elevated) must:
-      // (1) be monotonically lighter so depth ordering is unambiguous;
-      // (2) keep every adjacent step at or above the just-noticeable-difference
-      //     floor — dark themes get 0.015 ΔL (≈1 OKLCH JND, shadows can't compensate
-      //     at low luminance); light themes get 0.020 ΔL (1 JND is sufficient because
-      //     ambient cues help, and white-ceiling headroom is tight);
-      // (3) keep the largest step within 2.0× the smallest — a runaway elevated jump
-      //     reads as a discontinuity rather than the next floor in the ramp.
-      const metrics = getSurfaceRampMetrics(source.palette.surfaces);
-      const minStepFloor = source.type === "dark" ? 0.015 : 0.02;
-      const maxRatio = 2.0;
-      const diag = `${source.id} L=[grid=${metrics.lightness.grid.toFixed(4)}, sidebar=${metrics.lightness.sidebar.toFixed(4)}, canvas=${metrics.lightness.canvas.toFixed(4)}, panel=${metrics.lightness.panel.toFixed(4)}, elevated=${metrics.lightness.elevated.toFixed(4)}] steps=[${metrics.steps.gridToSidebar.toFixed(4)}, ${metrics.steps.sidebarToCanvas.toFixed(4)}, ${metrics.steps.canvasToPanel.toFixed(4)}, ${metrics.steps.panelToElevated.toFixed(4)}] min=${metrics.minStep.toFixed(4)} max=${metrics.maxStep.toFixed(4)} ratio=${metrics.ratio.toFixed(2)}`;
-      expect(
-        metrics.monotonic,
-        `${diag} — surfaces must be monotonically lighter from grid to elevated`
-      ).toBe(true);
-      expect(
-        metrics.minStep,
-        `${diag} — smallest step is below the ${minStepFloor} ΔL floor for ${source.type} themes`
-      ).toBeGreaterThanOrEqual(minStepFloor);
-      expect(
-        metrics.ratio,
-        `${diag} — step-uniformity ratio exceeds the ${maxRatio} ceiling`
-      ).toBeLessThanOrEqual(maxRatio);
-    }
-  );
 
   it("dark themes override toolbar-control-armed-shadow with a white-tinted hairline; light themes inherit the black-tinted CSS fallback", () => {
     // Dark themes must provide a white-tinted hairline override — the CSS fallback

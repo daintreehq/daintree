@@ -11,9 +11,9 @@ export const theme: BuiltInThemeSource = {
     type: "dark",
     surfaces: {
       grid: "#090705",
-      sidebar: "#140A0A",
-      canvas: "#16140C",
-      panel: "#221A15",
+      sidebar: "#110B08",
+      canvas: "#16110D",
+      panel: "#1E1612",
       elevated: "#2E221B",
     },
     text: {
@@ -24,7 +24,7 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#36241A",
     accent: "#4E9A53",
-    accentSecondary: "#5A8EA8",
+    accentSecondary: "#5A8B55",
     status: {
       success: "#5A7E52",
       warning: "#BA8A42",
