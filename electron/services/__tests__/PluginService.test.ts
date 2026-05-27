@@ -528,6 +528,17 @@ describe("PluginService", () => {
     expect(service.getPluginDir("acme.unknown")).toBeNull();
   });
 
+  it("getPluginDir returns null after the plugin is unloaded", async () => {
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.getPluginDir("acme.test-plugin")).toBe(path.join(tmpDir, "test-plugin"));
+
+    service.unloadPlugin("acme.test-plugin");
+    expect(service.getPluginDir("acme.test-plugin")).toBeNull();
+  });
+
   it("skips plugins with invalid JSON", async () => {
     const dir = path.join(tmpDir, "bad-json");
     await fs.mkdir(dir);

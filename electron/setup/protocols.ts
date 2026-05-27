@@ -293,6 +293,9 @@ function buildPluginHeaders(
     "Content-Length": String(contentLength),
     "Cross-Origin-Resource-Policy": "cross-origin",
     "Access-Control-Allow-Origin": allowOrigin,
+    // ACAO varies per request Origin — declare it so any future caching layer
+    // doesn't serve one origin's allow-origin to another.
+    Vary: "Origin",
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-cache, must-revalidate",
   };
@@ -307,6 +310,7 @@ function buildPluginErrorHeaders(allowOrigin: string): Record<string, string> {
     "Content-Type": "text/plain",
     "Cross-Origin-Resource-Policy": "cross-origin",
     "Access-Control-Allow-Origin": allowOrigin,
+    Vary: "Origin",
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
   };
@@ -338,7 +342,14 @@ function createPluginProtocolHandler() {
       });
 
     try {
-      const url = new URL(request.url);
+      let url: URL;
+      try {
+        url = new URL(request.url);
+      } catch {
+        // Malformed URL (e.g. bad percent-encoding) — treat as not found rather
+        // than letting it fall through to the 500 path.
+        return notFound();
+      }
       const pluginId = url.hostname;
       if (!pluginId) {
         return notFound();
@@ -355,7 +366,14 @@ function createPluginProtocolHandler() {
         return notFound();
       }
 
-      const decodedPath = decodeURIComponent(rawPath);
+      let decodedPath: string;
+      try {
+        decodedPath = decodeURIComponent(rawPath);
+      } catch {
+        // Malformed percent-encoding (e.g. "%ZZ") — decodeURIComponent throws a
+        // URIError. Treat as not found rather than a 500.
+        return notFound();
+      }
       if (decodedPath.includes("\0")) {
         return new Response("Invalid path", {
           status: 400,
@@ -410,7 +428,10 @@ function createPluginProtocolHandler() {
       try {
         const buffer = await fileHandle.readFile();
         const mimeType = getMimeType(realFile);
-        return new Response(buffer, {
+        // HEAD must not carry a body, but Content-Length still reflects the
+        // resource size so clients can read it from the headers.
+        const body = request.method === "HEAD" ? null : buffer;
+        return new Response(body, {
           status: 200,
           headers: buildPluginHeaders(mimeType, buffer.length, allowOrigin, fileStat.mtime),
         });
@@ -435,11 +456,14 @@ function createPluginProtocolHandler() {
  */
 export function registerProtocolsForSession(ses: Electron.Session, distPath: string): void {
   if (registeredSessions.has(ses)) return;
-  registeredSessions.add(ses);
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   ses.protocol.handle("plugin", createPluginProtocolHandler());
+
+  // Mark registered only after all handlers install — a throw mid-registration
+  // must not leave the session permanently flagged as partially configured.
+  registeredSessions.add(ses);
 }
 
 export function registerAppProtocol(distPath: string): void {

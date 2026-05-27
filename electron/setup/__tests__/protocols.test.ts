@@ -1284,11 +1284,35 @@ describe("createPluginProtocolHandler — plugin asset resolution & containment"
     expect(response.status).toBe(404);
   });
 
-  it("returns 405 for non-GET/HEAD methods", async () => {
+  it("returns 405 for non-GET/HEAD methods without touching PluginService or the filesystem", async () => {
+    const fs = await import("fs/promises");
     const handler = await captureHandler();
     const response = await handler(makeRequest("acme.demo", "index.mjs", { method: "POST" }));
 
     expect(response.status).toBe(405);
+    expect(pluginServiceMock.getPluginDir).not.toHaveBeenCalled();
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an empty asset path (plugin://acme.demo/) with no listing", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("acme.demo", ""));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 (not 500) for malformed percent-encoding in the path", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    // "%ZZ" is a valid URL but decodeURIComponent throws URIError on it.
+    const response = await handler(makeRequest("acme.demo", "%ZZ"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("returns 404 for a directory request (no listing, no index fallback)", async () => {
@@ -1317,6 +1341,16 @@ describe("createPluginProtocolHandler — plugin asset resolution & containment"
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+  });
+
+  it("echoes the production app://daintree Origin into Access-Control-Allow-Origin", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("acme.demo", "index.mjs", { origin: "app://daintree" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
   });
 
   it("falls back to app://daintree for an untrusted Origin", async () => {
