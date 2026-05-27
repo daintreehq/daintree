@@ -29,6 +29,7 @@ import {
   DOCK_PREWARM_HEIGHT_PX,
 } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 
@@ -731,12 +732,15 @@ export const createAddPanelActions = (
         const current = get().panelsById[id];
         if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
+        const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
         const spawnError = {
-          code: (error as { code?: string })?.code ?? "UNKNOWN",
-          message: error instanceof Error ? error.message : String(error),
-          errno: (error as { errno?: number })?.errno,
-          syscall: (error as { syscall?: string })?.syscall,
-          path: (error as { path?: string })?.path,
+          code: err.code ?? "UNKNOWN",
+          message: formatErrorMessage(error, "Failed to start terminal process"),
+          errno: err.errno,
+          syscall: err.syscall,
+          path: err.path,
         } as import("@shared/types/pty-host").SpawnError;
 
         set((state) => {

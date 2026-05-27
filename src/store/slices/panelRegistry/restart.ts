@@ -193,9 +193,8 @@ export const createRestartActions = (
     // Also set the store flag for UI and other consumers
     // Track whether we're restarting from a failed spawn so we can clear
     // spawnStatus (allowing XtermAdapter to mount) and restore it on failure.
-    const wasFailed =
-      (get().panelsById[id] as import("@shared/types/panel").PtyPanelData | undefined)
-        ?.spawnStatus === "failed";
+    const ptyPanel = get().panelsById[id] as import("@shared/types/panel").PtyPanelData | undefined; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- narrow to PtyPanelData for spawnStatus access
+    const wasFailed = ptyPanel?.spawnStatus === "failed";
     set((state) =>
       updateTerminal(state, id, (t) => ({
         ...t,
