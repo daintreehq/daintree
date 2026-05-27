@@ -9,22 +9,31 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 
+/** Enabled plugins first, then alphabetically by display name. */
+function sortPlugins(list: readonly LoadedPluginInfo[]): LoadedPluginInfo[] {
+  return [...list].sort((a, b) => {
+    const byEnabled = Number(a.disabled ?? false) - Number(b.disabled ?? false);
+    if (byEnabled !== 0) return byEnabled;
+    const aName = a.manifest.displayName ?? a.manifest.name;
+    const bName = b.manifest.displayName ?? b.manifest.name;
+    return aName.localeCompare(bName);
+  });
+}
+
 /**
  * Preferences surface for enabling/disabling installed plugins (#9284). Both
  * built-in and user-installed plugins can be turned off; the toggle persists to
- * `plugins.disabled` in the store and takes effect on next launch. Because the
- * list reflects the state at startup and no synchronous unload happens, a
- * "Restart required" badge appears whenever a toggle diverges from the running
- * state — that ambient cue is the recovery signal, so no toast is emitted.
+ * `plugins.disabled` in the store and takes effect on next launch. The switch
+ * reflects the persisted (desired) state and a "Restart required" badge appears
+ * whenever that diverges from what's actually running this session — both are
+ * supplied by `listPlugins()` so they survive a tab remount. The badge is the
+ * ambient recovery cue, so no toast is emitted.
  */
 export function PluginsTab() {
   const [plugins, setPlugins] = useState<LoadedPluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [error, setError] = useState<string | null>(null);
-  // Optimistic enabled state keyed by plugin id, applied on top of the startup
-  // state. A key is present only after the user toggles it this session.
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
 
   useSettingsTabValidation("plugins", Boolean(error));
@@ -35,13 +44,7 @@ export function PluginsTab() {
       .list()
       .then((list) => {
         if (cancelled) return;
-        // Stable order: enabled first, then by display name.
-        const sorted = [...list].sort((a, b) => {
-          const aName = a.manifest.displayName ?? a.manifest.name;
-          const bName = b.manifest.displayName ?? b.manifest.name;
-          return aName.localeCompare(bName);
-        });
-        setPlugins(sorted);
+        setPlugins(sortPlugins(list));
         setError(null);
       })
       .catch((err) => {
@@ -60,16 +63,22 @@ export function PluginsTab() {
   const handleToggle = async (plugin: LoadedPluginInfo) => {
     const id = plugin.manifest.name;
     if (pending.has(id)) return;
-    const startupEnabled = !plugin.disabled;
-    const current = overrides[id] ?? startupEnabled;
-    const next = !current;
+    const next = plugin.disabled === true; // currently disabled → enabling
+    const before = plugins;
 
     setPending((prev) => new Set(prev).add(id));
+    // Optimistic flip: a single toggle always flips both the desired state and
+    // the running/desired mismatch, so `pendingRestart` simply inverts.
+    setPlugins((prev) =>
+      prev.map((p) =>
+        p.manifest.name === id ? { ...p, disabled: !next, pendingRestart: !p.pendingRestart } : p
+      )
+    );
     try {
       setError(null);
       await window.electron.plugin.setEnabled(id, next);
-      setOverrides((prev) => ({ ...prev, [id]: next }));
     } catch (err) {
+      setPlugins(before); // revert the optimistic flip
       setError(formatErrorMessage(err, "Failed to update plugin"));
       logError("Failed to update plugin enabled state", err);
     } finally {
@@ -109,9 +118,8 @@ export function PluginsTab() {
         <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {plugins.map((plugin) => {
             const id = plugin.manifest.name;
-            const startupEnabled = !plugin.disabled;
-            const enabled = overrides[id] ?? startupEnabled;
-            const restartRequired = enabled !== startupEnabled;
+            const enabled = plugin.disabled !== true;
+            const restartRequired = plugin.pendingRestart === true;
             const label = plugin.manifest.displayName ?? plugin.manifest.name;
             return (
               <SettingsSwitchCard

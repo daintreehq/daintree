@@ -1155,6 +1155,44 @@ describe("PluginService integration — built-in plugin loading", () => {
     expect(service.listPlugins()[0].isBuiltin).toBe(true);
   });
 
+  it("does not register contributions or run main for a disabled user plugin", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.disabled-user", {
+      name: "acme.disabled-user",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#000" }],
+        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "acme.disabled-user.act" }],
+      },
+    });
+    const mainFile = await writeMainFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.disabled-user",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          panels: [{ id: "p", name: "P", iconId: "eye", color: "#000" }],
+          toolbarButtons: [
+            { id: "b", label: "B", iconId: "i", actionId: "acme.disabled-user.act" },
+          ],
+        },
+      })
+    );
+    storeState.set("plugins", { disabled: ["acme.disabled-user"] });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    expect(readMarker(markerKey)).toBeUndefined();
+    expect(getPanelKindConfig("acme.disabled-user.p")).toBeUndefined();
+    expect(getToolbarButtonConfig("plugin.acme.disabled-user.b")).toBeUndefined();
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ disabled: true, isBuiltin: false });
+  });
+
   it("does not execute the main entry of a disabled built-in", async () => {
     const markerKey = makeMarkerKey();
     const pluginDir = await writeBuiltinPlugin("daintree.disabled-main", {

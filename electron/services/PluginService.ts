@@ -1084,25 +1084,44 @@ export class PluginService {
   }
 
   listPlugins(): LoadedPluginInfo[] {
-    const active: LoadedPluginInfo[] = Array.from(this.plugins.values()).map((p) => ({
-      manifest: p.manifest,
-      dir: p.dir,
-      loadedAt: p.loadedAt,
-      isBuiltin: p.isBuiltin,
-      archiveHash: p.archiveHash,
-      disabled: false,
-    }));
-    // Surface plugins skipped at startup because they're disabled so the
-    // Preferences toggle can list and re-enable them (#9284). They carry no
+    // Desired state is the live persisted list; the running state is fixed for
+    // the session (`this.plugins` = loaded at launch, `this.disabledPlugins` =
+    // skipped at launch — disabling never unloads at runtime). Reporting both
+    // lets the renderer show the correct switch position and a "restart
+    // required" cue that survives a tab remount (#9284).
+    const desiredDisabled = this.getDisabledIds();
+
+    // Plugins that loaded and are running this session.
+    const running: LoadedPluginInfo[] = Array.from(this.plugins.values()).map((p) => {
+      const disabled = desiredDisabled.has(p.manifest.name);
+      return {
+        manifest: p.manifest,
+        dir: p.dir,
+        loadedAt: p.loadedAt,
+        isBuiltin: p.isBuiltin,
+        archiveHash: p.archiveHash,
+        disabled,
+        // Running but the user now wants it off → unload pending on restart.
+        pendingRestart: disabled,
+      };
+    });
+
+    // Plugins skipped at launch because they were disabled. They carry no
     // `loadedAt` — the main module never ran — so it's reported as 0.
-    const disabled: LoadedPluginInfo[] = Array.from(this.disabledPlugins.values()).map((p) => ({
-      manifest: p.manifest,
-      dir: p.dir,
-      loadedAt: 0,
-      isBuiltin: p.isBuiltin,
-      disabled: true,
-    }));
-    return [...active, ...disabled];
+    const skipped: LoadedPluginInfo[] = Array.from(this.disabledPlugins.values()).map((p) => {
+      const disabled = desiredDisabled.has(p.manifest.name);
+      return {
+        manifest: p.manifest,
+        dir: p.dir,
+        loadedAt: 0,
+        isBuiltin: p.isBuiltin,
+        disabled,
+        // Not running but the user now wants it on → load pending on restart.
+        pendingRestart: !disabled,
+      };
+    });
+
+    return [...running, ...skipped];
   }
 
   /**
@@ -1114,7 +1133,7 @@ export class PluginService {
    * a declared-intent list, not a live registry, so no existence check.
    */
   setEnabled(pluginId: string, enabled: boolean): void {
-    if (typeof pluginId !== "string" || pluginId.length === 0) {
+    if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       throw new Error("setEnabled: pluginId must be a non-empty string");
     }
     if (typeof enabled !== "boolean") {

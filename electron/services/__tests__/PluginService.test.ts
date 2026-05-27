@@ -1117,9 +1117,38 @@ describe("PluginService built-in plugin loading", () => {
       expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"], other: "keep" });
     });
 
-    it("throws on an empty plugin id", () => {
+    it("throws on an empty or whitespace-only plugin id", () => {
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       expect(() => service.setEnabled("", false)).toThrow(/non-empty string/);
+      expect(() => service.setEnabled("   ", false)).toThrow(/non-empty string/);
+    });
+
+    it("listPlugins reflects a runtime disable as disabled+pendingRestart without restart", async () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      await writePlugin("acme.runtime", { name: "acme.runtime", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: false });
+
+      service.setEnabled("acme.runtime", false);
+
+      // Still running this session, but the desired state is now off.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: true });
+    });
+
+    it("listPlugins reflects a runtime re-enable of a launch-disabled plugin", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.off"] });
+      await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: false });
+
+      service.setEnabled("acme.off", true);
+
+      // Not running this session, but the desired state is now on.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
     });
   });
 });
