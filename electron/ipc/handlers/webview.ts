@@ -1097,12 +1097,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       }
     }
 
-    const adjustedActiveIndex =
-      sanitized.length > 0 ? Math.min(activeIndex, sanitized.length - 1) : 0;
-
     return {
       entries: sanitized,
-      activeIndex: adjustedActiveIndex,
+      activeIndex,
       canGoBack: nh.canGoBack(),
       canGoForward: nh.canGoForward(),
     };

@@ -133,7 +133,8 @@ export function BrowserToolbar({
     longPressTargetRef.current = null;
   }, []);
 
-  const handlePointerDown = useCallback((dir: "back" | "forward") => {
+  const handlePointerDown = useCallback((dir: "back" | "forward", e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     longPressTargetRef.current = dir;
     longPressTimerRef.current = setTimeout(() => {
       if (longPressTargetRef.current === dir) {
@@ -143,7 +144,8 @@ export function BrowserToolbar({
   }, []);
 
   const handlePointerUp = useCallback(
-    (dir: "back" | "forward") => {
+    (dir: "back" | "forward", e: React.PointerEvent) => {
+      if (e.button !== 0) return;
       if (longPressDir === dir) {
         // Dropdown is open — don't navigate
         clearLongPress();
@@ -177,15 +179,20 @@ export function BrowserToolbar({
     };
   }, []);
 
-  // Recent entries for the dropdown (back shows past, forward shows future)
+  // Recent entries for the dropdown (back shows past, forward shows future).
+  // Use entry.index vs activeIndex so filtered entries don't shift positions.
   const recentBackEntries = useMemo(() => {
     if (!navSnapshot) return [];
-    return navSnapshot.entries.slice(0, navSnapshot.activeIndex).reverse();
+    return navSnapshot.entries
+      .filter((e) => e.index < navSnapshot.activeIndex)
+      .sort((a, b) => b.index - a.index);
   }, [navSnapshot]);
 
   const recentForwardEntries = useMemo(() => {
     if (!navSnapshot) return [];
-    return navSnapshot.entries.slice(navSnapshot.activeIndex + 1);
+    return navSnapshot.entries
+      .filter((e) => e.index > navSnapshot.activeIndex)
+      .sort((a, b) => a.index - b.index);
   }, [navSnapshot]);
 
   const backTooltip = backEntry?.title || (canGoBack ? "Go back" : "");
@@ -513,8 +520,8 @@ export function BrowserToolbar({
             <span className="inline-flex">
               <button
                 type="button"
-                onPointerDown={() => handlePointerDown("back")}
-                onPointerUp={() => handlePointerUp("back")}
+                onPointerDown={(e) => handlePointerDown("back", e)}
+                onPointerUp={(e) => handlePointerUp("back", e)}
                 onPointerLeave={clearLongPress}
                 onPointerCancel={clearLongPress}
                 disabled={!canGoBack}
@@ -559,8 +566,8 @@ export function BrowserToolbar({
             <span className="inline-flex">
               <button
                 type="button"
-                onPointerDown={() => handlePointerDown("forward")}
-                onPointerUp={() => handlePointerUp("forward")}
+                onPointerDown={(e) => handlePointerDown("forward", e)}
+                onPointerUp={(e) => handlePointerUp("forward", e)}
                 onPointerLeave={clearLongPress}
                 onPointerCancel={clearLongPress}
                 disabled={!canGoForward}

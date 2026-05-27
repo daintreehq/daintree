@@ -239,20 +239,6 @@ export class ProjectViewManager {
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
 
-    // XButton1/XButton2 back/forward. Only Windows and Linux map mouse side
-    // buttons to app-command; macOS keeps the existing keychord fallback.
-    win.on("app-command", (_e, cmd) => {
-      const active = this.getActiveView();
-      if (!active) return;
-      const wc = active.webContents;
-      if (wc.isDestroyed()) return;
-      if (cmd === "browser-backward" && wc.navigationHistory.canGoBack()) {
-        wc.navigationHistory.goBack();
-      } else if (cmd === "browser-forward" && wc.navigationHistory.canGoForward()) {
-        wc.navigationHistory.goForward();
-      }
-    });
-
     // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
     // synchronously on the first aligned tick BEFORE installing the recurring
     // `setInterval`. If the first tick throws, the recurring interval is never

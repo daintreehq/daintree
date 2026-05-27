@@ -150,6 +150,7 @@ export function BrowserPane({
   const [pendingApproval, setPendingApproval] = useState<{
     url: string;
     hostname: string;
+    historyIndex?: number;
   } | null>(null);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
@@ -178,11 +179,15 @@ export function BrowserPane({
   const currentUrl = history.present;
   const canGoBack = navSnapshot?.canGoBack ?? history.past.length > 0;
   const canGoForward = navSnapshot?.canGoForward ?? history.future.length > 0;
-  const backEntry = navSnapshot?.entries
-    ? (navSnapshot.entries[navSnapshot.activeIndex - 1] ?? null)
+  const backEntry = navSnapshot
+    ? (navSnapshot.entries
+        .filter((e) => e.index < navSnapshot.activeIndex)
+        .sort((a, b) => b.index - a.index)[0] ?? null)
     : null;
-  const forwardEntry = navSnapshot?.entries
-    ? (navSnapshot.entries[navSnapshot.activeIndex + 1] ?? null)
+  const forwardEntry = navSnapshot
+    ? (navSnapshot.entries
+        .filter((e) => e.index > navSnapshot.activeIndex)
+        .sort((a, b) => a.index - b.index)[0] ?? null)
     : null;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
 
@@ -314,8 +319,30 @@ export function BrowserPane({
       logError("[BrowserPane] Failed to save approved host", err);
       return;
     }
+    if (pendingApproval.historyIndex !== undefined) {
+      const webview = webviewRef.current;
+      if (webview && isWebviewReady) {
+        try {
+          const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+          await window.electron.webview.goToHistoryIndex(wcId, pendingApproval.historyIndex);
+          setPendingApproval(null);
+          void refreshNavigationHistory();
+          return;
+        } catch {
+          // Fall through to loadURL if goToHistoryIndex fails
+        }
+      }
+    }
     commitNavigation(url);
-  }, [pendingApproval, projectId, projectSettings, saveProjectSettings, commitNavigation]);
+  }, [
+    pendingApproval,
+    projectId,
+    projectSettings,
+    saveProjectSettings,
+    commitNavigation,
+    isWebviewReady,
+    refreshNavigationHistory,
+  ]);
 
   const handleDismissApproval = useCallback(() => {
     setPendingApproval(null);
@@ -448,6 +475,25 @@ export function BrowserPane({
     };
   }, []);
 
+  // XButton1/XButton2 back/forward on Windows/Linux. The <webview> does not
+  // propagate app-command, so mouseup on the parent document catches clicks
+  // on toolbar chrome. macOS maps side buttons differently and stays on the
+  // existing Cmd+Left / Cmd+Right keychord.
+  useEffect(() => {
+    const handleMouseUp = (e: MouseEvent) => {
+      if (!isFocused) return;
+      if (e.button === 3) {
+        e.preventDefault();
+        handleBack();
+      } else if (e.button === 4) {
+        e.preventDefault();
+        handleForward();
+      }
+    };
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, [isFocused, handleBack, handleForward]);
+
   const handleSetZoom = useCallback((rawZoom: number) => {
     setZoomFactor(clampZoom(rawZoom));
   }, []);
@@ -459,7 +505,7 @@ export function BrowserPane({
 
       const result = normalizeBrowserUrl(entry.url, { allowedHosts });
       if (result.requiresConfirmation && result.hostname) {
-        setPendingApproval({ url: result.url!, hostname: result.hostname });
+        setPendingApproval({ url: result.url!, hostname: result.hostname, historyIndex: index });
         return;
       }
 
