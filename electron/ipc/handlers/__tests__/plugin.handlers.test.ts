@@ -255,9 +255,9 @@ describe("registerPluginHandlers", () => {
       senderFrame: { url: "app://daintree/" },
       sender: { id: 1 },
     };
-    await expect(
-      invokeHandler(trustedEvent, "acme.plugin", "acme.ping", 42)
-    ).rejects.toThrow("Invalid arguments for plugin action");
+    await expect(invokeHandler(trustedEvent, "acme.plugin", "acme.ping", 42)).rejects.toThrow(
+      "Invalid arguments for plugin action"
+    );
 
     expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
   });

@@ -1225,9 +1225,12 @@ describe("Plugin IPC handler registration", () => {
       service.registerHandler("acme.test-plugin", "acme.test-plugin.ping", handler);
 
       await expect(
-        service.dispatchHandler("acme.test-plugin", "acme.test-plugin.ping", makeCtx("acme.test-plugin"), [
-          { name: 42 },
-        ])
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.ping",
+          makeCtx("acme.test-plugin"),
+          [{ name: 42 }]
+        )
       ).rejects.toThrow("Invalid arguments for plugin action");
       expect(handler).not.toHaveBeenCalled();
     });
@@ -1263,9 +1266,12 @@ describe("Plugin IPC handler registration", () => {
       const handler = vi.fn().mockResolvedValue("ok");
       service.registerHandler("acme.test-plugin", "raw-channel", handler);
 
-      const result = await service.dispatchHandler("acme.test-plugin", "raw-channel", makeCtx("acme.test-plugin"), [
-        { anything: "goes" },
-      ]);
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "raw-channel",
+        makeCtx("acme.test-plugin"),
+        [{ anything: "goes" }]
+      );
       expect(result).toBe("ok");
     });
 
@@ -1308,13 +1314,19 @@ describe("Plugin IPC handler registration", () => {
       service.registerHandler("acme.test-plugin", "acme.test-plugin.cached", handler);
 
       // First call compiles
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cached", makeCtx("acme.test-plugin"), [
-        { value: 1 },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cached",
+        makeCtx("acme.test-plugin"),
+        [{ value: 1 }]
+      );
       // Second call reuses cached validator
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cached", makeCtx("acme.test-plugin"), [
-        { value: 2 },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cached",
+        makeCtx("acme.test-plugin"),
+        [{ value: 2 }]
+      );
 
       expect(handler).toHaveBeenCalledTimes(2);
       expect(handler).toHaveBeenNthCalledWith(1, expect.anything(), { value: 1 });
@@ -1361,17 +1373,28 @@ describe("Plugin IPC handler registration", () => {
           required: ["x"],
         },
       });
-      service.registerHandler("acme.test-plugin", "acme.test-plugin.cleanup", vi.fn().mockResolvedValue("ok"));
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        vi.fn().mockResolvedValue("ok")
+      );
 
       // Prime the validator cache with a successful call
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.cleanup", makeCtx("acme.test-plugin"), [
-        { x: 1 },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        makeCtx("acme.test-plugin"),
+        [{ x: 1 }]
+      );
 
       service.removeHandlers("acme.test-plugin");
 
       // Re-register and re-prime — the old validator should be gone
-      service.registerHandler("acme.test-plugin", "acme.test-plugin.cleanup", vi.fn().mockResolvedValue("ok"));
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.cleanup",
+        vi.fn().mockResolvedValue("ok")
+      );
       // Should still work (compiles fresh)
       const result = await service.dispatchHandler(
         "acme.test-plugin",
@@ -1392,10 +1415,19 @@ describe("Plugin IPC handler registration", () => {
         danger: "safe",
         inputSchema: { $async: true, type: "object" },
       });
-      service.registerHandler("acme.test-plugin", "acme.test-plugin.async", vi.fn().mockResolvedValue("ok"));
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.async",
+        vi.fn().mockResolvedValue("ok")
+      );
 
       await expect(
-        service.dispatchHandler("acme.test-plugin", "acme.test-plugin.async", makeCtx("acme.test-plugin"), [{}])
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.async",
+          makeCtx("acme.test-plugin"),
+          [{}]
+        )
       ).rejects.toThrow("async");
     });
 
@@ -1419,16 +1451,22 @@ describe("Plugin IPC handler registration", () => {
       service.registerHandler("acme.test-plugin", "acme.test-plugin.format", handler);
 
       // Valid formats
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.format", makeCtx("acme.test-plugin"), [
-        { url: "https://example.com", email: "test@example.com" },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.format",
+        makeCtx("acme.test-plugin"),
+        [{ url: "https://example.com", email: "test@example.com" }]
+      );
       expect(handler).toHaveBeenCalled();
 
       // Invalid format rejects
       await expect(
-        service.dispatchHandler("acme.test-plugin", "acme.test-plugin.format", makeCtx("acme.test-plugin"), [
-          { url: "not-a-url", email: "test@example.com" },
-        ])
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.format",
+          makeCtx("acme.test-plugin"),
+          [{ url: "not-a-url", email: "test@example.com" }]
+        )
       ).rejects.toThrow("Invalid arguments for plugin action");
     });
 
@@ -1481,12 +1519,19 @@ describe("Plugin IPC handler registration", () => {
           required: ["x"],
         },
       });
-      service.registerHandler("acme.test-plugin", "acme.test-plugin.stale", vi.fn().mockResolvedValue("ok"));
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        vi.fn().mockResolvedValue("ok")
+      );
 
       // Prime the cache
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.stale", makeCtx("acme.test-plugin"), [
-        { x: 1 },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        makeCtx("acme.test-plugin"),
+        [{ x: 1 }]
+      );
 
       // Unregister and re-register with a different schema
       service.unregisterPluginAction("acme.test-plugin", "acme.test-plugin.stale");
@@ -1508,15 +1553,21 @@ describe("Plugin IPC handler registration", () => {
 
       // Old schema required `x: number` — should now reject that
       await expect(
-        service.dispatchHandler("acme.test-plugin", "acme.test-plugin.stale", makeCtx("acme.test-plugin"), [
-          { x: 1 },
-        ])
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "acme.test-plugin.stale",
+          makeCtx("acme.test-plugin"),
+          [{ x: 1 }]
+        )
       ).rejects.toThrow("Invalid arguments for plugin action");
 
       // New schema requires `y: string` — should pass with correct args
-      await service.dispatchHandler("acme.test-plugin", "acme.test-plugin.stale", makeCtx("acme.test-plugin"), [
-        { y: "hello" },
-      ]);
+      await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stale",
+        makeCtx("acme.test-plugin"),
+        [{ y: "hello" }]
+      );
       expect(handler).toHaveBeenCalledWith(expect.anything(), { y: "hello" });
     });
 
