@@ -275,29 +275,15 @@ const LazyCrashRecoveryDialog = lazy(() =>
   preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
 );
 
-function preloadRecoveryBannerCoordinator() {
-  return import("./components/Recovery/RecoveryBannerCoordinator");
+function preloadGlobalBannerCoordinator() {
+  return import("./components/Recovery/GlobalBannerCoordinator");
 }
-const LazyRecoveryBannerCoordinator = lazy(() =>
-  preloadRecoveryBannerCoordinator().then((m) => ({ default: m.RecoveryBannerCoordinator }))
+const LazyGlobalBannerCoordinator = lazy(() =>
+  preloadGlobalBannerCoordinator().then((m) => ({ default: m.GlobalBannerCoordinator }))
 );
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
-void preloadRecoveryBannerCoordinator();
-
-function preloadGitHubTokenBanner() {
-  return import("./components/Recovery/GitHubTokenBanner");
-}
-const LazyGitHubTokenBanner = lazy(() =>
-  preloadGitHubTokenBanner().then((m) => ({ default: m.GitHubTokenBanner }))
-);
-
-function preloadCloudSyncBanner() {
-  return import("./components/Recovery/CloudSyncBanner");
-}
-const LazyCloudSyncBanner = lazy(() =>
-  preloadCloudSyncBanner().then((m) => ({ default: m.CloudSyncBanner }))
-);
+void preloadGlobalBannerCoordinator();
 
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -537,9 +523,7 @@ function AppInner() {
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
-      void preloadRecoveryBannerCoordinator();
-      void preloadGitHubTokenBanner();
-      void preloadCloudSyncBanner();
+      void preloadGlobalBannerCoordinator();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
@@ -731,13 +715,7 @@ function AppInner() {
           >
             <E2EFaultInjector />
             <Suspense fallback={null}>
-              <LazyRecoveryBannerCoordinator />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyGitHubTokenBanner />
-            </Suspense>
-            <Suspense fallback={null}>
-              <LazyCloudSyncBanner />
+              <LazyGlobalBannerCoordinator />
             </Suspense>
             <DndProvider>
               <VoiceRecordingAnnouncer />

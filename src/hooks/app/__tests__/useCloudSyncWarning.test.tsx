@@ -8,9 +8,13 @@ vi.mock("@/lib/platform", () => ({
   isWindows: () => false,
 }));
 
+const notify = vi.fn();
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => notify(...args),
+}));
+
 import { useCloudSyncWarning } from "../useCloudSyncWarning";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectStore } from "@/store";
 import type { ProjectSettings } from "@/types";
@@ -36,8 +40,8 @@ function setupProject(opts: {
 
 describe("useCloudSyncWarning", () => {
   beforeEach(() => {
+    notify.mockClear();
     useCloudSyncBannerStore.setState({ service: null });
-    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
     useProjectStore.setState({ currentProject: null });
     useProjectSettingsStore.setState({ settings: null, projectId: null });
   });
@@ -94,7 +98,7 @@ describe("useCloudSyncWarning", () => {
     expect(useCloudSyncBannerStore.getState().service).toBeNull();
   });
 
-  it("adds an inbox entry once per project when banner is shown", () => {
+  it("routes an inbox notification once per project when banner is shown", () => {
     setupProject({
       projectId: "p1",
       projectPath: "/Users/foo/Library/CloudStorage/Dropbox-Personal/work",
@@ -106,8 +110,17 @@ describe("useCloudSyncWarning", () => {
     rerender({ home: "/Users/foo" });
     rerender({ home: "/Users/foo" });
 
-    const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries.filter((e) => e.title === "Cloud sync folder detected")).toHaveLength(1);
+    const cloudSyncCalls = notify.mock.calls.filter(
+      ([payload]) => payload?.title === "Cloud sync folder detected"
+    );
+    expect(cloudSyncCalls).toHaveLength(1);
+    expect(cloudSyncCalls[0]?.[0]).toMatchObject({
+      type: "warning",
+      priority: "low",
+      supersedeKey: "cloud-sync:p1",
+      countable: false,
+      context: { eventKind: "host" },
+    });
   });
 
   it("populates the banner store with the project id alongside the service", () => {

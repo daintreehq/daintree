@@ -15,10 +15,12 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-import { RecoveryBannerCoordinator } from "../RecoveryBannerCoordinator";
+import { GlobalBannerCoordinator } from "../GlobalBannerCoordinator";
 import { usePanelStore } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
+import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -37,7 +39,12 @@ beforeAll(() => {
 });
 
 function resetStores() {
-  usePanelStore.setState({ backendStatus: "connected", lastCrashType: null });
+  usePanelStore.setState({
+    backendStatus: "connected",
+    lastCrashType: null,
+    watchdogStatus: "active",
+    watchdogDisabledInfo: null,
+  });
   useSafeModeStore.setState({
     safeMode: false,
     dismissed: false,
@@ -46,6 +53,8 @@ function resetStores() {
     lastCrashAt: undefined,
   });
   useRestoreConfirmationStore.setState({ visible: false, suspectCount: 0, crashCount: 0 });
+  useGitHubTokenHealthStore.setState({ isUnhealthy: false });
+  useCloudSyncBannerStore.setState({ service: null, projectId: null });
 }
 
 beforeEach(() => {
@@ -59,9 +68,9 @@ afterEach(() => {
   }
 });
 
-describe("RecoveryBannerCoordinator", () => {
+describe("GlobalBannerCoordinator", () => {
   it("renders nothing when no recovery state is active", () => {
-    const { container } = render(<RecoveryBannerCoordinator />);
+    const { container } = render(<GlobalBannerCoordinator />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -70,7 +79,7 @@ describe("RecoveryBannerCoordinator", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
@@ -80,7 +89,7 @@ describe("RecoveryBannerCoordinator", () => {
   it("renders the host crash banner when backend is disconnected", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "OUT_OF_MEMORY" });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Terminal service ran out of memory")).toBeTruthy();
   });
@@ -90,7 +99,7 @@ describe("RecoveryBannerCoordinator", () => {
     usePanelStore.setState({ backendStatus: "recovering" });
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     act(() => {
       vi.advanceTimersByTime(400);
@@ -104,7 +113,7 @@ describe("RecoveryBannerCoordinator", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Safe mode — panels weren't restored")).toBeTruthy();
     expect(screen.queryByText(/Session recovered after unexpected exit/)).toBeNull();
@@ -113,7 +122,7 @@ describe("RecoveryBannerCoordinator", () => {
   it("renders the restore confirmation when only restore is active", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
   });
@@ -122,7 +131,7 @@ describe("RecoveryBannerCoordinator", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: true });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
@@ -133,7 +142,7 @@ describe("RecoveryBannerCoordinator", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     act(() => {
       vi.advanceTimersByTime(30_000);
@@ -147,7 +156,7 @@ describe("RecoveryBannerCoordinator", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     act(() => {
       vi.advanceTimersByTime(30_000);
@@ -171,7 +180,7 @@ describe("RecoveryBannerCoordinator", () => {
 
   it("switches from restore to safe mode reactively via store subscription", async () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
 
     act(() => {
@@ -187,7 +196,7 @@ describe("RecoveryBannerCoordinator", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     act(() => {
       vi.advanceTimersByTime(30_000);
@@ -202,7 +211,7 @@ describe("RecoveryBannerCoordinator", () => {
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
 
@@ -237,7 +246,7 @@ describe("RecoveryBannerCoordinator", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 2, crashCount: 1 });
 
-    render(<RecoveryBannerCoordinator />);
+    render(<GlobalBannerCoordinator />);
 
     act(() => {
       usePanelStore.setState({ backendStatus: "connected", lastCrashType: null });
@@ -255,7 +264,7 @@ describe("RecoveryBannerCoordinator", () => {
     usePanelStore.setState({ backendStatus: "recovering" });
     useSafeModeStore.setState({ safeMode: true, dismissed: false });
 
-    const { container } = render(<RecoveryBannerCoordinator />);
+    const { container } = render(<GlobalBannerCoordinator />);
 
     expect(container.firstChild).toBeNull();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
@@ -266,5 +275,67 @@ describe("RecoveryBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service restarting")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
+  });
+
+  it("suppresses github-token and cloud-sync while the watchdog is disabled", () => {
+    usePanelStore.setState({ watchdogStatus: "disabled" });
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
+    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+  });
+
+  it("renders the GitHub token banner when only the token is unhealthy", () => {
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("GitHub token expired")).toBeTruthy();
+  });
+
+  it("renders the cloud sync banner when only a synced folder is detected", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+  });
+
+  it("prefers the GitHub token banner over cloud sync when both are active", () => {
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("GitHub token expired")).toBeTruthy();
+    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+  });
+
+  it("suppresses github-token and cloud-sync while restore is active", () => {
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
+    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+  });
+
+  it("suppresses every lower-priority banner when the host has crashed", () => {
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
+    expect(screen.queryByText("Project in a synced folder")).toBeNull();
   });
 });

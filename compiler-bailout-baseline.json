@@ -1736,8 +1736,8 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Recovery/HostCrashBanner.tsx": {
-    "success": 2,
+  "src/components/Recovery/GlobalBannerCoordinator.tsx": {
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -1746,8 +1746,8 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Recovery/RecoveryBannerCoordinator.tsx": {
-    "success": 1,
+  "src/components/Recovery/HostCrashBanner.tsx": {
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -1786,7 +1786,7 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Recovery/useRecoveryPriority.ts": {
+  "src/components/Recovery/useGlobalBannerPriority.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
