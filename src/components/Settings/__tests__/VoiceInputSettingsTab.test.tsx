@@ -178,6 +178,8 @@ describe("VoiceInputSettingsTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
+      expect(screen.getByText(/not used for model training/)).toBeTruthy();
+      expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
     });
   });
 });
