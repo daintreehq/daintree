@@ -7,7 +7,24 @@ import {
 
 function fakeApi(values: Record<string, string | undefined>): PluginSettingsApi {
   return {
-    get: vi.fn(async (key: string) => values[key]),
+    get: vi.fn(async (key: string) => {
+      const v = values[key];
+      if (v === undefined && !(key in values)) {
+        return undefined;
+      }
+      return v;
+    }),
+  };
+}
+
+function throwingApi(errors: Record<string, Error>): PluginSettingsApi {
+  return {
+    get: vi.fn(async (key: string) => {
+      if (key in errors) {
+        throw errors[key];
+      }
+      return undefined;
+    }),
   };
 }
 
@@ -91,6 +108,7 @@ describe("resolveSettingsTemplates", () => {
       api = fakeApi({});
       const result = await resolveSettingsTemplates("plain text no templates", "acme.plugin", api);
       expect(result).toBe("plain text no templates");
+      expect(api.get).not.toHaveBeenCalled();
     });
 
     it("returns empty string for empty text input", async () => {
@@ -135,6 +153,27 @@ describe("resolveSettingsTemplates", () => {
       expect(result).toBe("${settings:foo-bar}");
       expect(api.get).not.toHaveBeenCalled();
     });
+
+    it("leaves ${settings:foo.} unchanged (trailing dot)", async () => {
+      api = fakeApi({});
+      const result = await resolveSettingsTemplates("${settings:foo.}", "acme.plugin", api);
+      expect(result).toBe("${settings:foo.}");
+      expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it("leaves ${settings:.foo} unchanged (leading dot)", async () => {
+      api = fakeApi({});
+      const result = await resolveSettingsTemplates("${settings:.foo}", "acme.plugin", api);
+      expect(result).toBe("${settings:.foo}");
+      expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it("leaves ${settings:foo..bar} unchanged (double dot)", async () => {
+      api = fakeApi({});
+      const result = await resolveSettingsTemplates("${settings:foo..bar}", "acme.plugin", api);
+      expect(result).toBe("${settings:foo..bar}");
+      expect(api.get).not.toHaveBeenCalled();
+    });
   });
 
   describe("escape", () => {
@@ -145,14 +184,16 @@ describe("resolveSettingsTemplates", () => {
       expect(api.get).not.toHaveBeenCalled();
     });
 
-    it("resolves adjacent unescaped template while leaving escaped one", async () => {
-      api = fakeApi({ foo: "bar" });
+    it("resolves adjacent unescaped template while leaving escaped one, distinct keys", async () => {
+      api = fakeApi({ public: "ok" });
       const result = await resolveSettingsTemplates(
-        "\\${settings:foo} ${settings:foo}",
+        "\\${settings:secret} ${settings:public}",
         "acme.plugin",
         api
       );
-      expect(result).toBe("\\${settings:foo} bar");
+      expect(result).toBe("\\${settings:secret} ok");
+      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(api.get).toHaveBeenCalledWith("public");
     });
   });
 
@@ -180,15 +221,27 @@ describe("resolveSettingsTemplates", () => {
 
     it("error message contains the token id, not any resolved value", async () => {
       api = fakeApi({ known: "secret-value" });
-      await expect(
-        resolveSettingsTemplates("${settings:known}${settings:missing}", "acme.plugin", api)
-      ).rejects.toThrow("missing");
-      // The message must NOT contain the resolved value of "known"
       try {
         await resolveSettingsTemplates("${settings:known}${settings:missing}", "acme.plugin", api);
       } catch (e) {
+        expect((e as Error).message).toContain("missing");
         expect((e as Error).message).not.toContain("secret-value");
       }
+    });
+
+    it("has exact error shape for mixed known+missing", async () => {
+      api = fakeApi({ known: "secret" });
+      let caught: SettingTemplateError | null = null;
+      try {
+        await resolveSettingsTemplates("${settings:known}${settings:missing}", "acme.plugin", api);
+      } catch (e) {
+        caught = e as SettingTemplateError;
+      }
+      expect(caught).not.toBeNull();
+      expect(caught!.code).toBe("UNMATCHED_SETTING");
+      expect(caught!.pluginId).toBe("acme.plugin");
+      expect(caught!.token).toBe("missing");
+      expect(caught!.message).toBe('Unmatched setting template "missing" for plugin "acme.plugin"');
     });
 
     it("fails the entire call when any one setting is missing (no partial substitution)", async () => {
@@ -198,12 +251,21 @@ describe("resolveSettingsTemplates", () => {
       ).rejects.toThrow(SettingTemplateError);
     });
 
-    it("throws only once even with multiple unmatched tokens (fail-fast on first)", async () => {
-      api = fakeApi({});
-      // Both tokens are unmatched — should throw on the first one
-      await expect(
-        resolveSettingsTemplates("${settings:a}${settings:b}", "acme.plugin", api)
-      ).rejects.toThrow("a");
+    it("wraps get() rejection in SettingTemplateError, hiding backend details", async () => {
+      const api2 = throwingApi({
+        secretKey: new Error("decrypt failed: sk-live-secret"),
+      });
+      let caught: SettingTemplateError | null = null;
+      try {
+        await resolveSettingsTemplates("${settings:secretKey}", "acme.plugin", api2);
+      } catch (e) {
+        caught = e as SettingTemplateError;
+      }
+      expect(caught).not.toBeNull();
+      expect(caught!.code).toBe("UNMATCHED_SETTING");
+      expect(caught!.token).toBe("secretKey");
+      expect(caught!.message).not.toContain("decrypt");
+      expect(caught!.message).not.toContain("sk-live-secret");
     });
   });
 });

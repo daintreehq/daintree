@@ -19,7 +19,8 @@ export class SettingTemplateError extends Error {
   }
 }
 
-const SETTINGS_TEMPLATE_RE = /(?<!\\)\$\{settings:([a-zA-Z_][a-zA-Z0-9_.]*)\}/g;
+const SETTINGS_TEMPLATE_RE =
+  /(?<!\\)\$\{settings:([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\}/g;
 
 /**
  * Scan `text` for `${settings:<id>}` templates and substitute each with the
@@ -39,19 +40,22 @@ export async function resolveSettingsTemplates(
   if (matches.length === 0) return text;
 
   const uniqueIds = new Map<string, string>();
-  const lookupMap = new Map<string, string>();
 
   for (const match of matches) {
     const settingId = match[1];
     if (!uniqueIds.has(settingId)) {
       uniqueIds.set(settingId, settingId);
-      lookupMap.set(settingId, match[0]);
     }
   }
 
   const results = await Promise.all(
     [...uniqueIds.keys()].map(async (id) => {
-      const value = await settings.get(id);
+      let value: string | undefined;
+      try {
+        value = await settings.get(id);
+      } catch {
+        throw new SettingTemplateError(pluginId, id);
+      }
       if (value === undefined) {
         throw new SettingTemplateError(pluginId, id);
       }
