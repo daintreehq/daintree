@@ -86,7 +86,7 @@ describe("useFindInPage", () => {
     act(() => result.current.open());
     act(() => result.current.setQuery("hello"));
 
-    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false });
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: false });
     expect(result.current.query).toBe("hello");
   });
 
@@ -102,6 +102,7 @@ describe("useFindInPage", () => {
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: true,
       findNext: true,
+      matchCase: false,
     });
 
     webview.findInPage.mockClear();
@@ -110,6 +111,7 @@ describe("useFindInPage", () => {
     expect(webview.findInPage).toHaveBeenCalledWith("test", {
       forward: false,
       findNext: true,
+      matchCase: false,
     });
   });
 
@@ -268,7 +270,7 @@ describe("useFindInPage", () => {
       });
     });
 
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: false });
   });
 
   it("does not restart find on did-navigate-in-page for non-main frame", () => {
@@ -305,11 +307,101 @@ describe("useFindInPage", () => {
     webview.findInPage.mockClear();
 
     act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "next" }));
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { forward: true, findNext: true });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", {
+      forward: true,
+      findNext: true,
+      matchCase: false,
+    });
 
     webview.findInPage.mockClear();
 
     act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "prev" }));
-    expect(webview.findInPage).toHaveBeenCalledWith("test", { forward: false, findNext: true });
+    expect(webview.findInPage).toHaveBeenCalledWith("test", {
+      forward: false,
+      findNext: true,
+      matchCase: false,
+    });
+  });
+
+  it("toggleMatchCase flips matchCase state", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    expect(result.current.matchCase).toBe(false);
+
+    act(() => result.current.toggleMatchCase());
+    expect(result.current.matchCase).toBe(true);
+
+    act(() => result.current.toggleMatchCase());
+    expect(result.current.matchCase).toBe(false);
+  });
+
+  it("toggleMatchCase re-issues find with matchCase when query is active", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    webview.findInPage.mockClear();
+
+    act(() => result.current.toggleMatchCase());
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: true });
+  });
+
+  it("goNext/goPrev preserve current matchCase", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    act(() => result.current.toggleMatchCase());
+    webview.findInPage.mockClear();
+
+    act(() => result.current.goNext());
+    expect(webview.findInPage).toHaveBeenCalledWith("test", {
+      forward: true,
+      findNext: true,
+      matchCase: true,
+    });
+  });
+
+  it("resets matchCase on close", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.toggleMatchCase());
+    expect(result.current.matchCase).toBe(true);
+
+    act(() => result.current.close());
+    expect(result.current.matchCase).toBe(false);
+  });
+
+  it("empty query + toggle does not call findInPage", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    webview.findInPage.mockClear();
+    act(() => result.current.toggleMatchCase());
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("SPA navigation restart preserves matchCase", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    act(() => result.current.toggleMatchCase());
+    webview.findInPage.mockClear();
+
+    act(() => {
+      webview._emit("did-navigate-in-page", {
+        isMainFrame: true,
+        url: "http://localhost:3000/new",
+      });
+    });
+
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: true });
   });
 });

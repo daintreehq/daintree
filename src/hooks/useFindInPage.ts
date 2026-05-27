@@ -67,6 +67,7 @@ export function useFindInPage(
     setQueryState("");
     setActiveMatch(0);
     setMatchCount(0);
+    setMatchCase(false);
     latestRequestIdRef.current = null;
     safeStopFind();
   }, [safeStopFind]);

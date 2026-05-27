@@ -90,6 +90,7 @@ export function FindBar({ find }: FindBarProps) {
           <button
             type="button"
             onClick={toggleMatchCase}
+            onMouseDown={(e) => e.preventDefault()}
             className={`px-1 rounded text-xs font-medium transition-colors ${
               matchCase
                 ? "text-accent-primary bg-accent-primary/10"
