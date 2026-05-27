@@ -75,9 +75,7 @@ describe("normalizeViteDevCommand", () => {
 
   describe("Nuxt commands (no --strictPort)", () => {
     it("appends --port only to 'nuxt dev'", async () => {
-      expect(await normalizeViteDevCommand("nuxt dev", CWD, PORT)).toBe(
-        `nuxt dev --port ${PORT}`
-      );
+      expect(await normalizeViteDevCommand("nuxt dev", CWD, PORT)).toBe(`nuxt dev --port ${PORT}`);
     });
   });
 
@@ -148,15 +146,11 @@ describe("normalizeViteDevCommand", () => {
 
   describe("skip conditions", () => {
     it("does NOT modify when command already has --port flag", async () => {
-      expect(await normalizeViteDevCommand("vite --port 5173", CWD, PORT)).toBe(
-        "vite --port 5173"
-      );
+      expect(await normalizeViteDevCommand("vite --port 5173", CWD, PORT)).toBe("vite --port 5173");
     });
 
     it("does NOT modify when command has --port=N form", async () => {
-      expect(await normalizeViteDevCommand("vite --port=5173", CWD, PORT)).toBe(
-        "vite --port=5173"
-      );
+      expect(await normalizeViteDevCommand("vite --port=5173", CWD, PORT)).toBe("vite --port=5173");
     });
 
     it("does NOT modify when command has -p flag", async () => {
