@@ -5,8 +5,24 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
-import Ajv, { type ValidateFunction } from "ajv";
-import addFormats from "ajv-formats";
+import { createRequire } from "node:module";
+
+// ajv and ajv-formats are CJS-only with deep `module.exports = Class` exports.
+// NodeNext module resolution can't resolve these from ESM, so use createRequire
+// which is the canonical Node.js interop for CJS-in-ESM.
+const req = createRequire(import.meta.url);
+const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
+const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
+
+interface ValidateFn {
+  (data: unknown): boolean;
+  $async?: boolean;
+  errors?: Array<{ instancePath: string; message?: string }>;
+}
+
+interface AjvInstance {
+  compile(schema: Record<string, unknown>): ValidateFn;
+}
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -155,8 +171,8 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
-  private actionValidators = new Map<string, ValidateFunction>();
-  private ajv: Ajv | null = null;
+  private actionValidators = new Map<string, ValidateFn>();
+  private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
    * Most recent activation error per plugin id. Populated by the catch in
