@@ -70,7 +70,15 @@ function clearPerfMarks(): void {
   delete (window as Window & typeof globalThis).__DAINTREE_PERF_MARKS__;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // safeStorage fires its permanent-fallback notification via an *unawaited*
+  // dynamic `import("@/lib/notify")`. Drain the microtask + macrotask queue
+  // here so each test's in-flight dispatch resolves against its own module
+  // registry before `resetModules` swaps it. Without this drain, a prior
+  // test's pending dispatch could land on the next test's freshly-installed
+  // notify spy — which made "notifies exactly once" flaky (it saw 2-3 calls
+  // under CI timing/ordering even though the per-instance guard is correct).
+  await new Promise((resolve) => setTimeout(resolve, 0));
   restoreLocalStorage();
   clearPerfMarks();
   vi.resetModules();
