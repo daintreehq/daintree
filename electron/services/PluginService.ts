@@ -6,6 +6,7 @@ import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
 import Ajv, { type ValidateFunction } from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -950,11 +951,19 @@ export class PluginService {
     }
 
     const descriptor = this.pluginActions.get(channel);
-    if (descriptor?.inputSchema) {
+    if (descriptor?.inputSchema && descriptor.pluginId === pluginId) {
       let validator = this.actionValidators.get(channel);
       if (!validator) {
-        if (!this.ajv) this.ajv = new Ajv();
+        if (!this.ajv) {
+          this.ajv = new Ajv();
+          addFormats(this.ajv);
+        }
         validator = this.ajv.compile(descriptor.inputSchema);
+        if (validator.$async) {
+          throw new Error(
+            `Plugin action "${channel}" has an async schema ($async) which is not supported`
+          );
+        }
         this.actionValidators.set(channel, validator);
       }
       const argsObj = args.length > 0 ? args[0] : {};
@@ -1211,6 +1220,7 @@ export class PluginService {
     if (!descriptor || descriptor.pluginId !== pluginId) return;
 
     this.pluginActions.delete(actionId);
+    this.actionValidators.delete(actionId);
     const owners = this.pluginActionOwners.get(pluginId);
     if (owners) {
       owners.delete(actionId);
