@@ -1266,6 +1266,61 @@ describe("PluginService integration — host.logger and diagnostics", () => {
     }
   });
 
+  it("keeps only the newest 500 lines after wraparound, reverse-chronological", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin(
+        "acme.flood",
+        `for (let i = 0; i < 505; i++) host.logger.info("line-" + i);`
+      );
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.flood");
+      expect(entry?.logLines).toHaveLength(500);
+      // Newest first: line-504 down to line-5; line-0..4 evicted.
+      expect(entry?.logLines[0].message).toBe("line-504");
+      expect(entry?.logLines[499].message).toBe("line-5");
+      expect(entry?.logLines.some((l) => l.message === "line-0")).toBe(false);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("caps an oversized message string with a truncation marker", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin("acme.bigmsg", `host.logger.info("x".repeat(5000));`);
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.bigmsg");
+      const message = entry?.logLines[0].message ?? "";
+      expect(message.length).toBeLessThan(5000);
+      expect(message.endsWith("…[truncated]")).toBe(true);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("scrubs secrets out of a captured load error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin(
+        "acme.errsecret",
+        `throw new Error("boot failed: ghp_abcdefghijklmnopqrstuvwxyz0123");`
+      );
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.errsecret");
+      expect(entry?.loadError).toContain("[REDACTED]");
+      expect(entry?.loadError).not.toContain("ghp_abcdefghij");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("caps oversized log fields with a single truncation marker", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     try {

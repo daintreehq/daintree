@@ -111,11 +111,35 @@ const ACTIVATE_TIMEOUT_MS = 5000;
 const LOG_BUFFER_CAPACITY = 500;
 
 /**
- * Cap on a single line's serialized `fields` payload (~2KB) so a plugin can't
- * `logger.error`-bomb the host into memory pressure. Oversized payloads are
- * replaced with a single truncation marker, never silently dropped.
+ * Caps on a single line so a plugin can't `logger.error`-bomb the host into
+ * memory pressure: the serialized `fields` payload and the `message` string
+ * are each bounded to ~2KB (UTF-8 bytes). Oversized values are replaced/cut
+ * with a single truncation marker, never silently dropped.
  */
 const LOG_FIELDS_MAX_BYTES = 2048;
+const LOG_MESSAGE_MAX_BYTES = 2048;
+const MESSAGE_TRUNCATION_MARKER = "…[truncated]";
+
+/**
+ * Cut `text` to at most `maxBytes` UTF-8 bytes, appending a truncation marker
+ * when it overflows. Walks by code point so a multi-byte character is never
+ * split mid-sequence.
+ */
+function capUtf8(text: string, maxBytes: number, marker: string): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  const budget = Math.max(0, maxBytes - markerBytes);
+  const chars = Array.from(text);
+  let used = 0;
+  let out = "";
+  for (const ch of chars) {
+    const chBytes = Buffer.byteLength(ch, "utf8");
+    if (used + chBytes > budget) break;
+    out += ch;
+    used += chBytes;
+  }
+  return out + marker;
+}
 
 /**
  * Fixed-capacity FIFO ring buffer of log lines, pre-allocated to avoid
@@ -618,14 +642,18 @@ export class PluginService {
     const buffer = this.logBuffers.get(pluginId);
     if (!buffer) return;
 
-    const safeMessage = typeof message === "string" ? message : String(message);
+    const rawMessage = typeof message === "string" ? message : String(message);
+    // Cap the stored message too — fields alone aren't enough to stop a
+    // `logger.error("x".repeat(5e6))` memory bomb (also avoids stalling IPC
+    // serialization of the snapshot). The console forward keeps the raw text.
+    const safeMessage = capUtf8(rawMessage, LOG_MESSAGE_MAX_BYTES, MESSAGE_TRUNCATION_MARKER);
 
     let serializedFields: string | undefined;
     if (fields !== undefined) {
       try {
         const json = JSON.stringify(fields);
         serializedFields =
-          json !== undefined && json.length > LOG_FIELDS_MAX_BYTES
+          json !== undefined && Buffer.byteLength(json, "utf8") > LOG_FIELDS_MAX_BYTES
             ? `[truncated: fields exceeded ${LOG_FIELDS_MAX_BYTES} bytes]`
             : json;
       } catch {
@@ -641,8 +669,7 @@ export class PluginService {
     });
 
     const prefix = `[plugin:${pluginId}]`;
-    const consoleArgs =
-      fields !== undefined ? [prefix, safeMessage, fields] : [prefix, safeMessage];
+    const consoleArgs = fields !== undefined ? [prefix, rawMessage, fields] : [prefix, rawMessage];
     if (level === "warn") console.warn(...consoleArgs);
     else if (level === "error") console.error(...consoleArgs);
     else console.info(...consoleArgs);

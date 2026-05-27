@@ -5,10 +5,10 @@ import type { PluginLogLine } from "../../types/plugin.js";
 describe("scrubSecrets", () => {
   it("redacts GitHub tokens of every prefix", () => {
     const text =
-      "ghp_abcdefghijklmnopqrstuvwxyz0123 gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 ghs_0123456789abcdefghijABCDE";
+      "ghp_abcdefghijklmnopqrstuvwxyz0123 gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 ghs_0123456789abcdefghijABCDE ghr_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 ghu_abcdefghijklmnopqrstuvwxyz0123";
     const out = scrubSecrets(text);
-    expect(out).not.toMatch(/gh[pous]_[A-Za-z0-9]/);
-    expect(out.match(/\[REDACTED\]/g)).toHaveLength(3);
+    expect(out).not.toMatch(/gh[pousr]_[A-Za-z0-9]/);
+    expect(out.match(/\[REDACTED\]/g)).toHaveLength(5);
   });
 
   it("redacts OpenAI keys including project/service-account prefixes", () => {

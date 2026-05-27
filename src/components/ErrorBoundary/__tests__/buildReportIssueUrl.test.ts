@@ -220,6 +220,24 @@ describe("buildReportIssueUrl", () => {
     expect(new URL(result.url).searchParams.get("body")).toContain("Plugin diagnostics");
   });
 
+  it("does not throw on a non-finite log timestamp from a corrupt payload", () => {
+    const result = buildReportIssueUrl(
+      makeInput({
+        pluginDiagnostics: [
+          {
+            name: "acme.plugin",
+            version: "1.0.0",
+            source: "user",
+            installedAt: "2026-01-01T00:00:00.000Z",
+            logLines: [{ timestamp: NaN, level: "info", message: "test" }],
+          },
+        ],
+      })
+    );
+    expect(() => new URL(result.url)).not.toThrow();
+    expect(result.fullBody).toContain("[unknown] INFO test");
+  });
+
   it("drops the plugin section from the URL when it would blow the budget, but keeps it in fullBody", () => {
     const huge = "z".repeat(20000);
     const result = buildReportIssueUrl(

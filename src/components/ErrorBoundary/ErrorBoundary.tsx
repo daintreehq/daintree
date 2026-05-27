@@ -164,11 +164,20 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
-      // Best-effort plugin diagnostics — if the bridge is missing or the call
-      // fails, the report still opens without the plugin section.
+      // Best-effort plugin diagnostics — if the bridge is missing, the call
+      // fails, or it stalls (a plugin spamming huge logs could slow snapshot
+      // serialization), the report still opens without the plugin section.
+      // The race against a 2s timeout guards the `reportInFlight` reset in the
+      // outer finally from being blocked by a never-resolving IPC call.
       let pluginDiagnostics: PluginDiagnosticsSnapshot | undefined;
       try {
-        pluginDiagnostics = await window.electron?.plugin?.getDiagnostics();
+        const fetchDiagnostics = window.electron?.plugin?.getDiagnostics();
+        pluginDiagnostics = fetchDiagnostics
+          ? await Promise.race([
+              fetchDiagnostics,
+              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
+            ])
+          : undefined;
       } catch {
         pluginDiagnostics = undefined;
       }

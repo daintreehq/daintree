@@ -72,6 +72,13 @@ function formatBody(params: {
  * doesn't dominate a short report. Returns an empty string when no plugins are
  * loaded — the caller omits the section entirely.
  */
+// A timestamp crosses the IPC boundary as plain JSON, so a corrupt/hand-built
+// payload could carry NaN or Infinity — `new Date(NaN).toISOString()` throws,
+// which would bubble out of buildReportIssueUrl and silently fail the report.
+function safeIso(timestamp: number): string {
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "unknown";
+}
+
 function formatPluginDiagnosticsSection(
   diagnostics: PluginDiagnosticsSnapshot | undefined
 ): string {
@@ -91,7 +98,7 @@ function formatPluginDiagnosticsSection(
       lines.push(`- Recent logs (${plugin.logLines.length}, newest first):`);
       lines.push("```");
       for (const line of plugin.logLines) {
-        const ts = new Date(line.timestamp).toISOString();
+        const ts = safeIso(line.timestamp);
         const fields = line.fields ? ` ${line.fields}` : "";
         lines.push(`[${ts}] ${line.level.toUpperCase()} ${line.message}${fields}`);
       }
@@ -100,7 +107,7 @@ function formatPluginDiagnosticsSection(
     if (plugin.actionAuditTail && plugin.actionAuditTail.length > 0) {
       lines.push(`- Recent actions:`);
       for (const entry of plugin.actionAuditTail) {
-        const ts = new Date(entry.timestamp).toISOString();
+        const ts = safeIso(entry.timestamp);
         lines.push(`  - ${ts} \`${entry.actionId}\` (${entry.effectiveDanger})`);
       }
     }
