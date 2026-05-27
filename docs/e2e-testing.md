@@ -50,6 +50,7 @@ Tests are split into nine Playwright projects:
 | full-resilience | `./e2e/full/resilience` | 2            | false            | 1-2     |
 | online          | `./e2e/online`          | 2            | true             | 1-2     |
 | nightly         | `./e2e/nightly`         | 0            | false            | 1       |
+| screenshots     | `./e2e/screenshots`     | 0            | false            | 1-2     |
 
 ## Directory Structure
 
