@@ -180,7 +180,7 @@ async function parseOpenAIErrorBody(
 export async function validateOpenAIKey(
   apiKey: string
 ): Promise<{ valid: boolean; error?: string }> {
-  if (!apiKey.trim()) {
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
     return { valid: false, error: "API key is required" };
   }
 

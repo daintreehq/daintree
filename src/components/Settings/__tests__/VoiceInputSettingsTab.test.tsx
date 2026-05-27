@@ -87,7 +87,7 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
     checkMicPermission: vi.fn().mockResolvedValue("unknown"),
     requestMicPermission: vi.fn().mockResolvedValue(undefined),
     openMicSettings: vi.fn(),
-    validateApiKey: vi.fn().mockResolvedValue("idle"),
+    validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
     ...overrides,
   };
 }
