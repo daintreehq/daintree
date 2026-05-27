@@ -23,6 +23,8 @@ function makeFindState(overrides: Partial<FindInPageState> = {}): FindInPageStat
     setQuery: vi.fn(),
     goNext: vi.fn(),
     goPrev: vi.fn(),
+    matchCase: false,
+    toggleMatchCase: vi.fn(),
     ...overrides,
   };
 }

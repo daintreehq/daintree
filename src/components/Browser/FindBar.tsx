@@ -12,12 +12,14 @@ export function FindBar({ find }: FindBarProps) {
     query,
     activeMatch,
     matchCount,
+    matchCase,
     inputRef,
     isComposingRef,
     setQuery,
     goNext,
     goPrev,
     close,
+    toggleMatchCase,
   } = find;
   const counterId = useId();
 
@@ -83,6 +85,24 @@ export function FindBar({ find }: FindBarProps) {
       >
         {countText}
       </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={toggleMatchCase}
+            className={`px-1 rounded text-xs font-medium transition-colors ${
+              matchCase
+                ? "text-accent-primary bg-accent-primary/10"
+                : "text-daintree-text/50 hover:text-daintree-text/70 hover:bg-overlay-medium"
+            }`}
+            aria-label="Match case"
+            aria-pressed={matchCase}
+          >
+            Aa
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Match case</TooltipContent>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">

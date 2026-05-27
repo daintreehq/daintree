@@ -5,6 +5,7 @@ export interface FindInPageState {
   query: string;
   activeMatch: number;
   matchCount: number;
+  matchCase: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
   isComposingRef: React.RefObject<boolean>;
   open: () => void;
@@ -12,6 +13,7 @@ export interface FindInPageState {
   setQuery: (q: string) => void;
   goNext: () => void;
   goPrev: () => void;
+  toggleMatchCase: () => void;
 }
 
 export function useFindInPage(
@@ -24,6 +26,7 @@ export function useFindInPage(
   const [query, setQueryState] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  const [matchCase, setMatchCase] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
   const latestRequestIdRef = useRef<number | null>(null);
@@ -32,13 +35,13 @@ export function useFindInPage(
     (text: string, opts: { forward?: boolean; findNext?: boolean }) => {
       if (!webviewElement || !isWebviewReady || !text) return;
       try {
-        const requestId = webviewElement.findInPage(text, opts);
+        const requestId = webviewElement.findInPage(text, { ...opts, matchCase });
         latestRequestIdRef.current = requestId;
       } catch {
         // webview detached
       }
     },
-    [webviewElement, isWebviewReady]
+    [webviewElement, isWebviewReady, matchCase]
   );
 
   const safeStopFind = useCallback(() => {
@@ -92,6 +95,17 @@ export function useFindInPage(
   const goPrev = useCallback(() => {
     if (query) safeFind(query, { forward: false, findNext: true });
   }, [query, safeFind]);
+
+  const toggleMatchCase = useCallback(() => {
+    setMatchCase((prev) => !prev);
+  }, []);
+
+  // Re-issue find when matchCase toggles
+  useEffect(() => {
+    if (!query || !isOpen) return;
+    safeFind(query, { findNext: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchCase]);
 
   // Listen for found-in-page events
   useEffect(() => {
@@ -182,6 +196,7 @@ export function useFindInPage(
     query,
     activeMatch,
     matchCount,
+    matchCase,
     inputRef,
     isComposingRef,
     open,
@@ -189,5 +204,6 @@ export function useFindInPage(
     setQuery,
     goNext,
     goPrev,
+    toggleMatchCase,
   };
 }
