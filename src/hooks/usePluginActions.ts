@@ -4,6 +4,7 @@ import type { AnyActionDefinition } from "@/services/actions/actionTypes";
 import type { ActionDefinition } from "@shared/types/actions";
 import type { PluginActionDescriptor } from "@shared/types/plugin";
 import { requestPluginConfirmation, usePluginConfirmStore } from "@/store/pluginConfirmStore";
+import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 
@@ -154,6 +155,8 @@ function toSyntheticDefinition(
             actionId: id,
             actionTitle: title ?? id,
             actionDescription: description ?? "",
+            effectiveDanger,
+            argsSummary: summarizeMcpArgs(args),
           });
         } finally {
           inFlightConfirms.delete(requestId);
