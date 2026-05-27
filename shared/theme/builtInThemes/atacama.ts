@@ -11,9 +11,9 @@ export const theme: BuiltInThemeSource = {
     type: "light",
     surfaces: {
       grid: "#DDD6CB",
-      sidebar: "#E5DDD4",
-      canvas: "#EDE7DF",
-      panel: "#F5F1EB",
+      sidebar: "#E7DDD7",
+      canvas: "#ECE7DD",
+      panel: "#F4EFE9",
       elevated: "#FAF8F4",
     },
     text: {
