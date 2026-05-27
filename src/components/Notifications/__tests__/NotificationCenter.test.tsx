@@ -564,10 +564,40 @@ describe("NotificationCenter muted pill", () => {
     render(<NotificationCenter open onClose={() => {}} />);
 
     const pill = screen.getByTestId("notification-muted-pill");
-    // Session mute holds active kinds; only the time-sensitive System kind toasts.
-    expect(pill.textContent).toContain("Will interrupt you: System");
+    // Session mute holds active kinds; waiting pages through (OS layer) and the
+    // time-sensitive System kind toasts.
+    expect(pill.textContent).toContain("Will interrupt you: Waiting, System");
     // Provenance line is preserved alongside the hero summary.
     expect(pill.textContent).toMatch(/Muted until /);
+  });
+
+  it("reads 'Nothing will interrupt you' when notifications are globally off during a mute", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({ quietUntil: until, enabled: false });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).toContain("Nothing will interrupt you right now");
+    expect(pill.textContent).not.toContain("Will interrupt you:");
+  });
+
+  it("lists kind-off notifications but not off sound kinds when both are off", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({
+      quietUntil: until,
+      completedEnabled: false,
+      waitingEnabled: false,
+      workingPulseEnabled: false,
+      uiFeedbackSoundEnabled: false,
+    });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill.textContent).toContain("Off: Completed, Waiting");
+    expect(pill.textContent).not.toContain("Working pulse");
+    expect(pill.textContent).not.toContain("UI sounds");
   });
 
   it("surfaces switched-off notification kinds in the muted pill summary", () => {

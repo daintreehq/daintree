@@ -53,14 +53,25 @@ describe("computeEffectiveNotificationState", () => {
     expect(statusOf(states, "settings")).toBe("inbox-only");
   });
 
-  it("holds active kinds behind the quiet gate but lets time-sensitive host break through", () => {
+  it("holds active kinds behind the quiet gate but lets host and waiting break through", () => {
     const states = computeEffectiveNotificationState({ ...ALL_ON, isQuiet: true });
     expect(statusOf(states, "completed")).toBe("quiet-gated");
-    expect(statusOf(states, "waiting")).toBe("quiet-gated");
     expect(statusOf(states, "agent")).toBe("quiet-gated");
     expect(statusOf(states, "recovery")).toBe("quiet-gated");
     // host carries `urgent` (time-sensitive) and bypasses the quiet gate.
     expect(statusOf(states, "host")).toBe("will-interrupt");
+    // waiting pages through quiet at the OS-native layer (main-process burst).
+    expect(statusOf(states, "waiting")).toBe("will-interrupt");
+  });
+
+  it("gates a switched-off waiting kind even though waiting would otherwise bypass quiet", () => {
+    const states = computeEffectiveNotificationState({
+      ...ALL_ON,
+      isQuiet: true,
+      waitingEnabled: false,
+    });
+    // Toggle-off wins over the quiet bypass — a silenced kind never fires.
+    expect(statusOf(states, "waiting")).toBe("kind-off");
   });
 
   it("classifies a switched-off notification kind as kind-off, regardless of the quiet gate", () => {
@@ -70,8 +81,8 @@ describe("computeEffectiveNotificationState", () => {
       completedEnabled: false,
     });
     expect(statusOf(states, "completed")).toBe("kind-off");
-    // waiting is still gated by quiet, not off.
-    expect(statusOf(states, "waiting")).toBe("quiet-gated");
+    // agent has no toggle and is held by the quiet gate.
+    expect(statusOf(states, "agent")).toBe("quiet-gated");
   });
 
   it("classifies a switched-off sound kind as sound-off, never kind-off", () => {
@@ -94,9 +105,10 @@ describe("computeEffectiveNotificationState", () => {
 });
 
 describe("selectors", () => {
-  it("selectInterruptingKinds returns only the kinds that toast right now", () => {
+  it("selectInterruptingKinds returns only the kinds that toast right now (EVENT_POLICY order)", () => {
     const states = computeEffectiveNotificationState({ ...ALL_ON, isQuiet: true });
-    expect(selectInterruptingKinds(states)).toEqual(["host"]);
+    // waiting precedes host in EVENT_POLICY declaration order.
+    expect(selectInterruptingKinds(states)).toEqual(["waiting", "host"]);
   });
 
   it("selectKindOffKinds returns switched-off notification kinds but not sound kinds", () => {
@@ -120,7 +132,7 @@ describe("heroLine", () => {
 
   it("names only what breaks through during a mute", () => {
     const states = computeEffectiveNotificationState({ ...ALL_ON, isQuiet: true });
-    expect(heroLine(states)).toBe("Will interrupt you: System");
+    expect(heroLine(states)).toBe("Will interrupt you: Waiting, System");
   });
 
   it("states plainly when nothing will interrupt", () => {

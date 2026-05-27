@@ -32,7 +32,10 @@ interface NotificationSettingsState {
 export const useNotificationSettingsStore = create<NotificationSettingsState>((set, get) => ({
   enabled: true,
   hydrated: false,
-  completedEnabled: true,
+  // Pre-hydration defaults mirror the main-process persisted defaults
+  // (electron/store.ts) so the summary doesn't flash a wrong state before
+  // hydrate() settles.
+  completedEnabled: false,
   waitingEnabled: true,
   workingPulseEnabled: false,
   uiFeedbackSoundEnabled: false,
@@ -50,7 +53,7 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
       if (settings) {
         set({
           enabled: settings.enabled !== false,
-          completedEnabled: settings.completedEnabled !== false,
+          completedEnabled: settings.completedEnabled === true,
           waitingEnabled: settings.waitingEnabled !== false,
           workingPulseEnabled: settings.workingPulseEnabled === true,
           uiFeedbackSoundEnabled: settings.uiFeedbackSoundEnabled === true,

@@ -88,10 +88,17 @@ function classifyKind(
   // Passive kinds only ever land in the inbox — they don't toast.
   if (isPassive) return "inbox-only";
 
-  // `time-sensitive` / `critical` kinds carry `urgent` and break through the
-  // quiet gate (see `resolveEventPolicyDefaults` / `isQuiet` in notify.ts).
+  // Kinds that break through the quiet gate:
+  // - `time-sensitive` / `critical` carry `urgent`, so the renderer `isQuiet`
+  //   check lets them toast (see `resolveEventPolicyDefaults` in notify.ts).
+  // - `waiting` pages through at the OS-native layer regardless: the main
+  //   process fires it via `flushWaitingBurst → showWatchNotification`, which
+  //   bypasses `drainQueue`'s quiet/session-mute gate ("waiting agents block
+  //   user work and should page through" — AgentNotificationService.ts).
   const bypassesQuiet =
-    policy.baseInterruption === "time-sensitive" || policy.baseInterruption === "critical";
+    policy.baseInterruption === "time-sensitive" ||
+    policy.baseInterruption === "critical" ||
+    kind === "waiting";
   if (input.isQuiet && !bypassesQuiet) return "quiet-gated";
 
   return "will-interrupt";

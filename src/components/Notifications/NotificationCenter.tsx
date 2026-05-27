@@ -580,7 +580,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     : "Quiet hours";
   // Effective-state summary: with the gates stacked, fold them into a single
   // line that answers "what will fire right now" plus which kinds are switched
-  // off. Computed only when the pill is shown (a gate is active).
+  // off. Rendered only inside the muted pill, but the computation itself is a
+  // cheap pure pass over ten kinds, so it's fine to run every render.
   const effectiveState = computeEffectiveNotificationState({
     enabled: notificationsEnabled,
     isQuiet: showMutedPill,

@@ -8,7 +8,7 @@ beforeEach(() => {
   useNotificationSettingsStore.setState({
     enabled: true,
     hydrated: false,
-    completedEnabled: true,
+    completedEnabled: false,
     waitingEnabled: true,
     workingPulseEnabled: false,
     uiFeedbackSoundEnabled: false,
@@ -42,17 +42,28 @@ describe("notificationSettingsStore hydrate — per-kind toggles", () => {
     expect(s.hydrated).toBe(true);
   });
 
-  it("applies defensive defaults when IPC omits the per-kind fields", async () => {
-    // completed/waiting default on (=== false guard), sound kinds default off (=== true guard).
+  it("applies defensive defaults matching the main-process store when IPC omits the fields", async () => {
+    // Mirrors electron/store.ts: completed off, waiting on, sounds off.
     getSettings.mockResolvedValue({ enabled: true });
 
     await useNotificationSettingsStore.getState().hydrate();
 
     const s = useNotificationSettingsStore.getState();
-    expect(s.completedEnabled).toBe(true);
+    expect(s.completedEnabled).toBe(false);
     expect(s.waitingEnabled).toBe(true);
     expect(s.workingPulseEnabled).toBe(false);
     expect(s.uiFeedbackSoundEnabled).toBe(false);
+  });
+
+  it("marks hydrated and preserves defaults when getSettings rejects", async () => {
+    getSettings.mockRejectedValue(new Error("ipc down"));
+
+    await useNotificationSettingsStore.getState().hydrate();
+
+    const s = useNotificationSettingsStore.getState();
+    expect(s.hydrated).toBe(true);
+    expect(s.completedEnabled).toBe(false);
+    expect(s.waitingEnabled).toBe(true);
   });
 
   it("is idempotent — a second hydrate is a no-op", async () => {
