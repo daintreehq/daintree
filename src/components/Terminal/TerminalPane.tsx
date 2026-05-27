@@ -1348,7 +1348,9 @@ function TerminalPaneComponent({
                 <LazyHybridInputBar
                   ref={inputBarRef}
                   terminalId={id}
-                  disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
+                  disabled={
+                    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting
+                  }
                   cwd={cwd}
                   agentId={effectiveAgentId}
                   agentHasLifecycleEvent={stateChangeTrigger !== undefined}
@@ -1356,7 +1358,7 @@ function TerminalPaneComponent({
                   restartKey={restartKey}
                   onActivate={handleClick}
                   onSend={({ trackerData, text }) => {
-                    if (!isInputLocked) {
+                    if (!isInputLocked && !isRestarting) {
                       terminalInstanceService.notifyUserInput(id);
                       // submit now rejects when the PTY is gone (#8706); the
                       // single-pane path has no recovery UI for that, so
@@ -1369,7 +1371,7 @@ function TerminalPaneComponent({
                     }
                   }}
                   onSendKey={(key) => {
-                    if (!isInputLocked) {
+                    if (!isInputLocked && !isRestarting) {
                       terminalInstanceService.notifyUserInput(id);
                       terminalClient.sendKey(id, key);
                     }
