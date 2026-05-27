@@ -23,8 +23,14 @@ import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ViewportPresetId } from "@shared/types/panel";
+import type {
+  BrowserNavigationHistoryEntry,
+  BrowserNavigationHistorySnapshot,
+} from "@shared/types/browser";
 import { VIEWPORT_PRESET_LIST } from "@/panels/dev-preview/viewportPresets";
 import { logError } from "@/utils/logger";
+
+const LONG_PRESS_MS = 400;
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -44,6 +50,9 @@ interface BrowserToolbarProps {
   url: string;
   canGoBack: boolean;
   canGoForward: boolean;
+  backEntry?: BrowserNavigationHistoryEntry | null;
+  forwardEntry?: BrowserNavigationHistoryEntry | null;
+  navSnapshot?: BrowserNavigationHistorySnapshot | null;
   isLoading: boolean;
   zoomFactor?: number;
   isConsoleOpen?: boolean;
@@ -55,6 +64,7 @@ interface BrowserToolbarProps {
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
+  onGoToHistoryIndex?: (index: number) => void;
   onReload: () => void;
   onHardReload?: () => void;
   onOpenExternal: () => void;
@@ -74,6 +84,9 @@ export function BrowserToolbar({
   url,
   canGoBack,
   canGoForward,
+  backEntry,
+  forwardEntry,
+  navSnapshot,
   isLoading,
   zoomFactor = 1.0,
   isConsoleOpen = false,
@@ -85,6 +98,7 @@ export function BrowserToolbar({
   onNavigate,
   onBack,
   onForward,
+  onGoToHistoryIndex,
   onReload,
   onHardReload,
   onOpenExternal,
@@ -104,6 +118,85 @@ export function BrowserToolbar({
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [historyAnnouncement, setHistoryAnnouncement] = useState("");
+
+  // Long-press state for back/forward history dropdown
+  const [longPressDir, setLongPressDir] = useState<"back" | "forward" | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTargetRef = useRef<"back" | "forward" | null>(null);
+  const longPressDropdownRef = useRef<HTMLDivElement>(null);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressTargetRef.current = null;
+  }, []);
+
+  const handlePointerDown = useCallback((dir: "back" | "forward", e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    longPressTargetRef.current = dir;
+    longPressTimerRef.current = setTimeout(() => {
+      if (longPressTargetRef.current === dir) {
+        setLongPressDir(dir);
+      }
+    }, LONG_PRESS_MS);
+  }, []);
+
+  const handlePointerUp = useCallback(
+    (dir: "back" | "forward", e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      if (longPressDir === dir) {
+        // Dropdown is open — don't navigate
+        clearLongPress();
+        return;
+      }
+      clearLongPress();
+      if (dir === "back") {
+        onBack();
+      } else {
+        onForward();
+      }
+    },
+    [longPressDir, clearLongPress, onBack, onForward]
+  );
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!longPressDir) return;
+    const handleClick = (e: MouseEvent) => {
+      if (longPressDropdownRef.current?.contains(e.target as Node)) return;
+      setLongPressDir(null);
+    };
+    document.addEventListener("mousedown", handleClick, true);
+    return () => document.removeEventListener("mousedown", handleClick, true);
+  }, [longPressDir]);
+
+  // Cleanup long-press timer on unmount
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
+
+  // Recent entries for the dropdown (back shows past, forward shows future).
+  // Use entry.index vs activeIndex so filtered entries don't shift positions.
+  const recentBackEntries = useMemo(() => {
+    if (!navSnapshot) return [];
+    return navSnapshot.entries
+      .filter((e) => e.index < navSnapshot.activeIndex)
+      .sort((a, b) => b.index - a.index);
+  }, [navSnapshot]);
+
+  const recentForwardEntries = useMemo(() => {
+    if (!navSnapshot) return [];
+    return navSnapshot.entries
+      .filter((e) => e.index > navSnapshot.activeIndex)
+      .sort((a, b) => a.index - b.index);
+  }, [navSnapshot]);
+
+  const backTooltip = backEntry?.title || (canGoBack ? "Go back" : "");
+  const forwardTooltip = forwardEntry?.title || (canGoForward ? "Go forward" : "");
 
   const announceHistoryChange = useCallback((text: string) => {
     // ZWSP toggle forces re-announce when consecutive removals share a display URL
@@ -421,40 +514,98 @@ export function BrowserToolbar({
         {copied ? "Copied to clipboard" : ""}
       </span>
       {/* Navigation buttons */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              type="button"
-              onClick={onBack}
-              disabled={!canGoBack}
-              className={cn(buttonClass, "disabled:pointer-events-none")}
-              aria-label="Go back"
-              data-testid="browser-back"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Go back</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <button
-              type="button"
-              onClick={onForward}
-              disabled={!canGoForward}
-              className={cn(buttonClass, "disabled:pointer-events-none")}
-              aria-label="Go forward"
-              data-testid="browser-forward"
-            >
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Go forward</TooltipContent>
-      </Tooltip>
+      <div className="relative">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onPointerDown={(e) => handlePointerDown("back", e)}
+                onPointerUp={(e) => handlePointerUp("back", e)}
+                onPointerLeave={clearLongPress}
+                onPointerCancel={clearLongPress}
+                disabled={!canGoBack}
+                className={cn(buttonClass, "disabled:pointer-events-none")}
+                aria-label={backTooltip || "Go back"}
+                data-testid="browser-back"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{backTooltip || "Go back"}</TooltipContent>
+        </Tooltip>
+        {longPressDir === "back" && recentBackEntries.length > 0 && (
+          <div
+            ref={longPressDropdownRef}
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+          >
+            {recentBackEntries.map((entry) => (
+              <button
+                key={entry.index}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setLongPressDir(null);
+                  onGoToHistoryIndex?.(entry.index);
+                }}
+                className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
+              >
+                <span className="text-xs text-daintree-text truncate">
+                  {entry.title || entry.url}
+                </span>
+                <span className="text-[11px] text-daintree-text/40 truncate">{entry.url}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="relative">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <button
+                type="button"
+                onPointerDown={(e) => handlePointerDown("forward", e)}
+                onPointerUp={(e) => handlePointerUp("forward", e)}
+                onPointerLeave={clearLongPress}
+                onPointerCancel={clearLongPress}
+                disabled={!canGoForward}
+                className={cn(buttonClass, "disabled:pointer-events-none")}
+                aria-label={forwardTooltip || "Go forward"}
+                data-testid="browser-forward"
+              >
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{forwardTooltip || "Go forward"}</TooltipContent>
+        </Tooltip>
+        {longPressDir === "forward" && recentForwardEntries.length > 0 && (
+          <div
+            ref={longPressDropdownRef}
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+          >
+            {recentForwardEntries.map((entry) => (
+              <button
+                key={entry.index}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setLongPressDir(null);
+                  onGoToHistoryIndex?.(entry.index);
+                }}
+                className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
+              >
+                <span className="text-xs text-daintree-text truncate">
+                  {entry.title || entry.url}
+                </span>
+                <span className="text-[11px] text-daintree-text/40 truncate">{entry.url}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
