@@ -3,12 +3,6 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { forwardRef, type ReactNode } from "react";
 
-interface MockIntersectionObserverEntry {
-  target: Element;
-  intersectionRatio: number;
-  isIntersecting: boolean;
-}
-
 let mockObserverInstances: MockIntersectionObserver[] = [];
 
 class MockIntersectionObserver {
@@ -717,7 +711,7 @@ describe("FileViewerModal", () => {
 
       // The effect should create an IntersectionObserver instance
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
 
       // Fire the callback with the first hunk visible
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
@@ -751,7 +745,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
 
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
       expect(hunk1Row).toBeTruthy();
@@ -783,7 +777,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
 
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
@@ -863,7 +857,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
       const disconnectSpy = vi.spyOn(observer, "disconnect");
 
       unmount();
@@ -879,7 +873,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
 
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
@@ -942,7 +936,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
 
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
 
@@ -975,7 +969,7 @@ describe("FileViewerModal", () => {
       });
 
       expect(mockObserverInstances.length).toBe(1);
-      const [observer] = mockObserverInstances;
+      const observer = mockObserverInstances[0]!;
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
 
       unmount();
