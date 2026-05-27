@@ -35,6 +35,15 @@ function getAgentStateMessage(
   }
 }
 
+function isPausedFlow(status: PersistableFlowStatus | undefined): boolean {
+  return (
+    status === "paused-backpressure" ||
+    status === "paused-resource-governor" ||
+    status === "paused-user" ||
+    status === "suspended"
+  );
+}
+
 function getFlowStatusMessage(
   title: string,
   prev: PersistableFlowStatus | undefined,
@@ -48,15 +57,12 @@ function getFlowStatusMessage(
       return `${title}: output paused, memory pressure`;
     case "suspended":
       return `${title}: output suspended`;
+    case "running":
     case undefined:
-      // Active flow status cleared — paired resume announcement.
-      if (prev === "paused-backpressure" || prev === "paused-resource-governor") {
-        return `${title}: output resumed`;
-      }
-      if (prev === "suspended") {
-        return `${title}: output resumed`;
-      }
-      return null;
+      // Resume signal — the IPC fallback resumes to "running", and some
+      // store paths transiently clear `flowStatus` to undefined. Both mean
+      // "no longer paused", but only announce if we were actually paused.
+      return isPausedFlow(prev) ? `${title}: output resumed` : null;
     default:
       return null;
   }

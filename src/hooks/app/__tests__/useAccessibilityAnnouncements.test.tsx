@@ -285,6 +285,78 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output suspended");
   });
 
+  it("announces flow status resuming back to 'running' (IPC resume signal)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-backpressure" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    // In production the IPC resume signal flips flowStatus to "running",
+    // not undefined. The badge UI hides because it gates on specific paused
+    // values, so the announcer must treat "running" as the resume edge.
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
+  });
+
+  it("announces resume from 'suspended' to 'running'", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "suspended" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
+  });
+
+  it("does NOT announce 'resumed' when transitioning 'running' → 'running'", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
   it("announces flow status resuming back to undefined", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
