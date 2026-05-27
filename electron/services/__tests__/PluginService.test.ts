@@ -67,7 +67,7 @@ vi.mock("../fileDecorationRegistry.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { PluginManifestSchema } from "../../schemas/plugin.js";
 import {
-  BUILT_IN_PLUGIN_PERMISSIONS,
+  BUILT_IN_PLUGIN_CAPABILITIES,
   type PluginIpcContext,
 } from "../../../shared/types/plugin.js";
 import {
@@ -177,125 +177,140 @@ describe("PluginManifestSchema name validation", () => {
   });
 });
 
-describe("PluginManifestSchema permissions field", () => {
+describe("PluginManifestSchema capabilities field", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("defaults to empty array when omitted", () => {
     const result = PluginManifestSchema.safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual([]);
+      expect(result.data.capabilities).toEqual([]);
     }
   });
 
-  it("accepts an empty permissions array", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, permissions: [] });
+  it("accepts an empty capabilities array", () => {
+    const result = PluginManifestSchema.safeParse({ ...validBase, capabilities: [] });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual([]);
+      expect(result.data.capabilities).toEqual([]);
     }
   });
 
-  it("accepts built-in permission strings", () => {
+  it("accepts built-in capability strings", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["fs:project-read", "network:fetch", "agent:invoke"],
+      capabilities: ["fs:project-read", "network:fetch", "agent:invoke"],
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.permissions).toEqual(["fs:project-read", "network:fetch", "agent:invoke"]);
+      expect(result.data.capabilities).toEqual([
+        "fs:project-read",
+        "network:fetch",
+        "agent:invoke",
+      ]);
     }
   });
 
-  it("rejects custom (non-built-in) permission strings", () => {
+  it("rejects custom (non-built-in) capability strings", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["custom:my-perm", "org.specific:do-thing"],
+      capabilities: ["custom:my-perm", "org.specific:do-thing"],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects empty string in permissions array", () => {
+  it("rejects empty string in capabilities array", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["fs:project-read", ""],
+      capabilities: ["fs:project-read", ""],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects whitespace-padded permission strings (no implicit trim)", () => {
+  it("rejects whitespace-padded capability strings (no implicit trim)", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["  fs:project-read  "],
+      capabilities: ["  fs:project-read  "],
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((i) => i.path[0] === "permissions")).toBe(true);
+      expect(result.error.issues.some((i) => i.path[0] === "capabilities")).toBe(true);
     }
   });
 
-  it("rejects whitespace-only permission strings", () => {
+  it("rejects whitespace-only capability strings", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["   "],
+      capabilities: ["   "],
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects permission strings containing newline characters", () => {
+  it("rejects capability strings containing newline characters", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: ["fs:project-read\n"],
+      capabilities: ["fs:project-read\n"],
     });
     expect(result.success).toBe(false);
   });
 
-  it("BUILT_IN_PLUGIN_PERMISSIONS contains all documented capabilities", () => {
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:project-write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("fs:user-data-write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("network:fetch");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:invoke");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("agent:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("git:write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:read");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("clipboard:write");
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toContain("shell:exec");
-  });
-
-  it("BUILT_IN_PLUGIN_PERMISSIONS has exactly 12 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_PERMISSIONS).toHaveLength(12);
-    expect(new Set(BUILT_IN_PLUGIN_PERMISSIONS).size).toBe(12);
-  });
-
-  it("rejects null permissions value", () => {
+  it('rejects stale "permissions" key because schema is strict', () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: null,
+      permissions: ["fs:project-read"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("BUILT_IN_PLUGIN_CAPABILITIES contains all documented capabilities", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:project-read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:project-write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:user-data-read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("fs:user-data-write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("network:fetch");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:write");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
+  });
+
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 12 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(12);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(12);
+  });
+
+  it("rejects null capabilities value", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      capabilities: null,
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects scalar (non-array) permissions value", () => {
+  it("rejects scalar (non-array) capabilities value", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: "git:read",
+      capabilities: "git:read",
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects non-string elements in permissions array", () => {
+  it("rejects non-string elements in capabilities array", () => {
     const result = PluginManifestSchema.safeParse({
       ...validBase,
-      permissions: [1, "git:read"],
+      capabilities: [1, "git:read"],
     });
     expect(result.success).toBe(false);
   });
@@ -1946,7 +1961,7 @@ describe("Plugin action registry", () => {
     );
   });
 
-  it("sets effectiveDanger='safe' when the plugin holds no high-risk permission", () => {
+  it("sets effectiveDanger='safe' when the plugin holds no high-risk capability", () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
     expect(service.listPluginActions()[0].effectiveDanger).toBe("safe");
   });
@@ -1959,11 +1974,11 @@ describe("Plugin action registry", () => {
     expect(service.listPluginActions()[0].effectiveDanger).toBe("confirm");
   });
 
-  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk permission", async () => {
+  it("raises effectiveDanger to 'confirm' for a self-declared 'safe' action when the manifest grants a high-risk capability", async () => {
     await writePlugin("risky", {
       name: "acme.risky",
       version: "1.0.0",
-      permissions: ["fs:project-read", "shell:exec"],
+      capabilities: ["fs:project-read", "shell:exec"],
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();
@@ -1981,12 +1996,12 @@ describe("Plugin action registry", () => {
 
   it.each(["shell:exec", "git:write", "fs:project-write", "fs:user-data-write", "agent:invoke"])(
     "raises a self-declared 'safe' action to confirm when the manifest grants %s",
-    async (permission) => {
-      const name = `acme.perm-${permission.replace(/[^a-z]/g, "-")}`;
-      await writePlugin(`perm-${permission.replace(/[^a-z]/g, "-")}`, {
+    async (capability) => {
+      const name = `acme.perm-${capability.replace(/[^a-z]/g, "-")}`;
+      await writePlugin(`perm-${capability.replace(/[^a-z]/g, "-")}`, {
         name,
         version: "1.0.0",
-        permissions: [permission],
+        capabilities: [capability],
       });
       const svc = new PluginService(tmpDir);
       await svc.initialize();
@@ -2003,11 +2018,11 @@ describe("Plugin action registry", () => {
     }
   );
 
-  it("does not raise effectiveDanger for read-only / reversible permissions", async () => {
+  it("does not raise effectiveDanger for read-only / reversible capabilities", async () => {
     await writePlugin("readonly", {
       name: "acme.readonly",
       version: "1.0.0",
-      permissions: ["fs:project-read", "network:fetch", "clipboard:write", "git:read"],
+      capabilities: ["fs:project-read", "network:fetch", "clipboard:write", "git:read"],
     });
     const svc = new PluginService(tmpDir);
     await svc.initialize();
@@ -2143,7 +2158,7 @@ describe("Plugin panel kind registry broadcast", () => {
   });
 });
 
-describe("permissions declaration logging", () => {
+describe("capabilities declaration logging", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
@@ -2157,11 +2172,11 @@ describe("permissions declaration logging", () => {
     errorSpy.mockRestore();
   });
 
-  it("logs declared permissions when plugin has permissions", async () => {
+  it("logs declared capabilities when plugin has capabilities", async () => {
     await writePlugin("perm-plugin", {
       name: "acme.perm-plugin",
       version: "1.0.0",
-      permissions: ["fs:project-read", "network:fetch"],
+      capabilities: ["fs:project-read", "network:fetch"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2170,12 +2185,12 @@ describe("permissions declaration logging", () => {
     expect(service.listPlugins()).toHaveLength(1);
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Plugin "acme.perm-plugin" declares permissions: fs:project-read, network:fetch'
+        'Plugin "acme.perm-plugin" declares capabilities: fs:project-read, network:fetch'
       )
     );
   });
 
-  it("does not log when plugin has no permissions", async () => {
+  it("does not log when plugin has no capabilities", async () => {
     await writePlugin("no-perms", {
       name: "acme.no-perms",
       version: "1.0.0",
@@ -2186,16 +2201,16 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });
 
-  it("does not log permissions for incompatible plugins", async () => {
+  it("does not log capabilities for incompatible plugins", async () => {
     await writePlugin("incompatible-perms", {
       name: "acme.incompatible-perms",
       version: "1.0.0",
-      permissions: ["fs:project-read"],
+      capabilities: ["fs:project-read"],
       engines: { daintree: "^1.0.0" },
     });
 
@@ -2204,26 +2219,26 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });
 
-  it("includes permissions in loaded plugin manifest", async () => {
+  it("includes capabilities in loaded plugin manifest", async () => {
     await writePlugin("with-perms", {
       name: "acme.with-perms",
       version: "1.0.0",
-      permissions: ["git:read", "agent:invoke"],
+      capabilities: ["git:read", "agent:invoke"],
     });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins[0].manifest.permissions).toEqual(["git:read", "agent:invoke"]);
+    expect(plugins[0].manifest.capabilities).toEqual(["git:read", "agent:invoke"]);
   });
 
-  it("defaults permissions to empty array for plugins without the field", async () => {
+  it("defaults capabilities to empty array for plugins without the field", async () => {
     await writePlugin("no-field", {
       name: "acme.no-field",
       version: "1.0.0",
@@ -2233,14 +2248,14 @@ describe("permissions declaration logging", () => {
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins[0].manifest.permissions).toEqual([]);
+    expect(plugins[0].manifest.capabilities).toEqual([]);
   });
 
-  it("rejects plugins that declare unknown permissions and does not log them", async () => {
+  it("rejects plugins that declare unknown capabilities and does not log them", async () => {
     await writePlugin("unknown-perm", {
       name: "acme.unknown-perm",
       version: "1.0.0",
-      permissions: ["shell:exec", "invalid:perm"],
+      capabilities: ["shell:exec", "invalid:perm"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2248,7 +2263,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -2257,11 +2272,11 @@ describe("permissions declaration logging", () => {
     );
   });
 
-  it("rejects plugins with newline characters in permission strings", async () => {
+  it("rejects plugins with newline characters in capability strings", async () => {
     await writePlugin("padded-perm", {
       name: "acme.padded-perm",
       version: "1.0.0",
-      permissions: ["fs:project-read\n", "agent:invoke\r"],
+      capabilities: ["fs:project-read\n", "agent:invoke\r"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2269,7 +2284,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -2278,11 +2293,11 @@ describe("permissions declaration logging", () => {
     );
   });
 
-  it("rejects plugins where any one permission in a mixed array is invalid", async () => {
+  it("rejects plugins where any one capability in a mixed array is invalid", async () => {
     await writePlugin("mixed-perm", {
       name: "acme.mixed-perm",
       version: "1.0.0",
-      permissions: ["fs:project-read", "invalid:perm", "git:read"],
+      capabilities: ["fs:project-read", "invalid:perm", "git:read"],
     });
 
     const service = new PluginService(tmpDir);
@@ -2290,7 +2305,7 @@ describe("permissions declaration logging", () => {
 
     expect(service.listPlugins()).toEqual([]);
     const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
     );
     expect(permLogs).toHaveLength(0);
   });

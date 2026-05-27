@@ -1,6 +1,6 @@
 import * as semver from "semver";
 import { z } from "zod";
-import { BUILT_IN_PLUGIN_PERMISSIONS } from "../../shared/types/plugin.js";
+import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PanelContribution,
@@ -8,7 +8,7 @@ import type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
-  PluginPermission,
+  PluginCapability,
 } from "../../shared/types/plugin.js";
 import type {
   FileDecorationContribution,
@@ -113,7 +113,7 @@ export const FileDecorationContributionSchema = z
   })
   .strict();
 
-export const PluginPermissionSchema = z.enum(BUILT_IN_PLUGIN_PERMISSIONS);
+export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
 
 export const PluginManifestSchema = z
   .strictObject({
@@ -136,7 +136,7 @@ export const PluginManifestSchema = z
           .optional(),
       })
       .optional(),
-    permissions: z.array(PluginPermissionSchema).default([]),
+    capabilities: z.array(PluginCapabilitySchema).default([]),
     contributes: z
       .strictObject({
         panels: z.array(PanelContributionSchema).default([]),
@@ -166,6 +166,6 @@ export type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
-  PluginPermission,
+  PluginCapability,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

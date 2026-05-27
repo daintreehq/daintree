@@ -34,9 +34,8 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
   // Declared capabilities, shown to the user at install time.
   // Disclosure-first with host-side policy effects (no Node sandbox).
-  // The live field key is "permissions"; it becomes "capabilities" in #9268.
   // See "Capabilities" below and ./trust-model.md.
-  "permissions": ["fs:project-read", "network:fetch"],
+  "capabilities": ["fs:project-read", "network:fetch"],
 
   // The plugin's UI and functional contributions.
   "contributes": {
@@ -125,9 +124,7 @@ Daintree is pre-1.0. Pin tightly during this phase — a plugin that works on Da
 
 ### `permissions`
 
-Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_PERMISSIONS` set. A forthcoming scoped object form (`{ name, scopes }`) and `mcp:*` tokens are not yet parsed. See the [trust model](./trust-model.md) for the full contract.
-
-> The current manifest field is `permissions` (`PluginPermission[]`) at the TypeScript level; the rename to `capabilities` and the discriminated-union schema are tracked in #9268.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
 | Token                | Intent                                                   |
 | -------------------- | -------------------------------------------------------- |

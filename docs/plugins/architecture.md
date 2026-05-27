@@ -146,7 +146,7 @@ Plugin manifest `env` values support `${settings:settingId}` syntax. Substitutio
 
 MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model (review by human, trusted source, signed distribution) is the primary defense.
 
-An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared capabilities (the `permissions` field today; renamed to `capabilities` in #9268) are disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
+An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared `capabilities` are disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
 
 ## Worktree observability
 
@@ -186,8 +186,8 @@ What disclosure does:
 
 What the host derives from declared capabilities:
 
-- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_PERMISSIONS` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
-- A compound-permission lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- A compound-capability lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
 
 The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
 
