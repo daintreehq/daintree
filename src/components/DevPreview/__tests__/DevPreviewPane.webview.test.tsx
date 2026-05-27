@@ -339,6 +339,9 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
       },
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
       webview: {
         registerPanel: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
@@ -1419,6 +1422,92 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       }
 
       expect(container.textContent).toContain("localhost:5173");
+    });
+
+    it("shows certificate error overlay for ERR_CERT_AUTHORITY_INVALID (-202)", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("certificate couldn't be verified");
+      expect(container.textContent).toContain("mkcert -install");
+      expect(container.textContent).toContain("localhost:8443");
+      // Should NOT enter the connection-refused retry loop
+      expect(container.textContent).not.toContain("Reconnecting");
+    });
+
+    it("copy button calls clipboard.writeText for cert errors", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -202,
+          errorDescription: "ERR_CERT_AUTHORITY_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      // Find the copy button by its text content
+      const buttons = Array.from(container.querySelectorAll("button"));
+      const mkcertButton = buttons.find((btn) => btn.textContent?.includes("mkcert -install"));
+      expect(mkcertButton).toBeTruthy();
+
+      act(() => {
+        mkcertButton!.click();
+      });
+
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      const clipboard = electron.clipboard as { writeText: ReturnType<typeof vi.fn> };
+      expect(clipboard.writeText).toHaveBeenCalledWith("mkcert -install");
+    });
+
+    it("shows SSL/TLS handshake message for ERR_SSL_PROTOCOL_ERROR (-107)", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -107,
+          errorDescription: "ERR_SSL_PROTOCOL_ERROR",
+          isMainFrame: true,
+          validatedURL: "https://localhost:8443/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("SSL/TLS handshake failed");
+      // -107 is also raised on protocol mismatch — the mkcert hint is wrong here
+      expect(container.textContent).not.toContain("mkcert");
+      // Should NOT enter the connection-refused retry loop
+      expect(container.textContent).not.toContain("Reconnecting");
+    });
+
+    it("classifies -200 (cert range boundary) as cert error", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -200,
+          errorDescription: "ERR_CERT_COMMON_NAME_INVALID",
+          isMainFrame: true,
+          validatedURL: "https://example.com/",
+        });
+      });
+
+      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("mkcert -install");
     });
 
     it("cleans slow timer on unmount", () => {

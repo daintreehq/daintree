@@ -23,6 +23,8 @@ export type WebviewLoadErrorCode =
   | "name_not_resolved"
   | "internet_disconnected"
   | "connection_refused"
+  | "cert"
+  | "ssl_protocol"
   | "failed";
 
 export interface WebviewLoadError {
@@ -31,6 +33,11 @@ export interface WebviewLoadError {
   errorCode?: number;
   validatedURL?: string;
 }
+
+// Chromium net error codes — see net/base/net_error_list.h
+const ERR_SSL_PROTOCOL_ERROR = -107;
+const ERR_CERT_RANGE_END = -200;
+const ERR_CERT_RANGE_START = -299;
 
 interface UseDevPreviewLoadLifecycleParams {
   webviewElement: Electron.WebviewTag | null;
@@ -353,6 +360,32 @@ export function useDevPreviewLoadLifecycle({
           code: "timeout",
           message: `Connection to ${e.validatedURL} timed out. The server may be unreachable.`,
           errorCode: ERR_CONNECTION_TIMED_OUT,
+        });
+        return;
+      }
+
+      // Cert/SSL errors: deterministic, no retry. Classify before the
+      // connection-refused retry block so cert failures don't enter the
+      // exponential-backoff loop. -107 (SSL protocol) checked first so it
+      // gets a different message than the cert-validation range (-200..-299).
+      const isCertError = e.errorCode <= ERR_CERT_RANGE_END && e.errorCode >= ERR_CERT_RANGE_START;
+
+      if (e.errorCode === ERR_SSL_PROTOCOL_ERROR) {
+        setWebviewLoadError({
+          code: "ssl_protocol",
+          message: `SSL/TLS handshake failed to ${e.validatedURL || "the server"}. The server may not support HTTPS, or its certificate may be invalid.`,
+          errorCode: e.errorCode,
+          validatedURL: e.validatedURL || undefined,
+        });
+        return;
+      }
+
+      if (isCertError) {
+        setWebviewLoadError({
+          code: "cert",
+          message: `The site's certificate couldn't be verified for ${e.validatedURL || "the server"}. If this is a local development server, make sure the local CA is trusted (e.g. run \`mkcert -install\`).`,
+          errorCode: e.errorCode,
+          validatedURL: e.validatedURL || undefined,
         });
         return;
       }
