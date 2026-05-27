@@ -116,6 +116,8 @@ describe("AutoUpdaterService", () => {
     windowMock.webContents.isDestroyed.mockReturnValue(false);
     delete process.env.PORTABLE_EXECUTABLE_FILE;
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     Object.defineProperty(process, "resourcesPath", {
       value: "/mock/resources",
@@ -155,6 +157,8 @@ describe("AutoUpdaterService", () => {
       configurable: true,
     });
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -435,6 +439,49 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
     });
 
+    it("skips initialization on Linux when FLATPAK_ID is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when SNAP is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.SNAP = "/snap/daintree/current";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Snap sandbox detected")
+      );
+
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when both FLATPAK_ID and APPIMAGE are set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("Linux Flatpak sandbox detected")
+      );
+    });
+
     it("initializes normally on Linux when APPIMAGE is set", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       process.env.APPIMAGE = "/path/to/app.AppImage";
@@ -506,7 +553,7 @@ describe("AutoUpdaterService", () => {
 
       autoUpdaterService.initialize();
 
-      expect(fsMock.existsSync).toHaveBeenCalledWith(expect.stringContaining("package-type"));
+      expect(fsMock.existsSync).toHaveBeenCalledWith("/mock/resources/package-type");
     });
 
     it("skips filesystem probe when APPIMAGE is set", () => {

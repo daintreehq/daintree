@@ -10,12 +10,5 @@ if [ -f "$PROFILE_SRC" ] && command -v apparmor_parser > /dev/null 2>&1; then
   apparmor_parser -r -T -W "$PROFILE_DST" || true
 fi
 
-# Fix chrome-sandbox SUID permissions (fallback if AppArmor profile isn't loaded)
-SANDBOX="/opt/Daintree/chrome-sandbox"
-if [ -f "$SANDBOX" ]; then
-  chown root:root "$SANDBOX"
-  chmod 4755 "$SANDBOX"
-fi
-
 # Symlink Daintree into PATH for CLI discovery
 ln -sf /opt/Daintree/daintree /usr/bin/daintree
