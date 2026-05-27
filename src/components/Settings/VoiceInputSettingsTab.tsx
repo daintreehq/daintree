@@ -202,6 +202,17 @@ export function VoiceInputSettingsTab() {
               onRefresh={handleRefreshMicPermission}
             />
 
+            <div
+              role="note"
+              className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
+            >
+              <p className="text-xs text-daintree-text/60 select-text">
+                Microphone audio is streamed over an encrypted connection to OpenAI for
+                transcription using your API key. Audio is not used for model training. OpenAI may
+                retain audio in abuse-monitoring logs for up to 30 days.
+              </p>
+            </div>
+
             <div className="flex items-center justify-between">
               <SettingsSelect
                 label="Microphone"
