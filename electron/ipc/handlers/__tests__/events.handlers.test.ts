@@ -152,6 +152,35 @@ describe("events IPC handler — action:dispatched", () => {
     cleanup();
   });
 
+  it("forwards a valid pluginId and 64-char hex argsHash", () => {
+    const { emit, cleanup } = setup();
+    const hash = "a".repeat(64);
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "acme.plugin",
+      argsHash: hash,
+    });
+
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.pluginId).toBe("acme.plugin");
+    expect(normalized.argsHash).toBe(hash);
+    cleanup();
+  });
+
+  it("drops a malformed argsHash and over-long pluginId", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      pluginId: "x".repeat(200),
+      argsHash: "not-hex",
+    });
+
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.pluginId).toBeUndefined();
+    expect(normalized.argsHash).toBeUndefined();
+    cleanup();
+  });
+
   it("rejects invalid action payloads (non-string actionId)", () => {
     const { emit, cleanup } = setup();
     ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, actionId: 123 });

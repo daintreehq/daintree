@@ -16,6 +16,12 @@ export const PLUGIN_METHOD_CHANNELS = {
   getPanelKinds: "plugin:panel-kinds-get",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",
+  getAuditRecords: "plugin:get-audit-records",
+  getAuditConfig: "plugin:get-audit-config",
+  clearAuditLog: "plugin:clear-audit-log",
+  setAuditEnabled: "plugin:set-audit-enabled",
+  setAuditMaxRecords: "plugin:set-audit-max-records",
+  exportAuditLog: "plugin:export-audit-log",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;

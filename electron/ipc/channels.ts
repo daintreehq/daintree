@@ -786,6 +786,12 @@ export const CHANNELS = {
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
+  PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
+  PLUGIN_CLEAR_AUDIT_LOG: "plugin:clear-audit-log",
+  PLUGIN_SET_AUDIT_ENABLED: "plugin:set-audit-enabled",
+  PLUGIN_SET_AUDIT_MAX_RECORDS: "plugin:set-audit-max-records",
+  PLUGIN_EXPORT_AUDIT_LOG: "plugin:export-audit-log",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

@@ -353,6 +353,17 @@ export {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
 } from "./ipc/mcpServer.js";
+export type {
+  PluginActionAuditRecord,
+  PluginActionAuditResult,
+  PluginAuditConfig,
+} from "./ipc/pluginAudit.js";
+export {
+  PLUGIN_AUDIT_SCHEMA_VERSION,
+  PLUGIN_AUDIT_MIN_RECORDS,
+  PLUGIN_AUDIT_MAX_RECORDS,
+  PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+} from "./ipc/pluginAudit.js";
 
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";

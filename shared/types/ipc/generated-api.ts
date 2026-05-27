@@ -302,9 +302,21 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
   };
   plugin: {
+    clearAuditLog(
+      ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["plugin:clear-audit-log"]["result"]>;
+    exportAuditLog(
+      ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
+    ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
     getActions(
       ...args: IpcInvokeMap["plugin:actions-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-get"]["result"]>;
+    getAuditConfig(
+      ...args: IpcInvokeMap["plugin:get-audit-config"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-audit-config"]["result"]>;
+    getAuditRecords(
+      ...args: IpcInvokeMap["plugin:get-audit-records"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-audit-records"]["result"]>;
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
@@ -323,6 +335,12 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    setAuditEnabled(
+      ...args: IpcInvokeMap["plugin:set-audit-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-audit-enabled"]["result"]>;
+    setAuditMaxRecords(
+      ...args: IpcInvokeMap["plugin:set-audit-max-records"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-audit-max-records"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;

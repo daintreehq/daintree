@@ -141,6 +141,12 @@ describe("leaf preload namespace bindings", () => {
       expect(PLUGIN_METHOD_CHANNELS.registerAction).toBe(CHANNELS.PLUGIN_ACTIONS_REGISTER);
       expect(PLUGIN_METHOD_CHANNELS.unregisterAction).toBe(CHANNELS.PLUGIN_ACTIONS_UNREGISTER);
       expect(PLUGIN_METHOD_CHANNELS.getPanelKinds).toBe(CHANNELS.PLUGIN_PANEL_KINDS_GET);
+      expect(PLUGIN_METHOD_CHANNELS.getAuditRecords).toBe(CHANNELS.PLUGIN_GET_AUDIT_RECORDS);
+      expect(PLUGIN_METHOD_CHANNELS.getAuditConfig).toBe(CHANNELS.PLUGIN_GET_AUDIT_CONFIG);
+      expect(PLUGIN_METHOD_CHANNELS.clearAuditLog).toBe(CHANNELS.PLUGIN_CLEAR_AUDIT_LOG);
+      expect(PLUGIN_METHOD_CHANNELS.setAuditEnabled).toBe(CHANNELS.PLUGIN_SET_AUDIT_ENABLED);
+      expect(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords).toBe(CHANNELS.PLUGIN_SET_AUDIT_MAX_RECORDS);
+      expect(PLUGIN_METHOD_CHANNELS.exportAuditLog).toBe(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG);
     });
 
     it("scratch matches", () => {
