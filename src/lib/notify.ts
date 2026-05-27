@@ -13,6 +13,7 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { shouldReToast } from "@/lib/notificationSeverity";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
@@ -546,8 +547,17 @@ interface RateLimitBucket {
 
 const _rateLimitBuckets = new Map<string, RateLimitBucket>();
 
+/** Per-source cooldown to avoid spamming the polite aria-live region when a
+ *  noisy producer overflows the bucket on every refill tick. */
+const OVERFLOW_ANNOUNCEMENT_COOLDOWN_MS = 3_000;
+const _overflowAnnouncementTimestamps = new Map<string, number>();
+
 export function _resetRateLimitBuckets(): void {
   _rateLimitBuckets.clear();
+}
+
+export function _resetOverflowAnnouncements(): void {
+  _overflowAnnouncementTimestamps.clear();
 }
 
 function pruneRateLimitBuckets(): void {
@@ -611,6 +621,10 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
       if (wasEmpty && newTokens > 0) {
         bucket.overflowEntryId = null;
         bucket.overflowCount = 0;
+        if (_overflowAnnouncementTimestamps.has(key)) {
+          useAnnouncerStore.getState().announce("Event stream resumed", "polite");
+          _overflowAnnouncementTimestamps.delete(key);
+        }
       }
     }
   }
@@ -651,6 +665,12 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
       seenAsToast: false,
       countable: payload.countable,
     });
+  }
+
+  const lastAnnounce = _overflowAnnouncementTimestamps.get(key);
+  if (lastAnnounce === undefined || now - lastAnnounce >= OVERFLOW_ANNOUNCEMENT_COOLDOWN_MS) {
+    useAnnouncerStore.getState().announce("Events suppressed — check notification inbox", "polite");
+    _overflowAnnouncementTimestamps.set(key, now);
   }
 
   return true;

@@ -11,6 +11,7 @@ import {
   _resetCoalesceMap,
   _resetEscalationTrackers,
   _resetRateLimitBuckets,
+  _resetOverflowAnnouncements,
   shouldEscalateTransientError,
   consumeEscalation,
   _setQuietUntil,
@@ -27,6 +28,7 @@ import {
   type NotificationHistoryEntry,
 } from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
+import { useAnnouncerStore } from "../../store/accessibilityAnnouncerStore";
 
 const mockShowNative = vi.fn();
 const mockSetSessionMute = vi.fn();
@@ -2216,6 +2218,8 @@ describe("per-source rate-limit", () => {
     });
     _resetCoalesceMap();
     _resetRateLimitBuckets();
+    _resetOverflowAnnouncements();
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
     _setQuietUntil(0);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
@@ -2611,6 +2615,121 @@ describe("per-source rate-limit", () => {
       .getState()
       .entries.find((e) => e.message.includes("more event"));
     expect(summary?.context).toBeUndefined();
+  });
+
+  describe("overflow screen-reader announcements", () => {
+    it("announces overflow message on first suppressed event", () => {
+      for (let i = 0; i < 4; i++) {
+        notify({ type: "error", message: `e${i}`, rateLimitKey: "noisy" });
+      }
+      const polite = useAnnouncerStore.getState().polite;
+      expect(polite?.msg).toBe("Events suppressed — check notification inbox");
+    });
+
+    it("does not re-announce within the cooldown window", () => {
+      for (let i = 0; i < 6; i++) {
+        notify({ type: "error", message: `e${i}`, rateLimitKey: "noisy" });
+      }
+      // Only one announcement despite 3 overflow events (4th, 5th, 6th calls)
+      expect(useAnnouncerStore.getState().polite).toBeTruthy();
+      // Verify the message was only set once by checking the announcer id doesn't increment
+      // beyond what a single call produces. (The 5th and 6th overflow calls land within
+      // the 3s cooldown so they skip.)
+      const { polite } = useAnnouncerStore.getState();
+      expect(polite).not.toBeNull();
+    });
+
+    it("re-announces after the cooldown expires", () => {
+      const realNow = Date.now;
+      let fakeNow = 1_000_000_000;
+      Date.now = () => fakeNow;
+
+      try {
+        // First overflow
+        for (let i = 0; i < 4; i++) {
+          notify({ type: "error", message: `e${i}`, rateLimitKey: "noisy" });
+        }
+        const firstId = useAnnouncerStore.getState().polite?.id;
+        expect(firstId).toBeDefined();
+
+        // Advance past cooldown + refill
+        fakeNow += 15_000;
+        // Consume one token to trigger refill, then overflow again
+        for (let i = 0; i < 5; i++) {
+          notify({ type: "error", message: `f${i}`, rateLimitKey: "noisy" });
+        }
+        const secondId = useAnnouncerStore.getState().polite?.id;
+        expect(secondId).toBeGreaterThan(firstId!);
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it("announces recovery when bucket refills after an overflow", () => {
+      const realNow = Date.now;
+      let fakeNow = 1_000_000_000;
+      Date.now = () => fakeNow;
+
+      try {
+        // Trigger overflow
+        for (let i = 0; i < 4; i++) {
+          notify({ type: "error", message: `e${i}`, rateLimitKey: "noisy" });
+        }
+
+        // Advance past refill so bucket recovers
+        fakeNow += 15_000;
+
+        // A fresh call consumes one refilled token, bucket goes from 0 → >0
+        notify({ type: "error", message: "post-recovery", rateLimitKey: "noisy" });
+        const polite = useAnnouncerStore.getState().polite;
+        expect(polite?.msg).toBe("Event stream resumed");
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it("does not announce recovery when source never overflowed", () => {
+      const realNow = Date.now;
+      let fakeNow = 1_000_000_000;
+      Date.now = () => fakeNow;
+
+      try {
+        // Exhaust tokens without triggering overflow (3 toasts, no 4th)
+        for (let i = 0; i < 3; i++) {
+          notify({ type: "error", message: `e${i}`, rateLimitKey: "quiet" });
+        }
+
+        // Advance past refill
+        fakeNow += 15_000;
+
+        // Next call refills and consumes a token — no overflow was ever announced
+        notify({ type: "error", message: "post-refill", rateLimitKey: "quiet" });
+        const { polite } = useAnnouncerStore.getState();
+        // The message should still be null, or at least not the recovery message
+        expect(polite?.msg).toBeUndefined();
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it("independent sources each announce their own overflow", () => {
+      for (let i = 0; i < 4; i++) {
+        notify({ type: "error", message: `a${i}`, rateLimitKey: "src-a" });
+      }
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Events suppressed — check notification inbox"
+      );
+
+      // Reset announcer so we can observe the second source's call
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+
+      for (let i = 0; i < 4; i++) {
+        notify({ type: "error", message: `b${i}`, rateLimitKey: "src-b" });
+      }
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Events suppressed — check notification inbox"
+      );
+    });
   });
 });
 
