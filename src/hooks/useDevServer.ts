@@ -544,6 +544,17 @@ export function useDevServer({
     };
   }, [panelId, currentProjectId, status, terminalId, url, isRestarting]);
 
+  // When the backend signals a compile is in progress, downgrade any
+  // existing Tier 2 "no signal yet" banner to Tier 1 (benign pulse). The
+  // compile IS the signal — the user doesn't need both warnings.
+  // Kept in a separate effect so timer starts from the main effect aren't
+  // reset when phaseLabel toggles (Tier 3 at 45s must still fire).
+  useEffect(() => {
+    if (phaseLabel === "Compiling") {
+      setStuckTier((prev) => (prev >= 2 ? 1 : prev));
+    }
+  }, [phaseLabel]);
+
   return {
     status,
     url,

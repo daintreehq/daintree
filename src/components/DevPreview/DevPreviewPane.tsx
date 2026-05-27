@@ -1251,7 +1251,13 @@ export function DevPreviewPane({
       onRestore={onRestore}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
-      className={stuckTier >= 1 ? "panel-state-working" : undefined}
+      className={
+        phaseLabel === "Compiling"
+          ? "panel-state-compiling"
+          : stuckTier >= 1
+            ? "panel-state-working"
+            : undefined
+      }
     >
       <div className="flex flex-col h-full">
         <BrowserToolbar
