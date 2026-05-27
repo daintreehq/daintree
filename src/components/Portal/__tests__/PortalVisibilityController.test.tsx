@@ -337,6 +337,45 @@ describe("PortalVisibilityController", () => {
     });
   });
 
+  it("restores the persisted active tab on cold start, not the first tab", async () => {
+    vi.spyOn(document, "getElementById").mockReturnValue({
+      getBoundingClientRect: () => createPlaceholderRect(),
+    } as unknown as HTMLElement);
+
+    render(<PortalVisibilityController />);
+
+    // Simulate rehydration: portalStore.merge restored a persisted activeTabId
+    // that's not tabs[0]. None of the tabs are marked created yet (cold start).
+    act(() => {
+      usePortalStore.setState({
+        isOpen: true,
+        activeTabId: "tab-3",
+        tabs: [
+          { id: "tab-1", title: "One", url: "https://example.com/1" },
+          { id: "tab-2", title: "Two", url: "https://example.com/2" },
+          { id: "tab-3", title: "Three", url: "https://example.com/3" },
+        ],
+        createdTabs: new Set<string>(),
+      });
+    });
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(portal.create).toHaveBeenCalledTimes(1);
+    expect(portal.create).toHaveBeenCalledWith({
+      tabId: "tab-3",
+      url: "https://example.com/3",
+    });
+    expect(portal.show).toHaveBeenCalledWith({
+      tabId: "tab-3",
+      bounds: { x: 10, y: 21, width: 301, height: 401 },
+    });
+    expect(usePortalStore.getState().activeTabId).toBe("tab-3");
+    expect(usePortalStore.getState().createdTabs.has("tab-3")).toBe(true);
+  });
+
   it("removes tab from createdTabs when eviction event fires", () => {
     usePortalStore.setState({
       isOpen: true,

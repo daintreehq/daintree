@@ -5,6 +5,8 @@ import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
 import { PortalLaunchpad } from "./PortalLaunchpad";
+import { PortalTabSkeleton } from "./PortalTabSkeleton";
+import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
@@ -27,17 +29,19 @@ import { getElementBoundsAsDip } from "@/lib/portalBounds";
 import { debounce } from "@/utils/debounce";
 
 export function PortalDock() {
-  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } = usePortalStore(
-    useShallow((s) => ({
-      width: s.width,
-      activeTabId: s.activeTabId,
-      tabs: s.tabs,
-      links: s.links,
-      setWidth: s.setWidth,
-      setOpen: s.setOpen,
-      defaultNewTabUrl: s.defaultNewTabUrl,
-    }))
-  );
+  const { width, activeTabId, tabs, links, createdTabs, setWidth, setOpen, defaultNewTabUrl } =
+    usePortalStore(
+      useShallow((s) => ({
+        width: s.width,
+        activeTabId: s.activeTabId,
+        tabs: s.tabs,
+        links: s.links,
+        createdTabs: s.createdTabs,
+        setWidth: s.setWidth,
+        setOpen: s.setOpen,
+        defaultNewTabUrl: s.defaultNewTabUrl,
+      }))
+    );
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -62,6 +66,14 @@ export function PortalDock() {
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
+
+  // Render a skeleton in the content placeholder while the active tab's view is
+  // being (re)created. Triggers on cold start with a persisted activeTabId and
+  // on click of an LRU-evicted tab (PortalManager evicts beyond PORTAL_MAX_LIVE_TABS),
+  // both of which take 300-800ms to resolve via portal.create + bounds wait + portal.show.
+  const isTabRestoring = !showLaunchpad && activeTabId !== null && !createdTabs.has(activeTabId);
+  const isRestoringGated = useSkeletonGate(isTabRestoring);
+  const showSkeleton = useSkeletonFloor(isRestoringGated);
 
   const syncBounds = useCallback(() => {
     if (!contentRef.current || !activeTabId) return;
@@ -447,6 +459,8 @@ export function PortalDock() {
           >
             {showLaunchpad ? (
               <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+            ) : showSkeleton ? (
+              <PortalTabSkeleton />
             ) : (
               <div className="flex-1 bg-daintree-sidebar" />
             )}
