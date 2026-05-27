@@ -26,6 +26,46 @@ function isSafeScriptName(name: string): boolean {
   return SAFE_SCRIPT_NAME_PATTERN.test(name);
 }
 
+type NpmFrameworkSignature = {
+  readonly packages: readonly string[];
+  readonly canonicalScript: "dev" | "start";
+};
+
+// Ordered most-specific to least-specific. Full-stack frameworks beat generic
+// bundlers when multiple are present (e.g. a Next.js repo that also lists vite
+// as a transitive devDep should still pick `next dev`).
+const NPM_FRAMEWORK_PRIORITY: readonly NpmFrameworkSignature[] = [
+  { packages: ["next"], canonicalScript: "dev" },
+  { packages: ["@remix-run/dev"], canonicalScript: "dev" },
+  { packages: ["@react-router/dev"], canonicalScript: "dev" },
+  { packages: ["nuxt"], canonicalScript: "dev" },
+  { packages: ["@sveltejs/kit"], canonicalScript: "dev" },
+  { packages: ["astro"], canonicalScript: "dev" },
+  { packages: ["react-scripts"], canonicalScript: "start" },
+  { packages: ["vite"], canonicalScript: "dev" },
+];
+
+function detectNpmFrameworkCanonicalScript(
+  deps: Record<string, unknown> | undefined,
+  devDeps: Record<string, unknown> | undefined,
+  scripts: Record<string, unknown>
+): "dev" | "start" | undefined {
+  const hasDep = (name: string): boolean => {
+    return (
+      (typeof deps === "object" && deps !== null && name in deps) ||
+      (typeof devDeps === "object" && devDeps !== null && name in devDeps)
+    );
+  };
+
+  for (const signature of NPM_FRAMEWORK_PRIORITY) {
+    if (!signature.packages.some(hasDep)) continue;
+    if (typeof scripts[signature.canonicalScript] === "string") {
+      return signature.canonicalScript;
+    }
+  }
+  return undefined;
+}
+
 export class RunCommandDetector {
   private readonly cache = new Cache<string, RunCommand[]>({
     maxSize: 50,
@@ -73,7 +113,7 @@ export class RunCommandDetector {
         runner = "yarn";
       }
 
-      return Object.entries(pkg.scripts)
+      const commands: RunCommand[] = Object.entries(pkg.scripts)
         .filter(([name, script]) => {
           if (typeof script !== "string") {
             return false;
@@ -91,6 +131,21 @@ export class RunCommandDetector {
           icon: "npm",
           description: script as string,
         }));
+
+      const canonicalScript = detectNpmFrameworkCanonicalScript(
+        pkg.dependencies,
+        pkg.devDependencies,
+        pkg.scripts as Record<string, unknown>
+      );
+      if (canonicalScript) {
+        const idx = commands.findIndex((cmd) => cmd.name === canonicalScript);
+        if (idx > 0) {
+          const [promoted] = commands.splice(idx, 1);
+          commands.unshift(promoted);
+        }
+      }
+
+      return commands;
     } catch (error) {
       console.warn(`[RunCommandDetector] Failed to parse ${pkgPath}:`, error);
       return [];
