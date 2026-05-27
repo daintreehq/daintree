@@ -42,6 +42,7 @@ vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
   unregisterPluginMenuItems: vi.fn(),
+  getPluginMenuItems: vi.fn(() => []),
 }));
 vi.mock("../forgeProviderRegistry.js", () => ({
   registerForgeProviders: vi.fn(),
