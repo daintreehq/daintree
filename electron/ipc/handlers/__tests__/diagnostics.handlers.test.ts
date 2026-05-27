@@ -50,7 +50,9 @@ const archiverMock = vi.hoisted(() => {
     append: vi.fn(),
     finalize: vi.fn(() => Promise.resolve()),
   };
-  return vi.fn(() => archive);
+  return vi.fn(function () {
+    return archive;
+  });
 });
 
 const resilientAtomicWriteFileMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -107,7 +109,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("archiver", () => ({
-  default: archiverMock,
+  ZipArchive: archiverMock,
 }));
 
 vi.mock("../../../utils/fs.js", () => ({
