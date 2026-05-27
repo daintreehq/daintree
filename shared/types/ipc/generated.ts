@@ -255,6 +255,10 @@ export interface GeneratedIpcInvokeMap {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
   };
+  "forge:unassign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
+    result: void;
+  };
   "gemini:enable-alternate-buffer": {
     args: [];
     result: { success: boolean };
@@ -262,6 +266,10 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
+  "github:unassign-issue": {
+    args: [payload: { cwd: string; issueNumber: number; username: string }];
+    result: void;
   };
   "global-env:get": {
     args: [];

@@ -157,6 +157,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               branch,
               assignedToSelf: wasAssigned,
               assignedUsername,
+              assignmentError,
             } = result.result as {
               worktreeId: string;
               worktreePath: string;
@@ -164,6 +165,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               recipeLaunched: boolean;
               assignedToSelf: boolean;
               assignedUsername: string | null;
+              assignmentError: string | null;
             };
 
             useWorktreeSelectionStore.getState().setPendingWorktree(createdWorktreeId);
@@ -180,6 +182,10 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const tierIndex = Math.min(comboCountRef.current - 1, tiers.length - 1);
             const tieredMessage = tiers[tierIndex];
 
+            // Snapshot rootPath at creation time so a later project switch
+            // doesn't redirect the un-assign DELETE at a different repo.
+            const snapRootPath = useProjectStore.getState().currentProject?.path ?? null;
+
             // Sticky toast surface lets users click Undo more than once before
             // the first invocation resolves; guard so worktree.delete and the
             // un-assign each fire at most once per success toast.
@@ -195,13 +201,15 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                     { source: "user" }
                   );
                 } catch (err) {
+                  // Half-rollback guard: if delete failed the worktree is still
+                  // live, so don't strip the assignment too — that leaves the
+                  // user with a worktree on an unassigned issue.
                   logError("Undo: failed to delete worktree", err);
+                  return;
                 }
-                if (wasAssigned && issueNumber && assignedUsername) {
-                  const rootPath = useProjectStore.getState().currentProject?.path;
-                  if (!rootPath) return;
+                if (wasAssigned && issueNumber && assignedUsername && snapRootPath) {
                   try {
-                    await githubClient.unassignIssue(rootPath, issueNumber, assignedUsername);
+                    await githubClient.unassignIssue(snapRootPath, issueNumber, assignedUsername);
                   } catch (err) {
                     // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                     notify({
@@ -213,6 +221,15 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                 }
               })();
             };
+
+            if (assignmentError) {
+              notify({
+                type: "warning",
+                title: "Could not assign issue",
+                message: `${assignmentError} — you can assign it manually on GitHub`,
+                context: { eventKind: "uiFeedback" },
+              });
+            }
 
             notify({
               type: "success",

@@ -285,7 +285,7 @@ export async function unassignIssue(
 
       removeIssueAssigneeFromCache(context.owner, context.repo, issueNumber, username);
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error), { cause: error });
     }
   });
 }

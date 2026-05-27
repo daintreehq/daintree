@@ -133,6 +133,7 @@ function mockForgeProviderResolved(
     buildPRsUrl: vi.fn(),
     buildCommitsUrl: vi.fn(),
     assignIssue: vi.fn(),
+    unassignIssue: vi.fn(),
     validateToken: vi.fn(),
     getRateLimit: vi.fn().mockResolvedValue({ limit: null, remaining: null, resetAt: null }),
   };
@@ -210,6 +211,7 @@ function makeMockEmptyImpl(): ForgeProviderImpl {
     buildPRsUrl: vi.fn(),
     buildCommitsUrl: vi.fn(),
     assignIssue: vi.fn(),
+    unassignIssue: vi.fn(),
     validateToken: vi.fn(),
   };
 }
