@@ -329,7 +329,10 @@ describe("projectRecipes IPC adversarial", () => {
         recipe: {
           ...validRecipe(),
           terminals: [
-            { type: "terminal", env: { AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" } },
+            {
+              type: "terminal",
+              env: { AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" },
+            },
           ],
         },
       })
