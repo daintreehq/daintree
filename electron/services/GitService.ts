@@ -1,7 +1,7 @@
 // eager-import-allow: performs sync fs existence checks while resolving git paths
 import type { SimpleGit, BranchSummary } from "simple-git";
 import { resolve, dirname, normalize, sep, isAbsolute } from "path";
-import { existsSync } from "fs";
+import { existsSync, realpathSync } from "fs";
 import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
@@ -11,6 +11,8 @@ import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/ty
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { parseNumstat } from "../utils/git.js";
+import type { DiffStat } from "../utils/git.js";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -379,19 +381,61 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       }
     }
 
-    // Return the list of changed files
+    // Return the list of changed files with per-file churn (--numstat)
     try {
-      const output = await this.git.raw([
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--name-status",
-        "--end-of-options",
-        range,
+      const [nameStatusOutput, numstatOutput, toplevel] = await Promise.all([
+        this.git.raw([
+          "diff",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--name-status",
+          "--end-of-options",
+          range,
+        ]),
+        this.git
+          .raw([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--numstat",
+            "--end-of-options",
+            range,
+          ])
+          .catch((error) => {
+            logWarn(
+              "Failed to read numstat for cross-worktree comparison; continuing without churn",
+              {
+                branch1,
+                branch2,
+                message: (error as Error).message,
+              }
+            );
+            return "";
+          }),
+        this.git.revparse(["--show-toplevel"]),
       ]);
+
+      const gitRoot = realpathSync(toplevel.trim()).replace(/\\/g, "/");
+      const rootPrefix = gitRoot.endsWith("/") ? gitRoot : `${gitRoot}/`;
+
+      // Build relative-path-keyed numstat map from the numstat output
+      let numstatByRelPath = new Map<string, DiffStat>();
+      if (numstatOutput) {
+        const numstatByAbsPath = parseNumstat(numstatOutput, gitRoot);
+        numstatByRelPath = new Map<string, DiffStat>();
+        for (const [absPath, stats] of numstatByAbsPath) {
+          const normalized = absPath.replace(/\\/g, "/");
+          const relative = normalized.startsWith(rootPrefix)
+            ? normalized.slice(rootPrefix.length)
+            : normalized;
+          numstatByRelPath.set(relative, stats);
+        }
+      }
+
       const files: CrossWorktreeFile[] = [];
 
-      for (const line of output.split("\n")) {
+      for (const line of nameStatusOutput.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
@@ -402,14 +446,25 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         const status = statusRaw[0] as CrossWorktreeFile["status"];
 
         if (status === "R" || status === "C") {
-          // Renamed/copied: parts[1] = old path, parts[2] = new path
+          const newPath = parts[2] ?? parts[1];
+          const oldPath = parts[1];
+          const insStats = numstatByRelPath.get(newPath);
+          const delStats = numstatByRelPath.get(oldPath);
           files.push({
             status,
-            path: parts[2] ?? parts[1],
-            oldPath: parts[1],
+            path: newPath,
+            oldPath,
+            insertions: insStats?.insertions ?? null,
+            deletions: delStats?.deletions ?? null,
           });
         } else {
-          files.push({ status, path: parts[1] });
+          const stats = numstatByRelPath.get(parts[1]);
+          files.push({
+            status,
+            path: parts[1],
+            insertions: stats?.insertions ?? null,
+            deletions: stats?.deletions ?? null,
+          });
         }
       }
 

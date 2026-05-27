@@ -131,6 +131,9 @@ function BaseBranchFileRow({
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash === -1 ? "" : normalized.slice(0, lastSlash);
   const base = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1);
+  const insertions = file.insertions ?? 0;
+  const deletions = file.deletions ?? 0;
+  const hasChurn = insertions > 0 || deletions > 0;
 
   return (
     <TruncatedTooltip content={file.path}>
@@ -180,6 +183,15 @@ function BaseBranchFileRow({
             {base}
           </span>
         </button>
+        {hasChurn && (
+          <div
+            data-testid="base-branch-file-row-churn"
+            className="ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums"
+          >
+            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
+            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+          </div>
+        )}
         {unresolvedCount !== undefined && unresolvedCount > 0 && (
           <button
             type="button"
@@ -371,6 +383,18 @@ export function ReviewHubContent({
           )
         : null,
     [baseBranchFiles]
+  );
+
+  const baseBranchChurn = useMemo(
+    () =>
+      sortedBaseBranchFiles?.reduce(
+        (acc, f) => ({
+          ins: acc.ins + (f.insertions ?? 0),
+          del: acc.del + (f.deletions ?? 0),
+        }),
+        { ins: 0, del: 0 }
+      ) ?? { ins: 0, del: 0 },
+    [sortedBaseBranchFiles]
   );
 
   const mainBranch = useWorktreeStore(
@@ -1558,6 +1582,15 @@ export function ReviewHubContent({
                     <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
                       {sortedBaseBranchFiles.length} file
                       {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
+                      {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
+                        <>
+                          {" "}
+                          <span className="text-status-success/80">
+                            +{baseBranchChurn.ins}
+                          </span>{" "}
+                          <span className="text-status-error/80">-{baseBranchChurn.del}</span>
+                        </>
+                      )}
                     </span>
                   </span>
                 </div>
