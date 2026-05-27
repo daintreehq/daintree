@@ -559,6 +559,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../forge.js").RegisteredForgeProvider[];
   };
+  "plugin:get-diagnostics": {
+    args: [];
+    result: import("../plugin.js").PluginDiagnosticsSnapshot;
+  };
   "plugin:list": {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];

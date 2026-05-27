@@ -187,4 +187,60 @@ describe("buildReportIssueUrl", () => {
     expect(title.length).toBeLessThan(longMessage.length);
     expect(title.endsWith("…")).toBe(true);
   });
+
+  it("omits the plugin section when no diagnostics are provided", () => {
+    const result = buildReportIssueUrl(makeInput());
+    expect(result.fullBody).not.toContain("Plugin diagnostics");
+  });
+
+  it("omits the plugin section when the diagnostics array is empty", () => {
+    const result = buildReportIssueUrl(makeInput({ pluginDiagnostics: [] }));
+    expect(result.fullBody).not.toContain("Plugin diagnostics");
+  });
+
+  it("includes a collapsible plugin section when plugins are loaded", () => {
+    const result = buildReportIssueUrl(
+      makeInput({
+        pluginDiagnostics: [
+          {
+            name: "acme.plugin",
+            version: "1.2.3",
+            source: "user",
+            installedAt: "2026-01-01T00:00:00.000Z",
+            logLines: [{ timestamp: 0, level: "error", message: "kaboom" }],
+          },
+        ],
+      })
+    );
+    expect(result.usedClipboardFallback).toBe(false);
+    expect(result.fullBody).toContain("<summary>Plugin diagnostics (1)</summary>");
+    expect(result.fullBody).toContain("acme.plugin@1.2.3 (user)");
+    expect(result.fullBody).toContain("kaboom");
+    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    expect(new URL(result.url).searchParams.get("body")).toContain("Plugin diagnostics");
+  });
+
+  it("drops the plugin section from the URL when it would blow the budget, but keeps it in fullBody", () => {
+    const huge = "z".repeat(20000);
+    const result = buildReportIssueUrl(
+      makeInput({
+        pluginDiagnostics: [
+          {
+            name: "acme.noisy",
+            version: "1.0.0",
+            source: "user",
+            installedAt: "2026-01-01T00:00:00.000Z",
+            logLines: [{ timestamp: 0, level: "info", message: huge }],
+          },
+        ],
+      })
+    );
+    // Error report itself is small, so no clipboard fallback — but the plugin
+    // section is too big for the URL and is dropped from it.
+    expect(result.usedClipboardFallback).toBe(false);
+    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    expect(new URL(result.url).searchParams.get("body")).not.toContain("Plugin diagnostics");
+    // The full report (clipboard payload) still carries it.
+    expect(result.fullBody).toContain("Plugin diagnostics");
+  });
 });

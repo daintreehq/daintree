@@ -308,6 +308,9 @@ export interface GeneratedElectronAPI {
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
+    getDiagnostics(
+      ...args: IpcInvokeMap["plugin:get-diagnostics"]["args"]
+    ): Promise<IpcInvokeMap["plugin:get-diagnostics"]["result"]>;
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;

@@ -260,7 +260,72 @@ export interface PluginHostApi {
    * unloaded.
    */
   invalidateFileDecorations(scope: string, paths?: string[]): void;
+  /**
+   * Per-plugin tagged log channel. Each call writes a line into a fixed-size
+   * FIFO ring buffer (most-recent ~500 lines) owned by the host and forwards
+   * the message to the host console prefixed `[plugin:${pluginId}]`. Writes
+   * are synchronous from the plugin's POV — the call enqueues and returns
+   * immediately, never backpressured. Like {@link invalidateFileDecorations}
+   * this is NOT revoke-guarded: a plugin logs from its own post-activation
+   * callbacks (timers, subscriptions) long after `activate()` resolves. It
+   * becomes a silent no-op once the plugin is unloaded.
+   */
+  readonly logger: PluginLogger;
 }
+
+export type PluginLogLevel = "info" | "warn" | "error";
+
+export interface PluginLogger {
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
+}
+
+/**
+ * One line in a plugin's ring buffer. `fields` is the plugin-supplied
+ * structured payload, JSON-stringified at write time and capped to ~2KB; a
+ * line whose serialized fields exceed the cap carries a single truncation
+ * marker instead of silent loss.
+ */
+export interface PluginLogLine {
+  timestamp: number;
+  level: PluginLogLevel;
+  message: string;
+  fields?: string;
+}
+
+/**
+ * Recent plugin-action dispatch, sourced from the audit log (#9232). Omitted
+ * from the diagnostics snapshot until that audit log lands.
+ */
+export interface PluginActionAuditEntry {
+  timestamp: number;
+  actionId: string;
+  effectiveDanger: "safe" | "confirm";
+}
+
+/** One loaded plugin's slice of the diagnostics export payload. */
+export interface PluginDiagnosticsEntry {
+  name: string;
+  version: string;
+  /** "builtin" for app-bundled plugins, "user" otherwise. */
+  source: string;
+  /**
+   * ISO-8601 install/load time. Falls back to the load timestamp until the
+   * provenance fields from #9271 land.
+   */
+  installedAt: string;
+  /** Present once #9271 wires dev-mode provenance; omitted otherwise. */
+  devMode?: boolean;
+  /** Load-time error caught while importing the plugin's main entry, if any. */
+  loadError?: string;
+  /** Most-recent log lines, reverse-chronological, with secrets scrubbed. */
+  logLines: PluginLogLine[];
+  /** Recent plugin-action dispatches (#9232); omitted until that log lands. */
+  actionAuditTail?: PluginActionAuditEntry[];
+}
+
+export type PluginDiagnosticsSnapshot = PluginDiagnosticsEntry[];
 
 export type PluginActivate = (
   host: PluginHostApi

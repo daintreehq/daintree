@@ -25,6 +25,7 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginDiagnosticsSnapshot,
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
@@ -104,6 +105,10 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   return getRegisteredForgeProviders();
+}
+
+async function handleGetDiagnostics(): Promise<PluginDiagnosticsSnapshot> {
+  return pluginService.getDiagnosticsSnapshot();
 }
 
 /**
@@ -230,6 +235,7 @@ export const pluginNamespace = defineIpcNamespace({
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getDiagnostics: op(PLUGIN_METHOD_CHANNELS.getDiagnostics, handleGetDiagnostics),
   },
 });
 

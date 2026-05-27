@@ -1205,3 +1205,113 @@ describe("PluginService integration — built-in plugin loading", () => {
     }
   });
 });
+
+describe("PluginService integration — host.logger and diagnostics", () => {
+  async function writeLoggingPlugin(name: string, body: string): Promise<void> {
+    const dir = await writePlugin(name, { name, version: "2.1.0" });
+    const mainFile = `log-${randomUUID()}.mjs`;
+    await fs.writeFile(path.join(dir, mainFile), `export function activate(host) {\n${body}\n}\n`);
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name, version: "2.1.0", main: mainFile })
+    );
+  }
+
+  it("captures host.logger lines in the diagnostics snapshot, newest first", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin(
+        "acme.logger",
+        `host.logger.info("first line");
+         host.logger.warn("second line", { code: 42 });
+         host.logger.error("third line");`
+      );
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const snapshot = service.getDiagnosticsSnapshot();
+      const entry = snapshot.find((p) => p.name === "acme.logger");
+      expect(entry).toBeDefined();
+      expect(entry?.version).toBe("2.1.0");
+      expect(entry?.source).toBe("user");
+      expect(entry?.logLines.map((l) => l.message)).toEqual([
+        "third line",
+        "second line",
+        "first line",
+      ]);
+      expect(entry?.logLines[0].level).toBe("error");
+      expect(entry?.logLines[1].fields).toBe(JSON.stringify({ code: 42 }));
+      // Console forwarding is on by default with the plugin prefix.
+      expect(infoSpy).toHaveBeenCalledWith("[plugin:acme.logger]", "first line");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("scrubs secrets from log lines on export but leaves the raw buffer intact", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin(
+        "acme.secrets",
+        `host.logger.error("token ghp_abcdefghijklmnopqrstuvwxyz0123 leaked");`
+      );
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.secrets");
+      expect(entry?.logLines[0].message).toContain("[REDACTED]");
+      expect(entry?.logLines[0].message).not.toContain("ghp_abcdefghij");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("caps oversized log fields with a single truncation marker", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin("acme.big", `host.logger.info("big", { blob: "x".repeat(5000) });`);
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.big");
+      expect(entry?.logLines[0].fields).toMatch(/^\[truncated:/);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("drops the log buffer when a plugin unloads", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin("acme.transient", `host.logger.info("hi");`);
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+      expect(service.getDiagnosticsSnapshot().some((p) => p.name === "acme.transient")).toBe(true);
+
+      service.unloadPlugin("acme.transient");
+      expect(service.getDiagnosticsSnapshot().some((p) => p.name === "acme.transient")).toBe(false);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("captures a plugin's load error in the diagnostics snapshot", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeLoggingPlugin("acme.broken", `throw new Error("activation boom");`);
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      const entry = service.getDiagnosticsSnapshot().find((p) => p.name === "acme.broken");
+      expect(entry?.loadError).toContain("activation boom");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("returns an empty snapshot when no plugins are loaded", async () => {
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    expect(service.getDiagnosticsSnapshot()).toEqual([]);
+  });
+});

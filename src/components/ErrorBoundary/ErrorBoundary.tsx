@@ -6,6 +6,7 @@ import { logError } from "@/utils/logger";
 import { captureRendererException } from "@/utils/rendererSentry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildReportIssueUrl } from "./buildReportIssueUrl";
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/plugin";
 import { notify } from "@/lib/notify";
 
 interface ErrorBoundaryProps {
@@ -163,6 +164,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
+      // Best-effort plugin diagnostics — if the bridge is missing or the call
+      // fails, the report still opens without the plugin section.
+      let pluginDiagnostics: PluginDiagnosticsSnapshot | undefined;
+      try {
+        pluginDiagnostics = await window.electron?.plugin?.getDiagnostics();
+      } catch {
+        pluginDiagnostics = undefined;
+      }
+
       const { url, fullBody, usedClipboardFallback } = buildReportIssueUrl({
         incidentId,
         componentName,
@@ -170,6 +180,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         stack: error.stack ?? "",
         componentStack: errorInfo?.componentStack ?? "",
         context,
+        pluginDiagnostics,
       });
 
       if (usedClipboardFallback) {

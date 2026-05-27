@@ -15,7 +15,12 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   BuiltInPluginPermission,
+  PluginLogLevel,
+  PluginLogLine,
+  PluginDiagnosticsEntry,
+  PluginDiagnosticsSnapshot,
 } from "../../shared/types/plugin.js";
+import { scrubLogLine } from "../../shared/utils/pluginDiagnosticsScrub.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -102,6 +107,43 @@ interface PluginLoadErrorRecord {
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 
+/** Per-plugin ring buffer depth. Oldest lines are overwritten FIFO. */
+const LOG_BUFFER_CAPACITY = 500;
+
+/**
+ * Cap on a single line's serialized `fields` payload (~2KB) so a plugin can't
+ * `logger.error`-bomb the host into memory pressure. Oversized payloads are
+ * replaced with a single truncation marker, never silently dropped.
+ */
+const LOG_FIELDS_MAX_BYTES = 2048;
+
+/**
+ * Fixed-capacity FIFO ring buffer of log lines, pre-allocated to avoid
+ * per-push allocation/GC churn. `head` points at the next write slot; `count`
+ * tracks how many slots are live (saturates at capacity).
+ */
+class PluginLogBuffer {
+  private readonly buf: PluginLogLine[] = new Array(LOG_BUFFER_CAPACITY);
+  private head = 0;
+  private count = 0;
+
+  push(line: PluginLogLine): void {
+    this.buf[this.head] = line;
+    this.head = (this.head + 1) % LOG_BUFFER_CAPACITY;
+    if (this.count < LOG_BUFFER_CAPACITY) this.count++;
+  }
+
+  /** Lines in reverse-chronological order (most recent first). */
+  toReverseChronological(): PluginLogLine[] {
+    const out: PluginLogLine[] = [];
+    for (let i = 1; i <= this.count; i++) {
+      const idx = (this.head - i + LOG_BUFFER_CAPACITY) % LOG_BUFFER_CAPACITY;
+      out.push(this.buf[idx]);
+    }
+    return out;
+  }
+}
+
 /**
  * Normalise the value thrown out of `activate()` into a serialisable record.
  * `unknown` becomes a stable `{ message, stack?, at }` shape so the Settings
@@ -147,6 +189,7 @@ type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktr
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  private logBuffers = new Map<string, PluginLogBuffer>();
   private handlerMap = new Map<string, PluginIpcHandler>();
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
@@ -518,6 +561,10 @@ export class PluginService {
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
     this.plugins.set(manifest.name, plugin);
+    // The log buffer shares the plugin's lifecycle — created here so host.logger
+    // calls during module evaluation/activation land in it, torn down in unloadPlugin.
+    this.logBuffers.set(manifest.name, new PluginLogBuffer());
+    this.pluginLoadErrors.delete(manifest.name);
 
     if (plugin.resolvedMain) {
       try {
@@ -542,6 +589,9 @@ export class PluginService {
         // same service in tests, or in future hot-reload paths.
         this.pluginLoadErrors.delete(manifest.name);
       } catch (err) {
+        // Retain the load error so the diagnostics export (and the #9290 detail
+        // view) can surface it. Per CLAUDE.md notify() rules this is Tier 0/1 —
+        // logged, not toasted.
         const record = toPluginLoadErrorRecord(err);
         this.pluginLoadErrors.set(manifest.name, record);
         console.error(`[PluginService] Failed to load main entry for ${manifest.name}:`, err);
@@ -551,6 +601,86 @@ export class PluginService {
     }
 
     return plugin;
+  }
+
+  /**
+   * Write a line into a plugin's ring buffer and forward it to the host
+   * console. Synchronous and fire-and-forget: a missing buffer (plugin already
+   * unloaded) is a silent no-op. Oversized `fields` payloads are truncated to
+   * a single marker rather than dropped silently.
+   */
+  private appendLog(
+    pluginId: string,
+    level: PluginLogLevel,
+    message: string,
+    fields?: Record<string, unknown>
+  ): void {
+    const buffer = this.logBuffers.get(pluginId);
+    if (!buffer) return;
+
+    const safeMessage = typeof message === "string" ? message : String(message);
+
+    let serializedFields: string | undefined;
+    if (fields !== undefined) {
+      try {
+        const json = JSON.stringify(fields);
+        serializedFields =
+          json !== undefined && json.length > LOG_FIELDS_MAX_BYTES
+            ? `[truncated: fields exceeded ${LOG_FIELDS_MAX_BYTES} bytes]`
+            : json;
+      } catch {
+        serializedFields = "[unserializable fields]";
+      }
+    }
+
+    buffer.push({
+      timestamp: Date.now(),
+      level,
+      message: safeMessage,
+      ...(serializedFields !== undefined ? { fields: serializedFields } : {}),
+    });
+
+    const prefix = `[plugin:${pluginId}]`;
+    const consoleArgs =
+      fields !== undefined ? [prefix, safeMessage, fields] : [prefix, safeMessage];
+    if (level === "warn") console.warn(...consoleArgs);
+    else if (level === "error") console.error(...consoleArgs);
+    else console.info(...consoleArgs);
+  }
+
+  /**
+   * Point-in-time diagnostics snapshot of every loaded plugin: provenance,
+   * captured load error, and the most-recent scrubbed log lines. Secrets are
+   * scrubbed on this export pass only — the raw ring buffer is never modified.
+   * Returns an empty array when no plugins are loaded so the report-issue
+   * payload can omit the section entirely.
+   */
+  getDiagnosticsSnapshot(): PluginDiagnosticsSnapshot {
+    const snapshot: PluginDiagnosticsEntry[] = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      const buffer = this.logBuffers.get(pluginId);
+      const logLines = buffer ? buffer.toReverseChronological().map(scrubLogLine) : [];
+      const loadErrorRecord = this.pluginLoadErrors.get(pluginId);
+      // Provenance falls back to load-derived values until #9271 lands; the
+      // action audit tail (#9232) is omitted until that log exists.
+      snapshot.push({
+        name: plugin.manifest.name,
+        version: plugin.manifest.version,
+        source: plugin.isBuiltin ? "builtin" : "user",
+        installedAt: new Date(plugin.loadedAt).toISOString(),
+        ...(loadErrorRecord !== undefined
+          ? {
+              loadError: scrubLogLine({
+                timestamp: loadErrorRecord.at,
+                level: "error",
+                message: loadErrorRecord.stack ?? loadErrorRecord.message,
+              }).message,
+            }
+          : {}),
+        logLines,
+      });
+    }
+    return snapshot;
   }
 
   private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
@@ -799,6 +929,15 @@ export class PluginService {
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
         });
       },
+      // NOT revoke-guarded: plugins log from post-activation callbacks (timers,
+      // worktree subscriptions) that fire long after activate() resolves. The
+      // liveness guard is buffer membership — appendLog is a silent no-op once
+      // the plugin unloads.
+      logger: {
+        info: (message, fields) => this.appendLog(pluginId, "info", message, fields),
+        warn: (message, fields) => this.appendLog(pluginId, "warn", message, fields),
+        error: (message, fields) => this.appendLog(pluginId, "error", message, fields),
+      },
     };
     return {
       host,
@@ -1027,6 +1166,7 @@ export class PluginService {
     );
 
     this.plugins.delete(pluginId);
+    this.logBuffers.delete(pluginId);
     this.pluginLoadErrors.delete(pluginId);
 
     if (decorationScopes && decorationScopes.length > 0) {

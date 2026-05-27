@@ -1,3 +1,5 @@
+import type { PluginDiagnosticsSnapshot } from "../../../shared/types/plugin";
+
 const REPO_ISSUE_URL = "https://github.com/daintreehq/daintree/issues/new";
 
 // GitHub's Nginx fronts the issue form at an 8 KiB URL hard cap. Reserve
@@ -28,6 +30,14 @@ export interface ReportIssueInput {
   stack: string;
   componentStack: string;
   context: Record<string, unknown> | undefined;
+  /**
+   * Optional plugin diagnostics snapshot (loaded plugins, provenance, scrubbed
+   * recent log lines). Rendered as a collapsible section appended to the body.
+   * Supplementary context — dropped from the URL first when over budget, but
+   * always present in `fullBody` for the clipboard fallback. Omitted entirely
+   * when no plugins are loaded.
+   */
+  pluginDiagnostics?: PluginDiagnosticsSnapshot;
 }
 
 export interface ReportIssueResult {
@@ -54,6 +64,51 @@ function formatBody(params: {
     `${context ? JSON.stringify(context, null, 2) : "None"}\n\n` +
     `**Stack Trace:**\n\`\`\`\n${stack || "No stack trace"}\n\`\`\`\n\n` +
     `**Component Stack:**\n\`\`\`\n${componentStack || "No component stack"}\n\`\`\``
+  );
+}
+
+/**
+ * Render the plugin diagnostics slice as a collapsible markdown section so it
+ * doesn't dominate a short report. Returns an empty string when no plugins are
+ * loaded — the caller omits the section entirely.
+ */
+function formatPluginDiagnosticsSection(
+  diagnostics: PluginDiagnosticsSnapshot | undefined
+): string {
+  if (!diagnostics || diagnostics.length === 0) return "";
+  const lines: string[] = [];
+  for (const plugin of diagnostics) {
+    lines.push(`#### ${plugin.name}@${plugin.version} (${plugin.source})`);
+    lines.push(`- Installed: ${plugin.installedAt}`);
+    if (plugin.devMode) lines.push(`- Dev mode: yes`);
+    if (plugin.loadError) {
+      lines.push(`- Load error:`);
+      lines.push("```");
+      lines.push(plugin.loadError);
+      lines.push("```");
+    }
+    if (plugin.logLines.length > 0) {
+      lines.push(`- Recent logs (${plugin.logLines.length}, newest first):`);
+      lines.push("```");
+      for (const line of plugin.logLines) {
+        const ts = new Date(line.timestamp).toISOString();
+        const fields = line.fields ? ` ${line.fields}` : "";
+        lines.push(`[${ts}] ${line.level.toUpperCase()} ${line.message}${fields}`);
+      }
+      lines.push("```");
+    }
+    if (plugin.actionAuditTail && plugin.actionAuditTail.length > 0) {
+      lines.push(`- Recent actions:`);
+      for (const entry of plugin.actionAuditTail) {
+        const ts = new Date(entry.timestamp).toISOString();
+        lines.push(`  - ${ts} \`${entry.actionId}\` (${entry.effectiveDanger})`);
+      }
+    }
+    lines.push("");
+  }
+  return (
+    `<details>\n<summary>Plugin diagnostics (${diagnostics.length})</summary>\n\n` +
+    `${lines.join("\n")}\n</details>`
   );
 }
 
@@ -129,7 +184,8 @@ function makeUrl(title: string, body: string): string {
  */
 export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult {
   const title = `Component Error: ${input.message || "Unknown"}`;
-  const fullBody = formatBody({
+  const pluginSection = formatPluginDiagnosticsSection(input.pluginDiagnostics);
+  const baseBody = formatBody({
     componentName: input.componentName,
     incidentId: input.incidentId,
     message: input.message,
@@ -137,9 +193,21 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     stack: input.stack,
     componentStack: input.componentStack,
   });
+  // `fullBody` is the complete report (incl. plugin diagnostics) — it's what
+  // the clipboard fallback writes. The URL body may carry less.
+  const fullBody = pluginSection ? `${baseBody}\n\n${pluginSection}` : baseBody;
 
+  // Prefer including plugin diagnostics in the URL when the whole thing fits.
   if (encodeURIComponent(fullBody).length <= URL_BODY_BUDGET) {
     return { url: makeUrl(title, fullBody), fullBody, usedClipboardFallback: false };
+  }
+
+  // Plugin diagnostics are supplementary — drop them from the URL before
+  // touching the error signal, then run the existing truncation waterfall on
+  // the error report alone. (When no plugins are loaded, baseBody === fullBody
+  // and this is the original first check.)
+  if (pluginSection && encodeURIComponent(baseBody).length <= URL_BODY_BUDGET) {
+    return { url: makeUrl(title, baseBody), fullBody, usedClipboardFallback: false };
   }
 
   const withoutComponentStack = formatBody({

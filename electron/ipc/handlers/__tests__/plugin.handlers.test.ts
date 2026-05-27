@@ -7,6 +7,7 @@ const mockListPlugins = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
+const mockGetDiagnosticsSnapshot = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -17,6 +18,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    getDiagnosticsSnapshot: (...args: unknown[]) => mockGetDiagnosticsSnapshot(...args),
   },
 }));
 
@@ -69,8 +71,9 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(11);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(12);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:get-diagnostics", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
@@ -681,6 +684,36 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("PLUGIN_GET_DIAGNOSTICS handler", () => {
+  function getHandler() {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:get-diagnostics"
+    )![1] as (...args: unknown[]) => unknown;
+  }
+
+  it("delegates to pluginService.getDiagnosticsSnapshot", async () => {
+    const snapshot = [
+      {
+        name: "acme.plugin",
+        version: "1.0.0",
+        source: "user",
+        installedAt: "2026-01-01T00:00:00.000Z",
+        logLines: [],
+      },
+    ];
+    mockGetDiagnosticsSnapshot.mockReturnValue(snapshot);
+    const handler = getHandler();
+    expect(await handler({})).toBe(snapshot);
+  });
+
+  it("returns an empty array when no plugins are loaded", async () => {
+    mockGetDiagnosticsSnapshot.mockReturnValue([]);
+    const handler = getHandler();
+    expect(await handler({})).toEqual([]);
   });
 });
 
