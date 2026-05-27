@@ -179,13 +179,13 @@ const INTERRUPTION_TO_PRIORITY: Record<EventInterruption, NotificationPriority> 
  * `duration` is resolved separately in `notify()` so the sticky-action default
  * can still win over a policy's `defaultDurationMs`.
  */
-function resolveEventPolicyDefaults(payload: NotifyPayload): NotifyPayload {
+function resolveEventPolicyDefaults<T extends NotifyPayload>(payload: T): T {
   const eventKind = payload.context?.eventKind;
   if (!eventKind) return payload;
   const policy = EVENT_POLICY[eventKind];
   if (!policy) return payload;
 
-  let next = payload;
+  let next: T = payload;
   if (next.priority === undefined) {
     next = { ...next, priority: INTERRUPTION_TO_PRIORITY[policy.baseInterruption] };
   }
@@ -228,22 +228,41 @@ export const TOAST_DURATION: Record<NotificationType, number> = {
   info: 6000,
 };
 
-export interface CoalesceOptions {
+interface CoalesceOptionsBase {
   key: string;
   windowMs?: number;
-  buildMessage: (count: number) => string | ReactNode;
   buildTitle?: (count: number) => string | undefined;
-  buildInboxMessage?: (count: number) => string | undefined;
   buildAction?: (count: number) => NotificationAction | undefined;
 }
 
-export interface NotifyPayload {
+/**
+ * Mirrors the `NotifyPayload` discriminated union for the coalesce patch path:
+ * a string `buildMessage` keeps `buildInboxMessage` optional, but a ReactNode
+ * `buildMessage` MUST be paired with a `buildInboxMessage` so the coalesced
+ * inbox row still carries plain-text content. Without this, a future caller
+ * with a rich `buildMessage` would silently overwrite the live notification's
+ * `inboxMessage` with `undefined` on coalesce.
+ */
+export type CoalesceOptions = CoalesceOptionsBase &
+  (
+    | {
+        buildMessage: (count: number) => string;
+        buildInboxMessage?: (count: number) => string | undefined;
+      }
+    | {
+        buildMessage: (count: number) => Exclude<ReactNode, string>;
+        buildInboxMessage: (count: number) => string | undefined;
+      }
+  );
+
+/**
+ * Fields shared by every `notify()` payload, regardless of message shape.
+ * Split out so the discriminated union on `message`/`inboxMessage` (see
+ * `NotifyPayload`) doesn't have to repeat them.
+ */
+interface NotifyPayloadBase {
   type: NotificationType;
   title?: string;
-  /** Display message — may be a ReactNode for rich toast content */
-  message: string | ReactNode;
-  /** Plain-text fallback for the history inbox when message is a ReactNode */
-  inboxMessage?: string;
   duration?: number;
   action?: NotificationAction;
   actions?: NotificationAction[];
@@ -313,6 +332,30 @@ export interface NotifyPayload {
     eventKind?: NotificationEventKind;
   };
 }
+
+/**
+ * Public payload accepted by `notify()`. The message/inboxMessage pair is a
+ * discriminated union: a `string` message keeps `inboxMessage` optional, but a
+ * `ReactNode` message MUST carry a plain-text `inboxMessage` so the persistent
+ * inbox row (the WCAG 2.2.1 conforming alternative for the time-limited toast)
+ * isn't silently dropped. Enforced at the type level — `notify({ message:
+ * <span/> })` without `inboxMessage` is a compile error.
+ */
+export type NotifyPayload = NotifyPayloadBase &
+  (
+    | {
+        /** Display message — plain string. The string itself is reused as the inbox row text when `inboxMessage` is omitted. */
+        message: string;
+        /** Optional override for the inbox row text. Defaults to the string `message` when omitted. */
+        inboxMessage?: string;
+      }
+    | {
+        /** Display message — rich ReactNode for toast content. Cannot be reused for the inbox, so `inboxMessage` is required. */
+        message: Exclude<ReactNode, string>;
+        /** Plain-text fallback used as the inbox row text. Required when `message` is a ReactNode. */
+        inboxMessage: string;
+      }
+  );
 
 interface CoalesceEntry {
   id: string;
@@ -761,23 +804,10 @@ export function isScheduledQuietHours(now: Date = new Date()): boolean {
  * or required action. Don't duplicate in-place UI state changes — those are
  * already visible without a notification.
  *
- * When `message` is a non-string ReactNode, `inboxMessage` is required —
- * otherwise the history entry is dropped and a toast (when shown) has no
- * WCAG 2.2.1 recoverable alternative. String messages auto-derive the history
- * text from the message itself.
+ * When `message` is a non-string ReactNode, `inboxMessage` is required at the
+ * type level — string messages auto-derive the history text from the message
+ * itself. See the `NotifyPayload` JSDoc for the WCAG 2.2.1 rationale.
  */
-export function notify(
-  payload: Omit<NotifyPayload, "message" | "inboxMessage"> & {
-    message: string;
-    inboxMessage?: string;
-  }
-): string;
-export function notify(
-  payload: Omit<NotifyPayload, "message" | "inboxMessage"> & {
-    message: Exclude<ReactNode, string>;
-    inboxMessage: string;
-  }
-): string;
 export function notify(payload: NotifyPayload): string {
   // Resolve routing defaults from the EVENT_POLICY manifest before reading any
   // routing fields — explicit caller fields are preserved, only gaps are filled.
@@ -785,15 +815,6 @@ export function notify(payload: NotifyPayload): string {
 
   const priority = payload.priority ?? "high";
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;
-
-  if (import.meta.env.DEV && typeof message !== "string" && !inboxMessage) {
-    // DEV-only API misuse warning. Routing this through the logger would loop
-    // back through notify on log failure, so emit straight to the console.
-    // eslint-disable-next-line no-console
-    console.error(
-      "[notify] ReactNode message without inboxMessage — persistent inbox history will be dropped. Provide inboxMessage for WCAG 2.2.1 compliance."
-    );
-  }
 
   if (import.meta.env.DEV && payload.transient) {
     // transient bypasses the inbox, so combinations that depend on the inbox
