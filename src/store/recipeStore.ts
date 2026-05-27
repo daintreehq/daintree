@@ -329,6 +329,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const updatedRecipe: TerminalRecipe = {
       ...recipe,
+      shadowedBy: undefined,
       ...sanitizedUpdates,
       id: newId,
       name: sanitizedUpdates.name ?? recipe.name,
@@ -445,7 +446,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!currentProjectId) throw new Error("No current project");
 
     const isGlobal = recipe.projectId === undefined;
-    const { projectId: _, worktreeId: _w, ...rest } = recipe;
+    const { projectId: _, worktreeId: _w, shadowedBy: _s, ...rest } = recipe;
     const promoted: TerminalRecipe = { ...rest, id: stableInRepoId(recipe.name) };
 
     const prevGlobal = get().globalRecipes;
@@ -507,7 +508,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   getRecipeById: (id) => {
-    return get().recipes.find((r) => r.id === id);
+    const recipe = get().recipes.find((r) => r.id === id);
+    if (recipe?.shadowedBy) {
+      return get().inRepoRecipes.find((r) => r.name === recipe.name) ?? recipe;
+    }
+    return recipe;
   },
 
   runRecipe: async (recipeId, worktreePath, worktreeId, context, options) => {
@@ -515,16 +520,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   runRecipeWithResults: async (recipeId, worktreePath, worktreeId, context, options) => {
-    let recipe = get().getRecipeById(recipeId);
+    const recipe = get().getRecipeById(recipeId);
     if (!recipe) {
       throw new Error(`Recipe ${recipeId} not found`);
     }
 
-    // Redirect shadowed recipes to the winning in-repo version
-    if (recipe.shadowedBy) {
-      const winner = get().recipes.find((r) => !r.shadowedBy && r.name === recipe!.name);
-      if (winner) recipe = winner;
-    }
+    // getRecipeById resolves shadowed recipes to the winner, so use the resolved id
+    const resolvedId = recipe.id;
 
     const now = Date.now();
     // Atomic in-memory append — folding the read+write into a `set` callback
@@ -533,7 +535,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set((state) => {
       const apply = (list: TerminalRecipe[]) =>
         list.map((r) => {
-          if (r.id !== recipeId) return r;
+          if (r.id !== resolvedId) return r;
           return {
             ...r,
             lastUsedAt: now,
@@ -549,10 +551,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     });
     // Persist using the freshest snapshot so any racing run's contribution is
     // preserved in the persisted history rather than clobbered.
-    const persistSnapshot = get().recipes.find((r) => r.id === recipeId);
+    const persistSnapshot = get().recipes.find((r) => r.id === resolvedId);
     if (persistSnapshot) {
       get()
-        .updateRecipe(recipeId, {
+        .updateRecipe(resolvedId, {
           lastUsedAt: persistSnapshot.lastUsedAt,
           usageHistory: persistSnapshot.usageHistory,
         })
