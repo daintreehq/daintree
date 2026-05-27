@@ -1,6 +1,25 @@
 import { EVENT_POLICY, type NotificationEventKind } from "@/lib/notify";
 
 /**
+ * Canonical kind order for the summary. An explicit type-annotated literal (not
+ * a cast) keeps it lint-clean while staying in EVENT_POLICY declaration order;
+ * a test asserts it stays in sync with EVENT_POLICY so a new kind can't be
+ * silently dropped from the summary.
+ */
+const ALL_EVENT_KINDS: readonly NotificationEventKind[] = [
+  "completed",
+  "waiting",
+  "workingPulse",
+  "uiFeedback",
+  "agent",
+  "git",
+  "host",
+  "recovery",
+  "settings",
+  "connectivity",
+];
+
+/**
  * What a notification kind will actually do right now, given the stacked
  * suppression gates (global enable, session mute, scheduled quiet hours, and
  * the per-kind toggles). Drives the notification center's "what will fire right
@@ -112,7 +131,7 @@ function classifyKind(
 export function computeEffectiveNotificationState(
   input: EffectiveStateInput
 ): KindEffectiveState[] {
-  return (Object.keys(EVENT_POLICY) as NotificationEventKind[]).map((kind) => ({
+  return ALL_EVENT_KINDS.map((kind) => ({
     kind,
     status: classifyKind(kind, input),
   }));

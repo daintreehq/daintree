@@ -580,20 +580,31 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     : "Quiet hours";
   // Effective-state summary: with the gates stacked, fold them into a single
   // line that answers "what will fire right now" plus which kinds are switched
-  // off. Rendered only inside the muted pill, but the computation itself is a
-  // cheap pure pass over ten kinds, so it's fine to run every render.
-  const effectiveState = computeEffectiveNotificationState({
-    enabled: notificationsEnabled,
-    isQuiet: showMutedPill,
+  // off. Memoized over the gate inputs so it's a stable value the rest of the
+  // render (and the compiler) can lean on.
+  const { summaryHeroLine, offLabel } = useMemo(() => {
+    const states = computeEffectiveNotificationState({
+      enabled: notificationsEnabled,
+      isQuiet: showMutedPill,
+      completedEnabled,
+      waitingEnabled,
+      workingPulseEnabled,
+      uiFeedbackSoundEnabled,
+    });
+    const offKinds = selectKindOffKinds(states);
+    return {
+      summaryHeroLine: heroLine(states),
+      offLabel:
+        offKinds.length > 0 ? `Off: ${offKinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "",
+    };
+  }, [
+    notificationsEnabled,
+    showMutedPill,
     completedEnabled,
     waitingEnabled,
     workingPulseEnabled,
     uiFeedbackSoundEnabled,
-  });
-  const summaryHeroLine = heroLine(effectiveState);
-  const offKinds = selectKindOffKinds(effectiveState);
-  const offLabel =
-    offKinds.length > 0 ? `Off: ${offKinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "";
+  ]);
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
   const mutedEmptyDescription = (() => {
     if (isScheduledMuted) {

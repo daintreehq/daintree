@@ -8,7 +8,7 @@ import {
   type EffectiveStateInput,
   type KindEffectiveState,
 } from "@/lib/notificationEffectiveState";
-import type { NotificationEventKind } from "@/lib/notify";
+import { EVENT_POLICY, type NotificationEventKind } from "@/lib/notify";
 
 const ALL_ON: EffectiveStateInput = {
   enabled: true,
@@ -24,9 +24,11 @@ function statusOf(states: KindEffectiveState[], kind: NotificationEventKind) {
 }
 
 describe("computeEffectiveNotificationState", () => {
-  it("covers all ten kinds in EVENT_POLICY order", () => {
+  it("covers every kind in EVENT_POLICY order (no drift)", () => {
     const states = computeEffectiveNotificationState(ALL_ON);
-    expect(states).toHaveLength(10);
+    // Stays in lockstep with EVENT_POLICY so a newly added kind can't be
+    // silently dropped from the summary.
+    expect(states.map((s) => s.kind)).toEqual(Object.keys(EVENT_POLICY));
     expect(states[0]?.kind).toBe("completed");
     expect(states[states.length - 1]?.kind).toBe("connectivity");
   });
