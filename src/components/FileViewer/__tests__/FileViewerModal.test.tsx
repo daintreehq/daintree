@@ -682,6 +682,32 @@ describe("FileViewerModal", () => {
   describe("hunk position indicator", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
 
+    function makeEntry(
+      target: Element,
+      intersectionRatio: number,
+      isIntersecting = true
+    ): IntersectionObserverEntry {
+      return {
+        target,
+        intersectionRatio,
+        isIntersecting,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        boundingClientRect: {} as DOMRectReadOnly,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        intersectionRect: {} as DOMRectReadOnly,
+        rootBounds: null,
+        time: 0,
+      } as IntersectionObserverEntry;
+    }
+
+    function fireObserver(
+      observer: MockIntersectionObserver,
+      entries: IntersectionObserverEntry[]
+    ) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      observer.callback(entries, observer as unknown as IntersectionObserver);
+    }
+
     it("is hidden when diff is not loaded", async () => {
       render(<FileViewerModal {...defaultProps} defaultMode="view" />);
 
@@ -716,20 +742,7 @@ describe("FileViewerModal", () => {
       // Fire the callback with the first hunk visible
       const hunk0Row = screen.getByTestId("hunk-0").querySelector("tr");
       expect(hunk0Row).toBeTruthy();
-      observer.callback(
-        [
-          {
-            target: hunk0Row!,
-            intersectionRatio: 0.8,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-        ],
-        observer as unknown as IntersectionObserver
-      );
+      fireObserver(observer, [makeEntry(hunk0Row!, 0.8)]);
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator")).toBeTruthy();
@@ -749,20 +762,7 @@ describe("FileViewerModal", () => {
 
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
       expect(hunk1Row).toBeTruthy();
-      observer.callback(
-        [
-          {
-            target: hunk1Row!,
-            intersectionRatio: 1.0,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-        ],
-        observer as unknown as IntersectionObserver
-      );
+      fireObserver(observer, [makeEntry(hunk1Row!, 1.0)]);
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
@@ -783,29 +783,7 @@ describe("FileViewerModal", () => {
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
 
       // Hunk 1 is more visible than hunk 0
-      observer.callback(
-        [
-          {
-            target: hunk0Row!,
-            intersectionRatio: 0.3,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-          {
-            target: hunk1Row!,
-            intersectionRatio: 0.9,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-        ],
-        observer as unknown as IntersectionObserver
-      );
+      fireObserver(observer, [makeEntry(hunk0Row!, 0.3), makeEntry(hunk1Row!, 0.9)]);
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
@@ -879,49 +857,14 @@ describe("FileViewerModal", () => {
       const hunk1Row = screen.getByTestId("hunk-1").querySelector("tr");
 
       // Show hunk 1 as most visible
-      observer.callback(
-        [
-          {
-            target: hunk1Row!,
-            intersectionRatio: 1.0,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-        ],
-        observer as unknown as IntersectionObserver
-      );
+      fireObserver(observer, [makeEntry(hunk1Row!, 1.0)]);
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 2 of 2");
       });
 
       // Scroll back — hunk 0 becomes most visible, hunk 1 fades
-      observer.callback(
-        [
-          {
-            target: hunk0Row!,
-            intersectionRatio: 0.95,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-          {
-            target: hunk1Row!,
-            intersectionRatio: 0.3,
-            isIntersecting: true,
-            boundingClientRect: {} as DOMRectReadOnly,
-            intersectionRect: {} as DOMRectReadOnly,
-            rootBounds: null,
-            time: 0,
-          },
-        ],
-        observer as unknown as IntersectionObserver
-      );
+      fireObserver(observer, [makeEntry(hunk0Row!, 0.95), makeEntry(hunk1Row!, 0.3)]);
 
       await waitFor(() => {
         expect(screen.getByTestId("hunk-position-indicator").textContent).toBe("Hunk 1 of 2");
@@ -942,20 +885,7 @@ describe("FileViewerModal", () => {
 
       // Fire callback with all hunks at ratio 0 (fully scrolled out)
       expect(() => {
-        observer.callback(
-          [
-            {
-              target: hunk0Row!,
-              intersectionRatio: 0,
-              isIntersecting: false,
-              boundingClientRect: {} as DOMRectReadOnly,
-              intersectionRect: {} as DOMRectReadOnly,
-              rootBounds: null,
-              time: 0,
-            },
-          ],
-          observer as unknown as IntersectionObserver
-        );
+        fireObserver(observer, [makeEntry(hunk0Row!, 0, false)]);
       }).not.toThrow();
     });
 
@@ -976,20 +906,7 @@ describe("FileViewerModal", () => {
 
       // Fire callback after unmount — must not throw or trigger state update warning
       expect(() => {
-        observer.callback(
-          [
-            {
-              target: hunk0Row!,
-              intersectionRatio: 1.0,
-              isIntersecting: true,
-              boundingClientRect: {} as DOMRectReadOnly,
-              intersectionRect: {} as DOMRectReadOnly,
-              rootBounds: null,
-              time: 0,
-            },
-          ],
-          observer as unknown as IntersectionObserver
-        );
+        fireObserver(observer, [makeEntry(hunk0Row!, 1.0)]);
       }).not.toThrow();
     });
   });
