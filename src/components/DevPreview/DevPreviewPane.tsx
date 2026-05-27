@@ -891,14 +891,14 @@ export function DevPreviewPane({
   }, []);
 
   const handleAutoDetect = useCallback(
-    async (candidateCommand?: string) => {
-      if (!currentProjectId || autoDetectRef.current) return;
+    async (candidateCommand?: string): Promise<boolean> => {
+      if (!currentProjectId || autoDetectRef.current) return false;
 
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) return;
+        if (!latestSettings) return false;
 
         let command = candidateCommand;
         if (!command) {
@@ -909,7 +909,7 @@ export function DevPreviewPane({
           )?.command;
         }
 
-        if (!command) return;
+        if (!command) return false;
 
         await saveSettings({
           ...latestSettings,
@@ -917,8 +917,11 @@ export function DevPreviewPane({
           devServerAutoDetected: true,
           devServerDismissed: false,
         });
+
+        return true;
       } catch (err) {
         logError("Failed to auto-detect dev server", err);
+        return false;
       } finally {
         autoDetectRef.current = false;
         if (isMountedRef.current) {
@@ -939,8 +942,8 @@ export function DevPreviewPane({
   const handleHeaderPickCandidate = useCallback(
     async (candidate: { command: string }) => {
       if (candidate.command.trim() === devCommand.trim()) return;
-      await handleAutoDetect(candidate.command);
-      stop();
+      const saved = await handleAutoDetect(candidate.command);
+      if (saved) stop();
     },
     [devCommand, handleAutoDetect, stop]
   );
@@ -996,6 +999,7 @@ export function DevPreviewPane({
                 key={c.id}
                 onSelect={() => void handleHeaderPickCandidate(c)}
                 className={isActive ? "bg-overlay-subtle" : ""}
+                aria-current={isActive ? "true" : undefined}
               >
                 <span className="text-xs font-medium">{c.name}</span>
                 <code className="text-[11px] text-daintree-text/50 truncate ml-auto">
