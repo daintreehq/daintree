@@ -46,6 +46,10 @@ export interface DevPreviewSessionState {
   updatedAt: number;
   phaseLabel?: "Compiling";
   forceKilled?: boolean;
+  // True when the per-session crash-loop guard halted auto-respawn after
+  // repeated fast install→crash cycles. The session lands in a recoverable
+  // "stopped" state (not a permanent lockout); an explicit restart clears it.
+  crashLoopStopped?: boolean;
 }
 
 export interface DevPreviewStateChangedPayload {
