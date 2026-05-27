@@ -9,6 +9,7 @@ import { openSettings } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
+import { commandArg, nodeScriptCommand } from "../../helpers/resource-lifecycle";
 
 /**
  * E2E tests for resource settings persistence and GUI-driven configuration.
@@ -25,14 +26,6 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
-
-function commandArg(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
-
-function nodeScriptCommand(scriptPath: string, args: string[] = []): string {
-  return ["node", commandArg(scriptPath), ...args].join(" ");
-}
 
 function writeResourceHelper(daintreeDir: string, stateFile: string): string {
   const scriptPath = path.join(daintreeDir, "resource-action.cjs");
