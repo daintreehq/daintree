@@ -425,6 +425,34 @@ describe("GridNotificationBar swap delay", () => {
     expect(getWrapper(container)?.className).toContain("h-auto");
   });
 
+  it("re-announces same-text content when the id changes (VoiceOver buffer flush)", () => {
+    const firstId = addGridBar({ message: "Saved" });
+    const { container, queryByText, getByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByText("Saved")).toBeTruthy();
+
+    // Same message text, fresh id — must clear and re-announce so AT re-reads it.
+    act(() => {
+      useNotificationStore.getState().removeNotification(firstId);
+      addGridBar({ message: "Saved" });
+    });
+
+    expect(getLiveRegion(container)?.textContent).toBe("");
+    expect(queryByText("Saved")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY - 1);
+    });
+    expect(queryByText("Saved")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(getByText("Saved")).toBeTruthy();
+  });
+
   it("collapses pending swaps so only the latest notification is announced (A→B→C)", () => {
     const firstId = addGridBar({ message: "First" });
     const { queryByText, getByText } = render(<GridNotificationBar />);
