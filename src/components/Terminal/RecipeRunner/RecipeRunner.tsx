@@ -34,14 +34,35 @@ function formatUnresolvedVarsTitle(vars: string[]): string {
 export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps) {
   const runner = useRecipeRunner({ activeWorktreeId, defaultCwd });
 
+  // Rendered alongside both the empty and populated states so a pending delete
+  // confirmation is never orphaned if the recipe list empties while open.
+  const deleteDialog = (
+    <ConfirmDialog
+      isOpen={runner.pendingDeleteId !== null}
+      title={`Delete '${runner.recipes.find((r) => r.id === runner.pendingDeleteId)?.name ?? "recipe"}'?`}
+      description={
+        runner.deleteError
+          ? `Error: ${runner.deleteError}`
+          : "The recipe will be permanently removed. This cannot be undone."
+      }
+      confirmLabel={runner.deleteError ? "Retry delete" : "Delete recipe"}
+      variant="destructive"
+      onConfirm={runner.confirmDelete}
+      onClose={runner.cancelDelete}
+    />
+  );
+
   if (runner.recipes.length === 0) {
     return (
-      <RecipeRunnerEmpty
-        onCreate={runner.handleCreate}
-        suggestions={runner.suggestions}
-        onRunSuggestion={runner.handleRunSuggestion}
-        disabled={!defaultCwd}
-      />
+      <>
+        <RecipeRunnerEmpty
+          onCreate={runner.handleCreate}
+          suggestions={runner.suggestions}
+          onRunSuggestion={runner.handleRunSuggestion}
+          disabled={!defaultCwd}
+        />
+        {deleteDialog}
+      </>
     );
   }
 
@@ -117,19 +138,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onKeyDown={runner.handleKeyDown}
         />
       )}
-      <ConfirmDialog
-        isOpen={runner.pendingDeleteId !== null}
-        title={`Delete '${runner.recipes.find((r) => r.id === runner.pendingDeleteId)?.name ?? "recipe"}'?`}
-        description={
-          runner.deleteError
-            ? `Error: ${runner.deleteError}`
-            : "The recipe will be permanently removed. This cannot be undone."
-        }
-        confirmLabel={runner.deleteError ? "Retry delete" : "Delete recipe"}
-        variant="destructive"
-        onConfirm={runner.confirmDelete}
-        onClose={runner.cancelDelete}
-      />
+      {deleteDialog}
     </div>
   );
 }

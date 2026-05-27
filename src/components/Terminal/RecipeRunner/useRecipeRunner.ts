@@ -119,6 +119,7 @@ export function useRecipeRunner({
 
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
+  const isConfirmingDeleteRef = useRef(false);
   const lastRunRecipeIdRef = useRef<string | null>(null);
   // Generation counter: every run/retry captures the current value, then any
   // resolved async work checks the latest value before calling setState. If a
@@ -165,6 +166,11 @@ export function useRecipeRunner({
   useEffect(() => {
     setSpawnFailureSummary(null);
     setUnresolvedVars([]);
+    // Drop any in-flight delete confirmation — a pending recipe id belongs to
+    // the previous worktree's filtered list; confirming it after the switch
+    // would delete a recipe out of its original context.
+    setPendingDeleteId(null);
+    setDeleteError(null);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
   }, [activeWorktreeId]);
@@ -406,20 +412,29 @@ export function useRecipeRunner({
   const confirmDelete = useCallback(() => {
     const recipeId = pendingDeleteId;
     if (!recipeId) return;
+    // Guard with a ref (not state) — dispatch is async and a double-click would
+    // otherwise fire recipe.delete twice, the second failing with a transient
+    // "already gone" error.
+    if (isConfirmingDeleteRef.current) return;
+    isConfirmingDeleteRef.current = true;
     void (async () => {
       setDeleteError(null);
-      const result = await actionService.dispatch(
-        "recipe.delete",
-        { recipeId },
-        { source: "user", confirmed: true }
-      );
-      if (result.ok) {
-        setPendingDeleteId(null);
-      } else {
-        // Keep the dialog open with retry copy rather than closing on a silent
-        // failure (the action surface is the user's only recovery path here).
-        logError("Failed to delete recipe", result.error);
-        setDeleteError(formatErrorMessage(result.error, "Failed to delete recipe"));
+      try {
+        const result = await actionService.dispatch(
+          "recipe.delete",
+          { recipeId },
+          { source: "user", confirmed: true }
+        );
+        if (result.ok) {
+          setPendingDeleteId(null);
+        } else {
+          // Keep the dialog open with retry copy rather than closing on a silent
+          // failure (the action surface is the user's only recovery path here).
+          logError("Failed to delete recipe", result.error);
+          setDeleteError(formatErrorMessage(result.error, "Failed to delete recipe"));
+        }
+      } finally {
+        isConfirmingDeleteRef.current = false;
       }
     })();
   }, [pendingDeleteId]);

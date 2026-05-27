@@ -876,4 +876,50 @@ describe("useRecipeRunner — delete confirm flow", () => {
 
     expect(dispatchMock).not.toHaveBeenCalled();
   });
+
+  it("clears a pending delete when the active worktree changes", () => {
+    const { result, rerender } = renderHook(
+      ({ activeWorktreeId }: { activeWorktreeId: string }) =>
+        useRecipeRunner({ activeWorktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { activeWorktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    expect(result.current.pendingDeleteId).toBe("r1");
+
+    rerender({ activeWorktreeId: "wt-2" });
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteError).toBeNull();
+  });
+
+  it("dispatches recipe.delete once when confirmDelete is double-clicked", async () => {
+    let resolve: (r: { ok: true; result: undefined }) => void = () => {};
+    dispatchMock.mockReturnValueOnce(
+      new Promise<{ ok: true; result: undefined }>((r) => {
+        resolve = r;
+      })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+      result.current.confirmDelete();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolve({ ok: true, result: undefined });
+      await Promise.resolve();
+    });
+  });
 });
