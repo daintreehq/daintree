@@ -271,6 +271,13 @@ export function ReviewHubContent({
   );
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
+  // Keyboard-navigation focus across the flat staged+unstaged file list. -1 means
+  // no row is keyboard-focused. Driven entirely by the capture-phase key handler;
+  // `fileListRef` scopes the listbox + scroll-into-view, and `focusedItemKeyRef`
+  // (a `section:path` key) preserves focus on the same file across list mutations.
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const fileListRef = useRef<HTMLDivElement | null>(null);
+  const focusedItemKeyRef = useRef<string | null>(null);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
   const baseBranchRequestRef = useRef(0);
@@ -350,6 +357,53 @@ export function ReviewHubContent({
       rows = rows.filter((f) => matchesFilter(f.path, changesView.filterQuery));
     return sortFiles(rows, changesView.sortKey, changesView.sortDir);
   }, [status, changesView]);
+
+  // Flat keyboard-navigation list: staged rows first, then unstaged, matching
+  // render order. Each entry carries its section so action keys (stage/unstage,
+  // viewed) and the `section:path` focus key can be derived without a lookup.
+  const navigableItems = useMemo(
+    () => [
+      ...derivedStaged.map((file) => ({ section: "staged" as FileStageRowSection, file })),
+      ...derivedUnstaged.map((file) => ({ section: "unstaged" as FileStageRowSection, file })),
+    ],
+    [derivedStaged, derivedUnstaged]
+  );
+
+  // Reconcile `focusedIndex` when the list mutates (filter, sort, stage/unstage,
+  // refresh). Preserve focus on the same file by `section:path`; if it left the
+  // list, clamp to the nearest valid index so focus never points off the end.
+  useEffect(() => {
+    if (navigableItems.length === 0) {
+      focusedItemKeyRef.current = null;
+      setFocusedIndex((prev) => (prev === -1 ? prev : -1));
+      return;
+    }
+    const key = focusedItemKeyRef.current;
+    if (key === null) return;
+    const nextIdx = navigableItems.findIndex(
+      (item) => `${item.section}:${item.file.path}` === key
+    );
+    if (nextIdx === -1) {
+      const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
+      const clampedItem = navigableItems[clamped];
+      focusedItemKeyRef.current = clampedItem
+        ? `${clampedItem.section}:${clampedItem.file.path}`
+        : null;
+      setFocusedIndex(clamped);
+    } else if (nextIdx !== focusedIndex) {
+      setFocusedIndex(nextIdx);
+    }
+  }, [navigableItems, focusedIndex]);
+
+  // Scroll the focused row into view. `useLayoutEffect` so the scroll lands in
+  // the same frame as the focus change, avoiding lag during key-repeat.
+  useLayoutEffect(() => {
+    if (focusedIndex < 0 || !fileListRef.current) return;
+    const row = fileListRef.current.querySelector<HTMLElement>(
+      `[data-row-index="${focusedIndex}"]`
+    );
+    row?.scrollIntoView({ behavior: "instant", block: "nearest" });
+  }, [focusedIndex]);
 
   const stagedChurn = useMemo(
     () =>
@@ -600,6 +654,8 @@ export function ReviewHubContent({
       setSelectedPaths(new Set());
       setSelectionSection(null);
       selectionAnchorRef.current = null;
+      setFocusedIndex(-1);
+      focusedItemKeyRef.current = null;
       hasAutoStagedRef.current = false;
       // Filter state lives in `stagedView`/`changesView` rather than refs, so the
       // modal-shell path (which unmounts on close) never noticed leftover
@@ -1167,6 +1223,81 @@ export function ReviewHubContent({
       } else {
         onClose();
       }
+      return;
+    }
+
+    // Navigation/action keys below only apply to the file list. Skip them when
+    // a text widget (filter inputs, commit textarea) or an open dropdown menu
+    // has focus so normal typing and menu navigation are unaffected.
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    ) {
+      return;
+    }
+    if (document.activeElement?.closest('[role="menu"]')) return;
+    // A diff overlay owns the keyboard while open; don't move the list beneath it.
+    if (selectedFile || selectedBaseBranchFile) return;
+    if (navigableItems.length === 0) return;
+
+    const moveFocus = (index: number) => {
+      const item = navigableItems[index];
+      if (!item) return;
+      setFocusedIndex(index);
+      focusedItemKeyRef.current = `${item.section}:${item.file.path}`;
+    };
+
+    switch (e.key) {
+      case "ArrowDown": {
+        e.preventDefault();
+        e.stopPropagation();
+        moveFocus(focusedIndex < 0 ? 0 : Math.min(focusedIndex + 1, navigableItems.length - 1));
+        return;
+      }
+      case "ArrowUp": {
+        e.preventDefault();
+        e.stopPropagation();
+        moveFocus(focusedIndex < 0 ? navigableItems.length - 1 : Math.max(focusedIndex - 1, 0));
+        return;
+      }
+      case "Enter": {
+        if (focusedIndex < 0) return;
+        const item = navigableItems[focusedIndex];
+        if (!item) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
+        setSelectionSection((prev) => (prev === null ? prev : null));
+        selectionAnchorRef.current = item.file.path;
+        setSelectedFile({ path: item.file.path, status: item.file.status });
+        return;
+      }
+      case " ": {
+        if (focusedIndex < 0) return;
+        const item = navigableItems[focusedIndex];
+        if (!item) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (item.section === "staged") {
+          handleToggleStaged(item.file.path);
+        } else {
+          handleToggleUnstaged(item.file.path);
+        }
+        return;
+      }
+      default: {
+        if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (focusedIndex < 0) return;
+          const item = navigableItems[focusedIndex];
+          if (!item) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const viewedKey = `${item.section}:${item.file.path}`;
+          handleViewedChange(viewedKey, !viewedFiles.has(viewedKey));
+        }
+        return;
+      }
     }
   });
 
@@ -1689,7 +1820,17 @@ export function ReviewHubContent({
                     </button>
                   </div>
                   {fileListExpanded && (
-                    <div id={`review-hub-files-${worktreePath}`}>
+                    <div
+                      id={`review-hub-files-${worktreePath}`}
+                      ref={fileListRef}
+                      role="listbox"
+                      aria-label="Changed files"
+                      tabIndex={-1}
+                      aria-activedescendant={
+                        focusedIndex >= 0 ? `review-hub-row-${focusedIndex}` : undefined
+                      }
+                      className="outline-hidden"
+                    >
                       {/* Conflict warning */}
                       {hasConflicts && (
                         <div
@@ -1869,11 +2010,14 @@ export function ReviewHubContent({
                               stagedView.density === "compact" ? "gap-0" : "gap-0.5"
                             )}
                           >
-                            {derivedStaged.map((file) => {
+                            {derivedStaged.map((file, i) => {
                               const viewedKey = `staged:${file.path}`;
                               return (
                                 <FileStageRow
                                   key={`staged-${file.path}`}
+                                  id={`review-hub-row-${i}`}
+                                  rowIndex={i}
+                                  isFocused={focusedIndex === i}
                                   file={file}
                                   section="staged"
                                   isStaged={true}
@@ -2076,11 +2220,15 @@ export function ReviewHubContent({
                               changesView.density === "compact" ? "gap-0" : "gap-0.5"
                             )}
                           >
-                            {derivedUnstaged.map((file) => {
+                            {derivedUnstaged.map((file, i) => {
                               const viewedKey = `unstaged:${file.path}`;
+                              const flatIndex = derivedStaged.length + i;
                               return (
                                 <FileStageRow
                                   key={`unstaged-${file.path}`}
+                                  id={`review-hub-row-${flatIndex}`}
+                                  rowIndex={flatIndex}
+                                  isFocused={focusedIndex === flatIndex}
                                   file={file}
                                   section="unstaged"
                                   isStaged={false}

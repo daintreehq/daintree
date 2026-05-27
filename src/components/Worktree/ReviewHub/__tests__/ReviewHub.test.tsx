@@ -3707,4 +3707,97 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(2));
     });
   });
+
+  describe("keyboard navigation (issue #9215)", () => {
+    // jsdom doesn't implement scrollIntoView; the focus effect calls it.
+    beforeEach(() => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+    });
+
+    const renderHub = async () => {
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+      return screen.getByRole("listbox", { name: "Changed files" });
+    };
+
+    it("ArrowDown focuses the first row, then traverses across sections", async () => {
+      const listbox = await renderHub();
+      expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+      expect(
+        screen.getByTestId("file-stage-row-src/index.ts").getAttribute("data-focused")
+      ).toBe("true");
+
+      // Row 1 is the first unstaged file — ArrowDown crosses the section boundary.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+
+      // Already at the last row — ArrowDown stops, no wrap.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+    });
+
+    it("ArrowUp from no focus jumps to the last row", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowUp" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+    });
+
+    it("Space unstages the focused staged row and keeps focus", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      await waitFor(() =>
+        expect(unstageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/index.ts")
+      );
+      expect(stageFileMock).not.toHaveBeenCalled();
+      // Focus is not cleared by toggling.
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+    });
+
+    it("Space stages the focused unstaged row", async () => {
+      const listbox = await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
+
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts"));
+      expect(unstageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("Enter opens the diff for the focused row", async () => {
+      await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      fileDiffModalOpenHistory.value.length = 0;
+      act(() => void fireEvent.keyDown(document, { key: "Enter" }));
+      await waitFor(() =>
+        expect(fileDiffModalOpenHistory.value.at(-1)).toBe(true)
+      );
+    });
+
+    it("'v' toggles the Viewed marker for the focused row", async () => {
+      await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      expect(screen.getByLabelText("Mark src/index.ts as viewed")).toBeTruthy();
+      act(() => void fireEvent.keyDown(document, { key: "v" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Mark src/index.ts as not viewed")).toBeTruthy()
+      );
+    });
+
+    it("ignores navigation keys while a filter input is focused", async () => {
+      const listbox = await renderHub();
+      const filterInput = screen.getAllByPlaceholderText("Filter…")[0]!;
+      filterInput.focus();
+
+      act(() => void fireEvent.keyDown(filterInput, { key: "ArrowDown" }));
+      expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+    });
+  });
 });
