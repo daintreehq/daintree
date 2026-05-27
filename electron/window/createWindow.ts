@@ -317,6 +317,7 @@ export function setupBrowserWindow(
   }
 
   let rendererLoadRequested = false;
+  const SHOW_FALLBACK_MS = 5_000;
   const loadRenderer = (reason: string, projectId?: string): void => {
     if (!win || win.isDestroyed() || rendererLoadRequested) return;
     rendererLoadRequested = true;
@@ -329,6 +330,32 @@ export function setupBrowserWindow(
       injectSkeletonCss(appWebContents);
     });
 
+    // Gate win.show() on the WebContentsView's first dom-ready so the HTML
+    // skeleton is parsed before the OS maps the window — eliminates the
+    // blank-window flash. `ready-to-show` on BrowserWindow does NOT cover
+    // child WebContentsView paint, and fires immediately for the sentinel
+    // data: page; dom-ready on appWebContents is the correct signal.
+    // 5s timeout fallback ensures a hung renderer doesn't leave the window
+    // permanently hidden — strictly worse than a brief blank.
+    let shown = false;
+    const showOnce = (): void => {
+      if (shown) return;
+      shown = true;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (!win.isDestroyed()) win.show();
+    };
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      fallbackTimer = null;
+      console.warn(
+        `[MAIN] dom-ready not received after ${SHOW_FALLBACK_MS}ms — showing window anyway`
+      );
+      showOnce();
+    }, SHOW_FALLBACK_MS);
+    appWebContents.once("dom-ready", showOnce);
+
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     console.log(`[MAIN] Loading renderer (${reason})...`);
     if (process.env.NODE_ENV === "development") {
@@ -339,11 +366,6 @@ export function setupBrowserWindow(
       console.log("[MAIN] Loading production build via app:// protocol");
       appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
-
-    // Show the window as soon as the navigation is in flight so the HTML
-    // skeleton in index.html paints during bundle parse instead of leaving
-    // the user with a blank background while JS loads.
-    if (!win.isDestroyed()) win.show();
   };
 
   // Window open handler — on the app view's webContents

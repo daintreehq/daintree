@@ -176,16 +176,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
           options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
         DAINTREE_DISABLE_WEBGL: "1",
-        // Force the v0.8.0 serial boot path for e2e: load the renderer only
-        // after PtyClient is ready and the WebContentsView is positioned and
-        // shown. v0.9.0's `perf(startup)` change flipped early-renderer to
-        // default-on (commit 2de3d3fe5), which races a not-yet-painted
-        // WebContentsView against the BrowserWindow show step on macOS/Linux
-        // and lets Playwright pick the blank BW shell as the "active" page —
-        // the `[aria-label="Toggle Sidebar"]` selector then never resolves
-        // and `electron.launch` times out at 60s. Production keeps the
-        // early-renderer perf gain; only e2e opts out for determinism.
-        DAINTREE_EARLY_RENDERER: "0",
+        // E2E now exercises the production early-renderer path. The
+        // win.show() call is gated on appWebContents `dom-ready` in
+        // createWindow.ts, so Playwright sees the WebContentsView page in
+        // app.windows() before the BrowserWindow is mapped — no boot-path
+        // divergence is needed for macOS/Linux determinism.
         ...(isWindowsCI
           ? {
               DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",

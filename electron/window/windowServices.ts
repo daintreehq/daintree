@@ -22,7 +22,7 @@ import {
   getEarlyPathRefreshPromise,
   kickOffEarlyPathRefresh,
 } from "../setup/environment.js";
-import { shouldDeferRendererLoadForE2E, shouldEnableEarlyRenderer } from "./earlyRenderer.js";
+import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
@@ -123,12 +123,13 @@ export async function setupWindowServices(
     markPerformance(PERF_MARKS.SERVICE_INIT_IPC_READY);
   }
 
-  // Early-renderer mode is the default: the did-finish-load handler is
-  // registered and loadRenderer() is fired before the workspace/PTY init
-  // block, so first paint stops waiting on the PTY handshake. Set
-  // DAINTREE_EARLY_RENDERER=0 to restore the serial path:
-  // workspace init → handler → loadRenderer.
-  const earlyRendererEnabled = shouldEnableEarlyRenderer({ isSmokeTest, env: process.env });
+  // Default boot path: the did-finish-load handler is registered and
+  // loadRenderer() fires before the workspace/PTY init block, so first
+  // paint stops waiting on the PTY handshake. Two paths fall back to the
+  // serial after-services-ready trigger: smoke tests (deterministic
+  // readiness checks) and the Windows E2E DAINTREE_E2E_DEFER_RENDERER_LOAD
+  // opt-in, which keeps the WebContentsView load behind the BrowserWindow
+  // sentinel for Playwright's CDP handshake.
   const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E({ env: process.env });
 
   let rendererLoadStarted = false;
@@ -180,10 +181,10 @@ export async function setupWindowServices(
     opts.loadRenderer(reason, opts.initialProjectId);
   };
 
-  if (earlyRendererEnabled && !deferRendererLoadForE2E) {
-    console.log("[MAIN] Early renderer enabled — loading renderer in parallel with PTY init");
+  if (!deferRendererLoadForE2E && !isSmokeTest) {
+    console.log("[MAIN] Loading renderer in parallel with PTY init");
     startRendererLoad("early-renderer");
-  } else if (earlyRendererEnabled) {
+  } else if (deferRendererLoadForE2E) {
     console.log("[MAIN] E2E renderer-load deferral enabled — waiting for services");
   }
 
@@ -308,13 +309,12 @@ export async function setupWindowServices(
   const { armRestoreQuota } = await import("../ipc/utils.js");
   armRestoreQuota(50, 120_000);
 
-  // With early-renderer mode (default), the RENDERER_READY mark can fire
-  // before this point, since the renderer is loading concurrently with
-  // workspace init.
+  // On the default path the RENDERER_READY mark can fire before this point,
+  // since the renderer is loading concurrently with workspace init.
   markPerformance(PERF_MARKS.SERVICE_INIT_COMPLETE);
-  // Opt-out path (DAINTREE_EARLY_RENDERER=0): renderer load happens here,
-  // after workspace + PTY are ready. With early-renderer mode active this is
-  // a no-op (already started above).
+  // Serial fallback: smoke tests and the Windows E2E deferral path land
+  // here after workspace + PTY are ready. With the default path this is a
+  // no-op (already started above).
   startRendererLoad("after-services-ready");
 
   // Error handlers also use ipcMain.handle — register once
