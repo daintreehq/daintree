@@ -39,7 +39,12 @@ beforeAll(() => {
 });
 
 function resetStores() {
-  usePanelStore.setState({ backendStatus: "connected", lastCrashType: null });
+  usePanelStore.setState({
+    backendStatus: "connected",
+    lastCrashType: null,
+    watchdogStatus: "active",
+    watchdogDisabledInfo: null,
+  });
   useSafeModeStore.setState({
     safeMode: false,
     dismissed: false,
@@ -270,6 +275,18 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service restarting")).toBeTruthy();
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
+  });
+
+  it("suppresses github-token and cloud-sync while the watchdog is disabled", () => {
+    usePanelStore.setState({ watchdogStatus: "disabled" });
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
+    expect(screen.queryByText("GitHub token expired")).toBeNull();
+    expect(screen.queryByText("Project in a synced folder")).toBeNull();
   });
 
   it("renders the GitHub token banner when only the token is unhealthy", () => {

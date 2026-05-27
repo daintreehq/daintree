@@ -119,6 +119,7 @@ describe("useCloudSyncWarning", () => {
       priority: "low",
       supersedeKey: "cloud-sync:p1",
       countable: false,
+      context: { eventKind: "host" },
     });
   });
 
