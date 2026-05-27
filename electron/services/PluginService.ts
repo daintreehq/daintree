@@ -87,7 +87,61 @@ interface LoadedPlugin {
   isBuiltin: boolean;
 }
 
+/**
+ * Diagnostic record of the most recent activation failure for a plugin id.
+ * Held internally (not on {@link LoadedPluginInfo}) until #9271 lands the
+ * provenance store with a public `loadError` field — at that point this Map
+ * is migrated into the provenance record. Until then the Settings diagnostic
+ * tab and IPC consumers may read it via {@link PluginService.getPluginLoadError}.
+ */
+interface PluginLoadErrorRecord {
+  message: string;
+  stack?: string;
+  at: number;
+}
+
 const ACTIVATE_TIMEOUT_MS = 5000;
+
+/**
+ * Normalise the value thrown out of `activate()` into a serialisable record.
+ * `unknown` becomes a stable `{ message, stack?, at }` shape so the Settings
+ * diagnostic tab (and #9271's provenance store) don't have to re-handle raw
+ * error objects.
+ */
+function toPluginLoadErrorRecord(err: unknown): PluginLoadErrorRecord {
+  if (err instanceof Error) {
+    return { message: err.message, stack: err.stack, at: Date.now() };
+  }
+  if (typeof err === "string") {
+    return { message: err, at: Date.now() };
+  }
+  // `JSON.stringify(undefined)` returns `undefined`, not a string, and would
+  // violate the `message: string` contract — coalesce to `String(err)` so
+  // bare `throw undefined` / `throw null` still surface a usable label.
+  let message: string;
+  try {
+    message = JSON.stringify(err) ?? String(err);
+  } catch {
+    message = String(err);
+  }
+  return { message, at: Date.now() };
+}
+
+/**
+ * Run a single unload-cascade step with per-step containment. A throwing
+ * disposer is logged as a warning (best-effort cleanup, not a user-actionable
+ * error per the issue's containment contract) and the cascade continues so
+ * subsequent registry unregisters still fire. Without this wrapping, one
+ * thrown disposer would strand later steps and leak registrations that fail
+ * the next load with a duplicate-id error.
+ */
+function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    console.warn(`[PluginService] Unload step "${step}" for "${pluginId}" threw:`, err);
+  }
+}
 
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
@@ -98,6 +152,13 @@ export class PluginService {
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
   private pluginEventCleanups = new Map<string, Array<() => void>>();
+  /**
+   * Most recent activation error per plugin id. Populated by the catch in
+   * `loadPlugin()` so a thrown `activate()` no longer escapes containment.
+   * Cleared on unload and on a subsequent successful activation. Exposed via
+   * {@link getPluginLoadError} for Settings diagnostics and IPC introspection.
+   */
+  private pluginLoadErrors = new Map<string, PluginLoadErrorRecord>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -475,9 +536,18 @@ export class PluginService {
             revoke();
           }
         }
+        // Successful activation (or a main with no activate fn) clears any
+        // diagnostic record left over from a prior failed attempt at the same
+        // plugin id — relevant when initialize() is run twice against the
+        // same service in tests, or in future hot-reload paths.
+        this.pluginLoadErrors.delete(manifest.name);
       } catch (err) {
+        const record = toPluginLoadErrorRecord(err);
+        this.pluginLoadErrors.set(manifest.name, record);
         console.error(`[PluginService] Failed to load main entry for ${manifest.name}:`, err);
       }
+    } else {
+      this.pluginLoadErrors.delete(manifest.name);
     }
 
     return plugin;
@@ -873,7 +943,18 @@ export class PluginService {
     if (!handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
-    return await handler(ctx, ...args);
+    try {
+      return await handler(ctx, ...args);
+    } catch (err) {
+      // Contain at the boundary so a throwing plugin handler can't propagate
+      // up through `ipcMain.handle` as an unhandled rejection in the main
+      // process. The error still surfaces to the renderer (we rethrow after
+      // logging) — the renderer-side wrapping in `usePluginActions` turns
+      // that rejection into a user-facing toast.
+      // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
+      console.error(`[PluginService] Handler "${key}" threw:`, err);
+      throw err;
+    }
   }
 
   removeHandlers(pluginId: string): void {
@@ -897,20 +978,7 @@ export class PluginService {
       this.cleanupMap.delete(pluginId);
     }
     this.flushPluginEventCleanups(pluginId);
-    this.removeHandlers(pluginId);
-    this.unregisterPluginActions(pluginId);
-    unregisterPluginMenuItems(pluginId);
-    unregisterPluginToolbarButtons(pluginId);
-    this.scheduleToolbarButtonsBroadcast(true);
-    unregisterPluginPanelKinds(pluginId);
-    unregisterForgeProviders(pluginId);
-    // Belt-and-suspenders: per-provider disposers pushed onto
-    // pluginEventCleanups by host.registerForgeProvider have already fired in
-    // flushPluginEventCleanups() above, but a direct bulk-clear guards against
-    // any impl entry that wasn't tracked through that path (e.g. a future
-    // re-bind that didn't refresh the disposer slot). The bulk call is
-    // idempotent — already-cleared keys are silent no-ops.
-    unregisterForgeProviderImpls(pluginId);
+
     // Capture the unloaded plugin's declared decoration scopes before clearing
     // the registry so we can tell any renderer that was showing them to
     // re-pull (it will now resolve no impl and clear). Without this, stale
@@ -919,16 +987,57 @@ export class PluginService {
     const decorationScopes = this.plugins
       .get(pluginId)
       ?.manifest.contributes.fileDecorationProviders.flatMap((c) => c.scopes);
-    unregisterFileDecorationProviders(pluginId);
-    unregisterFileDecorationProviderImpls(pluginId);
+
+    // Each step is wrapped individually so a throwing registry call can't
+    // strand later cleanup steps — partial-unload leaks would re-surface as
+    // duplicate-id errors on the next load. Disposer throws are warnings
+    // (the cleanup is best-effort), not user-visible errors.
+    //
+    // Belt-and-suspenders: per-provider disposers pushed onto
+    // pluginEventCleanups by host.registerForgeProvider have already fired in
+    // flushPluginEventCleanups() above, but the bulk *Impls clears below guard
+    // against any impl entry that wasn't tracked through that path (e.g. a
+    // future re-bind that didn't refresh the disposer slot). The bulk calls
+    // are idempotent — already-cleared keys are silent no-ops. Provider and
+    // impl steps are split so a throw in the descriptor unregister doesn't
+    // strand the impl unregister and vice versa.
+    runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginActions", () =>
+      this.unregisterPluginActions(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () =>
+      unregisterPluginToolbarButtons(pluginId)
+    );
+    runUnloadStep(pluginId, "scheduleToolbarButtonsBroadcast", () =>
+      this.scheduleToolbarButtonsBroadcast(true)
+    );
+    runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
+      unregisterPluginPanelKinds(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
+    runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
+      unregisterForgeProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterFileDecorationProviders", () =>
+      unregisterFileDecorationProviders(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
+      unregisterFileDecorationProviderImpls(pluginId)
+    );
+
     this.plugins.delete(pluginId);
+    this.pluginLoadErrors.delete(pluginId);
+
     if (decorationScopes && decorationScopes.length > 0) {
-      for (const scope of new Set(decorationScopes)) {
-        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-          name: "plugin:decorations-changed",
-          payload: { scope },
-        });
-      }
+      runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
+        for (const scope of new Set(decorationScopes)) {
+          broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+            name: "plugin:decorations-changed",
+            payload: { scope },
+          });
+        }
+      });
     }
   }
 
@@ -957,6 +1066,17 @@ export class PluginService {
       loadedAt: p.loadedAt,
       isBuiltin: p.isBuiltin,
     }));
+  }
+
+  /**
+   * Most recent activation error for a plugin id, or `undefined` if the last
+   * load succeeded (or the plugin has never been loaded). Cleared on unload
+   * and on a subsequent successful activation. Intended for the Settings
+   * diagnostic surface (F19) and #9271's provenance store — until that lands
+   * the record stays in-memory and does not survive a host restart.
+   */
+  getPluginLoadError(pluginId: string): PluginLoadErrorRecord | undefined {
+    return this.pluginLoadErrors.get(pluginId);
   }
 
   /**
