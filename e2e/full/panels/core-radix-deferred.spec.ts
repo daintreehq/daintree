@@ -61,6 +61,11 @@ test.describe.serial("Core: Radix deferred wrappers", () => {
     if ((await overflowTrigger.count()) === 0) {
       // No panel rendered (cold launch state). Skip — the tooltip path above
       // already exercises the deferred chunk priming.
+      test.info().annotations.push({
+        type: "quarantine",
+        description: "2026-05-27 No panel overflow trigger present in cold launch state",
+      });
+
       test.skip(true, "No panel overflow trigger present in cold launch state");
       return;
     }

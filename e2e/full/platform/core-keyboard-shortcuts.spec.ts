@@ -158,6 +158,11 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
   test.describe.serial("Terminal Search Routing", () => {
     // On Linux, Ctrl+F is intercepted by xterm's TUI keybind guard
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Cmd+F terminal search only testable on macOS",
+    });
+
     test.skip(process.platform !== "darwin", "Cmd+F terminal search only testable on macOS");
 
     test("Cmd+F opens terminal search when terminal is focused", async () => {

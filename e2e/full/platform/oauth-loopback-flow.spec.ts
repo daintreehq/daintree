@@ -470,6 +470,11 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
   // migration fixes; needs a deeper investigation of the CDP interception
   // in `DevPreviewPane` / Keycloak mock integration. Skipping to keep the
   // rest of the full suite green on this Mac; tracked separately.
+  test.info().annotations.push({
+    type: "quarantine",
+    description: "2026-05-27 Full test quarantined: dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated",
+  });
+
   test.skip("dev-preview: OAuth redirect blocked → Sign in via Browser → authenticated", async () => {
     // Use a getter so we always reference the latest page after view transitions
     const w = () => ctx.window;

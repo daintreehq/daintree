@@ -186,6 +186,11 @@ test.describe.serial("Core: PTY Resilience", () => {
   });
 
   test("PTY crash mid-output: spawn terminal and start flood", async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Unix-only: kills the PTY shell with SIGKILL",
+    });
+
     test.skip(process.platform === "win32", "Unix-only: kills the PTY shell with SIGKILL");
     test.setTimeout(120_000);
     const { window } = ctx;

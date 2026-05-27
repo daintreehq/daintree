@@ -45,6 +45,11 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
     const before = await getTotalHandlerCount(ctx.app);
     if (before === null) {
+      test.info().annotations.push({
+        type: "quarantine",
+        description: "2026-05-27 ipcMain._invokeHandlers private API unavailable",
+      });
+
       test.skip(true, "ipcMain._invokeHandlers private API unavailable");
       return;
     }

@@ -23,6 +23,11 @@ import { mkdtempSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
+test.info().annotations.push({
+  type: "platform-skip",
+  description: "Process cleanup tests are Unix-only",
+});
+
 test.skip(process.platform === "win32", "Process cleanup tests are Unix-only");
 
 test.describe("Core: Process Cleanup", () => {
@@ -186,6 +191,11 @@ test.describe("Core: Process Cleanup", () => {
 });
 
 test.describe.serial("Core: Process Cleanup on Shutdown", () => {
+  test.info().annotations.push({
+    type: "platform-skip",
+    description: "Unix-only: uses pgrep for process tree verification",
+  });
+
   test.skip(process.platform === "win32", "Unix-only: uses pgrep for process tree verification");
 
   let ctx: AppContext;

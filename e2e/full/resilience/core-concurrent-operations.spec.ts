@@ -148,6 +148,11 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
 
       const startBtn = window.locator(SEL.agent.startButton);
       if (!(await startBtn.isVisible().catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Agent start button not visible in this launch state",
+        });
+
         test.skip();
         return;
       }
@@ -163,6 +168,11 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
 
     test("typing in HybridInputBar is not disrupted by concurrent terminal output", async () => {
       if (!agentAvailable) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Required element or state not available in this launch",
+        });
+
         test.skip();
         return;
       }

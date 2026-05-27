@@ -50,6 +50,11 @@ test.describe.serial("Core: Keyboard Terminal Navigation", () => {
   });
 
   test("Ctrl+Tab cycles forward through terminals", async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Ctrl+Tab is intercepted by the Linux window manager",
+    });
+
     test.skip(process.platform === "linux", "Ctrl+Tab is intercepted by the Linux window manager");
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
@@ -80,6 +85,11 @@ test.describe.serial("Core: Keyboard Terminal Navigation", () => {
   });
 
   test("Ctrl+Shift+Tab cycles backward through terminals", async () => {
+    test.info().annotations.push({
+      type: "platform-skip",
+      description: "Ctrl+Tab is intercepted by the Linux window manager",
+    });
+
     test.skip(process.platform === "linux", "Ctrl+Tab is intercepted by the Linux window manager");
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);

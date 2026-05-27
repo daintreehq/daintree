@@ -12,6 +12,11 @@ import {
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
+test.info().annotations.push({
+  type: "platform-skip",
+  description: "Terminal isolation tests use Unix shell loops",
+});
+
 test.skip(process.platform === "win32", "Terminal isolation tests use Unix shell loops");
 
 let ctx: AppContext;

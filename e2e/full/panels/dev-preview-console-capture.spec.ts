@@ -50,6 +50,11 @@ server.listen(0, '127.0.0.1', () => {
 
     const devBtn = window.locator(SEL.toolbar.openDevPreview);
     if (!(await devBtn.isVisible().catch(() => false))) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "Dev preview toolbar button not visible in this launch state",
+        });
+
       test.skip();
       return;
     }

@@ -190,6 +190,11 @@ test.describe.serial("Core: Shell & Settings", () => {
       // rather than cleanly skipped.
       let before = await getGridPanelCount(window);
       if (before === 0) {
+        test.info().annotations.push({
+          type: "conditional-skip",
+          description: "No panels to close in this launch state",
+        });
+
         test.skip();
         return;
       }

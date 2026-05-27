@@ -481,6 +481,11 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
   });
 
   test("chrome tracks live process: promote on `claude`, demote after Claude exits", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ANTHROPIC_API_KEY is required for Claude online flow",
+    });
+
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for Claude online flow");
     test.setTimeout(process.platform === "win32" ? 600_000 : 300_000);
 
