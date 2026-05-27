@@ -551,13 +551,9 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
-  "plugin:clear-audit-log": {
+  "plugin:context-menu-items": {
     args: [];
-    result: void;
-  };
-  "plugin:export-audit-log": {
-    args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
-    result: boolean;
+    result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
   };
   "plugin:file-decorations-get": {
     args: [scope: string, paths: string[]];
@@ -567,13 +563,9 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../forge.js").RegisteredForgeProvider[];
   };
-  "plugin:get-audit-config": {
+  "plugin:keybindings": {
     args: [];
-    result: import("./pluginAudit.js").PluginAuditConfig;
-  };
-  "plugin:get-audit-records": {
-    args: [];
-    result: import("./pluginAudit.js").PluginActionAuditRecord[];
+    result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
   };
   "plugin:list": {
     args: [];
@@ -583,29 +575,9 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").MenuItemContribution }[];
   };
-  "plugin:keybindings": {
-    args: [];
-    result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
-  };
-  "plugin:context-menu-items": {
-    args: [];
-    result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
-  };
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
-  };
-  "plugin:set-audit-enabled": {
-    args: [enabled: boolean];
-    result: import("./pluginAudit.js").PluginAuditConfig;
-  };
-  "plugin:set-audit-max-records": {
-    args: [max: number];
-    result: import("./pluginAudit.js").PluginAuditConfig;
-  };
-  "plugin:set-enabled": {
-    args: [pluginId: string, enabled: boolean];
-    result: void;
   };
   "plugin:toolbar-buttons": {
     args: [];

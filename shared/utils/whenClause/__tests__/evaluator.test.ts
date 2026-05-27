@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../parser";
-import { evaluate } from "../evaluator";
-import type { WhenClauseContext } from "../types";
+import { parse } from "../parser.js";
+import { evaluate } from "../evaluator.js";
+import type { WhenClauseContext } from "../types.js";
 
 describe("when clause evaluator", () => {
   describe("literals", () => {
@@ -58,17 +58,17 @@ describe("when clause evaluator", () => {
     });
 
     it("evaluates dotted path from nested context", () => {
-      const ctx: WhenClauseContext = { panel: { kind: "terminal" } as any };
+      const ctx: WhenClauseContext = { panel: { kind: "terminal" } };
       expect(evaluate(parse("panel.kind"), ctx)).toBe(true);
     });
 
     it("evaluates missing nested key as falsy", () => {
-      const ctx: WhenClauseContext = { panel: { kind: "terminal" } as any };
+      const ctx: WhenClauseContext = { panel: { kind: "terminal" } };
       expect(evaluate(parse("panel.nonexistent"), ctx)).toBe(false);
     });
 
     it("evaluates path through null as falsy", () => {
-      const ctx: WhenClauseContext = { panel: null as any };
+      const ctx: WhenClauseContext = { panel: null };
       expect(evaluate(parse("panel.kind"), ctx)).toBe(false);
     });
   });

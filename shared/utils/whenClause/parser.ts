@@ -1,4 +1,4 @@
-import type { ASTNode, BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode } from "./types";
+import type { ASTNode, BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode } from "./types.js";
 
 const IDENT_RE = /^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*/;
 const UNSUPPORTED_OPS: Array<[RegExp, string]> = [
@@ -141,7 +141,7 @@ function parsePrimary(tok: Tokenizer): ASTNode {
   if (next === "'") {
     return { kind: "literal", value: tok.next() } as LiteralNode;
   }
-  throw new ParseError(`unexpected token "${next}"`, (tok as any).pos ?? 0);
+  throw new ParseError(`unexpected token "${next}"`, tok.length);
 }
 
 function parseEquality(tok: Tokenizer): ASTNode {
@@ -184,7 +184,7 @@ export function parse(input: string): ASTNode {
   const tok = new Tokenizer(trimmed);
   const ast = parseOr(tok);
   if (tok.peek() !== null) {
-    throw new ParseError("unexpected content after expression", (tok as any).pos ?? input.length);
+    throw new ParseError("unexpected content after expression", input.length);
   }
   return ast;
 }

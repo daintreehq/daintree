@@ -1,3 +1,3 @@
-export { parse, ParseError } from "./parser";
-export { evaluate } from "./evaluator";
-export type { ASTNode, WhenClauseContext, ContextKeyValue } from "./types";
+export { parse, ParseError } from "./parser.js";
+export { evaluate } from "./evaluator.js";
+export type { ASTNode, WhenClauseContext, ContextKeyValue } from "./types.js";

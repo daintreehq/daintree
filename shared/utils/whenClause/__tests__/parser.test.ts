@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parse, ParseError } from "../parser";
+import { parse, ParseError } from "../parser.js";
+import type { BinaryOpNode } from "../types.js";
 
 describe("when clause parser", () => {
   describe("literals", () => {
@@ -194,7 +195,7 @@ describe("when clause parser", () => {
     it("parses chained equality with &&", () => {
       const ast = parse("panel.kind == 'terminal' && agentState == 'idle'");
       expect(ast.kind).toBe("binary");
-      expect((ast as any).operator).toBe("&&");
+      expect((ast as BinaryOpNode).operator).toBe("&&");
     });
 
     it("parses negated equality (no parens in v1)", () => {

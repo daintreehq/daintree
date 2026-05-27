@@ -1,4 +1,4 @@
-import type { ASTNode, ContextKeyValue, WhenClauseContext } from "./types";
+import type { ASTNode, ContextKeyValue, WhenClauseContext } from "./types.js";
 
 function resolve(path: string[], ctx: WhenClauseContext): unknown {
   let current: unknown = ctx;
@@ -44,6 +44,8 @@ export function evaluate(node: ASTNode, ctx: WhenClauseContext): boolean {
           return resolveValue(node.left, ctx) === resolveValue(node.right, ctx);
         case "!=":
           return resolveValue(node.left, ctx) !== resolveValue(node.right, ctx);
+        default:
+          return false;
       }
     }
   }
