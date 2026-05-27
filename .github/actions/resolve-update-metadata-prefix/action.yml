@@ -1,0 +1,25 @@
+name: Resolve update metadata prefix
+description: Derive UPDATE_METADATA_PREFIX (rc/beta/latest) from the triggering tag
+
+outputs:
+  prefix:
+    description: The resolved prefix (rc, beta, or latest)
+    value: ${{ steps.resolve.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve prefix from tag
+      id: resolve
+      shell: bash
+      run: |
+        TAG_VERSION="${GITHUB_REF_NAME#v}"
+        if [[ "$TAG_VERSION" == *-rc* ]]; then
+          PREFIX="rc"
+        elif [[ "$TAG_VERSION" == *-beta* ]]; then
+          PREFIX="beta"
+        else
+          PREFIX="latest"
+        fi
+        echo "UPDATE_METADATA_PREFIX=${PREFIX}" >> "$GITHUB_ENV"
+        echo "prefix=${PREFIX}" >> "$GITHUB_OUTPUT"
