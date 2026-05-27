@@ -5,6 +5,24 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import { createRequire } from "node:module";
+
+// ajv and ajv-formats are CJS-only with deep `module.exports = Class` exports.
+// NodeNext module resolution can't resolve these from ESM, so use createRequire
+// which is the canonical Node.js interop for CJS-in-ESM.
+const req = createRequire(import.meta.url);
+const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
+const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
+
+interface ValidateFn {
+  (data: unknown): boolean;
+  $async?: boolean;
+  errors?: Array<{ instancePath: string; message?: string }>;
+}
+
+interface AjvInstance {
+  compile(schema: Record<string, unknown>): ValidateFn;
+}
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -153,6 +171,8 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
+  private actionValidators = new Map<string, ValidateFn>();
+  private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
    * Most recent activation error per plugin id. Populated by the catch in
@@ -945,6 +965,34 @@ export class PluginService {
     if (!handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
+
+    const descriptor = this.pluginActions.get(channel);
+    if (descriptor?.inputSchema && descriptor.pluginId === pluginId) {
+      let validator = this.actionValidators.get(channel);
+      if (!validator) {
+        if (!this.ajv) {
+          this.ajv = new Ajv();
+          addFormats(this.ajv);
+        }
+        validator = this.ajv.compile(descriptor.inputSchema);
+        if (validator.$async) {
+          throw new Error(
+            `Plugin action "${channel}" has an async schema ($async) which is not supported`
+          );
+        }
+        this.actionValidators.set(channel, validator);
+      }
+      const argsObj = args.length > 0 ? args[0] : {};
+      if (!validator(argsObj)) {
+        const details = validator.errors
+          ?.map((e) => `${e.instancePath || "/"} ${e.message}`)
+          .join("; ");
+        throw new Error(
+          `Invalid arguments for plugin action "${channel}": ${details ?? "unknown error"}`
+        );
+      }
+    }
+
     try {
       return await handler(ctx, ...args);
     } catch (err) {
@@ -964,6 +1012,7 @@ export class PluginService {
     for (const key of [...this.handlerMap.keys()]) {
       if (key.startsWith(prefix)) {
         this.handlerMap.delete(key);
+        this.actionValidators.delete(key.slice(prefix.length));
       }
     }
   }
@@ -1187,6 +1236,7 @@ export class PluginService {
     if (!descriptor || descriptor.pluginId !== pluginId) return;
 
     this.pluginActions.delete(actionId);
+    this.actionValidators.delete(actionId);
     const owners = this.pluginActionOwners.get(pluginId);
     if (owners) {
       owners.delete(actionId);
@@ -1203,6 +1253,7 @@ export class PluginService {
 
     for (const id of owners) {
       this.pluginActions.delete(id);
+      this.actionValidators.delete(id);
     }
     this.pluginActionOwners.delete(pluginId);
 
