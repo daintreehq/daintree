@@ -3728,9 +3728,9 @@ describe("ReviewHub", () => {
 
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
       expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
-      expect(
-        screen.getByTestId("file-stage-row-src/index.ts").getAttribute("data-focused")
-      ).toBe("true");
+      expect(screen.getByTestId("file-stage-row-src/index.ts").getAttribute("data-focused")).toBe(
+        "true"
+      );
 
       // Row 1 is the first unstaged file — ArrowDown crosses the section boundary.
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));

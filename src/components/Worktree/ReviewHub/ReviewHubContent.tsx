@@ -380,9 +380,7 @@ export function ReviewHubContent({
     }
     const key = focusedItemKeyRef.current;
     if (key === null) return;
-    const nextIdx = navigableItems.findIndex(
-      (item) => `${item.section}:${item.file.path}` === key
-    );
+    const nextIdx = navigableItems.findIndex((item) => `${item.section}:${item.file.path}` === key);
     if (nextIdx === -1) {
       const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
       const clampedItem = navigableItems[clamped];
@@ -1229,7 +1227,7 @@ export function ReviewHubContent({
     // Navigation/action keys below only apply to the file list. Skip them when
     // a text widget (filter inputs, commit textarea) or an open dropdown menu
     // has focus so normal typing and menu navigation are unaffected.
-    const target = e.target as HTMLElement | null;
+    const target = e.target instanceof HTMLElement ? e.target : null;
     if (
       target &&
       (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
