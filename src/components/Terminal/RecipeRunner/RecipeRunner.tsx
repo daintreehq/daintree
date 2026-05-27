@@ -55,18 +55,16 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
             title={formatFailureTitle(runner.spawnFailureSummary)}
             description={runner.spawnFailureSummary.failures[0]?.error}
             severity="error"
-            actions={[
-              {
-                id: "retry-failed",
-                label: "Retry failed",
-                icon: RotateCcw,
-                variant: "primary",
-                onClick: runner.handleRetryFailed,
-                title: "Retry the terminals that failed to start",
-                ariaLabel: "Retry failed terminals",
-                loading: runner.isRetryingFailed,
-              },
-            ]}
+            action={{
+              id: "retry-failed",
+              label: "Retry failed",
+              icon: RotateCcw,
+              variant: "primary",
+              onClick: runner.handleRetryFailed,
+              title: "Retry the terminals that failed to start",
+              ariaLabel: "Retry failed terminals",
+              loading: runner.isRetryingFailed,
+            }}
             onClose={runner.dismissSpawnFailures}
           />
         </div>

@@ -21,15 +21,13 @@ export interface BannerAction {
 
 export type InlineStatusBannerSeverity = "error" | "warning" | "info" | "success" | "neutral";
 
-export interface InlineStatusBannerProps {
+interface BaseInlineStatusBannerProps {
   icon: React.ComponentType<{ className?: string; style?: CSSProperties }>;
   title: React.ReactNode;
   description?: React.ReactNode;
   contextLine?: string;
-  severity?: InlineStatusBannerSeverity;
   animated?: boolean;
   className?: string;
-  actions: BannerAction[];
   role?: "alert" | "status";
   ariaLive?: "off" | "polite" | "assertive";
   onClose?: () => void;
@@ -38,7 +36,9 @@ export interface InlineStatusBannerProps {
   /**
    * Non-button control rendered alongside the actions (e.g. a Popover
    * trigger). Rendered first in the controls row, before the dismiss
-   * button and the primary action buttons.
+   * button and the primary action buttons. This is the escape hatch for
+   * surfacing secondary affordances on an error banner without breaking
+   * the single-action rule.
    */
   trailingSlot?: React.ReactNode;
   /**
@@ -55,6 +55,36 @@ export interface InlineStatusBannerProps {
    */
   autoDismissAfter?: number;
 }
+
+/**
+ * The action surface is gated on `severity`. Error banners follow the
+ * CLAUDE.md Title-Message-Action rule — at most one contextual `action`
+ * plus the optional close. The `actions?: never` here makes the
+ * single-action limit enforceable at the type level rather than only in
+ * prose: passing `actions` on an error banner is a compile error.
+ * Surface any demoted affordances through `trailingSlot`.
+ */
+interface ErrorActionProps {
+  action?: BannerAction;
+  actions?: never;
+}
+
+/**
+ * Non-error banners (warning / info / success / neutral) are not bound by
+ * the single-action rule and may pass an `actions` array, or the single
+ * `action` convenience prop (handy for callers whose severity is computed
+ * dynamically and may resolve to either branch).
+ */
+interface NonErrorActionProps {
+  action?: BannerAction;
+  actions?: BannerAction[];
+}
+
+export type InlineStatusBannerProps = BaseInlineStatusBannerProps &
+  (
+    | ({ severity: "error" } & ErrorActionProps)
+    | ({ severity: Exclude<InlineStatusBannerSeverity, "error"> } & NonErrorActionProps)
+  );
 
 const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, string> = {
   error: "--color-status-error",
@@ -103,6 +133,7 @@ export function InlineStatusBanner({
   severity = "error",
   animated = true,
   className,
+  action,
   actions,
   role = "alert",
   ariaLive,
@@ -153,6 +184,8 @@ export function InlineStatusBanner({
     };
   }, [shouldAnimate]);
 
+  const actionList: BannerAction[] = actions ?? (action ? [action] : []);
+
   const hasDescription = description || contextLine || descriptionExtras;
 
   const closeButton = onClose ? (
@@ -169,7 +202,7 @@ export function InlineStatusBanner({
     </button>
   ) : null;
 
-  const showControlsRow = !!trailingSlot || (!hasDescription && !!onClose) || actions.length > 0;
+  const showControlsRow = !!trailingSlot || (!hasDescription && !!onClose) || actionList.length > 0;
 
   return (
     <div
@@ -259,7 +292,7 @@ export function InlineStatusBanner({
         <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
           {trailingSlot}
           {!hasDescription && closeButton}
-          {actions.map((action) => {
+          {actionList.map((action) => {
             const variant = action.variant ?? "primary";
             const variantClasses = getButtonClasses(variant);
             const variantStyle = colorVar ? getButtonStyle(variant, colorVar) : undefined;

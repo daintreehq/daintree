@@ -52,24 +52,42 @@ export function ReconnectErrorBanner({
   isRestarting = false,
   className,
 }: ReconnectErrorBannerProps) {
+  const severity = getErrorSeverity(error.type);
+  const retryAction = {
+    id: "retry",
+    label: "Retry",
+    icon: RotateCcw,
+    variant: "primary" as const,
+    onClick: () => onRestart(terminalId),
+    title: "Retry reconnecting",
+    ariaLabel: "Retry reconnecting",
+    loading: isRestarting,
+  };
+
+  // Severity is computed from the error type, so branch on it to satisfy the
+  // discriminated union on `InlineStatusBanner` (error banners take a single
+  // `action`). Either way this banner shows exactly one action.
+  if (severity === "error") {
+    return (
+      <InlineStatusBanner
+        icon={getErrorIcon(error.type)}
+        title={getErrorTitle(error.type)}
+        description={boundedErrorText(error.message)}
+        severity="error"
+        action={retryAction}
+        onClose={() => onDismiss(terminalId)}
+        className={className}
+      />
+    );
+  }
+
   return (
     <InlineStatusBanner
       icon={getErrorIcon(error.type)}
       title={getErrorTitle(error.type)}
       description={boundedErrorText(error.message)}
-      severity={getErrorSeverity(error.type)}
-      actions={[
-        {
-          id: "retry",
-          label: "Retry",
-          icon: RotateCcw,
-          variant: "primary",
-          onClick: () => onRestart(terminalId),
-          title: "Retry reconnecting",
-          ariaLabel: "Retry reconnecting",
-          loading: isRestarting,
-        },
-      ]}
+      severity={severity}
+      action={retryAction}
       onClose={() => onDismiss(terminalId)}
       className={className}
     />

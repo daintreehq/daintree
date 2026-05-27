@@ -1,5 +1,6 @@
 import { XCircle, RotateCcw, FolderEdit, Trash2, Settings2 } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
+import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { sanitizeErrorText, boundedErrorText } from "@/utils/errorText";
 import { actionService } from "@/services/ActionService";
 import type { SpawnError } from "@/types";
@@ -94,58 +95,60 @@ export function SpawnErrorBanner({
   const isCwdError = error.code === "ENOTDIR";
   const isResourceLimit = RESOURCE_LIMIT_CODES.has(error.code);
 
-  const actions: BannerAction[] = [];
-  if (isCwdError) {
-    actions.push({
-      id: "update-cwd",
-      label: "Change directory",
-      icon: FolderEdit,
-      variant: "accent",
-      onClick: () => onUpdateCwd(terminalId),
-      title: "Change working directory",
-      ariaLabel: "Update working directory",
-      disabled: isRestarting,
-    });
-  }
-  if (isResourceLimit) {
-    actions.push({
-      id: "open-limits",
-      label: "Terminal limits",
-      icon: Settings2,
-      variant: "accent",
-      onClick: () => {
-        void actionService.dispatch(
-          "app.settings.openTab",
-          { tab: "terminal", subtab: "performance", sectionId: "terminal-panel-limits" },
-          { source: "user" }
-        );
-      },
-      title: "Open terminal limits settings",
-      ariaLabel: "Open terminal limits settings",
-    });
-  }
-  actions.push(
-    {
-      id: "retry",
-      label: "Retry",
-      icon: RotateCcw,
-      variant: "primary",
-      onClick: () => onRetry(terminalId),
-      title: "Retry",
-      ariaLabel: "Retry starting terminal",
-      loading: isRestarting,
+  const retryAction: BannerAction = {
+    id: "retry",
+    label: "Retry",
+    icon: RotateCcw,
+    variant: "primary",
+    onClick: () => onRetry(terminalId),
+    title: "Retry",
+    ariaLabel: "Retry starting terminal",
+    loading: isRestarting,
+  };
+  const changeDirAction: BannerAction = {
+    id: "update-cwd",
+    label: "Change directory",
+    icon: FolderEdit,
+    variant: "accent",
+    onClick: () => onUpdateCwd(terminalId),
+    title: "Change working directory",
+    ariaLabel: "Update working directory",
+    disabled: isRestarting,
+  };
+  const limitsAction: BannerAction = {
+    id: "open-limits",
+    label: "Terminal limits",
+    icon: Settings2,
+    variant: "accent",
+    onClick: () => {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "terminal", subtab: "performance", sectionId: "terminal-panel-limits" },
+        { source: "user" }
+      );
     },
-    {
-      id: "trash",
-      label: "Remove terminal",
-      icon: Trash2,
-      variant: "danger",
-      onClick: () => onTrash(terminalId),
-      title: "Move to trash",
-      ariaLabel: "Move to trash",
-      disabled: isRestarting,
-    }
-  );
+    title: "Open terminal limits settings",
+    ariaLabel: "Open terminal limits settings",
+  };
+  const trashAction: BannerAction = {
+    id: "trash",
+    label: "Remove terminal",
+    icon: Trash2,
+    variant: "danger",
+    onClick: () => onTrash(terminalId),
+    title: "Move to trash",
+    ariaLabel: "Move to trash",
+    disabled: isRestarting,
+  };
+
+  // Single contextual action: the most specific recovery for the error code.
+  // Everything else moves into the overflow menu so the banner keeps to the
+  // one-action rule (CLAUDE.md Title-Message-Action).
+  const primaryAction = isCwdError ? changeDirAction : isResourceLimit ? limitsAction : retryAction;
+  const overflowActions: BannerAction[] = [
+    ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
+    trashAction,
+  ];
 
   return (
     <InlineStatusBanner
@@ -154,7 +157,10 @@ export function SpawnErrorBanner({
       description={getErrorDescription(error, cwd)}
       contextLine={cwd ? `Directory: ${sanitizeErrorText(cwd)}` : undefined}
       severity="error"
-      actions={actions}
+      action={primaryAction}
+      trailingSlot={
+        <BannerOverflowMenu actions={overflowActions} ariaLabel="More recovery options" />
+      }
       className={className}
     />
   );
