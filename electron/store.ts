@@ -275,6 +275,15 @@ export interface StoreSchema {
   dismissedUpdateAt?: number;
   lastUpdateCheck?: number | null;
   /**
+   * Persisted between `update-downloaded` and the next boot so we can detect
+   * silent install failures (e.g. macOS ShipIt aborting without surfacing an
+   * error, NSIS empty-directory races on Windows). Read-and-deleted on boot
+   * before any await; if the stored version doesn't match `app.getVersion()`
+   * the mismatch is reported via `trackEvent`. Absent means "no install
+   * pending" — no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  pendingUpdateVersion?: string;
+  /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —
    * no migration entry required (mirrors `dismissedUpdateVersion` pattern).
