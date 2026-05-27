@@ -160,18 +160,6 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
   }, []);
 
   useEffect(() => {
-    if (
-      import.meta.env.DEV &&
-      typeof notification.message !== "string" &&
-      !notification.inboxMessage
-    ) {
-      logError(
-        "[Toaster] non-string message without inboxMessage — aria-live announcement will be empty"
-      );
-    }
-  }, [notification.id, notification.updatedAt, notification.message, notification.inboxMessage]);
-
-  useEffect(() => {
     const handle = requestAnimationFrame(() => setIsVisible(true));
     return () => cancelAnimationFrame(handle);
   }, []);

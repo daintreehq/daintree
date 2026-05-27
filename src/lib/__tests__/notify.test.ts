@@ -114,9 +114,13 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("inbox message");
     });
 
-    it("skips history entry if ReactNode message and no inboxMessage", () => {
+    // The ReactNode-without-inboxMessage shape is now a compile error (see
+    // NotifyPayload's discriminated union). The runtime guard that previously
+    // mirrored that check was removed; if a caller bypasses the type system
+    // with `as any`, the history entry is still silently dropped — that is
+    // the intentional fallback, not a regression.
+    it("skips history entry if ReactNode message and no inboxMessage (runtime fallback)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const jsxElement = React.createElement("span", null, "test");
       notify({
         type: "info",
@@ -124,10 +128,6 @@ describe("notify()", () => {
         priority: "low",
       } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[notify] ReactNode message without inboxMessage")
-      );
-      consoleSpy.mockRestore();
     });
 
     it("creates history entry when ReactNode message provides inboxMessage", () => {
@@ -145,18 +145,18 @@ describe("notify()", () => {
       );
     });
 
-    it("does NOT log dev guard for string message without inboxMessage", () => {
+    it("string message without inboxMessage is type-legal and writes the history entry", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       notify({ type: "info", message: "Just a string", priority: "low" });
-      expect(consoleSpy).not.toHaveBeenCalled();
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      consoleSpy.mockRestore();
     });
 
-    it("logs dev guard when ReactNode message has empty-string inboxMessage", () => {
+    it("empty-string inboxMessage with ReactNode message drops the history entry (runtime fallback)", () => {
+      // The type allows `inboxMessage: ""` (it is a string), but the runtime
+      // treats empty as "no inbox text" and skips the entry — same fallback
+      // as the bypassed-type case above. Callers should pass a non-empty
+      // fallback; we don't enforce a NonEmptyString at the type level.
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const jsxElement = React.createElement("span", null, "test");
       notify({
         type: "info",
@@ -164,10 +164,7 @@ describe("notify()", () => {
         inboxMessage: "",
         priority: "low",
       });
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[notify] ReactNode message without inboxMessage")
-      );
-      consoleSpy.mockRestore();
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
     });
 
     it("stores correlationId in history entry", () => {
