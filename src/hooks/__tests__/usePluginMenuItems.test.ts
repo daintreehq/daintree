@@ -112,6 +112,41 @@ describe("usePluginMenuItems", () => {
     expect(result.current[0]?.item.when).toBe("view == 'terminal'");
   });
 
+  it("clears items immediately when the location changes", async () => {
+    menuItemsMock.mockImplementation(() => new Promise<MenuEntry[]>(() => {}));
+    onMenuItemsChangedMock.mockImplementation((cb: (p: { items: MenuEntry[] }) => void) => {
+      // Seed terminal items via push so there is something to clear.
+      cb({ items: [entry("acme", "terminal")] });
+      return () => {};
+    });
+    const { usePluginMenuItems } = await import("../usePluginMenuItems");
+    const { result, rerender } = renderHook(
+      ({ loc }: { loc: MenuItemContribution["location"] }) => usePluginMenuItems(loc),
+      { initialProps: { loc: "terminal" as MenuItemContribution["location"] } }
+    );
+
+    await waitFor(() => expect(result.current).toHaveLength(1));
+
+    // Switching location tears down the old effect; the new pull never resolves.
+    onMenuItemsChangedMock.mockReturnValue(() => {});
+    rerender({ loc: "help" as MenuItemContribution["location"] });
+    expect(result.current).toHaveLength(0);
+  });
+
+  it("survives a malformed push payload without throwing", async () => {
+    let emit: ((p: { items: MenuEntry[] }) => void) | null = null;
+    onMenuItemsChangedMock.mockImplementation((cb: (p: { items: MenuEntry[] }) => void) => {
+      emit = cb;
+      return () => {};
+    });
+    const { usePluginMenuItems } = await import("../usePluginMenuItems");
+    const { result } = renderHook(() => usePluginMenuItems("terminal"));
+
+    await waitFor(() => expect(emit).not.toBeNull());
+    expect(() => emit!({ items: undefined as unknown as MenuEntry[] })).not.toThrow();
+    expect(result.current).toHaveLength(0);
+  });
+
   it("unsubscribes from the push channel on unmount", async () => {
     const cleanup = vi.fn();
     onMenuItemsChangedMock.mockReturnValue(cleanup);

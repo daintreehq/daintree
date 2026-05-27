@@ -803,9 +803,9 @@ export function TerminalContextMenu({
           {pluginTerminalItems.length > 0 && (
             <>
               <ContextMenuSeparator />
-              {pluginTerminalItems.map(({ pluginId, item }) => (
+              {pluginTerminalItems.map(({ pluginId, item }, index) => (
                 <ContextMenuItem
-                  key={`${pluginId}:${item.actionId}:${item.label}`}
+                  key={`${pluginId}:${item.actionId}:${index}`}
                   onSelect={() =>
                     void actionService.dispatch(item.actionId, undefined, {
                       source: sourceRef.current,

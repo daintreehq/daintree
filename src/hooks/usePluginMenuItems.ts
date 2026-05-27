@@ -32,6 +32,8 @@ export function usePluginMenuItems(location: MenuItemLocation): PluginMenuItemEn
 
     const sync = (entries: PluginMenuItemEntry[]): void => {
       if (disposed) return;
+      // Defensive: a malformed push payload shouldn't crash the menu.
+      if (!Array.isArray(entries)) return;
       setItems(entries.filter((entry) => entry.item.location === location));
     };
 
@@ -55,6 +57,9 @@ export function usePluginMenuItems(location: MenuItemLocation): PluginMenuItemEn
     });
 
     return () => {
+      // Clear before the next location's pull resolves so a re-keyed call site
+      // doesn't briefly show the previous location's items.
+      setItems([]);
       disposed = true;
       cleanup();
     };
