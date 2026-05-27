@@ -91,6 +91,9 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 import { useRecipeRunner } from "../useRecipeRunner";
+import { actionService } from "@/services/ActionService";
+
+const dispatchMock = vi.mocked(actionService.dispatch);
 
 function makeRecipe(
   overrides: Partial<TerminalRecipe> & { id: string; name: string }
@@ -109,6 +112,8 @@ beforeEach(() => {
   addPanelMock.mockReset();
   addPanelMock.mockResolvedValue("panel-1");
   logErrorMock.mockReset();
+  dispatchMock.mockReset();
+  dispatchMock.mockResolvedValue({ ok: true, result: undefined });
 });
 
 async function flush() {
@@ -777,5 +782,144 @@ describe("useRecipeRunner — handleRunSuggestion", () => {
 
     expect(addPanelMock).toHaveBeenCalledTimes(1);
     expect(addPanelMock.mock.calls[0]?.[0]).toMatchObject({ worktreeId: undefined });
+  });
+});
+
+describe("useRecipeRunner — delete confirm flow", () => {
+  it("handleDelete arms the confirm dialog instead of deleting directly", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+
+    expect(result.current.pendingDeleteId).toBe("r1");
+    expect(recipeStoreState.deleteRecipe).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("confirmDelete dispatches recipe.delete with confirmed:true and clears on success", async () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "recipe.delete",
+      { recipeId: "r1" },
+      { source: "user", confirmed: true }
+    );
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteError).toBeNull();
+  });
+
+  it("keeps the dialog open with an error when dispatch fails", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+
+    expect(result.current.pendingDeleteId).toBe("r1");
+    expect(result.current.deleteError).toBeTruthy();
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "Failed to delete recipe",
+      expect.objectContaining({ code: "EXECUTION_ERROR" })
+    );
+  });
+
+  it("cancelDelete clears the pending id without dispatching", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.cancelDelete();
+    });
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("confirmDelete is a no-op when nothing is pending", async () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("clears a pending delete when the active worktree changes", () => {
+    const { result, rerender } = renderHook(
+      ({ activeWorktreeId }: { activeWorktreeId: string }) =>
+        useRecipeRunner({ activeWorktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { activeWorktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    expect(result.current.pendingDeleteId).toBe("r1");
+
+    rerender({ activeWorktreeId: "wt-2" });
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteError).toBeNull();
+  });
+
+  it("dispatches recipe.delete once when confirmDelete is double-clicked", async () => {
+    let resolve: (r: { ok: true; result: undefined }) => void = () => {};
+    dispatchMock.mockReturnValueOnce(
+      new Promise<{ ok: true; result: undefined }>((r) => {
+        resolve = r;
+      })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+      result.current.confirmDelete();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolve({ ok: true, result: undefined });
+      await Promise.resolve();
+    });
   });
 });

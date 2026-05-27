@@ -31,6 +31,12 @@ export function buildCopy(pending: PortalPendingCloseSnapshot): DialogCopy {
         description: `All other portal tabs close and their navigation history is discarded. ${count} ${noun} will close.`,
         confirmLabel: `Close ${count} portal ${noun}`,
       };
+    case "closeToRight":
+      return {
+        title: "Close tabs to the right?",
+        description: `All portal tabs to the right close and their navigation history is discarded. ${count} ${noun} will close.`,
+        confirmLabel: `Close ${count} portal ${noun}`,
+      };
   }
 }
 
@@ -58,6 +64,16 @@ export function PortalCloseConfirmDialog(): ReactElement | null {
         if (!pending.keepTabId) break;
         void actionService.dispatch(
           "portal.closeOthers",
+          { tabId: pending.keepTabId, confirmed: true },
+          { source: "user" }
+        );
+        break;
+      case "closeToRight":
+        // Defensive: without the anchor tab the action would fall back to the
+        // active tab, which may have changed since the dialog opened.
+        if (!pending.keepTabId) break;
+        void actionService.dispatch(
+          "portal.closeToRight",
           { tabId: pending.keepTabId, confirmed: true },
           { source: "user" }
         );
