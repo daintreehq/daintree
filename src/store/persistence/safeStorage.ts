@@ -74,13 +74,25 @@ function resolveLocalStorage(): StateStorage | undefined {
 }
 
 /**
+ * Outcome of a resilient write, so the caller can keep the backup copy
+ * consistent with what actually reached durable storage:
+ * - `durable`  — written to real localStorage; the backup may advance.
+ * - `quota`    — transient quota error; primary unchanged, backup must NOT advance.
+ * - `memory`   — written only to the in-memory fallback; nothing durable to back up.
+ */
+type ResilientWriteResult = "durable" | "quota" | "memory";
+
+/**
  * Resilient storage augmented with best-effort backup operations. The backup
  * methods write/read a sibling `${key}.__bak` entry directly on the real
  * localStorage — bypassing the perf-marked primary path and skipping entirely
  * once a permanent in-memory fallback is active (a backup in memory buys
  * nothing and would needlessly re-hit broken localStorage).
  */
-interface ResilientStorage extends StateStorage {
+interface ResilientStorage {
+  getItem: (name: string) => string | null | Promise<string | null>;
+  setItem: (name: string, value: string) => ResilientWriteResult;
+  removeItem: (name: string) => void;
   writeBackup: (name: string, value: string) => void;
   readBackup: (name: string) => string | null;
   removeBackup: (name: string) => void;
@@ -154,6 +166,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
       const payloadBytes = collectPerf ? estimateStringBytes(value) : null;
       const storage: "localStorage" | "memory" =
         activeStorage === memoryStorage ? "memory" : "localStorage";
+      const wroteToMemory = activeStorage === memoryStorage;
       try {
         activeStorage.setItem(name, value);
         if (collectPerf) {
@@ -165,6 +178,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
             storage,
           });
         }
+        return wroteToMemory ? "memory" : "durable";
       } catch (error) {
         if (collectPerf) {
           markRendererPerformance("persistence_localstorage_set", {
@@ -176,17 +190,19 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
           });
         }
         if (isQuotaExceededError(error)) {
-          // Transient: keep localStorage active so later (smaller) writes retry
-          // it. Mirror this write into memory so the value isn't lost outright.
+          // Transient: storage is healthy but this write was too large. Keep
+          // localStorage active so later (smaller) writes retry it. The value
+          // still lives in the in-memory React store this session; it simply
+          // isn't persisted, so we don't switch storages or notify.
           console.warn("[safeStorage] storage quota exceeded, skipping persistent write", {
             key: name,
             error: formatErrorMessage(error, "Storage quota exceeded"),
           });
-          memoryStorage.setItem(name, value);
-          return;
+          return "quota";
         }
         switchToMemoryStorage().setItem(name, value);
         notifyPermanentFallbackOnce();
+        return "memory";
       }
     },
     removeItem: (name) => {
@@ -212,7 +228,8 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
       }
     },
     readBackup: (name) => {
-      if (!baseStorage) return null;
+      // localStorage is known broken once we've fallen back — don't re-hit it.
+      if (activeStorage === memoryStorage || !baseStorage) return null;
       try {
         const value = baseStorage.getItem(backupKeyFor(name));
         return value instanceof Promise ? null : value;
@@ -297,8 +314,12 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
     },
     setItem: (name, value) => {
       const serialized = JSON.stringify(value);
-      raw.setItem(name, serialized);
-      raw.writeBackup(name, serialized);
+      // Only advance the backup when the primary write actually reached durable
+      // storage. On a quota failure the primary keeps its old value, so writing
+      // a newer backup would leave the two inconsistent and recover stale state.
+      if (raw.setItem(name, serialized) === "durable") {
+        raw.writeBackup(name, serialized);
+      }
     },
     removeItem: (name) => {
       raw.removeItem(name);
