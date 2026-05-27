@@ -1189,11 +1189,14 @@ describe("DevPreviewSessionService", () => {
       const tid = started.terminalId!;
       ptyClient.emitData(tid, "ready at http://localhost:4173\n");
       await vi.waitFor(() => {
-        const s = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+        const s = service.getState({
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+        });
         expect(s.status).toBe("running");
       });
       vi.useFakeTimers();
-      onStateChanged.mockClear();
+      (onStateChanged as unknown as ReturnType<typeof vi.fn>).mockClear();
       return tid;
     }
 
@@ -1203,7 +1206,10 @@ describe("DevPreviewSessionService", () => {
       ptyClient.emitData(tid, "compiling...");
 
       await vi.advanceTimersByTimeAsync(500);
-      let state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      let state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(500);
@@ -1222,17 +1228,23 @@ describe("DevPreviewSessionService", () => {
       const tid = started.terminalId!;
       ptyClient.emitData(tid, "http://localhost:3000\n");
       await vi.waitFor(() => {
-        const s = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+        const s = service.getState({
+          panelId: baseRequest.panelId,
+          projectId: baseRequest.projectId,
+        });
         expect(s.status).toBe("starting");
         expect(s.url).toBeNull();
       });
 
       vi.useFakeTimers();
-      onStateChanged.mockClear();
+      (onStateChanged as unknown as ReturnType<typeof vi.fn>).mockClear();
 
       ptyClient.emitData(tid, "compiling...");
       await vi.advanceTimersByTimeAsync(1000);
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBe("Compiling");
     });
 
@@ -1244,7 +1256,10 @@ describe("DevPreviewSessionService", () => {
       ptyClient.emitData(tid, "webpack compiled successfully");
       await vi.advanceTimersByTimeAsync(1000);
 
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBeUndefined();
     });
 
@@ -1253,7 +1268,10 @@ describe("DevPreviewSessionService", () => {
 
       ptyClient.emitData(tid, "compiling...");
       await vi.advanceTimersByTimeAsync(1000);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       // Advance 1300ms: auto-clear fires at 1500ms from publish, 200ms remain.
       await vi.advanceTimersByTimeAsync(1300);
@@ -1263,15 +1281,24 @@ describe("DevPreviewSessionService", () => {
 
       // Old timer point (200ms later): should be suppressed (was cancelled).
       await vi.advanceTimersByTimeAsync(200);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       // Still visible 1100ms later (1400ms since reset, 100ms before new auto-clear).
       await vi.advanceTimersByTimeAsync(1100);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       // Auto-clear fires after remaining 200ms (1500ms since reset).
       await vi.advanceTimersByTimeAsync(200);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBeUndefined();
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBeUndefined();
     });
 
     it("stop clears arm timer and never publishes", async () => {
@@ -1283,7 +1310,10 @@ describe("DevPreviewSessionService", () => {
       await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
 
       await vi.advanceTimersByTimeAsync(1000);
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBeUndefined();
     });
 
@@ -1292,11 +1322,17 @@ describe("DevPreviewSessionService", () => {
 
       ptyClient.emitData(tid, "compiling...");
       await vi.advanceTimersByTimeAsync(1000);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       ptyClient.emitData(tid, "Error: EACCES: permission denied");
 
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.status).toBe("error");
       expect(state.phaseLabel).toBeUndefined();
     });
@@ -1306,11 +1342,17 @@ describe("DevPreviewSessionService", () => {
 
       ptyClient.emitData(tid, "compiling...");
       await vi.advanceTimersByTimeAsync(1000);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       ptyClient.emitExit(tid, 0);
 
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBeUndefined();
     });
 
@@ -1319,11 +1361,17 @@ describe("DevPreviewSessionService", () => {
 
       ptyClient.emitData(tid, "compiling...");
       await vi.advanceTimersByTimeAsync(1000);
-      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+          .phaseLabel
+      ).toBe("Compiling");
 
       ptyClient.emitData(tid, "webpack compiled successfully");
 
-      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
       expect(state.phaseLabel).toBeUndefined();
     });
   });

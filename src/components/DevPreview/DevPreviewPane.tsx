@@ -1252,9 +1252,11 @@ export function DevPreviewPane({
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       className={
-        phaseLabel === "Compiling" ? "panel-state-compiling"
-        : stuckTier >= 1 ? "panel-state-working"
-        : undefined
+        phaseLabel === "Compiling"
+          ? "panel-state-compiling"
+          : stuckTier >= 1
+            ? "panel-state-working"
+            : undefined
       }
     >
       <div className="flex flex-col h-full">
