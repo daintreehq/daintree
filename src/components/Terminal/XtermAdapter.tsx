@@ -13,7 +13,6 @@ import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProto
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import { resolveTerminalTabEscape } from "./terminalFocus";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
@@ -260,41 +259,6 @@ export function XtermAdapter({
           return true;
         }
 
-        // Tab/Shift+Tab escape: xterm otherwise transmits Tab to the PTY as \t,
-        // trapping keyboard-only users in the terminal. Mirror F6 region cycling
-        // by dispatching the same navigation actions, then suppress the PTY
-        // write. Handled before the repeat guard so a held Tab can't leak \t on
-        // key-repeat; the focus move only dispatches on the initial keydown.
-        // resolveTerminalTabEscape itself ignores IME composition and
-        // Ctrl/Alt/Meta combos, so this stays ahead of the guards below. (#8935)
-        const tabEscape = resolveTerminalTabEscape(event);
-        if (tabEscape) {
-          if (!event.repeat) {
-            void actionService
-              .dispatch(
-                tabEscape === "prev" ? "nav.focusRegion.prev" : "nav.focusRegion.next",
-                undefined,
-                { source: "keybinding" }
-              )
-              .then((dispatchResult) => {
-                if (!dispatchResult.ok) {
-                  logError("[XtermTabEscape] Failed to move focus region", undefined, {
-                    error: dispatchResult.error,
-                  });
-                }
-              })
-              .catch((error) => {
-                logError("[XtermTabEscape] Unexpected error", error);
-              });
-          }
-          return false;
-        }
-
-        // Skip repeat events
-        if (event.repeat) {
-          return true;
-        }
-
         // Get normalized key for modifier-only detection
         const normalizedKey = keybindingService.normalizeKeyForBinding(event);
         const isModifierOnly = ["Meta", "Control", "Alt", "Shift"].includes(normalizedKey);
@@ -308,6 +272,43 @@ export function XtermAdapter({
         // full lifecycle (composed text + \r). keyCode 229 is Chromium's "Process"
         // key signal during active composition where isComposing may not yet be set.
         if (event.isComposing || event.keyCode === 229) {
+          return true;
+        }
+
+        // Plain Tab and Shift+Tab are terminal input. xterm v6 intentionally
+        // leaves key events uncanceled in screen-reader mode, which lets
+        // Chromium's native focus traversal run after xterm accepts Tab.
+        // Cancel only the DOM/default path; return true so xterm still emits
+        // HT for Tab and CSI Z for Shift+Tab.
+        if (
+          (event.key === "Tab" || event.code === "Tab" || event.keyCode === 9) &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+
+        // Bare F11 is Electron's fullscreen accelerator on Linux/Windows. xterm
+        // v6 leaves handled keys uncanceled in screen-reader mode, so the event
+        // bubbles to the menu accelerator. Cancel the DOM/default path; return
+        // true so xterm still emits the F11 sequence to the PTY.
+        if (
+          (event.key === "F11" || event.code === "F11" || event.keyCode === 122) &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+
+        // Skip repeat events
+        if (event.repeat) {
           return true;
         }
 
@@ -646,7 +647,7 @@ export function XtermAdapter({
         ref={containerRef}
         className="w-full h-full min-h-0 min-w-0"
         aria-label="Terminal output"
-        aria-keyshortcuts="F6 Tab Shift+Tab"
+        aria-keyshortcuts="F6 Shift+F6"
         role="application"
       />
     </div>

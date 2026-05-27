@@ -74,9 +74,7 @@ export interface WorktreeHeaderProps {
     onCopyPath: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
-    onOpenIssuePortal?: () => void;
     onOpenIssueExternal?: () => void;
-    onOpenPRPortal?: () => void;
     onOpenPRExternal?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;

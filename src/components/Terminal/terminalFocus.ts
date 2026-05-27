@@ -91,30 +91,3 @@ export function isLikelyAtSynthesizedPointer(
   if (lastMoveAt === null) return true;
   return now - lastMoveAt > thresholdMs;
 }
-
-export type TerminalFocusEscapeDirection = "next" | "prev";
-
-/**
- * Resolve whether a keydown inside a focused xterm should escape terminal
- * focus to an adjacent macro region, and in which direction.
- *
- * Tab is an *additive* escape path alongside F6 (handled separately) so
- * keyboard-only users aren't trapped — xterm otherwise transmits Tab to the
- * PTY as `\t`. Returns null for any other key, for Tab during IME composition,
- * and for Tab with Ctrl/Alt/Meta held (those reach the TUI or global
- * keybindings). Plain Tab moves to the next region; Shift+Tab the previous.
- */
-export function resolveTerminalTabEscape(event: {
-  key: string;
-  shiftKey: boolean;
-  ctrlKey: boolean;
-  altKey: boolean;
-  metaKey: boolean;
-  isComposing: boolean;
-  keyCode: number;
-}): TerminalFocusEscapeDirection | null {
-  if (event.key !== "Tab") return null;
-  if (event.isComposing || event.keyCode === 229) return null;
-  if (event.ctrlKey || event.altKey || event.metaKey) return null;
-  return event.shiftKey ? "prev" : "next";
-}

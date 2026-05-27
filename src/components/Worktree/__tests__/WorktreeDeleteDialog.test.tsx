@@ -15,10 +15,20 @@ vi.stubGlobal(
   }
 );
 
-const { startDeleteMock, terminalCountsMock } = vi.hoisted(() => ({
+const { startDeleteMock, terminalCountsMock, devPreviewGetByWorktreeMock } = vi.hoisted(() => ({
   startDeleteMock: vi.fn(),
   terminalCountsMock: { total: 0 },
+  devPreviewGetByWorktreeMock: vi.fn(),
 }));
+
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
+  ...((window as unknown as Record<string, unknown>).electron ?? {}),
+  devPreview: {
+    getByWorktree: devPreviewGetByWorktreeMock,
+    stopByWorktree: vi.fn(),
+  },
+};
 
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({
@@ -104,6 +114,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -268,6 +279,7 @@ describe("WorktreeDeleteDialog — body copy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -449,6 +461,7 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -500,6 +513,7 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -665,6 +679,7 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -693,10 +708,82 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
   });
 });
 
+describe("WorktreeDeleteDialog — dev preview disclosure (#9084)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the dev server row inactive when no session is running", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce(null);
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await waitFor(() => {
+      expect(devPreviewGetByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+    });
+    const row = screen.getByText("Dev server will be stopped");
+    expect(row.className).toContain("line-through");
+  });
+
+  it("activates the dev server row when a running session is detected", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce({
+      panelId: "panel-1",
+      projectId: "project-1",
+      worktreeId: "wt-1",
+      status: "running",
+      url: "http://localhost:5173",
+      predictedUrl: null,
+      error: null,
+      terminalId: "t-1",
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await waitFor(() => {
+      const row = screen.getByText("Dev server will be stopped");
+      expect(row.className).not.toContain("line-through");
+    });
+  });
+
+  it("treats a stopped session as inactive", async () => {
+    devPreviewGetByWorktreeMock.mockResolvedValueOnce({
+      panelId: "panel-1",
+      projectId: "project-1",
+      worktreeId: "wt-1",
+      status: "stopped",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await waitFor(() => {
+      expect(devPreviewGetByWorktreeMock).toHaveBeenCalled();
+    });
+    const row = screen.getByText("Dev server will be stopped");
+    expect(row.className).toContain("line-through");
+  });
+});
+
 describe("WorktreeDeleteDialog — state reset", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
   });
 
   afterEach(() => {

@@ -5,6 +5,7 @@ import React, { Suspense } from "react";
 import { render, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
+import { actionService } from "@/services/ActionService";
 import { XtermAdapter } from "../XtermAdapter";
 
 const mocks = vi.hoisted(() => {
@@ -287,6 +288,129 @@ describe("XtermAdapter lifecycle", () => {
     expect(firstOnExit).not.toHaveBeenCalled();
     expect(secondOnExit).toHaveBeenCalledWith(7);
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab and Shift+Tab as xterm-owned input without dispatching focus-region actions (#9082)", async () => {
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const keyHandler = mocks.getKeyHandler();
+    expect(keyHandler).toBeTruthy();
+
+    const tabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(tabEvent, "preventDefault");
+    const stopPropagationSpy = vi.spyOn(tabEvent, "stopPropagation");
+    const tabResult = keyHandler?.(tabEvent);
+    expect(tabResult).toBe(true);
+    expect(preventDefaultSpy).toHaveBeenCalled();
+    expect(stopPropagationSpy).toHaveBeenCalled();
+
+    const shiftTabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const shiftTabPreventDefaultSpy = vi.spyOn(shiftTabEvent, "preventDefault");
+    const shiftTabStopPropagationSpy = vi.spyOn(shiftTabEvent, "stopPropagation");
+    const shiftTabResult = keyHandler?.(shiftTabEvent);
+    expect(shiftTabResult).toBe(true);
+    expect(shiftTabPreventDefaultSpy).toHaveBeenCalled();
+    expect(shiftTabStopPropagationSpy).toHaveBeenCalled();
+
+    // Held Tab (key-repeat) must also pass through — shell autocomplete and
+    // many TUIs rely on sustained Tab presses.
+    const repeatedTabEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const repeatedTabPreventDefaultSpy = vi.spyOn(repeatedTabEvent, "preventDefault");
+    const repeatedTabStopPropagationSpy = vi.spyOn(repeatedTabEvent, "stopPropagation");
+    const repeatedTabResult = keyHandler?.(repeatedTabEvent);
+    expect(repeatedTabResult).toBe(true);
+    expect(repeatedTabPreventDefaultSpy).toHaveBeenCalled();
+    expect(repeatedTabStopPropagationSpy).toHaveBeenCalled();
+
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("captures bare F11 so Electron's fullscreen accelerator does not fire (#9104)", async () => {
+    // The regression condition is xterm v6's screen-reader mode, which skips
+    // its internal preventDefault on handled keys and lets F11 bubble to the
+    // Electron menu accelerator. The guard itself is unconditional, so this
+    // test exercises the same handler path regardless of screenReaderMode.
+    renderAdapter();
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+
+    const keyHandler = mocks.getKeyHandler();
+    expect(keyHandler).toBeTruthy();
+
+    const f11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      bubbles: true,
+      cancelable: true,
+    });
+    const preventDefaultSpy = vi.spyOn(f11Event, "preventDefault");
+    const stopPropagationSpy = vi.spyOn(f11Event, "stopPropagation");
+    const f11Result = keyHandler?.(f11Event);
+    expect(f11Result).toBe(true);
+    expect(preventDefaultSpy).toHaveBeenCalled();
+    expect(stopPropagationSpy).toHaveBeenCalled();
+
+    // F11 with modifiers must still reach TUIs that bind them (e.g. Ctrl+F11).
+    const ctrlF11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const ctrlPreventDefaultSpy = vi.spyOn(ctrlF11Event, "preventDefault");
+    const ctrlStopPropagationSpy = vi.spyOn(ctrlF11Event, "stopPropagation");
+    keyHandler?.(ctrlF11Event);
+    expect(ctrlPreventDefaultSpy).not.toHaveBeenCalled();
+    expect(ctrlStopPropagationSpy).not.toHaveBeenCalled();
+
+    const shiftF11Event = new KeyboardEvent("keydown", {
+      key: "F11",
+      code: "F11",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const shiftPreventDefaultSpy = vi.spyOn(shiftF11Event, "preventDefault");
+    const shiftStopPropagationSpy = vi.spyOn(shiftF11Event, "stopPropagation");
+    keyHandler?.(shiftF11Event);
+    expect(shiftPreventDefaultSpy).not.toHaveBeenCalled();
+    expect(shiftStopPropagationSpy).not.toHaveBeenCalled();
+
+    // Some input methods report key="Unidentified" with code/keyCode intact.
+    // xterm still emits F11 to the PTY via keyCode 122, so the guard must too.
+    const unidentifiedF11Event = new KeyboardEvent("keydown", {
+      key: "Unidentified",
+      code: "F11",
+      keyCode: 122,
+      bubbles: true,
+      cancelable: true,
+    });
+    const unidentifiedPreventDefaultSpy = vi.spyOn(unidentifiedF11Event, "preventDefault");
+    const unidentifiedStopPropagationSpy = vi.spyOn(unidentifiedF11Event, "stopPropagation");
+    const unidentifiedResult = keyHandler?.(unidentifiedF11Event);
+    expect(unidentifiedResult).toBe(true);
+    expect(unidentifiedPreventDefaultSpy).toHaveBeenCalled();
+    expect(unidentifiedStopPropagationSpy).toHaveBeenCalled();
+
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("re-applies renderer policy when a stable tier provider returns a new tier", async () => {

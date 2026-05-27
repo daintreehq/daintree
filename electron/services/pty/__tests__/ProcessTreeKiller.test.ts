@@ -58,6 +58,13 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
     killer.execute(true);
 
     expect(warnSpy).not.toHaveBeenCalled();
+    // Guard against the loop being silently skipped: both descendants must
+    // have received SIGTERM and the follow-up SIGCONT (ESRCH on SIGTERM is
+    // treated as "process already gone" — SIGCONT still runs and ESRCHs too).
+    expect(killSpy).toHaveBeenCalledWith(1001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(1001, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(1002, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(1002, "SIGCONT");
   });
 
   it("warns once per pid when SIGTERM fails with EPERM", () => {
@@ -126,5 +133,129 @@ describe("ProcessTreeKiller — kill() error discrimination", () => {
       .map((c: unknown[]) => String(c[0]))
       .filter((m: string) => m.includes("SIGKILL"));
     expect(sigkillWarnings).toHaveLength(0);
+    // Guard against the sweep being a no-op: SIGKILL must have been attempted
+    // for both descendant and shell pids.
+    expect(killSpy).toHaveBeenCalledWith(3001, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(3000, "SIGKILL");
+  });
+
+  it("sends SIGCONT after SIGTERM for each descendant, then SIGCONT for shell", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const pty = makePty(4000);
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([4001, 4002]));
+    // Use a deferred escalation so SIGKILL doesn't fire and obscure the
+    // SIGTERM/SIGCONT call sequence we're asserting.
+    killer.execute(false);
+
+    const signals = killSpy.mock.calls.map((c: unknown[]) => [c[0], c[1]]);
+    expect(signals).toEqual([
+      [4001, "SIGTERM"],
+      [4001, "SIGCONT"],
+      [4002, "SIGTERM"],
+      [4002, "SIGCONT"],
+      [4000, "SIGCONT"],
+    ]);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+
+    killer.abort();
+  });
+
+  it("silently ignores ESRCH from SIGCONT calls", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
+      if (sig === "SIGCONT") {
+        throw makeErrnoError("ESRCH");
+      }
+      return true;
+    });
+
+    const killer = new ProcessTreeKiller(makePty(5000), makeTreeCache([5001, 5002]));
+    killer.execute(true);
+
+    const sigcontWarnings = warnSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((m: string) => m.includes("SIGCONT"));
+    expect(sigcontWarnings).toHaveLength(0);
+    // Guard against SIGCONT being silently skipped: each descendant and the
+    // shell must have received a SIGCONT call.
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(5002, "SIGCONT");
+    expect(killSpy).toHaveBeenCalledWith(5000, "SIGCONT");
+  });
+
+  it("warns once per pid when SIGCONT fails with EPERM", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
+      if (sig === "SIGCONT") {
+        throw makeErrnoError("EPERM", "kill EPERM");
+      }
+      return true;
+    });
+
+    const killer = new ProcessTreeKiller(makePty(6000), makeTreeCache([6001, 6002]));
+    killer.execute(true);
+
+    const sigcontWarnings = warnSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((m: string) => m.includes("SIGCONT"));
+    // Two descendants + one shell SIGCONT.
+    expect(sigcontWarnings).toHaveLength(3);
+    expect(sigcontWarnings.some((m: string) => m.includes("pid=6001"))).toBe(true);
+    expect(sigcontWarnings.some((m: string) => m.includes("pid=6002"))).toBe(true);
+    expect(sigcontWarnings.some((m: string) => m.includes("pid=6000"))).toBe(true);
+    sigcontWarnings.forEach((m: string) => {
+      expect(m).toContain("[ProcessTreeKiller]");
+    });
+  });
+
+  it("skips SIGCONT when SIGTERM fails with EPERM", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
+      if (sig === "SIGTERM") {
+        throw makeErrnoError("EPERM", "kill EPERM");
+      }
+      return true;
+    });
+
+    const killer = new ProcessTreeKiller(makePty(8000), makeTreeCache([8001, 8002]));
+    killer.execute(true);
+
+    // Descendant SIGCONT must NOT be called when its SIGTERM was rejected.
+    // Waking a process we couldn't signal would let it run freely without
+    // the queued SIGTERM the wake was meant to deliver.
+    expect(killSpy).not.toHaveBeenCalledWith(8001, "SIGCONT");
+    expect(killSpy).not.toHaveBeenCalledWith(8002, "SIGCONT");
+    // Shell SIGCONT is independent of the descendant gate — it's tied to
+    // ptyProcess.kill() (SIGHUP), not the descendant SIGTERM loop.
+    expect(killSpy).toHaveBeenCalledWith(8000, "SIGCONT");
+  });
+
+  it("sends shell SIGCONT even when ptyProcess.kill() throws", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const pty = makePty(7000);
+    (pty.kill as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("pty already exited");
+    });
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+    killer.execute(true);
+
+    const shellSigcont = killSpy.mock.calls.find(
+      (c: unknown[]) => c[0] === 7000 && c[1] === "SIGCONT"
+    );
+    expect(shellSigcont).toBeDefined();
   });
 });

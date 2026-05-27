@@ -5,10 +5,21 @@ import { renderHook, act } from "@testing-library/react";
 const worktreeClientMock = vi.hoisted(() => ({ delete: vi.fn() }));
 const notifyMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
+const devPreviewGetByWorktreeMock = vi.hoisted(() => vi.fn());
+const devPreviewStopByWorktreeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/utils/logger", () => ({ logError: logErrorMock }));
+
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
+  ...((window as unknown as Record<string, unknown>).electron ?? {}),
+  devPreview: {
+    getByWorktree: devPreviewGetByWorktreeMock,
+    stopByWorktree: devPreviewStopByWorktreeMock,
+  },
+};
 
 import { useWorktreeBulkRemove } from "../useWorktreeBulkRemove";
 import type { WorktreeState } from "@/types";
@@ -40,6 +51,8 @@ function setup(selectedIds: string[], worktrees: WorktreeState[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  devPreviewGetByWorktreeMock.mockResolvedValue(null);
+  devPreviewStopByWorktreeMock.mockResolvedValue(undefined);
 });
 
 describe("useWorktreeBulkRemove — confirm derivation", () => {
@@ -184,6 +197,113 @@ describe("useWorktreeBulkRemove — execution", () => {
     const payload = error![0] as { title: string; message: string };
     expect(payload.title).toBe("Couldn't remove worktree");
     expect(payload.message).toBe("Disk read-only");
+  });
+
+  it("stops dev previews before each delete and folds counts into the success toast (#9084)", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    const runningState = {
+      panelId: "panel",
+      projectId: "project",
+      status: "running",
+      url: "http://localhost:5173",
+      predictedUrl: null,
+      error: null,
+      terminalId: "t",
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    };
+    devPreviewGetByWorktreeMock.mockImplementation(({ worktreeId }: { worktreeId: string }) =>
+      Promise.resolve({ ...runningState, worktreeId })
+    );
+
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    act(() => hook.result.current.handleRemoveClick());
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(2);
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "a" });
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "b" });
+
+    const successCall = notifyMock.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "success"
+    );
+    expect(successCall).toBeDefined();
+    const payload = successCall![0] as { message: string };
+    expect(payload.message).toContain("Stopped 2 dev servers");
+  });
+
+  it("uses singular dev server copy when exactly one preview was stopped (#9084)", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    devPreviewGetByWorktreeMock.mockImplementation(({ worktreeId }: { worktreeId: string }) => {
+      if (worktreeId === "a") {
+        return Promise.resolve({
+          panelId: "p",
+          projectId: "proj",
+          worktreeId,
+          status: "running",
+          url: null,
+          predictedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          generation: 1,
+          updatedAt: Date.now(),
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    act(() => hook.result.current.handleRemoveClick());
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    // stopByWorktree is called for every target (no client-side gate); the
+    // service no-ops when no session matches. Only `a` had a session, so
+    // the toast names it.
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(2);
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "a" });
+    expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "b" });
+
+    const successCall = notifyMock.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === "success"
+    );
+    const payload = successCall![0] as { message: string };
+    expect(payload.message).toContain("Stopped dev server for a");
+  });
+
+  it("treats a dev preview stop failure as a removal failure for that target (#9084)", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    devPreviewGetByWorktreeMock.mockResolvedValue({
+      panelId: "p",
+      projectId: "proj",
+      worktreeId: "a",
+      status: "running",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      generation: 1,
+      updatedAt: Date.now(),
+    });
+    devPreviewStopByWorktreeMock.mockRejectedValueOnce(new Error("stop failed"));
+
+    const { hook } = setup(["a"], [wt("a", { branch: "feature/a" })]);
+    act(() => hook.result.current.handleRemoveClick());
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    const error = notifyMock.mock.calls.find((c) => (c[0] as { type: string }).type === "error");
+    expect(error).toBeDefined();
+    const payload = error![0] as { message: string };
+    expect(payload.message).toContain("stop failed");
   });
 
   it("recovers from a PQueue TimeoutError so the dialog can be reused (no permanent freeze)", async () => {

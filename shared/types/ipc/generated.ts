@@ -192,6 +192,14 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewGetByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState | null;
   };
+  "dev-preview:get-destructive-preview-meta": {
+    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    result: import("./devPreview.js").DevPreviewDestructivePreviewMeta;
+  };
+  "dev-preview:get-destructive-preview-sizes": {
+    args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesRequest];
+    result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
+  };
   "dev-preview:get-state": {
     args: [request: import("./devPreview.js").DevPreviewSessionRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
@@ -214,6 +222,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "dev-preview:stop-by-panel": {
     args: [request: import("./devPreview.js").DevPreviewStopByPanelRequest];
+    result: void;
+  };
+  "dev-preview:stop-by-worktree": {
+    args: [request: import("./devPreview.js").DevPreviewStopByWorktreeRequest];
     result: void;
   };
   "editor:discover": {

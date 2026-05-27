@@ -87,6 +87,12 @@ export interface GeneratedElectronAPI {
     getByWorktree(
       ...args: IpcInvokeMap["dev-preview:get-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-by-worktree"]["result"]>;
+    getDestructivePreviewMeta(
+      ...args: IpcInvokeMap["dev-preview:get-destructive-preview-meta"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-destructive-preview-meta"]["result"]>;
+    getDestructivePreviewSizes(
+      ...args: IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["result"]>;
     getState(
       ...args: IpcInvokeMap["dev-preview:get-state"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-state"]["result"]>;
@@ -105,6 +111,9 @@ export interface GeneratedElectronAPI {
     stopByPanel(
       ...args: IpcInvokeMap["dev-preview:stop-by-panel"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop-by-panel"]["result"]>;
+    stopByWorktree(
+      ...args: IpcInvokeMap["dev-preview:stop-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:stop-by-worktree"]["result"]>;
   };
   eventInspector: {
     clear(

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.14.1] - 2026-05-27
+
+Bugfix follow-up to 0.14.0. Terminal regressions around Tab passthrough, F11 in screen-reader mode, and suspended process kill are fixed; dev preview now coordinates port release, Vite port injection, destructive-confirm content previews, and stuck-tier thresholds; worktree delete waits for a running dev preview to stop.
+
+### Bug Fixes
+
+**Terminal & keyboard**
+
+- Tab passes through to PTY for shell autocomplete (#9082)
+- Bare F11 no longer toggles fullscreen when the terminal is focused (#9104)
+- Suspended PTY descendants woken with SIGCONT before SIGTERM (#9085)
+- Focus-region rebinds to bare text keys no longer steal terminal input (#9105)
+
+**Dev preview**
+
+- Stop path waits for TCP port release before declaring stopped (#9088)
+- `--port` injected into Vite-based dev commands so they honor the allocated PORT (#9092)
+- Destructive confirm dialog shows the concrete content preview instead of a generic warning (#9086)
+- Stuck-tier banners retuned and Tier 2 suppressed during mid-compile (#9099)
+
+**Worktree**
+
+- Running dev preview stopped before worktree delete (#9084)
+- Portal option dropped from worktree sidebar issue/PR menus (#9103)
+
+### Other Changes
+
+- Lint guard prevents direct assignment to `autoUpdater.channel` from flipping `allowDowngrade` (#9123)
+
 ## [0.14.0] - 2026-05-26
 
 GitHub and forge traffic was overhauled — host-side batch loading, cross-window GraphQL coalescing, an ETag-gated REST activity probe in front of PR detection, and in-band CI aggregates folded into the list query make PR and issue surfaces materially cheaper to poll. A broad accessibility sweep landed across menus, dialogs, palettes, the assistant, and forced-colors mode. The #8957 panel-refactor epic completed: `PanelInstance` is now the renderer carrier and `TerminalInstance` is gone. Five performance budgets gate every PR with a sticky summary comment.

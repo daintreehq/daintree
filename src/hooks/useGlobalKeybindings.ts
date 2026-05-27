@@ -110,8 +110,26 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // below in resolveKeybinding → canExecute.
       const hasModifier = e.metaKey || e.ctrlKey;
       const isFocusRegion = isFocusRegionEvent(e);
+      // A single-character key (letter, digit, punctuation, Space) is text input
+      // that belongs to the terminal/editor — even if it happens to match a
+      // focus-region rebind. Only non-text keys (F-keys, arrows, Home/End/etc.)
+      // may bypass the editable/terminal bailouts as a focus-region escape.
+      const isFocusRegionNonTextKey = isFocusRegion && e.key.length !== 1;
+      const isTerminalTabInput =
+        isInTerminal &&
+        (e.key === "Tab" || e.code === "Tab" || e.keyCode === 9) &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey;
 
-      if (isEditable && !hasModifier && !pendingChord && !isFocusRegion) {
+      if (isEditable && !hasModifier && !pendingChord && !isFocusRegionNonTextKey) {
+        return;
+      }
+
+      // Tab and Shift+Tab are xterm-owned input for completion/TUI navigation.
+      // Do not let focus-region rebinds or native focus traversal steal them
+      // before xterm's key handler has a chance to emit the terminal sequence.
+      if (isTerminalTabInput && !pendingChord) {
         return;
       }
 
@@ -119,7 +137,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // chord completion, or region focus. Bare keys (like X for fleet arming)
       // are blocked inside terminals so they don't steal typing — scoped
       // bindings only match when focus is outside .xterm.
-      if (isInTerminal && !hasModifier && !pendingChord && !isFocusRegion) {
+      if (isInTerminal && !hasModifier && !pendingChord && !isFocusRegionNonTextKey) {
         return;
       }
 

@@ -11,7 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -121,21 +121,31 @@ interface DevPreviewStuckBannerProps {
   error: UseDevServerReturn["error"];
   /** Disables the banner actions while a restart is already in flight. */
   isRestarting: boolean;
+  /**
+   * When `"Compiling"` at Tier 3, the banner swaps to long-compile copy
+   * instead of the generic "didn't start" framing — the server clearly
+   * started, the first compile is just slow.
+   */
+  phaseLabel?: "Compiling";
   onRestart: () => void;
   onRemedy: (actionId: string) => void;
 }
 
 /**
- * Staged stuck-start escalation banner (#8276). Replaces the old silent
- * auto-restart with a user-driven signal: Tier 2 is a warning that the
- * server is slow, Tier 3 an error that names likely causes and, when the
- * dev server emitted a recognised error, offers a variant-specific remedy
- * (`error.recommendedActionId`) alongside a plain restart.
+ * Staged stuck-start escalation banner (#8276, copy retuned #9099). Replaces
+ * the old silent auto-restart with a user-driven signal: Tier 2 is a warning
+ * that the server is slow (suppressed by the hook while `phaseLabel ===
+ * "Compiling"` — compile evidence isn't "stuck"), Tier 3 an error that names
+ * likely causes and, when the dev server emitted a recognised error, offers
+ * a variant-specific remedy (`error.recommendedActionId`) alongside a plain
+ * restart. At Tier 3 with `phaseLabel === "Compiling"` the copy switches to
+ * a long-compile framing instead of the "didn't start" framing.
  */
 function DevPreviewStuckBanner({
   tier,
   error,
   isRestarting,
+  phaseLabel,
   onRestart,
   onRemedy,
 }: DevPreviewStuckBannerProps) {
@@ -179,15 +189,21 @@ function DevPreviewStuckBanner({
         ]
       : [restartAction];
 
+  const isLongCompile = phaseLabel === "Compiling" && !error?.message;
+  const title = isLongCompile
+    ? "First compile is taking longer than usual"
+    : "Dev server still hasn't started";
   const description = error?.message
     ? error.message
-    : "Likely causes: the port is still bound by another process, dependencies are missing, or the build cache is stuck. Check the terminal logs.";
+    : isLongCompile
+      ? "The initial compile is still running. Check the terminal logs — large projects can take 45s or more."
+      : "Likely causes: the port is still bound by another process, dependencies are missing, or the build cache is stuck. Check the terminal logs.";
 
   return (
     <InlineStatusBanner
       icon={AlertTriangle}
       severity="error"
-      title="Dev server still hasn't started"
+      title={title}
       description={description}
       role="alert"
       ariaLive="assertive"
@@ -1213,6 +1229,7 @@ export function DevPreviewPane({
             tier={stuckTier >= 3 ? 3 : 2}
             error={error}
             isRestarting={isRestarting}
+            phaseLabel={phaseLabel}
             onRestart={handleRestartDevServer}
             onRemedy={handleStuckRemedy}
           />
@@ -1727,29 +1744,14 @@ export function DevPreviewPane({
             onStop={stop}
           />
         )}
-        <ConfirmDialog
+        <DevPreviewDestructiveConfirmDialog
+          panelId={id}
+          projectId={currentProjectId}
+          tier={pendingRestartTier}
           isOpen={isRestartConfirmOpen}
           onClose={handleRestartConfirmClose}
-          variant="destructive"
-          title={
-            pendingRestartTier === "restartAndClearCache"
-              ? "Clear cache and restart?"
-              : "Reinstall dependencies?"
-          }
-          description={
-            pendingRestartTier === "restartAndClearCache"
-              ? "This will delete framework build caches (.next, .vite, .turbo) and respawn the dev server. Source files and installed dependencies are not affected."
-              : "This will delete node_modules and reinstall all dependencies, then respawn the dev server. Source files and git state are not affected."
-          }
-          confirmLabel={
-            pendingRestartTier === "restartAndClearCache" ? "Clear cache" : "Reinstall dependencies"
-          }
           onConfirm={handleRestartConfirm}
-        >
-          {pendingRestartTier === "reinstallAndRestart" && (
-            <p className="text-xs text-daintree-text/50 font-mono break-all">{cwd}/node_modules</p>
-          )}
-        </ConfirmDialog>
+        />
       </div>
     </ContentPanel>
   );

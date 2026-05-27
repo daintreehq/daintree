@@ -37,24 +37,29 @@ export interface UseDevServerReturn extends UseDevServerState {
   isRestarting: boolean;
   /**
    * Escalation level while the server is stuck in `starting`. 0 = not stuck,
-   * 1 = ambient (6s), 2 = warning banner (12s), 3 = error banner (25s).
-   * Resets to 0 whenever status leaves `starting`.
+   * 1 = ambient (6s), 2 = warning banner (20s), 3 = error banner (45s).
+   * Resets to 0 whenever status leaves `starting`. Tier 2 is suppressed when
+   * `phaseLabel === "Compiling"` — a confirmed compile in progress is not
+   * "no signal," and Tier 3 still fires at 45s if the compile drags on.
    */
   stuckTier: DevServerStuckTier;
   forceKilled?: boolean;
 }
 
 /**
- * Staged stuck-start escalation thresholds (#8276). When the dev server stays
- * in `starting` past each threshold, `stuckTier` advances so the UI can
- * surface a progressively stronger, user-driven signal instead of silently
- * restarting (which wiped the logs explaining the stall). All three timers
- * are scheduled together from a single effect; tier 1 sits well past the 5s
- * post-spawn URL poll window so it never fires for fast-starting servers.
+ * Staged stuck-start escalation thresholds (#8276, retuned #9099). When the
+ * dev server stays in `starting` past each threshold, `stuckTier` advances so
+ * the UI can surface a progressively stronger, user-driven signal instead of
+ * silently restarting (which wiped the logs explaining the stall). The
+ * thresholds were rescaled in #9099 from 6/12/25s to 6/20/45s after measured
+ * cold-start data (Vite cold monorepo 15–45s, Next.js webpack medium ~45s,
+ * webpack enterprise 45–90s) showed the old values fired false alarms on
+ * realistic projects. Tier 1 still sits past the 5s post-spawn URL poll
+ * window so it never fires for fast-starting servers.
  */
 const STUCK_TIER1_MS = 6000;
-const STUCK_TIER2_MS = 12000;
-const STUCK_TIER3_MS = 25000;
+const STUCK_TIER2_MS = 20000;
+const STUCK_TIER3_MS = 45000;
 
 export type DevServerStuckTier = 0 | 1 | 2 | 3;
 
@@ -117,10 +122,12 @@ export function useDevServer({
     status: DevPreviewStatus;
     url: string | null;
     terminalId: string | null;
+    phaseLabel: "Compiling" | undefined;
   }>({
     status: "stopped",
     url: null,
     terminalId: null,
+    phaseLabel: undefined,
   });
   const isMountedRef = useRef(true);
   const isEnsuringRef = useRef(false);
@@ -177,6 +184,7 @@ export function useDevServer({
       status: state.status,
       url: state.url,
       terminalId: state.terminalId,
+      phaseLabel: state.phaseLabel,
     };
     setStatus(state.status);
     setUrl(state.url);
@@ -197,10 +205,12 @@ export function useDevServer({
       status: "error",
       url: null,
       terminalId: null,
+      phaseLabel: undefined,
     };
     setStatus("error");
     setError({ type: "unknown", message });
     setTerminalId(null);
+    setPhaseLabel(undefined);
     setIsRestarting(false);
   }, []);
 
@@ -350,11 +360,13 @@ export function useDevServer({
         status: "stopped",
         url: null,
         terminalId: null,
+        phaseLabel: undefined,
       };
       setStatus("stopped");
       setUrl(null);
       setTerminalId(null);
       setError(null);
+      setPhaseLabel(undefined);
       setIsRestarting(false);
       lastEnsureConfigRef.current = "";
       pendingEnsureConfigRef.current = null;
@@ -454,11 +466,11 @@ export function useDevServer({
     ensureLatestConfig,
   ]);
 
-  // Staged stuck-start escalation (#8276). Replaces the old silent
-  // auto-restart: instead of firing `devPreview.restart()` once at 10s
-  // (which wiped the logs explaining the stall), we advance `stuckTier`
-  // at 6s/12s/25s so the UI can surface a user-driven signal. The user
-  // now drives any recovery explicitly via the banner actions.
+  // Staged stuck-start escalation (#8276, retuned #9099). Replaces the
+  // old silent auto-restart: instead of firing `devPreview.restart()`
+  // once at 10s (which wiped the logs explaining the stall), we advance
+  // `stuckTier` at 6s/20s/45s so the UI can surface a user-driven signal.
+  // The user now drives any recovery explicitly via the banner actions.
   useEffect(() => {
     if (status !== "starting" || !currentProjectId || !terminalId || url || isRestarting) {
       // `installing` and every other non-starting state falls through here,
@@ -481,6 +493,11 @@ export function useDevServer({
       if (latestContext.panelId !== requestPanelId) return;
       if (latestSession.status !== "starting" || latestSession.url || !latestSession.terminalId)
         return;
+      // #9099: Tier 2 means "no signal yet" — once the backend has emitted
+      // `phaseLabel === "Compiling"`, that IS a signal, so suppress the
+      // warning banner. Tier 3 still fires at 45s even mid-compile because
+      // a 45s compile is itself worth surfacing.
+      if (tier === 2 && latestSession.phaseLabel === "Compiling") return;
 
       setStuckTier((prev) => (tier > prev ? tier : prev));
     };

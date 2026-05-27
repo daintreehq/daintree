@@ -33,7 +33,7 @@ export interface DevPreviewSessionState {
   worktreeId?: string;
   status: DevPreviewSessionStatus;
   url: string | null;
-  assignedUrl: string | null;
+  predictedUrl: string | null;
   error: DevServerError | null;
   terminalId: string | null;
   isRestarting: boolean;
@@ -48,5 +48,37 @@ export interface DevPreviewStateChangedPayload {
 }
 
 export interface DevPreviewGetByWorktreeRequest {
+  worktreeId: string;
+}
+
+export type DevPreviewPackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+export interface DevPreviewDirMeta {
+  relPath: string;
+  exists: boolean;
+  mtimeMs: number | null;
+}
+
+export interface DevPreviewDestructivePreviewMeta {
+  cwd: string;
+  cacheDirs: DevPreviewDirMeta[];
+  nodeModules: DevPreviewDirMeta;
+  packageManager: DevPreviewPackageManager;
+  lockfileName: string | null;
+}
+
+export interface DevPreviewDestructivePreviewSizesRequest extends DevPreviewSessionRequest {
+  // When true, skip the (potentially multi-second) node_modules walk. The
+  // cache-clear tier only needs cache-dir sizes, so the reinstall-only walk
+  // is wasted wall-time otherwise.
+  skipNodeModules?: boolean;
+}
+
+export interface DevPreviewDestructivePreviewSizes {
+  cacheDirSizes: Record<string, number | null>;
+  nodeModulesSizeBytes: number | null;
+}
+
+export interface DevPreviewStopByWorktreeRequest {
   worktreeId: string;
 }

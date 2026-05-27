@@ -545,6 +545,133 @@ describe("useGlobalKeybindings — region focus key bypass (issue #7303)", () =>
       xterm.remove();
     }
   });
+
+  it("does not let focus-region Tab rebinds steal xterm input", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
+      if (id === "nav.focusRegion.next") return "Tab";
+      if (id === "nav.focusRegion.prev") return "Shift+Tab";
+      return undefined;
+    });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "nav.focusRegion.next" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      render(<Host />);
+
+      const tabEvent = dispatchKey("Tab", xterm);
+      expect(tabEvent.defaultPrevented).toBe(false);
+
+      const shiftTabEvent = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        xterm.dispatchEvent(shiftTabEvent);
+      });
+      expect(shiftTabEvent.defaultPrevented).toBe(false);
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      xterm.remove();
+    }
+  });
+
+  // Issue #9105 — bare-key focus-region rebinds (letters, punctuation) must not
+  // steal terminal input. Only non-text keys (F-keys, arrows, etc.) may bypass
+  // the xterm/editable bailouts as a focus-region escape.
+  it("does not let a bare letter focus-region rebind steal xterm input", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
+      if (id === "nav.focusRegion.next") return "q";
+      if (id === "nav.focusRegion.prev") return "Shift+q";
+      return undefined;
+    });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "nav.focusRegion.next" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      render(<Host />);
+      const event = dispatchKey("q", xterm);
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      xterm.remove();
+    }
+  });
+
+  it("does not let a bare punctuation focus-region rebind steal xterm input", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
+      if (id === "nav.focusRegion.next") return "[";
+      if (id === "nav.focusRegion.prev") return "Shift+[";
+      return undefined;
+    });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "nav.focusRegion.next" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      render(<Host />);
+      const event = dispatchKey("[", xterm);
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      xterm.remove();
+    }
+  });
+
+  it("does not let a bare letter focus-region rebind bypass the editable guard", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
+      if (id === "nav.focusRegion.next") return "q";
+      if (id === "nav.focusRegion.prev") return "Shift+q";
+      return undefined;
+    });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "nav.focusRegion.next" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+
+    try {
+      render(<Host />);
+      input.focus();
+      const event = dispatchKey("q", input);
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      input.remove();
+    }
+  });
 });
 
 describe("useGlobalKeybindings — IME composition guard", () => {

@@ -14,14 +14,31 @@ function nextV(epoch: string = TEST_EPOCH): WorktreeEventVersion {
   return { epoch, seq: ++_seq };
 }
 
-const { worktreeClientDeleteMock, closeTerminalsForWorktreeMock, notifyMock } = vi.hoisted(() => ({
+const {
+  worktreeClientDeleteMock,
+  closeTerminalsForWorktreeMock,
+  notifyMock,
+  devPreviewGetByWorktreeMock,
+  devPreviewStopByWorktreeMock,
+} = vi.hoisted(() => ({
   worktreeClientDeleteMock:
     vi.fn<
       (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
     >(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
   notifyMock: vi.fn(),
+  devPreviewGetByWorktreeMock: vi.fn().mockResolvedValue(null),
+  devPreviewStopByWorktreeMock: vi.fn().mockResolvedValue(undefined),
 }));
+
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
+  ...((window as unknown as Record<string, unknown>).electron ?? {}),
+  devPreview: {
+    getByWorktree: devPreviewGetByWorktreeMock,
+    stopByWorktree: devPreviewStopByWorktreeMock,
+  },
+};
 
 vi.mock("@/clients", async () => {
   const actual = await vi.importActual<typeof import("@/clients")>("@/clients");
@@ -148,6 +165,10 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
 
       worktreeClientDeleteMock.mockResolvedValueOnce();
       store.getState().retryDelete("wt-1");
+      // Drain the pre-delete awaits (getByWorktree, stopByWorktree) so the
+      // second worktreeClient.delete fires before we inspect mock.calls.
+      await flushPromises();
+      await flushPromises();
 
       const callMutationIds = worktreeClientDeleteMock.mock.calls.map((c) => c[3]);
       expect(callMutationIds[0]).toBe(firstMutationId);

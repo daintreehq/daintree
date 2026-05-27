@@ -98,6 +98,14 @@ export class WorkspaceHostEventRouter {
           worktreeId: event.worktreeId,
           projectPath: entry.projectPath,
         });
+        // Fallback signal for external removals (CLI `git worktree remove`,
+        // IDE-driven cleanup). The UI-initiated delete path stops the dev
+        // preview BEFORE removal via `window.electron.devPreview.stopByWorktree`
+        // (#9084); this emit lets subscribers reconcile in the external case.
+        events.emit("sys:worktree:remove", {
+          worktreeId: event.worktreeId,
+          timestamp: Date.now(),
+        });
         break;
 
       case "pr-detected": {

@@ -36,8 +36,6 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.reveal",
   "worktree.openIssue",
   "worktree.openPR",
-  "worktree.openIssueInPortal",
-  "worktree.openPRInPortal",
   "worktree.copyContext",
   "worktree.inject",
   "worktree.getAvailableBranch",

@@ -7,7 +7,7 @@
  *        is never killed or tracked.
  *
  *   CC – stop() releases the port from portRegistry; the next ensure() therefore
- *        allocates a NEW port and broadcasts a different assignedUrl, breaking
+ *        allocates a NEW port and broadcasts a different predictedUrl, breaking
  *        any agent that cached the URL. stop() should keep the port (session is
  *        still alive in "stopped" state); only stopByPanel / stopByProject /
  *        dispose should release ports.
@@ -17,10 +17,10 @@
  *
  * Real-life scenario proofs:
  *   RLS-1 – agent can call getByWorktree() immediately after ensure() and get
- *            a non-null assignedUrl even before the server prints its URL.
+ *            a non-null predictedUrl even before the server prints its URL.
  *   RLS-2 – after crash-and-re-ensure, getByWorktree() returns the new session
- *            with a valid assignedUrl (previous URL was cleared on crash).
- *   RLS-3 – stop() → ensure() cycle is idempotent: same assignedUrl, server
+ *            with a valid predictedUrl (previous URL was cleared on crash).
+ *   RLS-3 – stop() → ensure() cycle is idempotent: same predictedUrl, server
  *            restarts cleanly (verifies BUG-CC fix).
  */
 
@@ -237,10 +237,10 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
 
   // ── Bug CC ─────────────────────────────────────────────────────────────────
 
-  it("BUG-CC: ensure() after stop() reuses the same port (assignedUrl is stable)", async () => {
+  it("BUG-CC: ensure() after stop() reuses the same port (predictedUrl is stable)", async () => {
     // First ensure allocates a port.
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    const originalUrl = first.assignedUrl;
+    const originalUrl = first.predictedUrl;
     expect(originalUrl).toBeTruthy();
 
     // Explicit stop keeps the session alive (status=stopped) but releases
@@ -248,33 +248,33 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     // This breaks agent URL caching: the URL silently changes.
     await service.stop(base);
 
-    // Re-ensure should reuse the original port — same assignedUrl.
+    // Re-ensure should reuse the original port — same predictedUrl.
     // Fails when stop() calls releasePort() for a still-live session.
     const second = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(second.assignedUrl).toBe(originalUrl);
+    expect(second.predictedUrl).toBe(originalUrl);
   });
 
-  it("BUG-CC2: getByWorktree returns the same assignedUrl after stop()+ensure() cycle", async () => {
+  it("BUG-CC2: getByWorktree returns the same predictedUrl after stop()+ensure() cycle", async () => {
     await service.ensure({ ...base, worktreeId: "wt-1" });
-    const originalUrl = service.getByWorktree("wt-1")?.assignedUrl;
+    const originalUrl = service.getByWorktree("wt-1")?.predictedUrl;
     expect(originalUrl).toBeTruthy();
 
     await service.stop(base);
     await service.ensure({ ...base, worktreeId: "wt-1" });
 
     // If stop() released the port, getByWorktree now returns a different URL.
-    const afterUrl = service.getByWorktree("wt-1")?.assignedUrl;
+    const afterUrl = service.getByWorktree("wt-1")?.predictedUrl;
     expect(afterUrl).toBe(originalUrl);
   });
 
   it("BUG-CC3: multiple stop()+ensure() cycles keep the same port throughout", async () => {
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    const originalUrl = first.assignedUrl;
+    const originalUrl = first.predictedUrl;
 
     for (let i = 0; i < 3; i++) {
       await service.stop(base);
       const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-      expect(state.assignedUrl).toBe(originalUrl);
+      expect(state.predictedUrl).toBe(originalUrl);
     }
   });
 
@@ -328,79 +328,79 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     const b = service.getByWorktree("wt-b");
     expect(a).not.toBeNull();
     expect(b).not.toBeNull();
-    expect(a!.assignedUrl).toBeTruthy();
-    expect(b!.assignedUrl).toBeTruthy();
+    expect(a!.predictedUrl).toBeTruthy();
+    expect(b!.predictedUrl).toBeTruthy();
     // The invariant: two concurrent allocations never produce the same URL.
-    expect(a!.assignedUrl).not.toBe(b!.assignedUrl);
+    expect(a!.predictedUrl).not.toBe(b!.predictedUrl);
   });
 
   // ── Real-Life Scenario 1: agent URL pre-fetch ──────────────────────────────
 
-  it("RLS-1: assignedUrl is non-null immediately after ensure() before server prints URL", async () => {
+  it("RLS-1: predictedUrl is non-null immediately after ensure() before server prints URL", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
 
     // The server has not printed anything yet — url is null, status is starting.
-    // But assignedUrl must already be set so agents can navigate before the server is ready.
+    // But predictedUrl must already be set so agents can navigate before the server is ready.
     expect(state.status).toBe("starting");
     expect(state.url).toBeNull();
-    expect(state.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(state.predictedUrl).toMatch(/^http:\/\/localhost:\d+$/);
   });
 
-  it("RLS-1b: getByWorktree() returns assignedUrl immediately after ensure()", async () => {
+  it("RLS-1b: getByWorktree() returns predictedUrl immediately after ensure()", async () => {
     await service.ensure({ ...base, worktreeId: "wt-1" });
 
     const session = service.getByWorktree("wt-1");
     expect(session).not.toBeNull();
-    expect(session!.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(session!.predictedUrl).toMatch(/^http:\/\/localhost:\d+$/);
 
-    // assignedUrl is available even while status is still starting.
+    // predictedUrl is available even while status is still starting.
     expect(session!.status).toBe("starting");
   });
 
   // ── Real-Life Scenario 2: crash-and-recover ────────────────────────────────
 
-  it("RLS-2: after terminal crash and re-ensure, getByWorktree has fresh assignedUrl", async () => {
+  it("RLS-2: after terminal crash and re-ensure, getByWorktree has fresh predictedUrl", async () => {
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(first.assignedUrl).toBeTruthy();
+    expect(first.predictedUrl).toBeTruthy();
 
     // Simulate server crash.
     ptyClient.emitExit(first.terminalId!, 1);
 
     const crashState = service.getState(base);
-    expect(crashState.assignedUrl).toBeNull();
+    expect(crashState.predictedUrl).toBeNull();
     expect(crashState.status).toBe("error");
 
-    // Re-ensure should spawn a new terminal and set a new assignedUrl.
+    // Re-ensure should spawn a new terminal and set a new predictedUrl.
     const recovered = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(recovered.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(recovered.predictedUrl).toMatch(/^http:\/\/localhost:\d+$/);
 
     // getByWorktree must reflect the recovered session.
     const byWt = service.getByWorktree("wt-1");
     expect(byWt).not.toBeNull();
-    expect(byWt!.assignedUrl).toBe(recovered.assignedUrl);
+    expect(byWt!.predictedUrl).toBe(recovered.predictedUrl);
     expect(byWt!.status).toBe("starting");
   });
 
   // ── Real-Life Scenario 3: stop / re-start lifecycle ────────────────────────
 
-  it("RLS-3: stop() then ensure() restarts the server with the same assignedUrl", async () => {
+  it("RLS-3: stop() then ensure() restarts the server with the same predictedUrl", async () => {
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(first.assignedUrl).toBeTruthy();
+    expect(first.predictedUrl).toBeTruthy();
 
     await service.stop(base);
 
-    // After stop: session alive but stopped, assignedUrl null in public state.
+    // After stop: session alive but stopped, predictedUrl null in public state.
     const stopped = service.getState(base);
     expect(stopped.status).toBe("stopped");
-    expect(stopped.assignedUrl).toBeNull();
+    expect(stopped.predictedUrl).toBeNull();
 
     // Re-ensure restarts the server — same port, same URL.
     const restarted = await service.ensure({ ...base, worktreeId: "wt-1" });
     expect(restarted.status).toBe("starting");
-    expect(restarted.assignedUrl).toBe(first.assignedUrl);
+    expect(restarted.predictedUrl).toBe(first.predictedUrl);
 
     // getByWorktree picks up the restarted session.
     const byWt = service.getByWorktree("wt-1");
-    expect(byWt!.assignedUrl).toBe(first.assignedUrl);
+    expect(byWt!.predictedUrl).toBe(first.predictedUrl);
   });
 });

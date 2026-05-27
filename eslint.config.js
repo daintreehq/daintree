@@ -306,6 +306,20 @@ export default tseslint.config(
           message:
             "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
         },
+        {
+          // why: electron-updater's AppUpdater.channel setter unconditionally
+          // flips allowDowngrade=true on every assignment, silently stranding
+          // the stable-channel rollback guard from #7573. AutoUpdaterService
+          // routes channel changes through setFeedURL() + an explicit
+          // allowDowngrade assignment for this reason. Matches dot and bracket
+          // notation; aliased writes (`const u = autoUpdater; u.channel = …`)
+          // are out of scope — the direct form is the accidental drift path.
+          // See #9123.
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
+          message:
+            "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
+        },
       ],
     },
   },
@@ -771,6 +785,15 @@ export default tseslint.config(
             "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
         },
         {
+          // Mirrored from the shared/**+electron/** warn block so the
+          // handler override doesn't silently drop the guard for handler
+          // files (flat-config last-write-wins). See #9123.
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
+          message:
+            "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
+        },
+        {
           selector:
             "CallExpression[callee.name=/^(typedHandle|typedHandleWithContext|typedHandleValidated|typedHandleWithContextValidated)$/]",
           message:
@@ -819,6 +842,15 @@ export default tseslint.config(
             "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
           message:
             "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+        {
+          // Mirrored from the shared/**+electron/** warn block so the
+          // handler-test override doesn't silently drop the guard for
+          // handler test files (flat-config last-write-wins). See #9123.
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
+          message:
+            "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
         },
       ],
     },
@@ -932,6 +964,15 @@ export default tseslint.config(
             "BinaryExpression[operator=/^(!==|===)$/]:matches([left.name='kind'], [left.property.name='kind'])[right.type='Literal'][right.value=/^(terminal|browser|dev-preview)$/]",
           message:
             "Don't compare panel.kind against string literals. Use registry helpers (panelKindHasPty, panelKindCanRestart) or sanctioned type guards (isPtyPanel, isBrowserPanel, isDevPreviewPanel) from @shared/types/panel. See #7672.",
+        },
+        {
+          // Mirrored from the shared/**+electron/** warn block so the
+          // legacy-allowlist override doesn't silently drop the guard for
+          // the legacy handler files (flat-config last-write-wins). See #9123.
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
+          message:
+            "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
         },
         {
           selector:

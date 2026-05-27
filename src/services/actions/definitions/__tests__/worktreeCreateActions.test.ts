@@ -54,6 +54,10 @@ function installTerminalInfoMock(getInfo: ReturnType<typeof vi.fn>) {
     value: {
       electron: {
         terminal: { getInfo },
+        devPreview: {
+          getByWorktree: vi.fn().mockResolvedValue(null),
+          stopByWorktree: vi.fn().mockResolvedValue(undefined),
+        },
       },
     },
   });

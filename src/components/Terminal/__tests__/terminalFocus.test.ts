@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
-  resolveTerminalTabEscape,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "../terminalFocus";
@@ -184,40 +183,5 @@ describe("isLikelyAtSynthesizedPointer", () => {
   it("honors a custom threshold", () => {
     expect(isLikelyAtSynthesizedPointer(1000, 1030, 20)).toBe(true);
     expect(isLikelyAtSynthesizedPointer(1000, 1010, 20)).toBe(false);
-  });
-});
-
-describe("resolveTerminalTabEscape", () => {
-  const base = {
-    key: "Tab",
-    shiftKey: false,
-    ctrlKey: false,
-    altKey: false,
-    metaKey: false,
-    isComposing: false,
-    keyCode: 9,
-  };
-
-  it("moves to the next region on plain Tab", () => {
-    expect(resolveTerminalTabEscape(base)).toBe("next");
-  });
-
-  it("moves to the previous region on Shift+Tab", () => {
-    expect(resolveTerminalTabEscape({ ...base, shiftKey: true })).toBe("prev");
-  });
-
-  it("ignores non-Tab keys", () => {
-    expect(resolveTerminalTabEscape({ ...base, key: "Enter" })).toBeNull();
-  });
-
-  it("ignores Tab during IME composition", () => {
-    expect(resolveTerminalTabEscape({ ...base, isComposing: true })).toBeNull();
-    expect(resolveTerminalTabEscape({ ...base, keyCode: 229 })).toBeNull();
-  });
-
-  it("ignores Tab combined with Ctrl/Alt/Meta so the TUI or global keybindings handle it", () => {
-    expect(resolveTerminalTabEscape({ ...base, ctrlKey: true })).toBeNull();
-    expect(resolveTerminalTabEscape({ ...base, altKey: true })).toBeNull();
-    expect(resolveTerminalTabEscape({ ...base, metaKey: true })).toBeNull();
   });
 });

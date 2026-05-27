@@ -290,7 +290,7 @@ test.describe.serial("Core: Accessibility", () => {
           expect(visited.size).toBeGreaterThanOrEqual(3);
         });
 
-        test("Tab moves focus out of a focused terminal (no keyboard trap)", async () => {
+        test("Tab stays terminal input and F6 moves focus out of a focused terminal", async () => {
           const { window } = ctx;
           await ensureWindowFocused(ctx.app);
 
@@ -310,8 +310,16 @@ test.describe.serial("Core: Accessibility", () => {
             })
             .toBe(true);
 
-          // Tab must escape the terminal rather than being swallowed as \t.
+          // Tab is terminal input for shell/agent autocomplete, not a focus
+          // escape. Keyboard-only region escape is F6 / Shift+F6.
           await window.keyboard.press("Tab");
+          await expect
+            .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
+              timeout: T_LONG,
+            })
+            .toBe(true);
+
+          await window.keyboard.press("F6");
           await expect
             .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
               timeout: T_LONG,

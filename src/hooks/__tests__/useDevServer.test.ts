@@ -579,22 +579,26 @@ describe("useDevServer logic", () => {
     });
   });
 
-  // ─── Staged stuck-start escalation (#8276) ────────────────────────
+  // ─── Staged stuck-start escalation (#8276, retuned #9099) ─────────
   //
   // Mirrors the hook's timer effect: when the server is genuinely stuck
-  // in `starting`, `stuckTier` advances at 6s/12s/25s. The old behaviour
+  // in `starting`, `stuckTier` advances at 6s/20s/45s. The old behaviour
   // (silent `devPreview.restart()` at 10s) is gone — escalation now only
-  // produces a tier number; the user drives any restart.
+  // produces a tier number; the user drives any restart. Tier 2 is
+  // suppressed at fire time when `phaseLabel === "Compiling"` because a
+  // confirmed compile in progress is not "no signal." Tier 3 still fires
+  // at 45s even mid-compile.
   describe("stuckTier escalation", () => {
     const STUCK_TIER1_MS = 6000;
-    const STUCK_TIER2_MS = 12000;
-    const STUCK_TIER3_MS = 25000;
+    const STUCK_TIER2_MS = 20000;
+    const STUCK_TIER3_MS = 45000;
     const POST_SPAWN_POLL_WINDOW_MS = 5000; // lesson #4169
 
     type StuckSession = {
       status: DevPreviewStatus;
       url: string | null;
       terminalId: string | null;
+      phaseLabel?: "Compiling";
     };
 
     // Schedule-time gate: matches the effect's early `setStuckTier(0)`.
@@ -612,7 +616,8 @@ describe("useDevServer logic", () => {
     }
 
     // Fire-time guard + tier accumulation: matches `advanceTier`, which
-    // re-checks the latest session before raising the tier.
+    // re-checks the latest session (including phaseLabel) before raising
+    // the tier. Tier 2 is gated on `phaseLabel !== "Compiling"`.
     function computeStuckTier(
       elapsedMs: number,
       sessionAtFire: StuckSession,
@@ -624,7 +629,7 @@ describe("useDevServer logic", () => {
         sessionAtFire.status === "starting" && !sessionAtFire.url && !!sessionAtFire.terminalId;
       if (!stillStuck) return 0;
       if (elapsedMs >= STUCK_TIER1_MS) tier = 1;
-      if (elapsedMs >= STUCK_TIER2_MS) tier = 2;
+      if (elapsedMs >= STUCK_TIER2_MS && sessionAtFire.phaseLabel !== "Compiling") tier = 2;
       if (elapsedMs >= STUCK_TIER3_MS) tier = 3;
       return tier;
     }
@@ -638,12 +643,27 @@ describe("useDevServer logic", () => {
       ).toBe(0);
     });
 
-    it("escalates 1 → 2 → 3 at 6s / 12s / 25s", () => {
+    it("escalates 1 → 2 → 3 at 6s / 20s / 45s", () => {
       const eligible = isStuckEligible(starting, eligibleCtx);
       expect(computeStuckTier(STUCK_TIER1_MS, starting, eligible)).toBe(1);
       expect(computeStuckTier(STUCK_TIER2_MS, starting, eligible)).toBe(2);
       expect(computeStuckTier(STUCK_TIER3_MS, starting, eligible)).toBe(3);
-      expect(computeStuckTier(60000, starting, eligible)).toBe(3);
+      expect(computeStuckTier(90000, starting, eligible)).toBe(3);
+    });
+
+    it("suppresses Tier 2 when phaseLabel is 'Compiling' at fire time (#9099)", () => {
+      const compiling: StuckSession = {
+        ...starting,
+        phaseLabel: "Compiling",
+      };
+      const eligible = isStuckEligible(compiling, eligibleCtx);
+      // Tier 1 still fires at 6s — it is the cheap ambient signal.
+      expect(computeStuckTier(STUCK_TIER1_MS, compiling, eligible)).toBe(1);
+      // Tier 2 is suppressed: 20s mid-compile is not a stuck signal.
+      expect(computeStuckTier(STUCK_TIER2_MS, compiling, eligible)).toBe(1);
+      expect(computeStuckTier(STUCK_TIER3_MS - 1, compiling, eligible)).toBe(1);
+      // Tier 3 still fires at 45s — a 45s compile is itself worth surfacing.
+      expect(computeStuckTier(STUCK_TIER3_MS, compiling, eligible)).toBe(3);
     });
 
     it("never escalates while installing (first-run installs are exempt)", () => {
@@ -685,6 +705,14 @@ describe("useDevServer logic", () => {
       // Lesson #4169: the 5s URL-detection poll resolves fast-start false
       // positives; tier 1 must sit strictly past that window.
       expect(STUCK_TIER1_MS).toBeGreaterThan(POST_SPAWN_POLL_WINDOW_MS);
+    });
+
+    it("Tier 3 covers webpack-mode enterprise cold builds (#9099)", () => {
+      // Measured: Next.js webpack medium ~45s, webpack enterprise 45-90s.
+      // The new 45s threshold must reach those projects without firing on
+      // healthy Vite cold builds (15-45s, mostly below the new mark).
+      expect(STUCK_TIER3_MS).toBeGreaterThanOrEqual(45000);
+      expect(STUCK_TIER2_MS).toBeGreaterThanOrEqual(20000);
     });
 
     it("escalation produces only a tier — it never triggers a restart", () => {

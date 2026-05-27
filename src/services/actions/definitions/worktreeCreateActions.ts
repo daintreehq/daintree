@@ -101,6 +101,13 @@ export function registerWorktreeCreateActions(
         if (closeTerminals) {
           await closeTerminalsForWorktree(worktreeId);
         }
+        // Stop any running dev preview BEFORE `git worktree remove` (#9084).
+        // Windows holds a directory lock while the dev server runs; removal
+        // fails outright if the server is still alive. `stopByWorktree` is
+        // a safe no-op when no session matches, so it's called
+        // unconditionally rather than gated on `getByWorktree` — that gate
+        // would miss multi-panel sessions sharing the same worktreeId.
+        await window.electron.devPreview.stopByWorktree({ worktreeId });
         await worktreeClient.delete(worktreeId, force, deleteBranch);
       },
     })

@@ -609,7 +609,7 @@ describe("dev preview session handlers", () => {
         worktreeId: string;
         status: string;
         url: string | null;
-        assignedUrl: string | null;
+        predictedUrl: string | null;
       } | null
     >(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
 
@@ -636,7 +636,7 @@ describe("dev preview session handlers", () => {
       expect(state?.panelId).toBe("panel-wt-lookup");
       expect(state?.worktreeId).toBe("wt-lookup");
       expect(state?.url).toBe("http://localhost:5174/");
-      expect(state?.assignedUrl).toMatch(/^http:\/\/localhost:\d+/);
+      expect(state?.predictedUrl).toMatch(/^http:\/\/localhost:\d+/);
     });
   });
 

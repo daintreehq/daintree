@@ -9,6 +9,8 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
   DevPreviewGetByWorktreeRequest,
+  DevPreviewDestructivePreviewSizesRequest,
+  DevPreviewStopByWorktreeRequest,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
@@ -92,6 +94,33 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           }
           const svc = await getSessionService();
           return svc.getByWorktree(request.worktreeId);
+        }
+      ),
+      getDestructivePreviewMeta: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewMeta,
+        async (request: DevPreviewSessionRequest) => {
+          const svc = await getSessionService();
+          return svc.getDestructivePreviewMeta(request);
+        }
+      ),
+      getDestructivePreviewSizes: op(
+        DEV_PREVIEW_METHOD_CHANNELS.getDestructivePreviewSizes,
+        async (request: DevPreviewDestructivePreviewSizesRequest) => {
+          const svc = await getSessionService();
+          return svc.getDestructivePreviewSizes(request);
+        }
+      ),
+      stopByWorktree: op(
+        DEV_PREVIEW_METHOD_CHANNELS.stopByWorktree,
+        async (request: DevPreviewStopByWorktreeRequest) => {
+          if (!request || typeof request.worktreeId !== "string" || !request.worktreeId.trim()) {
+            throw new Error("worktreeId is required");
+          }
+          // Lazy-init guard: if no session service has been created, there
+          // are no sessions to stop. Skip the import to avoid spinning up
+          // the service just to no-op.
+          if (!sessionService) return;
+          await sessionService.stopByWorktree(request.worktreeId);
         }
       ),
     },

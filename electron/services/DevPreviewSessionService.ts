@@ -1,11 +1,18 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   getInvalidCommandMessage,
   normalizeNextjsDevCommand,
+  normalizeViteDevCommand,
 } from "./DevPreviewCommandNormalizer.js";
-import { allocatePort, releasePort } from "./DevPreviewPortAllocator.js";
+import {
+  allocatePort,
+  releasePort,
+  waitForPortFree,
+  PORT_FREE_TIMEOUT_MS,
+} from "./DevPreviewPortAllocator.js";
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
 import {
   createSessionKey,
@@ -26,6 +33,11 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewSessionStatus,
+  DevPreviewDirMeta,
+  DevPreviewDestructivePreviewMeta,
+  DevPreviewDestructivePreviewSizes,
+  DevPreviewDestructivePreviewSizesRequest,
+  DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -197,7 +209,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -237,7 +249,7 @@ export class DevPreviewSessionService {
             status: "error",
             error: { type: "unknown", message: commandError },
             url: null,
-            assignedUrl: null,
+            predictedUrl: null,
             terminalId: null,
             isRestarting: false,
           });
@@ -254,6 +266,10 @@ export class DevPreviewSessionService {
         });
 
         await this.stopSessionTerminal(session, "restart");
+        if (!(await this.waitForRegisteredPortFree(session, key))) {
+          state = this.getSessionState(request.projectId, request.panelId);
+          return;
+        }
         await this.spawnSessionTerminal(session);
         state = this.getSessionState(request.projectId, request.panelId);
       });
@@ -283,7 +299,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -302,12 +318,16 @@ export class DevPreviewSessionService {
       // causes EPERM on Windows.
       await this.stopSessionTerminal(session, "restart-clear-cache");
 
+      if (!(await this.waitForRegisteredPortFree(session, key))) {
+        return;
+      }
+
       const deletionError = await this.clearCacheDirs(session.cwd);
       if (deletionError) {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Failed to clear cache: ${deletionError}`,
@@ -339,7 +359,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -369,7 +389,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Failed to remove node_modules: ${message}`,
@@ -417,10 +437,37 @@ export class DevPreviewSessionService {
         const stopStartedAt = performance.now();
         await this.stopSessionTerminal(session, "stop", DEV_PREVIEW_STOP_ESCALATION_MS);
         const forceKilled = performance.now() - stopStartedAt >= DEV_PREVIEW_STOP_ESCALATION_MS;
+
+        const port = this.portRegistry.get(key);
+        if (port !== undefined) {
+          const portAbort = new AbortController();
+          const portFree = await waitForPortFree(port, portAbort.signal);
+          if (!portFree) {
+            // Release the registry entry so a subsequent ensure() picks a fresh
+            // port via allocatePort instead of immediately re-hitting the busy one.
+            releasePort(this.portRegistry, key);
+            this.updateSession(session, {
+              status: "error",
+              url: null,
+              predictedUrl: null,
+              error: {
+                type: "port-conflict",
+                message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s after stopping. Retry to start again.`,
+                port: String(port),
+              },
+              terminalId: null,
+              isRestarting: false,
+              forceKilled,
+              phaseLabel: undefined,
+            });
+            return;
+          }
+        }
+
         this.updateSession(session, {
           status: "stopped",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: null,
           terminalId: null,
           isRestarting: false,
@@ -431,7 +478,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "stopped",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: null,
           terminalId: null,
           isRestarting: false,
@@ -457,7 +504,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
@@ -470,7 +517,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "error",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: { type: "unknown", message: `Failed to stop dev preview: ${message}` },
               terminalId: null,
               isRestarting: false,
@@ -499,7 +546,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
@@ -520,6 +567,52 @@ export class DevPreviewSessionService {
     );
   }
 
+  // Called from the renderer's worktree delete path BEFORE `git worktree
+  // remove` runs. On Windows the dev server holds a directory lock — if the
+  // session isn't stopped first, the removal fails outright (#9084). The
+  // first stop failure rejects so the caller can abort the delete before
+  // git removal makes a partial mess.
+  async stopByWorktree(worktreeId: string): Promise<void> {
+    const targets = [...this.sessions.entries()].filter(
+      ([, session]) => session.worktreeId === worktreeId
+    );
+
+    const errors: unknown[] = [];
+    await Promise.all(
+      targets.map(async ([key, session]) => {
+        await this.runLocked(key, async () => {
+          try {
+            await this.stopSessionTerminal(session, "worktree-delete");
+            this.updateSession(session, {
+              status: "stopped",
+              url: null,
+              predictedUrl: null,
+              error: null,
+              terminalId: null,
+              isRestarting: false,
+            });
+            this.sessions.delete(key);
+            releasePort(this.portRegistry, key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
+          } catch (err) {
+            const message = formatErrorMessage(err, "Failed to stop dev preview");
+            console.warn("[DevPreviewSessionService] stopByWorktree failed for session", {
+              panelId: session.panelId,
+              projectId: session.projectId,
+              worktreeId: session.worktreeId,
+              error: message,
+            });
+            errors.push(err);
+          }
+        });
+      })
+    );
+
+    if (errors.length > 0) {
+      throw errors[0];
+    }
+  }
+
   getState(request: DevPreviewSessionRequest): DevPreviewSessionState {
     validateSessionRequest(request);
     return this.getSessionState(request.projectId, request.panelId);
@@ -536,7 +629,7 @@ export class DevPreviewSessionService {
       worktreeId: undefined,
       status: "stopped",
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -574,7 +667,7 @@ export class DevPreviewSessionService {
         worktreeId: undefined,
         status: "stopped",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
@@ -594,7 +687,7 @@ export class DevPreviewSessionService {
       worktreeId: session.worktreeId,
       status: session.status,
       url: session.url,
-      assignedUrl: session.assignedUrl,
+      predictedUrl: session.predictedUrl,
       error: session.error,
       terminalId: session.terminalId,
       isRestarting: session.isRestarting,
@@ -612,7 +705,7 @@ export class DevPreviewSessionService {
         DevPreviewSession,
         | "status"
         | "url"
-        | "assignedUrl"
+        | "predictedUrl"
         | "error"
         | "terminalId"
         | "isRestarting"
@@ -626,7 +719,7 @@ export class DevPreviewSessionService {
     if (this.disposed) return;
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
-    if (updates.assignedUrl !== undefined) session.assignedUrl = updates.assignedUrl;
+    if (updates.predictedUrl !== undefined) session.predictedUrl = updates.predictedUrl;
     if (updates.error !== undefined) session.error = updates.error;
     if (updates.terminalId !== undefined) session.terminalId = updates.terminalId;
     if (updates.isRestarting !== undefined) session.isRestarting = updates.isRestarting;
@@ -690,7 +783,7 @@ export class DevPreviewSessionService {
       session.markerSeen = false;
       session.needsInstall = false;
       session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null, assignedUrl: null });
+      this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
     }
 
     await this.spawnSessionTerminal(session);
@@ -720,21 +813,21 @@ export class DevPreviewSessionService {
       releasePort(this.portRegistry, sessionKey);
       return;
     }
-    const assignedUrl = `http://localhost:${port}`;
+    const predictedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
 
     session.buffer = "";
     session.lastErrorKey = null;
     session.markerSeen = false;
-    session.assignedUrl = assignedUrl;
+    session.predictedUrl = predictedUrl;
     this.clearCompiling(session);
     this.attachTerminal(session, terminalId);
     this.updateSession(session, {
       terminalId,
       status: "starting",
       url: null,
-      assignedUrl,
+      predictedUrl,
       error: null,
       generation: nextGeneration,
       forceKilled: undefined,
@@ -757,9 +850,11 @@ export class DevPreviewSessionService {
         terminalId,
       });
 
-      // The allocated PORT is authoritative for the common zero-config path.
-      // Keep output URL detection below as an override for servers that choose
-      // their own port, but do not depend on a single terminal line to start.
+      // predictedUrl is the allocator-derived starting point for the readiness
+      // poller — it's accurate for frameworks that honor env.PORT or the
+      // injected --port flag, but not authoritative. UrlDetector overwrites
+      // state.url when real output reveals a different bind address (e.g. next
+      // dev auto-incrementing past EADDRINUSE on configs without --strictPort).
       setTimeout(() => {
         if (this.disposed) return;
         if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
@@ -767,7 +862,7 @@ export class DevPreviewSessionService {
 
         const abort = new AbortController();
         session.readinessAbort = abort;
-        this.pollServerReadiness(session, assignedUrl, abort.signal, nextGeneration);
+        this.pollServerReadiness(session, predictedUrl, abort.signal, nextGeneration);
       }, 0);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to start dev server");
@@ -775,7 +870,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: { type: "unknown", message: `Failed to start dev server: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -798,6 +893,7 @@ export class DevPreviewSessionService {
     };
 
     void normalizeNextjsDevCommand(trimmedCommand, session.cwd, session.turbopackEnabled)
+      .then((nextNormalized) => normalizeViteDevCommand(nextNormalized, session.cwd, port))
       .then((normalizedCommand) => {
         submitCommand(normalizedCommand);
       })
@@ -911,6 +1007,41 @@ export class DevPreviewSessionService {
       normalized.includes("terminal not found") ||
       normalized.includes("unknown terminal")
     );
+  }
+
+  /**
+   * Wait for the session's registered port to release before respawning. On
+   * Windows a force-killed dev server can hold the socket in TIME_WAIT, which
+   * would otherwise cause the next spawn to fail with EADDRINUSE on the same
+   * port (allocatePort returns the registered port without re-probing).
+   * Returns true if free (or no port registered); on timeout, releases the
+   * port from the registry so a subsequent allocate picks a fresh candidate
+   * and surfaces an error state.
+   */
+  private async waitForRegisteredPortFree(
+    session: DevPreviewSession,
+    key: string
+  ): Promise<boolean> {
+    const port = this.portRegistry.get(key);
+    if (port === undefined) return true;
+    const abort = new AbortController();
+    const free = await waitForPortFree(port, abort.signal);
+    if (free) return true;
+    releasePort(this.portRegistry, key);
+    this.updateSession(session, {
+      status: "error",
+      url: null,
+      predictedUrl: null,
+      error: {
+        type: "port-conflict",
+        message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s. Retry to start again.`,
+        port: String(port),
+      },
+      terminalId: null,
+      isRestarting: false,
+      phaseLabel: undefined,
+    });
+    return false;
   }
 
   private async waitForTerminalGone(
@@ -1051,7 +1182,7 @@ export class DevPreviewSessionService {
       status: "error",
       error: result.error,
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       isRestarting: false,
       phaseLabel: undefined,
     });
@@ -1084,7 +1215,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: {
           type: "missing-dependencies",
           message: `Dependency installation failed (exit code ${exitCode})`,
@@ -1111,7 +1242,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error,
         terminalId: null,
         isRestarting: false,
@@ -1123,7 +1254,7 @@ export class DevPreviewSessionService {
     this.updateSession(session, {
       status: "stopped",
       url: null,
-      assignedUrl: null,
+      predictedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -1168,7 +1299,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
-        assignedUrl: null,
+        predictedUrl: null,
         error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -1188,12 +1319,174 @@ export class DevPreviewSessionService {
   }
 
   private detectInstallCommand(cwd: string): string {
-    if (existsSync(path.join(cwd, "bun.lock")) || existsSync(path.join(cwd, "bun.lockb"))) {
-      return "bun install";
+    const info = this.detectPackageManagerInfo(cwd);
+    return `${info.packageManager} install`;
+  }
+
+  // Lockfile precedence mirrors detectInstallCommand: bun > pnpm > yarn > npm.
+  // package-lock.json is only used to report the lockfile name when no other
+  // lockfile is present; it does not change the install command (npm is the
+  // default fallback regardless).
+  private detectPackageManagerInfo(cwd: string): {
+    packageManager: DevPreviewPackageManager;
+    lockfileName: string | null;
+  } {
+    if (existsSync(path.join(cwd, "bun.lock"))) {
+      return { packageManager: "bun", lockfileName: "bun.lock" };
     }
-    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm install";
-    if (existsSync(path.join(cwd, "yarn.lock"))) return "yarn install";
-    return "npm install";
+    if (existsSync(path.join(cwd, "bun.lockb"))) {
+      return { packageManager: "bun", lockfileName: "bun.lockb" };
+    }
+    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
+      return { packageManager: "pnpm", lockfileName: "pnpm-lock.yaml" };
+    }
+    if (existsSync(path.join(cwd, "yarn.lock"))) {
+      return { packageManager: "yarn", lockfileName: "yarn.lock" };
+    }
+    if (existsSync(path.join(cwd, "package-lock.json"))) {
+      return { packageManager: "npm", lockfileName: "package-lock.json" };
+    }
+    return { packageManager: "npm", lockfileName: null };
+  }
+
+  async getDestructivePreviewMeta(
+    request: DevPreviewSessionRequest
+  ): Promise<DevPreviewDestructivePreviewMeta> {
+    validateSessionRequest(request);
+    const cwd = this.resolveSessionCwd(request);
+    const [cacheDirs, nodeModules] = await Promise.all([
+      Promise.all(CACHE_DIRS.map((relPath) => this.statDirMeta(cwd, relPath))),
+      this.statDirMeta(cwd, "node_modules"),
+    ]);
+    const pmInfo = this.detectPackageManagerInfo(cwd);
+    return {
+      cwd,
+      cacheDirs,
+      nodeModules,
+      packageManager: pmInfo.packageManager,
+      lockfileName: pmInfo.lockfileName,
+    };
+  }
+
+  async getDestructivePreviewSizes(
+    request: DevPreviewDestructivePreviewSizesRequest
+  ): Promise<DevPreviewDestructivePreviewSizes> {
+    validateSessionRequest(request);
+    const cwd = this.resolveSessionCwd(request);
+    const skipNodeModules = request.skipNodeModules === true;
+    const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
+      Promise.all(
+        CACHE_DIRS.map(async (relPath) => {
+          const size = await this.computeDirSize(path.join(cwd, relPath));
+          return [relPath, size] as const;
+        })
+      ),
+      skipNodeModules ? Promise.resolve(null) : this.computeDirSize(path.join(cwd, "node_modules")),
+    ]);
+    return {
+      cacheDirSizes: Object.fromEntries(cacheDirEntries),
+      nodeModulesSizeBytes,
+    };
+  }
+
+  private resolveSessionCwd(request: DevPreviewSessionRequest): string {
+    const key = createSessionKey(request.projectId, request.panelId);
+    const session = this.sessions.get(key);
+    if (!session) {
+      throw new Error(
+        `No dev-preview session for panel ${request.panelId} in project ${request.projectId}`
+      );
+    }
+    return session.cwd;
+  }
+
+  private async statDirMeta(cwd: string, relPath: string): Promise<DevPreviewDirMeta> {
+    const fullPath = path.join(cwd, relPath);
+    try {
+      const stat = await fsPromises.stat(fullPath);
+      if (!stat.isDirectory()) {
+        return { relPath, exists: false, mtimeMs: null };
+      }
+      return { relPath, exists: true, mtimeMs: stat.mtimeMs };
+    } catch {
+      return { relPath, exists: false, mtimeMs: null };
+    }
+  }
+
+  private async computeDirSize(dirPath: string): Promise<number | null> {
+    try {
+      const stat = await fsPromises.stat(dirPath);
+      if (!stat.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    if (process.platform === "win32") {
+      return this.computeDirSizeWalk(dirPath);
+    }
+    return this.computeDirSizeDu(dirPath);
+  }
+
+  // POSIX path: shell out to `du -sk` (kilobytes). execFile avoids shell
+  // interpretation entirely — dirPath cannot inject. `du` deduplicates
+  // hardlinks by inode within the traversal, so pnpm-linked files inside
+  // node_modules count once per inode (still reports apparent content size,
+  // not the disk that would actually be reclaimed by deletion).
+  private async computeDirSizeDu(dirPath: string): Promise<number | null> {
+    return new Promise((resolve) => {
+      execFile(
+        "du",
+        ["-sk", dirPath],
+        { maxBuffer: 1024 * 1024, timeout: 30_000 },
+        (err, stdout) => {
+          if (err) return resolve(null);
+          const firstField = stdout.trim().split(/\s+/, 1)[0];
+          const kilobytes = Number.parseInt(firstField, 10);
+          if (!Number.isFinite(kilobytes)) return resolve(null);
+          resolve(kilobytes * 1024);
+        }
+      );
+    });
+  }
+
+  // Windows fallback: no `du` available. Walks the tree with opendir,
+  // accumulating file sizes via lstat. Tracks an inode set to dedupe
+  // hardlinks where the FS reports a stable inode (NTFS returns 0/unstable
+  // values in some cases — those entries simply count each time, accepting a
+  // small over-report on edge filesystems).
+  private async computeDirSizeWalk(dirPath: string): Promise<number | null> {
+    try {
+      let total = 0;
+      const seenInos = new Set<string>();
+      const stack: string[] = [dirPath];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        let handle: Awaited<ReturnType<typeof fsPromises.opendir>>;
+        try {
+          handle = await fsPromises.opendir(cur);
+        } catch {
+          continue;
+        }
+        for await (const ent of handle) {
+          const full = path.join(cur, ent.name);
+          if (ent.isDirectory()) {
+            stack.push(full);
+          } else if (ent.isFile() || ent.isSymbolicLink()) {
+            try {
+              const st = await fsPromises.lstat(full);
+              const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
+              if (inoKey && seenInos.has(inoKey)) continue;
+              if (inoKey) seenInos.add(inoKey);
+              total += st.size;
+            } catch {
+              // skip unreadable
+            }
+          }
+        }
+      }
+      return total;
+    } catch {
+      return null;
+    }
   }
 
   private pollServerReadiness(
@@ -1230,7 +1523,7 @@ export class DevPreviewSessionService {
           this.updateSession(session, {
             status: "error",
             url: null,
-            assignedUrl: null,
+            predictedUrl: null,
             error: {
               type: "unknown",
               message: `Dev server at ${url} did not respond within ${READINESS_TIMEOUT_MS / 1000} seconds`,
@@ -1256,7 +1549,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
-          assignedUrl: null,
+          predictedUrl: null,
           error: {
             type: "unknown",
             message: `Dev server readiness check failed: ${message}`,
