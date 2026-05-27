@@ -36,6 +36,7 @@ export type UseWebviewEventsOptions = {
   setIsSlowLoad: (v: boolean) => void;
   setBlockedNav: (v: { url: string; canOpenExternal: boolean } | null) => void;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
+  onRenderProcessGone?: (details: { reason: string; exitCode: number }) => void;
 };
 
 /**
@@ -65,10 +66,17 @@ export function useWebviewEvents({
   setIsSlowLoad,
   setBlockedNav,
   setHistory,
+  onRenderProcessGone,
 }: UseWebviewEventsOptions): void {
   const getZoomFactor = useEffectEvent(() => zoomFactor);
   const getProjectId = useEffectEvent(() => projectId);
   const getLoadTimeoutMs = useEffectEvent(() => loadTimeoutMs);
+  // Route render-process-gone through useEffectEvent so the lifecycle effect
+  // doesn't rebind listeners when the callback identity changes — listeners
+  // are torn down/rebuilt only when the webview element itself swaps.
+  const fireRenderProcessGone = useEffectEvent((details: { reason: string; exitCode: number }) => {
+    onRenderProcessGone?.(details);
+  });
 
   useEffect(() => {
     const webview = webviewElement;
@@ -313,6 +321,27 @@ export function useWebviewEvents({
       // Webview not yet attached to DOM - dom-ready handler will take over
     }
 
+    const handleRenderProcessGone = (event: Event) => {
+      const details = (event as Event & { details?: { reason: string; exitCode: number } }).details;
+      if (!details) return;
+      // Webview eviction (about:blank src swap by useWebviewEviction) can race
+      // a memory-eviction crash report from Chromium; defer to the eviction
+      // placeholder rather than showing a duplicate crash banner.
+      if (details.reason === "clean-exit" || details.reason === "memory-eviction") return;
+      if (evictingRef.current) return;
+      setIsLoading(false);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+      fireRenderProcessGone(details);
+    };
+
     webview.addEventListener("dom-ready", handleDomReady);
     webview.addEventListener("did-start-loading", handleDidStartLoading);
     webview.addEventListener("did-stop-loading", handleDidStopLoading);
@@ -321,6 +350,7 @@ export function useWebviewEvents({
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
     webview.addEventListener("page-title-updated", handlePageTitleUpdated);
     webview.addEventListener("page-favicon-updated", handlePageFaviconUpdated);
+    webview.addEventListener("render-process-gone", handleRenderProcessGone);
 
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
@@ -331,6 +361,7 @@ export function useWebviewEvents({
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
       webview.removeEventListener("page-favicon-updated", handlePageFaviconUpdated);
+      webview.removeEventListener("render-process-gone", handleRenderProcessGone);
       if (faviconDebounceTimer) {
         clearTimeout(faviconDebounceTimer);
         faviconDebounceTimer = null;

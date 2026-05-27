@@ -201,6 +201,24 @@ describe("BrowserPane webview lifecycle regression", () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).window = globalThis.window ?? {};
+    // InlineStatusBanner reads window.matchMedia at render time; jsdom does
+    // not implement it, so provide a no-op stub.
+    if (typeof window.matchMedia !== "function") {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        configurable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      });
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).electron = {
       clipboard: {
@@ -211,6 +229,8 @@ describe("BrowserPane webview lifecycle regression", () => {
         respondToDialog: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
+        onUnresponsive: vi.fn(() => vi.fn()),
+        onResponsive: vi.fn(() => vi.fn()),
       },
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
@@ -1094,6 +1114,145 @@ describe("BrowserPane webview lifecycle regression", () => {
       const alert = container.querySelector('[role="alert"]');
       expect(alert).not.toBeNull();
       expect(alert?.textContent).toContain("Couldn't resolve");
+    });
+  });
+
+  describe("crash and unresponsive recovery (#9212)", () => {
+    function emitRenderProcessGone(
+      webview: MockWebviewElement,
+      reason: string,
+      exitCode = 1
+    ): void {
+      emitWebviewEvent(webview, "render-process-gone", {
+        details: { reason, exitCode },
+      });
+    }
+
+    function getUnresponsiveCallback(): (payload: { panelId: string }) => void {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.webview.onUnresponsive;
+      const lastCall = mock.mock.calls[mock.mock.calls.length - 1];
+      return lastCall[0];
+    }
+
+    function getResponsiveCallback(): (payload: { panelId: string }) => void {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.webview.onResponsive;
+      const lastCall = mock.mock.calls[mock.mock.calls.length - 1];
+      return lastCall[0];
+    }
+
+    it("auto-reloads silently on the first crash within 60s and surfaces the banner", () => {
+      // The auto-reload runs in the background to recover from a one-off crash,
+      // and the banner stays up so the user has explicit recovery if the reload
+      // does not succeed. A second crash within the window stops auto-reloading
+      // (see next test) to avoid a reload loop.
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Page process crashed");
+    });
+
+    it("does not auto-reload on a second crash within the 60s window", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "oom", 9);
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Page process crashed");
+      expect(container.textContent).toContain("Reason: oom (exit code 9)");
+    });
+
+    it("ignores memory-eviction reason — eviction placeholder owns that signal", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "memory-eviction");
+        emitRenderProcessGone(webview, "memory-eviction");
+      });
+
+      expect(webview.reload).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Page process crashed");
+    });
+
+    it("ignores clean-exit reason — intentional renderer shutdown", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "clean-exit", 0);
+        emitRenderProcessGone(webview, "clean-exit", 0);
+      });
+
+      expect(webview.reload).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Page process crashed");
+    });
+
+    it("shows the unresponsive banner when WEBVIEW_UNRESPONSIVE fires for this panel", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const onUnresponsive = getUnresponsiveCallback();
+
+      act(() => {
+        onUnresponsive({ panelId: "browser-panel-1" });
+      });
+
+      expect(container.textContent).toContain("Page not responding");
+    });
+
+    it("ignores WEBVIEW_UNRESPONSIVE for a different panel", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const onUnresponsive = getUnresponsiveCallback();
+
+      act(() => {
+        onUnresponsive({ panelId: "some-other-panel" });
+      });
+
+      expect(container.textContent).not.toContain("Page not responding");
+    });
+
+    it("auto-clears the unresponsive banner when WEBVIEW_RESPONSIVE fires", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const onUnresponsive = getUnresponsiveCallback();
+      const onResponsive = getResponsiveCallback();
+
+      act(() => {
+        onUnresponsive({ panelId: "browser-panel-1" });
+      });
+      expect(container.textContent).toContain("Page not responding");
+
+      act(() => {
+        onResponsive({ panelId: "browser-panel-1" });
+      });
+      expect(container.textContent).not.toContain("Page not responding");
+    });
+
+    it("does not downgrade a crashed banner when a stale responsive event fires", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const onResponsive = getResponsiveCallback();
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+        emitRenderProcessGone(webview, "crashed");
+      });
+      expect(container.textContent).toContain("Page process crashed");
+
+      act(() => {
+        onResponsive({ panelId: "browser-panel-1" });
+      });
+      expect(container.textContent).toContain("Page process crashed");
     });
   });
 });
