@@ -107,12 +107,14 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-const { fileDiffModalOpenHistory } = vi.hoisted(() => ({
+const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
   fileDiffModalOpenHistory: { value: [] as boolean[] },
+  fileDiffModalLastFilePath: { value: null as string | null },
 }));
 vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({ isOpen }: { isOpen: boolean }) => {
+  FileDiffModal: ({ isOpen, filePath }: { isOpen: boolean; filePath: string }) => {
     fileDiffModalOpenHistory.value.push(isOpen);
+    if (isOpen) fileDiffModalLastFilePath.value = filePath;
     return null;
   },
 }));
@@ -3771,13 +3773,15 @@ describe("ReviewHub", () => {
 
     it("Enter opens the diff for the focused row", async () => {
       await renderHub();
+      // Focus row 1 (the unstaged file) so a wrong-file bug would be caught.
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
 
       fileDiffModalOpenHistory.value.length = 0;
+      fileDiffModalLastFilePath.value = null;
       act(() => void fireEvent.keyDown(document, { key: "Enter" }));
-      await waitFor(() =>
-        expect(fileDiffModalOpenHistory.value.at(-1)).toBe(true)
-      );
+      await waitFor(() => expect(fileDiffModalOpenHistory.value.at(-1)).toBe(true));
+      expect(fileDiffModalLastFilePath.value).toBe("src/app.ts");
     });
 
     it("'v' toggles the Viewed marker for the focused row", async () => {
@@ -3798,6 +3802,55 @@ describe("ReviewHub", () => {
 
       act(() => void fireEvent.keyDown(filterInput, { key: "ArrowDown" }));
       expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+    });
+
+    it("does nothing when the file list is collapsed", async () => {
+      // The disclosure defaults to collapsed; rows (and the listbox) aren't
+      // rendered, so keys must not mutate the index or fire git side effects.
+      useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, false);
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
+      await act(async () => {});
+
+      expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull();
+      fileDiffModalOpenHistory.value.length = 0;
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      act(() => void fireEvent.keyDown(document, { key: " " }));
+      act(() => void fireEvent.keyDown(document, { key: "Enter" }));
+      expect(stageFileMock).not.toHaveBeenCalled();
+      expect(unstageFileMock).not.toHaveBeenCalled();
+      expect(fileDiffModalOpenHistory.value.some((o) => o === true)).toBe(false);
+    });
+
+    it("does not hijack Space when a toolbar button has focus", async () => {
+      await renderHub();
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+
+      // With a row keyboard-focused, Space on the Refresh button must NOT
+      // unstage the row — the button owns its own activation.
+      const refreshButton = screen.getByRole("button", { name: /refresh/i });
+      act(() => void fireEvent.keyDown(refreshButton, { key: " " }));
+      expect(unstageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("clears keyboard focus when the hub closes", async () => {
+      const { rerender } = render(
+        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+      expect(
+        screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
+      ).toBe("review-hub-row-0");
+
+      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      expect(
+        screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
+      ).toBeNull();
     });
   });
 });

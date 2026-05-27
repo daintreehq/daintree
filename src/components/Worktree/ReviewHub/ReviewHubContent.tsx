@@ -1239,13 +1239,24 @@ export function ReviewHubContent({
     if (document.activeElement?.closest('[role="menu"]')) return;
     // A diff overlay owns the keyboard while open; don't move the list beneath it.
     if (selectedFile || selectedBaseBranchFile) return;
+    // The file list is collapsed — no rows are visible, so don't let keys mutate
+    // the index or fire stage/unstage/open-diff on rows the user can't see.
+    if (!fileListExpanded) return;
     if (navigableItems.length === 0) return;
+
+    // Action keys (Enter/Space/v) carry side effects; never let them fire while a
+    // button or link has focus, or we'd hijack that control's native activation
+    // (e.g. Space on Refresh) and instead act on the last keyboard-focused row.
+    const targetIsControl = target?.tagName === "BUTTON" || target?.tagName === "A";
 
     const moveFocus = (index: number) => {
       const item = navigableItems[index];
       if (!item) return;
       setFocusedIndex(index);
       focusedItemKeyRef.current = `${item.section}:${item.file.path}`;
+      // Move DOM focus to the listbox so assistive tech announces the active
+      // option via aria-activedescendant. Scroll is handled by the layout effect.
+      fileListRef.current?.focus({ preventScroll: true });
     };
 
     switch (e.key) {
@@ -1262,7 +1273,7 @@ export function ReviewHubContent({
         return;
       }
       case "Enter": {
-        if (focusedIndex < 0) return;
+        if (targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];
         if (!item) return;
         e.preventDefault();
@@ -1274,7 +1285,7 @@ export function ReviewHubContent({
         return;
       }
       case " ": {
-        if (focusedIndex < 0) return;
+        if (targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];
         if (!item) return;
         e.preventDefault();
@@ -1288,7 +1299,7 @@ export function ReviewHubContent({
       }
       default: {
         if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          if (focusedIndex < 0) return;
+          if (targetIsControl || focusedIndex < 0) return;
           const item = navigableItems[focusedIndex];
           if (!item) return;
           e.preventDefault();
