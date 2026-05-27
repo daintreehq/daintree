@@ -19,6 +19,7 @@ describe("LogFilters accessibility", () => {
     onClear: vi.fn(),
     availableSources: ["renderer", "main", "preload"],
     levelCounts: { debug: 1, info: 2, warn: 3, error: 4 } as const,
+    sourceCounts: { renderer: 3, main: 1, preload: 0 } as Partial<Record<string, number>>,
   };
 
   it("renders search input with type='search'", () => {
@@ -66,10 +67,10 @@ describe("LogFilters accessibility", () => {
   it("closes sources popover on Escape", async () => {
     render(<LogFilters {...baseProps} />);
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
-    expect(screen.getByText("renderer")).toBeTruthy();
+    expect(screen.getByText(/renderer/)).toBeTruthy();
     dispatchEscape();
     await waitFor(() => {
-      expect(screen.queryByText("renderer")).toBeNull();
+      expect(screen.queryByText(/renderer/)).toBeNull();
     });
   });
 
@@ -92,5 +93,41 @@ describe("LogFilters accessibility", () => {
     expect(onFiltersChange).not.toHaveBeenCalledWith(
       expect.objectContaining({ search: "foo" })
     );
+  });
+
+  it("renders source counts beside source names in dropdown", () => {
+    render(<LogFilters {...baseProps} />);
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
+    const mainBtn = screen.getByText(/^\*?main/).closest("button")!;
+    const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
+    expect(rendererBtn.textContent).toContain("3");
+    expect(mainBtn.textContent).toContain("1");
+    expect(preloadBtn.textContent).toContain("0");
+  });
+
+  it("dims zero-count source rows with opacity-50", () => {
+    render(<LogFilters {...baseProps} />);
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
+    expect(preloadBtn.className).toContain("opacity-50");
+  });
+
+  it("keeps zero-count source rows clickable", () => {
+    const onFiltersChange = vi.fn();
+    render(<LogFilters {...baseProps} onFiltersChange={onFiltersChange} />);
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
+    fireEvent.click(preloadBtn);
+    expect(onFiltersChange).toHaveBeenCalledWith({ sources: ["preload"] });
+  });
+
+  it("right-aligns count with ml-auto and uses tabular-nums", () => {
+    render(<LogFilters {...baseProps} />);
+    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
+    const countSpan = rendererBtn.querySelector("span.ml-auto.tabular-nums");
+    expect(countSpan).toBeTruthy();
+    expect(countSpan!.className).toContain("opacity-70");
   });
 });
