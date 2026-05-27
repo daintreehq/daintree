@@ -591,6 +591,13 @@ describe("persistence boundary hardening", () => {
   });
 
   it("notifies exactly once when a permanent structural fallback occurs", async () => {
+    // Drain pending `void import("@/lib/notify").then(...)` chains from prior
+    // tests' notifyPermanentFallbackOnce dispatches. notify is dispatched via
+    // dynamic import to break a module cycle, and those import resolutions can
+    // straddle test boundaries — once our doMock below activates, any pending
+    // resolution binds to our spy and inflates the count above 1.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     const notifySpy = vi.fn();
     vi.doMock("@/lib/notify", () => ({ notify: notifySpy }));
     installLocalStorage(
@@ -606,11 +613,16 @@ describe("persistence boundary hardening", () => {
       const { createSafeJSONStorage } = await import("../persistence/safeStorage");
       const storage = createSafeJSONStorage<{ value: number }>();
 
+      // Final drain + reset right before the writes that matter. Any
+      // stragglers from cross-file imports (Zustand persist initialisations in
+      // other suites etc.) get accounted for here and zeroed out, so the
+      // count we assert reflects only THIS test's setItem-triggered notify.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      notifySpy.mockClear();
+
       storage.setItem("notify-key-1", { state: { value: 1 }, version: 1 });
       storage.setItem("notify-key-2", { state: { value: 2 }, version: 1 });
 
-      // notify is dispatched via a dynamic import to break a module cycle;
-      // wait for the microtask queue + import resolution to drain.
       await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1));
     } finally {
       vi.doUnmock("@/lib/notify");
