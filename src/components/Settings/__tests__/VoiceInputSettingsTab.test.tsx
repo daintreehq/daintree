@@ -52,11 +52,11 @@ vi.mock("@/hooks/useAudioDevices", () => ({
   SYSTEM_DEFAULT_VALUE: "__system_default__",
 }));
 
-vi.mock("@/hooks", () => {
-  const React = require("react");
+vi.mock("@/hooks", async () => {
+  const { useEffect } = await vi.importActual<typeof import("react")>("react");
   return {
     useTabLoad: ({ initialize }: { initialize: () => Promise<unknown> }) => {
-      React.useEffect(() => {
+      useEffect(() => {
         initialize();
       }, []);
       return {
