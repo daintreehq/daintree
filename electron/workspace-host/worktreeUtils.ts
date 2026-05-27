@@ -151,7 +151,15 @@ export async function canonicalizeNearestExisting(target: string): Promise<strin
     try {
       const real = await realpath(current);
       return tail.length ? pathResolve(real, ...tail) : real;
-    } catch {
+    } catch (error) {
+      // Only "does not exist" justifies walking up. A real failure (EACCES on
+      // an existing-but-unreadable segment, EIO, ELOOP) must not be silently
+      // downgraded to lexical reasoning — that would let an inaccessible
+      // symlink escape containment. Re-throw anything other than absent paths.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw error;
+      }
       const parent = dirname(current);
       if (parent === current) {
         return pathResolve(target);
@@ -175,7 +183,15 @@ export async function assertWorktreePathContained(
   rootPath: string,
   absoluteCreatePath: string
 ): Promise<void> {
-  const boundary = await realpath(dirname(pathResolve(rootPath)));
+  const resolvedRoot = pathResolve(rootPath);
+  const parentDir = dirname(resolvedRoot);
+  // A repo at the filesystem root would make the parent boundary the root
+  // itself, which would accept any path on the system. Reject rather than
+  // degrade to an open boundary.
+  if (parentDir === resolvedRoot) {
+    throw new Error("Cannot create a worktree for a repository at the filesystem root");
+  }
+  const boundary = await realpath(parentDir);
   const target = await canonicalizeNearestExisting(absoluteCreatePath);
   const rel = pathRelative(boundary, target);
   // Reject the boundary itself (rel === ""), escapes ("../…"), and absolute

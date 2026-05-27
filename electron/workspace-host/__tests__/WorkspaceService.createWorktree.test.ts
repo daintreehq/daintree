@@ -1187,6 +1187,54 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
+  it("rejects a path equal to the parent-directory boundary itself (#9154)", async () => {
+    // path "/test" == dirname("/test/root"); rel === "" must be rejected.
+    await service.createWorktree("req-boundary-eq", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/boundary",
+      path: "/test",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-boundary-eq",
+        success: false,
+        error: expect.stringContaining("parent directory"),
+      })
+    );
+  });
+
+  it("propagates a non-ENOENT realpath error instead of degrading containment (#9154)", async () => {
+    // EACCES on an existing-but-unreadable segment must fail closed, not be
+    // treated as a not-yet-created directory.
+    const fsPromisesModule = await import("fs/promises");
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => {
+      const s = String(p);
+      if (s === path.resolve("/test/locked/wt")) {
+        return Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      }
+      return Promise.resolve(s);
+    });
+
+    await service.createWorktree("req-eacces", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/eacces",
+      path: "/test/locked/wt",
+    });
+
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-eacces",
+        success: false,
+        error: expect.stringContaining("EACCES"),
+      })
+    );
+  });
+
   it("allows the default sibling worktree path under the parent directory (#9154)", async () => {
     // Mirrors DEFAULT_WORKTREE_PATH_PATTERN: {parent-dir}/{base-folder}-worktrees/...
     await service.createWorktree("req-sibling-ok", "/test/root", {
