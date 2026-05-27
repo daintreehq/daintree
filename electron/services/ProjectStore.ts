@@ -37,6 +37,7 @@ import {
   cleanupUserDataRootQuarantineFiles,
 } from "./projectQuarantineCleanup.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { stableInRepoId } from "../../shared/utils/recipeFilename.js";
 
 import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
@@ -148,8 +149,14 @@ export class ProjectStore {
    * the renderer can surface a conflict dialog instead of silently clobbering
    * newer disk content (#9186).
    *
-   * `options.force === true` skips the comparison and updates the cached hash
-   * after the write — the renderer uses this for the explicit "Overwrite" path.
+   * On a rename, the `previousName` file is also checked — without that, a
+   * `Foo` → `Bar` rename would write `bar.json` (passes because the new file
+   * doesn't exist yet) and then delete an externally-modified `foo.json`,
+   * silently dropping the disk edits.
+   *
+   * `options.force === true` skips both comparisons and updates the cached
+   * hash after the write — the renderer uses this for the explicit
+   * "Overwrite" path.
    *
    * Brand-new recipes (file does not exist) are allowed unconditionally so
    * `createRecipe` / `importRecipe` paths work without a special-case flag.
@@ -160,24 +167,42 @@ export class ProjectStore {
   async writeInRepoRecipeChecked(
     projectPath: string,
     recipe: TerminalRecipe,
-    options: { force?: boolean } = {}
+    options: { force?: boolean; previousName?: string } = {}
   ): Promise<void> {
     if (!options.force) {
-      const onDiskHash = await this.identityFiles.getInRepoRecipeFileHash(projectPath, recipe.name);
-      if (onDiskHash !== null) {
-        const cached = this.inRepoRecipeHashes.get(this.hashKey(projectPath, recipe.id));
-        if (cached === undefined || cached !== onDiskHash) {
-          throw new AppError({
-            code: "RECIPE_STALE_CONFLICT",
-            message: `Recipe '${recipe.name}' changed on disk since it was loaded`,
-            userMessage: recipe.name,
-            context: { recipeId: recipe.id, name: recipe.name },
-          });
-        }
+      await this.assertRecipeFileNotStale(projectPath, recipe.id, recipe.name);
+      if (
+        options.previousName &&
+        safeRecipeFilename(options.previousName) !== safeRecipeFilename(recipe.name)
+      ) {
+        // The rename will delete the old-name file; the user's load-time hash
+        // is what we cached under the old id, so compare it against the
+        // current on-disk bytes of the old-name file before letting the
+        // rename proceed.
+        const oldId = stableInRepoId(options.previousName);
+        await this.assertRecipeFileNotStale(projectPath, oldId, options.previousName);
       }
     }
     const hash = await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
     this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipe.id), hash);
+  }
+
+  private async assertRecipeFileNotStale(
+    projectPath: string,
+    recipeId: string,
+    recipeName: string
+  ): Promise<void> {
+    const onDiskHash = await this.identityFiles.getInRepoRecipeFileHash(projectPath, recipeName);
+    if (onDiskHash === null) return;
+    const cached = this.inRepoRecipeHashes.get(this.hashKey(projectPath, recipeId));
+    if (cached === undefined || cached !== onDiskHash) {
+      throw new AppError({
+        code: "RECIPE_STALE_CONFLICT",
+        message: `Recipe '${recipeName}' changed on disk since it was loaded`,
+        userMessage: recipeName,
+        context: { recipeId, name: recipeName },
+      });
+    }
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {

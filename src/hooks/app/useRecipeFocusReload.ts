@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 
 const FOCUS_REFRESH_DEDUPE_MS = 500;
 
@@ -10,6 +11,12 @@ const FOCUS_REFRESH_DEDUPE_MS = 500;
  * app's in-memory state stale and the next save hits the staleness gate. A
  * window-focus reload bypasses the conflict for the common path where the
  * user wants the on-disk version anyway.
+ *
+ * Skips when a recipe editor or manager is open: a silent reload while the
+ * user is mid-edit would let an old form snapshot save over freshly-loaded
+ * disk content without tripping the write-time stale check (the cache would
+ * already match disk). With an editor open we let the explicit save-time
+ * guard surface the conflict dialog instead.
  *
  * Pattern mirrors `ProjectPulseCard.tsx` focus refresh: pair the bare `focus`
  * event with `visibilitychange` (the more reliable signal when the OS sends
@@ -24,6 +31,7 @@ export function useRecipeFocusReload(): void {
   useEffect(() => {
     const trigger = () => {
       if (typeof document !== "undefined" && document.hidden) return;
+      if (useRecipeEditorActivityStore.getState().isOpen()) return;
       const now = Date.now();
       if (now - lastFiredRef.current < FOCUS_REFRESH_DEDUPE_MS) return;
       lastFiredRef.current = now;

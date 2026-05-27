@@ -54,7 +54,7 @@ function RecipeConflictDialogInner() {
             onClick={() => resolveConflict("overwrite")}
             data-testid="recipe-conflict-overwrite"
           >
-            Overwrite
+            Overwrite recipe
           </Button>
           <Button
             variant="default"

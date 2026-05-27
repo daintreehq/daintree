@@ -1391,7 +1391,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "project:update-inrepo-recipe": {
-    args: [payload: { projectId: string; recipe: TerminalRecipe; previousName?: string }];
+    args: [
+      payload: {
+        projectId: string;
+        recipe: TerminalRecipe;
+        previousName?: string;
+        force?: boolean;
+      },
+    ];
     result: void;
   };
   "project:delete-inrepo-recipe": {

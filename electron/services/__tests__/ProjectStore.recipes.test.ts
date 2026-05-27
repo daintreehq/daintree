@@ -363,6 +363,54 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     ).resolves.toBeUndefined();
   });
 
+  it("refuses a rename when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Name"), name: "Old Name" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+
+    // External edit to the old file between load and rename.
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-name.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Name", "External Old Name"));
+
+    const renamed = {
+      ...recipe,
+      id: stableInRepoId("New Name"),
+      name: "New Name",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, { previousName: "Old Name" })
+    ).rejects.toMatchObject({ code: "RECIPE_STALE_CONFLICT" });
+
+    // New-name file must not be written, old-name file must be untouched.
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-name.json");
+    await expect(fs.access(newPath)).rejects.toThrow();
+    expect(await fs.readFile(oldPath, "utf-8")).toBe(
+      original.replace("Old Name", "External Old Name")
+    );
+  });
+
+  it("force=true allows a rename even when the old-name file was externally modified", async () => {
+    const recipe = makeRecipe({ id: stableInRepoId("Old Forced"), name: "Old Forced" });
+    await store.writeInRepoRecipe(projectPath, recipe);
+    const oldPath = path.join(projectPath, ".daintree", "recipes", "old-forced.json");
+    const original = await fs.readFile(oldPath, "utf-8");
+    await fs.writeFile(oldPath, original.replace("Old Forced", "External Edit"));
+
+    const renamed = {
+      ...recipe,
+      id: stableInRepoId("New Forced"),
+      name: "New Forced",
+    };
+    await expect(
+      store.writeInRepoRecipeChecked(projectPath, renamed, {
+        previousName: "Old Forced",
+        force: true,
+      })
+    ).resolves.toBeUndefined();
+    const newPath = path.join(projectPath, ".daintree", "recipes", "new-forced.json");
+    expect(JSON.parse(await fs.readFile(newPath, "utf-8")).name).toBe("New Forced");
+  });
+
   it("readInRepoRecipes populates the hash cache so a follow-up edit can proceed", async () => {
     // Simulate an existing in-repo recipe written by a previous session.
     const recipe = makeRecipe({ id: stableInRepoId("Loaded"), name: "Loaded" });
