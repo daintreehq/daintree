@@ -109,7 +109,14 @@ export class DevPreviewSessionService {
   constructor(
     private readonly ptyClient: PtyClient,
     private readonly onStateChanged: (state: DevPreviewSessionState) => void,
-    restoredEntries: readonly DevPreviewManifestEntry[] = []
+    restoredEntries: readonly DevPreviewManifestEntry[] = [],
+    // Persists the running-session manifest. Invoked on two kinds of event:
+    // when a session ENTERS a running state (so a later crash can restore it),
+    // and after an EXPLICIT user stop (so the manifest stops offering a restart
+    // for a server the user deliberately stopped). Deliberately NOT invoked from
+    // handleExit — a process exit at shutdown must leave the manifest intact so
+    // the next launch can offer the restart (#9094).
+    private readonly onPersistManifest: (entries: DevPreviewManifestEntry[]) => void = () => {}
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
@@ -120,8 +127,13 @@ export class DevPreviewSessionService {
     }
   }
 
-  get isDisposed(): boolean {
-    return this.disposed;
+  private persistManifest(): void {
+    if (this.disposed) return;
+    try {
+      this.onPersistManifest(this.captureManifest());
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] persistManifest failed:", err);
+    }
   }
 
   /**
@@ -173,10 +185,19 @@ export class DevPreviewSessionService {
 
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
-    if (!key) return null;
-    const session = this.sessions.get(key);
-    if (!session) return null;
-    return this.toPublicState(session);
+    if (key) {
+      const session = this.sessions.get(key);
+      if (session) return this.toPublicState(session);
+    }
+    // Fall back to a restore placeholder so callers (e.g. the worktree-delete
+    // dialog) still surface a dangling dev-preview panel that was running when
+    // Daintree last closed but hasn't been restarted yet. #9094.
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) {
+        return this.getSessionState(entry.projectId, entry.panelId);
+      }
+    }
+    return null;
   }
 
   dispose(): void {
@@ -531,6 +552,9 @@ export class DevPreviewSessionService {
         });
       }
     });
+    // Explicit user stop — drop this session from the restore manifest so the
+    // next launch doesn't offer to restart a server the user chose to stop.
+    this.persistManifest();
     return this.getSessionState(request.projectId, request.panelId);
   }
 
@@ -576,6 +600,7 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
   }
 
   async stopByProject(projectId: string): Promise<void> {
@@ -610,6 +635,7 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
   }
 
   // Called from the renderer's worktree delete path BEFORE `git worktree
@@ -652,6 +678,15 @@ export class DevPreviewSessionService {
         });
       })
     );
+
+    // Drop any restore placeholder for this worktree too — the worktree is
+    // being removed, so its dev server must not be offered for restart.
+    for (const [key, entry] of this.restoredEntries) {
+      if (entry.worktreeId === worktreeId) {
+        this.restoredEntries.delete(key);
+      }
+    }
+    this.persistManifest();
 
     if (errors.length > 0) {
       throw errors[0];
@@ -768,6 +803,7 @@ export class DevPreviewSessionService {
     >
   ): void {
     if (this.disposed) return;
+    const wasRunning = RUNNING_STATES.has(session.status);
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
     if (updates.predictedUrl !== undefined) session.predictedUrl = updates.predictedUrl;
@@ -781,6 +817,14 @@ export class DevPreviewSessionService {
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
     this.onStateChanged(this.toPublicState(session));
+
+    // Snapshot the manifest the moment a session enters a running state so an
+    // abrupt crash (SIGKILL/OOM, where shutdown hooks never run) can still
+    // restore it. Leaving a running state is handled by the explicit-stop
+    // sites — never here — so a shutdown PTY kill doesn't wipe the manifest.
+    if (!wasRunning && RUNNING_STATES.has(session.status)) {
+      this.persistManifest();
+    }
   }
 
   private async runLocked(key: string, task: () => Promise<void>): Promise<void> {

@@ -1099,6 +1099,69 @@ describe("DevPreviewSessionService", () => {
       expect(state.status).toBe("stopped");
     });
 
+    it("getByWorktree falls back to a restored entry when no live session exists", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [
+          {
+            panelId: baseRequest.panelId,
+            projectId: baseRequest.projectId,
+            worktreeId: "wt-7",
+            cwd: baseRequest.cwd,
+            devCommand: baseRequest.devCommand,
+            lastKnownPort: null,
+            capturedAt: 1000,
+          },
+        ]
+      );
+
+      const state = service.getByWorktree("wt-7");
+      expect(state?.status).toBe("restored-stopped");
+      expect(service.getByWorktree("wt-unknown")).toBeNull();
+    });
+
+    it("persists the running manifest on start and clears it on explicit stop", async () => {
+      const persist = vi.fn();
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        persist
+      );
+
+      await service.ensure(baseRequest);
+      expect(persist).toHaveBeenCalled();
+      expect(persist.mock.calls.at(-1)?.[0]).toHaveLength(1);
+
+      persist.mockClear();
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(persist).toHaveBeenCalled();
+      // Explicit stop persists an empty manifest (deletes the restore prompt).
+      expect(persist.mock.calls.at(-1)?.[0]).toEqual([]);
+    });
+
+    it("does not persist when a session exits on its own (manifest survives for restore)", async () => {
+      const persist = vi.fn();
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        persist
+      );
+
+      const started = await service.ensure(baseRequest);
+      persist.mockClear();
+
+      // A PTY exit (e.g. shutdown kill or server crash) must NOT clear the
+      // manifest — that's how the next launch keeps the restart offer.
+      ptyClient.emitExit(started.terminalId!, 0);
+      expect(persist).not.toHaveBeenCalled();
+    });
+
     it("clears the restored-stopped status once the session is started", async () => {
       service.dispose();
       service = new DevPreviewSessionService(

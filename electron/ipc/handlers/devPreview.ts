@@ -4,7 +4,6 @@ import { broadcastToRenderer } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { DEV_PREVIEW_METHOD_CHANNELS } from "./devPreview.preload.js";
 import type { HandlerDependencies } from "../types.js";
-import { getCrashRecoveryService } from "../../services/CrashRecoveryService.js";
 import {
   readAndClearDevPreviewManifest,
   writeDevPreviewManifest,
@@ -47,7 +46,8 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
               const payload: DevPreviewStateChangedPayload = { state };
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
             },
-            restoredEntries
+            restoredEntries,
+            (entries) => writeDevPreviewManifest(app.getPath("userData"), entries)
           );
           return sessionService;
         })
@@ -149,18 +149,6 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
 
   const cleanups: Array<() => void> = [namespace.register()];
 
-  // Persist the running-session manifest on every backup tick. The eager
-  // quit-intent takeBackup() in shutdown.ts fires this BEFORE the PTYs are
-  // killed, so a clean exit captures sessions while they're still running; the
-  // periodic ticks cover the crash (SIGKILL/OOM) path. After dispose() the
-  // sessions map is empty and captureManifest() would write [] (deleting the
-  // good capture from quit-intent), so the isDisposed guard makes the
-  // post-dispose cleanupOnExit tick a no-op.
-  const unsubPreBackup = getCrashRecoveryService().registerPreBackupCallback(() => {
-    if (!sessionService || sessionService.isDisposed) return;
-    writeDevPreviewManifest(app.getPath("userData"), sessionService.captureManifest());
-  });
-
   const unsubHibernation = getHibernationService().onProjectHibernated((projectId) => {
     // Skip if the session service was never created — no sessions exist to stop.
     if (!sessionService) return;
@@ -170,7 +158,6 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   });
 
   return () => {
-    unsubPreBackup();
     unsubHibernation();
     if (sessionService) {
       sessionService.dispose();
