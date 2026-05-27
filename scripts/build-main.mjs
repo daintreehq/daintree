@@ -32,6 +32,20 @@ const common = {
   pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+    // Strip E2E test backdoors from production builds (#9148). Replacing these
+    // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
+    // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
+    // in preload.cts (plus the matching main-process test guards). Conditional
+    // spread, not a ternary value — esbuild stringifies a bare `undefined` define
+    // as the literal "undefined", so dev/test builds must omit these keys entirely
+    // to keep the branches intact for the E2E harness.
+    ...(isProd
+      ? {
+          "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
+        }
+      : {}),
   },
 };
 

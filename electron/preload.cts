@@ -131,8 +131,14 @@ import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry
 
 export type { ElectronAPI };
 
-const isDemoMode =
-  !process.argv.some((a) => a.includes("app.asar")) && process.argv.includes("--demo-mode");
+// True for packaged production builds. `process.resourcesPath` is undefined in
+// sandboxed preloads (sandbox: true), so the only reliable signal here is the
+// `app.asar` segment Electron injects into argv when running from the asar.
+// Used to gate the E2E test bridges below as defense-in-depth (#9148) — the
+// primary strip happens at build time via esbuild defines in build-main.mjs.
+const isPackagedBuild = process.argv.some((a) => a.includes("app.asar"));
+
+const isDemoMode = !isPackagedBuild && process.argv.includes("--demo-mode");
 
 // Persisted color scheme id passed from the main process via
 // webPreferences.additionalArguments. Read synchronously here (process.argv is
@@ -2648,7 +2654,7 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
 
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_IPC__", {
     getRendererListenerCount: (channel: string) => ipcRenderer.listenerCount(channel),
   });
@@ -2658,7 +2664,7 @@ if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.
-if (process.env.DAINTREE_E2E_MODE === "1") {
+if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_MODE__", true);
 }
 
@@ -2668,7 +2674,7 @@ if (process.env.DAINTREE_E2E_MODE === "1") {
 // only set when the E2E harness launches Electron. The sandboxed renderer
 // cannot read `process.env` directly, so the preload (which does have a
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
-if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" && !isPackagedBuild) {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
 }
 
