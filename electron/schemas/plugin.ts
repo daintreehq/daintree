@@ -124,9 +124,11 @@ const SCOPED_PERMISSION_KEYS: readonly ScopedPluginPermission[] = [
   "fs:user-data-write",
 ];
 
-/** Rejects bare wildcard entries (`*`, `**`) so plugins can't claim "scoped" with unbounded sinks. */
+/** Rejects bare wildcard entries (`*`, `**`) so plugins can't claim "scoped" with unbounded sinks.
+ *  Whitespace-padded bypass (e.g. `" * "`) is blocked by trimming before the wildcard check. */
 const PluginScopeAllowEntrySchema = z
   .string()
+  .trim()
   .min(1)
   .refine((val) => val !== "*" && val !== "**", {
     message:

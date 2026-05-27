@@ -2215,13 +2215,10 @@ describe("Plugin action registry", () => {
     ).toBe("safe");
   });
 
-  it("empty allow list does not count as scoped (still elevates)", async () => {
-    // Work around schema validation (which rejects empty allow with min(1)) by
-    // constructing a PluginService directly and injecting a manifest with an
-    // empty scopes allow list. This simulates a plugin whose scopes were valid
-    // at install time but whose allow narrowed to empty via a future update.
-    // We can't writePlugin because the schema rejects empty allow.
-    // Instead, test that a missing scopes field behaves as unscoped.
+  it("missing scopes field still elevates", async () => {
+    // A plugin without a scopes field at all should still be elevated by the
+    // lattice. (The schema's min(1) on `allow` prevents `allow: []`, so the
+    // empty-allow path is separately covered by the schema test below.)
     await writePlugin("missing-scopes", {
       name: "acme.missing-scopes",
       version: "1.0.0",

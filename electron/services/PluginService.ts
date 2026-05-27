@@ -101,17 +101,6 @@ const EXFILTRATION_SINK_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new 
   "network:fetch",
 ]);
 
-/** Local-write permissions that, combined with an unconstrained network fetch,
- *  enable remote-controlled mutation. All four are already individually
- *  triggering, so this rule is effectively redundant — included for
- *  completeness and future-proofing should the individual-trigger set change. */
-const REMOTE_CONTROLLED_MUTATION_WRITE_PERMISSIONS: ReadonlySet<BuiltInPluginPermission> = new Set([
-  "fs:project-write",
-  "fs:user-data-write",
-  "git:write",
-  "shell:exec",
-]);
-
 /**
  * Returns true when `permission` has a non-empty `allow` list in `scopes`,
  * meaning the plugin has voluntarily narrowed that sink's attack surface.
