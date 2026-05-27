@@ -33,6 +33,7 @@ vi.mock("node:crypto", () => ({
 }));
 
 import { ipcMain } from "electron";
+import * as fsPromises from "node:fs/promises";
 import { registerClipboardHandlers } from "../clipboard.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
@@ -178,6 +179,47 @@ describe("clipboard:write-text handler", () => {
   });
 });
 
+describe("clipboard:save-image cleanup trigger", () => {
+  let cleanup: () => void;
+
+  const fakeClipboardImage = {
+    isEmpty: () => false,
+    toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89]) }),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboardMock.readImage.mockReturnValue(fakeClipboardImage);
+    vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("runs cleanup fire-and-forget after writing the image", async () => {
+    const handler = getHandler("clipboard:save-image");
+    await handler(fakeEvent);
+
+    expect(fsPromises.writeFile).toHaveBeenCalled();
+    // cleanup reads the clipboard dir; startup also runs it once, so assert it
+    // ran again after the save (≥2 invocations total).
+    expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not reject the save when cleanup fails", async () => {
+    vi.mocked(fsPromises.readdir).mockRejectedValue(new Error("disk gone"));
+    const handler = getHandler("clipboard:save-image");
+    await expect(handler(fakeEvent)).resolves.toMatchObject({
+      filePath: expect.any(String),
+      thumbnailDataUrl: expect.stringContaining("data:image/png;base64,"),
+    });
+  });
+});
+
 describe("clipboard:write-text size cap", () => {
   const MAX_TEXT_BYTES = 8 * 1024 * 1024;
   let cleanup: () => void;
@@ -256,6 +298,29 @@ describe("clipboard:write-image size cap", () => {
 
     expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
     expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("accepts image data exactly at the 50 MB limit", async () => {
+    const fakeImage = { isEmpty: () => false };
+    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
+
+    const handler = getHandler("clipboard:write-image");
+    await handler(fakeEvent, new Uint8Array(MAX_IMAGE_BYTES));
+
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
+  });
+
+  it("rejects non-Uint8Array input with VALIDATION before any allocation", async () => {
+    const handler = getHandler("clipboard:write-image");
+    for (const bad of [null, new ArrayBuffer(8)]) {
+      await expect(handler(fakeEvent, bad as unknown as Uint8Array)).rejects.toMatchObject({
+        name: "AppError",
+        code: "VALIDATION",
+      });
+    }
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+    expect(clipboardMock.writeImage).not.toHaveBeenCalled();
   });
 });
 

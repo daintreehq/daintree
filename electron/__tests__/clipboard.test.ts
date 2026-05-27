@@ -64,14 +64,25 @@ afterAll(async () => {
 describe("cleanupOldClipboardImages — age eviction", () => {
   it("deletes files older than the 24h window", async () => {
     const old = await createClipboardFile("clipboard-1-aaa.png", MAX_AGE_MS + 60_000);
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
     await expect(fs.access(old)).rejects.toThrow();
   });
 
   it("preserves files within the 24h window", async () => {
     const fresh = await createClipboardFile("clipboard-2-bbb.png", MAX_AGE_MS - 60_000);
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
     await expect(fs.access(fresh)).resolves.toBeUndefined();
+  });
+
+  it("preserves a file exactly at the 24h boundary but evicts one past it", async () => {
+    const atBoundary = await createClipboardFile("clipboard-at-boundary.png", MAX_AGE_MS);
+    const pastBoundary = await createClipboardFile(
+      "clipboard-past-boundary.png",
+      MAX_AGE_MS + 1000
+    );
+    await cleanupOldClipboardImages(NOW);
+    await expect(fs.access(atBoundary)).resolves.toBeUndefined();
+    await expect(fs.access(pastBoundary)).rejects.toThrow();
   });
 
   it("ignores files that don't match the clipboard naming pattern", async () => {
@@ -80,13 +91,13 @@ describe("cleanupOldClipboardImages — age eviction", () => {
     const mtime = new Date(NOW - (MAX_AGE_MS + 60_000));
     await fs.utimes(other, mtime, mtime);
 
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
     await expect(fs.access(other)).resolves.toBeUndefined();
   });
 
   it("returns without error when the clipboard dir doesn't exist", async () => {
     await fs.rm(clipboardDir(), { recursive: true, force: true });
-    await expect(cleanupOldClipboardImages()).resolves.toBeUndefined();
+    await expect(cleanupOldClipboardImages(NOW)).resolves.toBeUndefined();
   });
 });
 
@@ -100,7 +111,7 @@ describe("cleanupOldClipboardImages — count cap", () => {
       await createClipboardFile(`clipboard-${i}-x.png`, ageMs);
     }
 
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
 
     const remaining = await listClipboardFiles();
     expect(remaining).toHaveLength(MAX_FILE_COUNT);
@@ -116,7 +127,7 @@ describe("cleanupOldClipboardImages — count cap", () => {
       await createClipboardFile(`clipboard-${i}-x.png`, (i + 1) * 60_000);
     }
 
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
 
     const remaining = await listClipboardFiles();
     expect(remaining).toHaveLength(MAX_FILE_COUNT);
@@ -132,10 +143,15 @@ describe("cleanupOldClipboardImages — count cap", () => {
       await createClipboardFile(`clipboard-fresh-${i}.png`, (i + 1) * 1_000);
     }
 
-    await cleanupOldClipboardImages();
+    await cleanupOldClipboardImages(NOW);
 
     const remaining = await listClipboardFiles();
     expect(remaining).toHaveLength(MAX_FILE_COUNT);
     expect(remaining.every((name) => name.startsWith("clipboard-fresh-"))).toBe(true);
+    // fresh-21 and fresh-20 carry the largest age offsets (oldest mtimes), so
+    // the count cap evicts exactly those two.
+    expect(remaining).not.toContain("clipboard-fresh-21.png");
+    expect(remaining).not.toContain("clipboard-fresh-20.png");
+    expect(remaining).toContain("clipboard-fresh-0.png");
   });
 });

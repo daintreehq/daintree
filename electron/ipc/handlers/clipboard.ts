@@ -34,7 +34,7 @@ function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
   }
 }
 
-export async function cleanupOldClipboardImages(): Promise<void> {
+export async function cleanupOldClipboardImages(now: number = Date.now()): Promise<void> {
   const dir = getClipboardDir();
   let entries: Dirent[];
   try {
@@ -60,7 +60,6 @@ export async function cleanupOldClipboardImages(): Promise<void> {
   );
 
   const surviving: { filePath: string; mtimeMs: number }[] = [];
-  const now = Date.now();
   const ageEvictions: Promise<void>[] = [];
 
   // Pass 2 — age eviction: delete anything older than the 24h window.
@@ -84,7 +83,9 @@ export async function cleanupOldClipboardImages(): Promise<void> {
 
   // Pass 3 — count cap: if too many recent files survive, evict the oldest.
   if (surviving.length > MAX_FILE_COUNT) {
-    surviving.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    // Tie-break by path so files sharing an mtime (coarse-resolution FSes)
+    // evict in a deterministic order rather than relying on readdir order.
+    surviving.sort((a, b) => a.mtimeMs - b.mtimeMs || a.filePath.localeCompare(b.filePath));
     const toEvict = surviving.slice(0, surviving.length - MAX_FILE_COUNT);
     logCleanupRejections(
       await Promise.allSettled(toEvict.map((entry) => fs.unlink(entry.filePath)))
@@ -149,6 +150,12 @@ async function handleThumbnailFromPath(
 }
 
 async function handleWriteImage(pngData: Uint8Array): Promise<void> {
+  if (!(pngData instanceof Uint8Array)) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "Image data must be a Uint8Array",
+    });
+  }
   if (pngData.byteLength > MAX_IMAGE_BYTES) {
     throw new AppError({
       code: "PAYLOAD_TOO_LARGE",
