@@ -74,6 +74,10 @@ vi.mock("fs/promises", () => ({
   access: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
   cp: vi.fn().mockResolvedValue(undefined),
+  // Identity by default: containment check (assertWorktreePathContained)
+  // realpaths the repo parent and the target's nearest existing ancestor;
+  // identity keeps resolved paths unchanged so existing assertions hold.
+  realpath: vi.fn().mockImplementation((p: string) => Promise.resolve(p)),
 }));
 
 // Default to "exists" so existing tests focus on the git/monitor logic rather
@@ -274,10 +278,15 @@ describe("WorkspaceService adversarial", () => {
   it("does not accumulate duplicate monitors when delete and create overlap on the same path", async () => {
     const racePath = pathResolve("/repo/wt-race");
     let releaseGit!: () => void;
+    let signalRawCalled!: () => void;
+    const rawCalled = new Promise<void>((resolve) => {
+      signalRawCalled = resolve;
+    });
     mockSimpleGit.raw.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseGit = resolve;
+          signalRawCalled();
         })
     );
 
@@ -289,6 +298,11 @@ describe("WorkspaceService adversarial", () => {
 
     const deletePromise = service.deleteWorktree("req-race-delete", racePath);
 
+    // The containment check (#9154) introduces an await on realpath before
+    // `git.raw` runs, so synchronously calling releaseGit() here would land
+    // before the mock implementation ran. Wait for the raw call to capture
+    // the resolver first.
+    await rawCalled;
     releaseGit();
     await Promise.allSettled([createPromise, deletePromise]);
 
