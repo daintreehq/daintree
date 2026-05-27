@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
+
+import { logWarn } from "@/utils/logger";
 import { setupFdLeakWarningListeners, _resetFdLeakWarningCooldown } from "../fdLeakWarning";
 
 let onFdLeakWarningCb: ((data: unknown) => void) | null = null;
-let warnSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   onFdLeakWarningCb = null;
-  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.clearAllMocks();
   _resetFdLeakWarningCooldown();
 
   vi.stubGlobal("electron", {
@@ -24,7 +26,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  warnSpy.mockRestore();
   vi.unstubAllGlobals();
 });
 
@@ -41,19 +42,23 @@ const makePayload = (overrides = {}) => ({
 describe("setupFdLeakWarningListeners", () => {
   it("logs the first warning without notifying the user", () => {
     const d = setupFdLeakWarningListeners();
-    onFdLeakWarningCb!(makePayload());
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.lastCall?.[0]).toContain("[TerminalDiagnostics] FD leak warning");
+    const payload = makePayload();
+    onFdLeakWarningCb!(payload);
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("[TerminalDiagnostics] FD leak warning"),
+      { data: payload }
+    );
     d.dispose();
   });
 
   it("suppresses repeat logs within cooldown period", () => {
     const d = setupFdLeakWarningListeners();
     onFdLeakWarningCb!(makePayload());
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledTimes(1);
 
     onFdLeakWarningCb!(makePayload());
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledTimes(1);
 
     d.dispose();
   });
@@ -61,24 +66,30 @@ describe("setupFdLeakWarningListeners", () => {
   it("includes ptmxLimit percentage in log message", () => {
     const d = setupFdLeakWarningListeners();
     onFdLeakWarningCb!(makePayload({ fdCount: 400, ptmxLimit: 511 }));
-    const message = warnSpy.mock.lastCall?.[0];
-    expect(message).toContain("78% of limit");
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("78% of limit"),
+      expect.any(Object)
+    );
     d.dispose();
   });
 
   it("omits percentage when ptmxLimit is null", () => {
     const d = setupFdLeakWarningListeners();
     onFdLeakWarningCb!(makePayload({ ptmxLimit: null }));
-    const message = warnSpy.mock.lastCall?.[0];
-    expect(message).not.toContain("of limit");
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.not.stringContaining("of limit"),
+      expect.any(Object)
+    );
     d.dispose();
   });
 
   it("includes orphaned pids when present", () => {
     const d = setupFdLeakWarningListeners();
     onFdLeakWarningCb!(makePayload({ orphanedPids: [123, 456] }));
-    const message = warnSpy.mock.lastCall?.[0];
-    expect(message).toContain("orphaned PIDs: 123, 456");
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("orphaned PIDs: 123, 456"),
+      expect.any(Object)
+    );
     d.dispose();
   });
 });
