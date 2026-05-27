@@ -925,6 +925,12 @@
           animation: none;
           opacity: 1;
         }
+        /* Show the painted project name immediately — its reveal is motion, not
+           a timing signal, so reduced-motion users must still see it (#9162). */
+        .skeleton-title.skeleton-title--identified {
+          animation: none;
+          opacity: 1;
+        }
         /* Snap the stuck-state in without a fade. Duration 0ms preserves the
            6s safety delay (the timing mechanism) while removing the motion. */
         .skeleton-stuck {

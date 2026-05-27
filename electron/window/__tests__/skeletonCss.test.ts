@@ -94,4 +94,28 @@ describe("injectSkeletonProjectIdentity (#9162)", () => {
     injectSkeletonProjectIdentity(wc as never, null);
     expect(wc.executeJavaScript).not.toHaveBeenCalled();
   });
+
+  it("the generated script mutates the real skeleton DOM correctly", () => {
+    const { JSDOM } = require("jsdom") as typeof import("jsdom");
+    const dom = new JSDOM(
+      `<div id="startup-skeleton"><div class="skeleton-logo-section"><div class="skeleton-title"></div></div></div>`
+    );
+    const wc = makeWc();
+    // U+2028 (line separator) would break a naive string-spliced script but is
+    // safe through JSON.stringify — execute the real generated script to prove it.
+    const name = "Edge Case";
+    injectSkeletonProjectIdentity(wc as never, { name, emoji: "✨" });
+    const script = wc.executeJavaScript.mock.calls[0]?.[0] as string;
+
+    // Execute the real generated script with jsdom's document in scope (the
+    // script references a free `document`, which we bind as a parameter).
+    const run = new Function("document", script) as (d: unknown) => void;
+    run(dom.window.document);
+
+    const title = dom.window.document.querySelector("#startup-skeleton .skeleton-title");
+    const section = dom.window.document.querySelector("#startup-skeleton .skeleton-logo-section");
+    expect(title?.textContent).toBe(`✨  ${name}`);
+    expect(title?.classList.contains("skeleton-title--identified")).toBe(true);
+    expect(section?.classList.contains("skeleton-logo-section--identified")).toBe(true);
+  });
 });
