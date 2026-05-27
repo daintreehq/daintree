@@ -25,6 +25,7 @@ import {
 } from "./DevPreviewRequestValidators.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -97,17 +98,61 @@ export class DevPreviewSessionService {
   private disposed = false;
   private readonly portRegistry = new Map<string, number>(); // sessionKey -> allocated port
   private readonly worktreeToSession = new Map<string, string>(); // worktreeId -> sessionKey
+  // Spawn metadata for sessions that were running when Daintree last closed,
+  // loaded once at first init. A panel with a matching entry and no live
+  // session reports status "restored-stopped" so the UI can offer a restart.
+  // Entries are dropped the moment a real session is created for that key.
+  private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number) => void;
 
   constructor(
     private readonly ptyClient: PtyClient,
-    private readonly onStateChanged: (state: DevPreviewSessionState) => void
+    private readonly onStateChanged: (state: DevPreviewSessionState) => void,
+    restoredEntries: readonly DevPreviewManifestEntry[] = []
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+    for (const entry of restoredEntries) {
+      this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
+    }
+  }
+
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  /**
+   * Snapshot the spawn metadata of every currently-running session for the
+   * restore manifest. Captures only RUNNING_STATES — stopped/error sessions
+   * have nothing meaningful to restart. `lastKnownPort` comes from the port
+   * registry (populated even while a session is still starting, when `url` is
+   * not yet known) and is informational only.
+   *
+   * Must be called BEFORE the PTYs are killed at shutdown: a killed dev-server
+   * PTY fires `exit`, which transitions its session out of RUNNING_STATES, so a
+   * post-kill capture would return nothing.
+   */
+  captureManifest(): DevPreviewManifestEntry[] {
+    const entries: DevPreviewManifestEntry[] = [];
+    for (const [key, session] of this.sessions) {
+      if (!RUNNING_STATES.has(session.status)) continue;
+      if (!session.devCommand.trim() || !session.cwd) continue;
+      entries.push({
+        panelId: session.panelId,
+        projectId: session.projectId,
+        worktreeId: session.worktreeId,
+        cwd: session.cwd,
+        devCommand: session.devCommand,
+        env: session.env ? { ...session.env } : undefined,
+        turbopackEnabled: session.turbopackEnabled,
+        lastKnownPort: this.portRegistry.get(key) ?? null,
+        capturedAt: Date.now(),
+      });
+    }
+    return entries;
   }
 
   /**
@@ -623,6 +668,11 @@ export class DevPreviewSessionService {
     let session = this.sessions.get(key);
     if (session) return session;
 
+    // A real session supersedes any restore placeholder for this key — drop the
+    // manifest entry so getSessionState stops reporting "restored-stopped" once
+    // the user has restarted (or anything else spawned the server).
+    this.restoredEntries.delete(key);
+
     session = {
       panelId,
       projectId,
@@ -661,11 +711,12 @@ export class DevPreviewSessionService {
     const key = createSessionKey(projectId, panelId);
     const session = this.sessions.get(key);
     if (!session) {
+      const restored = this.restoredEntries.get(key);
       return {
         panelId,
         projectId,
-        worktreeId: undefined,
-        status: "stopped",
+        worktreeId: restored?.worktreeId,
+        status: restored ? "restored-stopped" : "stopped",
         url: null,
         predictedUrl: null,
         error: null,

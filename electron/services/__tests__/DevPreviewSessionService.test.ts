@@ -1025,4 +1025,109 @@ describe("DevPreviewSessionService", () => {
       })
     );
   });
+
+  describe("restore manifest (#9094)", () => {
+    it("captureManifest returns only running-state sessions with their spawn metadata", async () => {
+      await service.ensure({ ...baseRequest, env: { FOO: "bar" }, worktreeId: "wt-1" });
+
+      const captured = service.captureManifest();
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+        worktreeId: "wt-1",
+        cwd: baseRequest.cwd,
+        devCommand: baseRequest.devCommand,
+        env: { FOO: "bar" },
+      });
+      // Port comes from the allocator-backed registry, not the (possibly null) url.
+      expect(typeof captured[0].lastKnownPort === "number").toBe(true);
+    });
+
+    it("captureManifest omits a session once it has stopped", async () => {
+      await service.ensure(baseRequest);
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(service.captureManifest()).toEqual([]);
+    });
+
+    it("reports restored-stopped for a panel that has a manifest entry but no live session", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [
+          {
+            panelId: baseRequest.panelId,
+            projectId: baseRequest.projectId,
+            worktreeId: "wt-1",
+            cwd: baseRequest.cwd,
+            devCommand: baseRequest.devCommand,
+            lastKnownPort: 5173,
+            capturedAt: 1000,
+          },
+        ]
+      );
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("restored-stopped");
+      expect(state.worktreeId).toBe("wt-1");
+      expect(state.terminalId).toBeNull();
+      expect(state.url).toBeNull();
+    });
+
+    it("reports stopped (not restored-stopped) for an unrelated panel", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [
+          {
+            panelId: baseRequest.panelId,
+            projectId: baseRequest.projectId,
+            cwd: baseRequest.cwd,
+            devCommand: baseRequest.devCommand,
+            lastKnownPort: null,
+            capturedAt: 1000,
+          },
+        ]
+      );
+
+      const state = service.getState({ panelId: "other-panel", projectId: baseRequest.projectId });
+      expect(state.status).toBe("stopped");
+    });
+
+    it("clears the restored-stopped status once the session is started", async () => {
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [
+          {
+            panelId: baseRequest.panelId,
+            projectId: baseRequest.projectId,
+            cwd: baseRequest.cwd,
+            devCommand: baseRequest.devCommand,
+            lastKnownPort: null,
+            capturedAt: 1000,
+          },
+        ]
+      );
+
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+      ).toBe("restored-stopped");
+
+      await service.ensure(baseRequest);
+
+      // Once a real session exists, the synthetic restored-stopped status is gone
+      // even if the user later stops the server.
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(
+        service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).status
+      ).toBe("stopped");
+    });
+  });
 });

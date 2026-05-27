@@ -82,6 +82,7 @@ const statusConfig: Record<DevPreviewStatus, { label: string; color: string }> =
   stopping: { label: "Stopping", color: "text-blue-400" },
   error: { label: "Error", color: "text-red-400" },
   stopped: { label: "Stopped", color: "text-gray-400" },
+  "restored-stopped": { label: "Stopped", color: "text-gray-400" },
 };
 
 // ─── Rendering decision logic ───────────────────────────────────────

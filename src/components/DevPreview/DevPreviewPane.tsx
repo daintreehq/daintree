@@ -772,6 +772,14 @@ export function DevPreviewPane({
     void restart();
   }, [resetPreviewWebviewState, restart]);
 
+  // A "restored-stopped" panel has no live backend session (the process was
+  // not reattached across relaunch), so start()/ensure() — not restart() — is
+  // what re-issues the prior command. #9094.
+  const handleStartFromRestored = useCallback(() => {
+    resetPreviewWebviewState();
+    void start();
+  }, [resetPreviewWebviewState, start]);
+
   const confirmRestartInFlightRef = useRef(false);
   const [pendingRestartTier, setPendingRestartTier] = useState<
     "restartAndClearCache" | "reinstallAndRestart" | null
@@ -1433,6 +1441,30 @@ export function DevPreviewPane({
                       </Button>
                     </>
                   )}
+                </div>
+              ) : status === "restored-stopped" ? (
+                <div className="flex flex-col items-center text-center max-w-md">
+                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                    Dev server was running
+                  </h3>
+                  <p className="text-xs text-daintree-text/50 mb-3 leading-relaxed">
+                    Daintree closed while this dev server was active. It wasn't reattached — restart
+                    to run it again.
+                  </p>
+                  {devCommand && (
+                    <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
+                      <code className="text-xs text-daintree-text/70 font-mono">{devCommand}</code>
+                    </div>
+                  )}
+                  <Button
+                    onClick={handleStartFromRestored}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-accent-primary"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    <span className="text-xs">Restart dev server</span>
+                  </Button>
                 </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">

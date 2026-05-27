@@ -73,6 +73,13 @@ export class CrashRecoveryService {
   // current session's backup tick cannot overwrite it. Null when there was
   // no pre-crash backup or after the file has been consumed/cleaned up.
   private crashedBackupPath: string | null = null;
+  // Best-effort hooks invoked at the start of every backup tick (periodic, blur,
+  // and the eager quit-intent backup in shutdown.ts). Used by services with
+  // their own crash-resilient state — e.g. the dev-preview session manifest —
+  // to ride the same capture cadence without entangling their data in the
+  // debounced appState backup. Each runs in isolation so one throw can't block
+  // the snapshot write or the other callbacks.
+  private preBackupCallbacks: Array<() => void> = [];
   // In-memory snapshot captured during consumeMarker() so restoreBackup() and
   // getBackupPanelCount() can serve the pre-crash state even if the on-disk
   // files are deleted, rotated, or overwritten between marker consumption and
@@ -268,7 +275,27 @@ export class CrashRecoveryService {
     }, DEBOUNCE_BACKUP_MS);
   }
 
+  /**
+   * Register a hook to run at the start of every backup tick. Returns an
+   * unsubscribe function. Callbacks must be synchronous and best-effort — they
+   * run inside takeBackup's isolated try/catch and must not throw.
+   */
+  registerPreBackupCallback(fn: () => void): () => void {
+    this.preBackupCallbacks.push(fn);
+    return () => {
+      const idx = this.preBackupCallbacks.indexOf(fn);
+      if (idx !== -1) this.preBackupCallbacks.splice(idx, 1);
+    };
+  }
+
   takeBackup(): void {
+    for (const fn of this.preBackupCallbacks) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn("[CrashRecovery] pre-backup callback failed:", err);
+      }
+    }
     try {
       const backupDir = path.join(this.userData, BACKUP_DIR);
       fs.mkdirSync(backupDir, { recursive: true });

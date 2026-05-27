@@ -6,7 +6,12 @@ export type DevPreviewSessionStatus =
   | "installing"
   | "running"
   | "stopping"
-  | "error";
+  | "error"
+  // Synthesized at launch for a panel whose dev server was running when
+  // Daintree last closed (clean exit or crash). Distinct from "stopped" so the
+  // UI can offer a one-click restart instead of the generic empty state. The
+  // process is NOT reattached — only spawn metadata is restored.
+  | "restored-stopped";
 
 export interface DevPreviewEnsureRequest {
   panelId: string;
