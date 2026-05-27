@@ -1,4 +1,5 @@
 import type { CrashType } from "@shared/types/pty-host";
+import type { PanelSuspectReason } from "@shared/types/ipc/crashRecovery";
 
 export interface RecoveryBannerCopy {
   title: string;
@@ -59,6 +60,22 @@ export function getSuspectPanelBannerTitle(count: number, deselected: boolean): 
     return `${count} ${noun} deselected — created shortly before the crash`;
   }
   return `${count} ${noun} created shortly before the crash`;
+}
+
+/**
+ * Per-panel reason text shown on the suspect badge. Returns `undefined` for
+ * reasons with no user-facing copy yet (e.g. `repeated-suspect`), which the
+ * row renders as an icon-only badge with no tooltip.
+ */
+export function getPanelSuspectReasonTitle(reason?: PanelSuspectReason): string | undefined {
+  switch (reason) {
+    case "crash-window":
+      return "Created within 30 seconds of the crash";
+    case "repeated-suspect":
+      return "Flagged across multiple crash sessions";
+    default:
+      return undefined;
+  }
 }
 
 export const SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED =

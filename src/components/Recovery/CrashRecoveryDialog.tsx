@@ -20,6 +20,7 @@ import { SettingsSwitch } from "../Settings/SettingsSwitch";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import {
   getSuspectPanelBannerTitle,
+  getPanelSuspectReasonTitle,
   SUSPECT_PANEL_BANNER_DESCRIPTION_DESELECTED,
   SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED,
 } from "./recoveryCopy";
@@ -542,7 +543,7 @@ function PanelRow({
         {panel.isSuspect && (
           <span
             className="text-status-warning"
-            title="Created shortly before crash"
+            title={getPanelSuspectReasonTitle(panel.suspectReason)}
             data-testid={`suspect-badge-${panel.id}`}
           >
             <AlertTriangle className="h-3.5 w-3.5" />

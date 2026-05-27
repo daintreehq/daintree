@@ -1010,7 +1010,9 @@ describe("CrashRecoveryService", () => {
 
       const pending = svc.getPendingCrash();
       expect(pending!.panels![0].isSuspect).toBe(false);
+      expect(pending!.panels![0].suspectReason).toBeUndefined();
       expect(pending!.panels![1].isSuspect).toBe(true);
+      expect(pending!.panels![1].suspectReason).toBe("crash-window");
     });
 
     it("includes agent state in panel summaries", () => {

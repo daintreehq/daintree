@@ -119,6 +119,7 @@ const mockPanels = [
     cwd: "/project",
     location: "dock" as const,
     isSuspect: true,
+    suspectReason: "crash-window" as const,
     agentState: "working",
   },
   { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
@@ -228,6 +229,26 @@ describe("CrashRecoveryDialog", () => {
       setup();
       expect(screen.getByTestId("suspect-badge-t2")).toBeTruthy();
       expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
+    it("shows per-panel reason text in the suspect badge title", () => {
+      setup();
+      expect(screen.getByTestId("suspect-badge-t2").getAttribute("title")).toBe(
+        "Created within 30 seconds of the crash"
+      );
+    });
+
+    it("renders an icon-only suspect badge with no title when suspectReason is absent", () => {
+      setup({
+        crash: {
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: true },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
     });
 
     it("shows agent state for agent panels and not for non-agent panels", () => {
