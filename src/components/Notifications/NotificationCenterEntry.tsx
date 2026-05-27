@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Ref } from "react";
-import { CheckCircle2, XCircle, Info, AlertTriangle, MoreHorizontal, X } from "lucide-react";
+import { CheckCircle2, XCircle, Info, AlertTriangle, Clock, MoreHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -15,8 +15,28 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  SNOOZE_DURATION_OPTIONS,
+  SNOOZE_LABEL,
+  type SnoozeDurationOption,
+} from "@shared/utils/snoozeTimestamps";
+
+const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function formatSnoozedUntil(snoozedUntil: number): string {
+  const target = new Date(snoozedUntil);
+  return snoozedUntilFormatter.format(target);
+}
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle2, className: "text-status-success" },
@@ -84,6 +104,18 @@ interface NotificationCenterEntryProps {
   role?: string;
   onFocus?: () => void;
   onDropdownOpenChange?: (open: boolean) => void;
+  /**
+   * When true, the parent (NotificationCenter) is requesting that the snooze
+   * picker open programmatically for this row — set by the `h` keybinding.
+   * The row consumes the request via `onConsumeSnoozePending` after opening
+   * so the same flag doesn't reopen the menu on subsequent renders.
+   */
+  isSnoozePending?: boolean;
+  isSnoozed?: boolean;
+  snoozedUntil?: number;
+  onConsumeSnoozePending?: () => void;
+  onSnooze?: (option: SnoozeDurationOption) => void;
+  onUnsnooze?: () => void;
 }
 
 export function NotificationCenterEntry({
@@ -97,6 +129,12 @@ export function NotificationCenterEntry({
   role,
   onFocus,
   onDropdownOpenChange,
+  isSnoozePending = false,
+  isSnoozed = false,
+  snoozedUntil,
+  onConsumeSnoozePending,
+  onSnooze,
+  onUnsnooze,
 }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
@@ -234,54 +272,26 @@ export function NotificationCenterEntry({
             </span>
           );
         })()}
-        {(entry.context?.projectId || entry.context?.eventKind) &&
-          (() => {
-            const eventKind = entry.context?.eventKind;
-            return (
-              <DropdownMenu onOpenChange={onDropdownOpenChange}>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Notification options"
-                    onClick={(e) => e.stopPropagation()}
-                    className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
-                  >
-                    <MoreHorizontal className="h-3 w-3" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" sideOffset={4}>
-                  {isNotificationEventKind(eventKind) && (
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        const projectId = entry.context?.projectId;
-                        if (!isNotificationEventKind(eventKind)) return;
-                        void actionService.dispatch("project.silenceNotificationKind", {
-                          kind: eventKind,
-                          projectId,
-                        });
-                      }}
-                    >
-                      Silence {EVENT_KIND_LABEL[eventKind]}
-                      {entry.context?.projectId && eventKind !== "uiFeedback"
-                        ? " from this project"
-                        : ""}
-                    </DropdownMenuItem>
-                  )}
-                  {entry.context?.projectId && (
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        const projectId = entry.context?.projectId;
-                        if (!projectId) return;
-                        void actionService.dispatch("project.muteNotifications", { projectId });
-                      }}
-                    >
-                      Mute project notifications
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            );
-          })()}
+        <RowOptionsMenu
+          entry={entry}
+          onDropdownOpenChange={onDropdownOpenChange}
+          isSnoozePending={isSnoozePending}
+          isSnoozed={isSnoozed}
+          snoozedUntil={snoozedUntil}
+          onConsumeSnoozePending={onConsumeSnoozePending}
+          onSnooze={onSnooze}
+          onUnsnooze={onUnsnooze}
+        />
+        {isSnoozed && snoozedUntil !== undefined && (
+          <span
+            data-testid="notification-snoozed-indicator"
+            title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+            aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+            className="inline-flex h-4 w-4 items-center justify-center text-daintree-text/40"
+          >
+            <Clock className="h-3 w-3" aria-hidden="true" />
+          </span>
+        )}
         {onDismiss && (
           <button
             type="button"
@@ -297,5 +307,129 @@ export function NotificationCenterEntry({
         )}
       </div>
     </div>
+  );
+}
+
+interface RowOptionsMenuProps {
+  entry: NotificationHistoryEntry;
+  onDropdownOpenChange?: (open: boolean) => void;
+  isSnoozePending: boolean;
+  isSnoozed: boolean;
+  snoozedUntil: number | undefined;
+  onConsumeSnoozePending?: () => void;
+  onSnooze?: (option: SnoozeDurationOption) => void;
+  onUnsnooze?: () => void;
+}
+
+function RowOptionsMenu({
+  entry,
+  onDropdownOpenChange,
+  isSnoozePending,
+  isSnoozed,
+  snoozedUntil,
+  onConsumeSnoozePending,
+  onSnooze,
+  onUnsnooze,
+}: RowOptionsMenuProps) {
+  const eventKind = entry.context?.eventKind;
+  const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
+  const supportsSnooze = !!entry.correlationId && !!onSnooze;
+  const hasActions = hasContextActions || supportsSnooze;
+  const [open, setOpen] = useState(false);
+
+  // Programmatic open from the parent's `h` keybinding. Open exactly once
+  // per pending request and consume the flag in the same effect so the menu
+  // doesn't re-open on subsequent renders.
+  useEffect(() => {
+    if (!isSnoozePending) return;
+    if (!supportsSnooze) {
+      onConsumeSnoozePending?.();
+      return;
+    }
+    setOpen(true);
+    onConsumeSnoozePending?.();
+  }, [isSnoozePending, supportsSnooze, onConsumeSnoozePending]);
+
+  if (!hasActions) return null;
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    onDropdownOpenChange?.(next);
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Notification options"
+          onClick={(e) => e.stopPropagation()}
+          className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
+        >
+          <MoreHorizontal className="h-3 w-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={4}>
+        {supportsSnooze &&
+          (isSnoozed ? (
+            <DropdownMenuItem
+              onSelect={() => {
+                onUnsnooze?.();
+              }}
+            >
+              <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+              {snoozedUntil !== undefined
+                ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
+                : "Unsnooze"}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+                Snooze
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {SNOOZE_DURATION_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option}
+                    onSelect={() => {
+                      onSnooze?.(option);
+                    }}
+                  >
+                    {SNOOZE_LABEL[option]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        {supportsSnooze && hasContextActions && <DropdownMenuSeparator />}
+        {isNotificationEventKind(eventKind) && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const projectId = entry.context?.projectId;
+              if (!isNotificationEventKind(eventKind)) return;
+              void actionService.dispatch("project.silenceNotificationKind", {
+                kind: eventKind,
+                projectId,
+              });
+            }}
+          >
+            Silence {EVENT_KIND_LABEL[eventKind]}
+            {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+          </DropdownMenuItem>
+        )}
+        {entry.context?.projectId && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const projectId = entry.context?.projectId;
+              if (!projectId) return;
+              void actionService.dispatch("project.muteNotifications", { projectId });
+            }}
+          >
+            Mute project notifications
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

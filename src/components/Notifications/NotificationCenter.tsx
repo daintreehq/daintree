@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowDown, Bell, CheckCheck, Ellipsis, Layers, Moon, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  Bell,
+  CheckCheck,
+  Clock,
+  Ellipsis,
+  Layers,
+  Moon,
+  Trash2,
+} from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
+import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
+import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
 import {
@@ -151,6 +163,7 @@ function partitionByContext(groups: ThreadGroup[]): ContextSection[] {
 export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const entries = useNotificationHistoryStore((s) => s.entries);
   const unreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const snoozedThreads = useNotificationHistoryStore((s) => s.snoozedThreads);
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const markIdsRead = useNotificationHistoryStore((s) => s.markIdsRead);
   const markUnseenAsToast = useNotificationHistoryStore((s) => s.markUnseenAsToast);
@@ -158,6 +171,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
   const archiveEntry = useNotificationHistoryStore((s) => s.archiveEntry);
   const archiveByCorrelationId = useNotificationHistoryStore((s) => s.archiveByCorrelationId);
+  const snoozeThread = useNotificationHistoryStore((s) => s.snoozeThread);
+  const clearSnooze = useNotificationHistoryStore((s) => s.clearSnooze);
+  const clearExpiredSnoozes = useNotificationHistoryStore((s) => s.clearExpiredSnoozes);
+
+  useSnoozeExpiryTimer(snoozedThreads, clearExpiredSnoozes);
 
   const {
     notificationsEnabled,
@@ -192,7 +210,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const lastClosedAt = useUIStore((s) => s.lastNotificationCenterClosedAt);
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
-  const [filter, setFilter] = useState<"all" | "unread" | "archived">("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
+  const [snoozePendingIndex, setSnoozePendingIndex] = useState<number | null>(null);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
   const [dividerEl, setDividerEl] = useState<HTMLDivElement | null>(null);
@@ -283,30 +302,57 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   }, [showJumpPill]);
 
   const filteredEntries = useMemo(() => {
+    // Recompute "is snoozed?" per entry against the current snooze map.
+    // Inlining the check keeps callers from threading `now` everywhere — for
+    // the inbox-render path a single timestamp captured per render is fine
+    // (the expiry timer will re-render when a snooze actually expires).
+    const now = Date.now();
+    const isSnoozed = (e: NotificationHistoryEntry): boolean => {
+      if (!e.correlationId) return false;
+      const until = snoozedThreads[e.correlationId];
+      return typeof until === "number" && until > now;
+    };
+    if (filter === "snoozed") {
+      // Snoozed tab shows only actively-snoozed (non-archived) entries.
+      // Archived entries that happen to belong to a still-snoozed
+      // correlationId stay in Archived, not here — Snoozed is the "deferred
+      // commitment" surface, Archived is the "done" surface.
+      return entries.filter((e) => e.archivedAt === null && isSnoozed(e));
+    }
     if (filter === "archived") {
       return entries.filter((e) => e.archivedAt !== null);
     }
     if (filter === "all") {
       // Archived entries belong to the Archived tab only — they're done.
-      return entries.filter((e) => e.archivedAt === null);
+      // Snoozed threads are intentionally hidden until they un-snooze.
+      return entries.filter((e) => e.archivedAt === null && !isSnoozed(e));
     }
     if (frozenUnreadIds) {
       return entries.filter(
-        (e) => e.archivedAt === null && (!e.seenAsToast || frozenUnreadIds.has(e.id))
+        (e) =>
+          e.archivedAt === null && !isSnoozed(e) && (!e.seenAsToast || frozenUnreadIds.has(e.id))
       );
     }
-    return entries.filter((e) => e.archivedAt === null && !e.seenAsToast);
-  }, [entries, filter, frozenUnreadIds]);
+    return entries.filter((e) => e.archivedAt === null && !e.seenAsToast && !isSnoozed(e));
+  }, [entries, filter, frozenUnreadIds, snoozedThreads]);
 
   const { needsAttentionGroups, chronoSections, dividerGroupId } = useMemo(() => {
+    const now = Date.now();
+    const isSnoozedGroup = (g: ThreadGroup): boolean => {
+      if (!g.correlationId) return false;
+      const until = snoozedThreads[g.correlationId];
+      return typeof until === "number" && until > now;
+    };
     // Pinned reflects the global unread severe-threads set so it stays the
-    // same in All and Unread filter views. Hidden in Archived — pinned is for
-    // active items only. Chrono respects the active filter.
+    // same in All and Unread filter views. Hidden in Archived and Snoozed —
+    // pinned is for active, attention-required items only. Snoozed threads
+    // are an explicit defer so they must drop out of the pinned rail.
     const pinned =
-      filter === "archived"
+      filter === "archived" || filter === "snoozed"
         ? []
         : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
             .filter((g) => {
+              if (isSnoozedGroup(g)) return false;
               if (!isUnreadGroup(g)) return false;
               const sev = getWorstSeverity(g.entries);
               return sev === "error" || sev === "warning";
@@ -326,7 +372,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       : [{ key: "all", groups: chronoGroups }];
 
     let divider: string | null = null;
-    if (lastClosedAt > 0 && filter !== "archived") {
+    if (lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
       for (const g of chronoGroups) {
         if (g.latestTimestamp > lastClosedAt) {
           divider = g.correlationId ?? g.entries[0]?.id ?? null;
@@ -340,7 +386,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       chronoSections: sections,
       dividerGroupId: divider,
     };
-  }, [entries, filteredEntries, groupByContext, lastClosedAt, filter]);
+  }, [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]);
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
 
@@ -470,6 +516,45 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     [archiveByCorrelationId, archiveEntry]
   );
 
+  // Build a fast index of unread entry IDs grouped by row, so the `u` toggle
+  // can flip read/unread for the focused row in one store call. Without this
+  // memo each keystroke would walk every entry looking for matches.
+  const flatRowEntryIds = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const group of groupByCorrelationId(entries)) {
+      const key = group.correlationId ?? group.entries[0]!.id;
+      map.set(
+        key,
+        group.entries.filter((e) => !e.archivedAt).map((e) => e.id)
+      );
+    }
+    return map;
+  }, [entries]);
+
+  const toggleReadForRow = useCallback(
+    (row: FlatRow) => {
+      const ids = flatRowEntryIds.get(row.key) ?? [row.entryId];
+      const live = useNotificationHistoryStore.getState().entries;
+      const liveById = new Map(live.map((e) => [e.id, e] as const));
+      const unreadIds = ids.filter((id) => {
+        const e = liveById.get(id);
+        return e !== undefined && !e.seenAsToast;
+      });
+      if (unreadIds.length > 0) {
+        markIdsRead(unreadIds);
+      } else {
+        // Whole row already read — flip the head entry back to unread so the
+        // dot reappears. Skip when the head entry no longer exists (a
+        // dismissal or prune raced the keystroke).
+        const head = liveById.get(row.entryId);
+        if (head && head.seenAsToast && !head.archivedAt) {
+          markUnseenAsToast(row.entryId, { silent: true });
+        }
+      }
+    },
+    [flatRowEntryIds, markIdsRead, markUnseenAsToast]
+  );
+
   const moveFocusTo = useCallback((index: number) => {
     const target = rowRefs.current.get(index);
     if (target) {
@@ -530,6 +615,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           }
           return;
         }
+        case "u": {
+          // Linear-parity toggle: flip the focused row between read and
+          // unread. Lowercase only — uppercase `U` is reserved for a future
+          // bulk action and would conflict with Shift-modified navigation.
+          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          e.preventDefault();
+          const row = flatRows[activeIndex];
+          if (!row) return;
+          toggleReadForRow(row);
+          return;
+        }
+        case "h": {
+          // Linear-parity snooze: open the snooze sub-menu on the focused
+          // row. Lowercase only and only for correlated rows (snooze is a
+          // thread-level concept). The dropdown-open guard at the top of
+          // this handler keeps subsequent j/k from double-navigating.
+          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          const row = flatRows[activeIndex];
+          if (!row || !row.correlationId) return;
+          e.preventDefault();
+          setSnoozePendingIndex(activeIndex);
+          return;
+        }
         case "Enter": {
           const row = flatRows[activeIndex];
           if (!row || !row.primaryAction) return;
@@ -541,8 +649,35 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
       }
     },
-    [rowCount, flatRows, moveFocusTo, dismissEntry, archiveRow, dispatchPrimaryAction, filter]
+    [
+      rowCount,
+      flatRows,
+      moveFocusTo,
+      dismissEntry,
+      archiveRow,
+      dispatchPrimaryAction,
+      filter,
+      toggleReadForRow,
+    ]
   );
+
+  const handleSnoozeForRow = useCallback(
+    (row: FlatRow, option: SnoozeDurationOption) => {
+      if (!row.correlationId) return;
+      snoozeThread(row.correlationId, resolveSnoozeDuration(option));
+    },
+    [snoozeThread]
+  );
+
+  const handleUnsnoozeForRow = useCallback(
+    (row: FlatRow) => {
+      if (!row.correlationId) return;
+      clearSnooze(row.correlationId);
+    },
+    [clearSnooze]
+  );
+
+  const consumeSnoozePending = useCallback(() => setSnoozePendingIndex(null), []);
 
   const handleMarkAllRead = () => {
     // Archived entries are already done; they must never appear in the
@@ -619,6 +754,22 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   })();
 
   const showGroupToggle = entries.length > 0;
+  // Hide the Snoozed tab when nothing is snoozed — it would otherwise be a
+  // dead chip that always opens to an empty state, training users to ignore
+  // it. Snap focus back to "all" if the active snooze just expired while the
+  // tab was open so the user isn't stranded on a vanished tab.
+  const hasSnoozedThreads = useMemo(() => {
+    const now = Date.now();
+    for (const value of Object.values(snoozedThreads)) {
+      if (typeof value === "number" && value > now) return true;
+    }
+    return false;
+  }, [snoozedThreads]);
+  useEffect(() => {
+    if (filter === "snoozed" && !hasSnoozedThreads) {
+      setFilter("all");
+    }
+  }, [filter, hasSnoozedThreads]);
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
@@ -672,6 +823,24 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               >
                 Archived
               </button>
+              {hasSnoozedThreads && (
+                <button
+                  type="button"
+                  aria-pressed={filter === "snoozed"}
+                  onClick={() => {
+                    setFilter("snoozed");
+                    setFrozenUnreadIds(null);
+                  }}
+                  className={cn(
+                    "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                    filter === "snoozed"
+                      ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
+                      : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                  )}
+                >
+                  Snoozed
+                </button>
+              )}
             </>
           )}
         </div>
@@ -789,7 +958,15 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           className="h-full overflow-y-auto"
         >
           {totalChronoGroups === 0 && needsAttentionGroups.length === 0 ? (
-            filter === "archived" && entries.length > 0 ? (
+            filter === "snoozed" && entries.length > 0 ? (
+              <EmptyState
+                variant="user-cleared"
+                scale="canvas"
+                title="Nothing snoozed"
+                icon={<Clock />}
+                className="py-10"
+              />
+            ) : filter === "archived" && entries.length > 0 ? (
               <EmptyState
                 variant="user-cleared"
                 scale="canvas"
@@ -855,6 +1032,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onDropdownOpenChange={handleDropdownOpenChange}
                   onDismiss={dismissEntry}
                   onDismissThread={dismissByCorrelationId}
+                  snoozePendingIndex={snoozePendingIndex}
+                  snoozedThreads={snoozedThreads}
+                  snoozeRenderTime={now}
+                  onConsumeSnoozePending={consumeSnoozePending}
+                  onSnoozeRow={handleSnoozeForRow}
+                  onUnsnoozeRow={handleUnsnoozeForRow}
                 />
               )}
               {chronoSections.map((section, sectionIdx) => (
@@ -876,6 +1059,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onDismiss={dismissEntry}
                   onDismissThread={dismissByCorrelationId}
                   onMarkIdsRead={markIdsReadWithUndo}
+                  snoozePendingIndex={snoozePendingIndex}
+                  snoozedThreads={snoozedThreads}
+                  snoozeRenderTime={now}
+                  onConsumeSnoozePending={consumeSnoozePending}
+                  onSnoozeRow={handleSnoozeForRow}
+                  onUnsnoozeRow={handleUnsnoozeForRow}
                 />
               ))}
             </>
@@ -935,10 +1124,22 @@ function NeedsAttentionSection({
   onDropdownOpenChange,
   onDismiss,
   onDismissThread,
+  snoozePendingIndex,
+  snoozedThreads,
+  snoozeRenderTime,
+  onConsumeSnoozePending,
+  onSnoozeRow,
+  onUnsnoozeRow,
 }: {
   groups: ThreadGroup[];
   onDismiss: (id: string) => void;
   onDismissThread: (correlationId: string) => void;
+  snoozePendingIndex: number | null;
+  snoozedThreads: Record<string, number>;
+  snoozeRenderTime: number;
+  onConsumeSnoozePending: () => void;
+  onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
+  onUnsnoozeRow: (row: FlatRow) => void;
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
@@ -946,15 +1147,33 @@ function NeedsAttentionSection({
         Needs attention
       </div>
       <div role="group" aria-label="Needs attention" className="divide-y divide-tint/[0.04]">
-        {groups.map((group, idx) =>
-          renderGroup(group, onDismiss, onDismissThread, {
-            flatIndex: indexOffset + idx,
-            focusedIndex,
-            setRowRef,
-            onRowFocus,
-            onDropdownOpenChange,
-          })
-        )}
+        {groups.map((group, idx) => {
+          const flatIndex = indexOffset + idx;
+          return renderGroup(
+            group,
+            onDismiss,
+            onDismissThread,
+            {
+              flatIndex,
+              focusedIndex,
+              setRowRef,
+              onRowFocus,
+              onDropdownOpenChange,
+            },
+            buildSnoozeProps(
+              group,
+              flatIndex,
+              snoozePendingIndex,
+              snoozedThreads,
+              snoozeRenderTime,
+              {
+                onConsumeSnoozePending,
+                onSnooze: onSnoozeRow,
+                onUnsnooze: onUnsnoozeRow,
+              }
+            )
+          );
+        })}
       </div>
     </div>
   );
@@ -974,6 +1193,12 @@ function ChronoSection({
   onDismiss,
   onDismissThread,
   onMarkIdsRead,
+  snoozePendingIndex,
+  snoozedThreads,
+  snoozeRenderTime,
+  onConsumeSnoozePending,
+  onSnoozeRow,
+  onUnsnoozeRow,
 }: {
   section: ContextSection;
   groupByContext: boolean;
@@ -983,6 +1208,12 @@ function ChronoSection({
   onDismiss: (id: string) => void;
   onDismissThread: (correlationId: string) => void;
   onMarkIdsRead: (ids: string[], options: { resetLastClosed: boolean }) => void;
+  snoozePendingIndex: number | null;
+  snoozedThreads: Record<string, number>;
+  snoozeRenderTime: number;
+  onConsumeSnoozePending: () => void;
+  onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
+  onUnsnoozeRow: (row: FlatRow) => void;
 } & RovingSectionProps) {
   const sectionUnreadIds = section.groups.flatMap((g) =>
     g.entries.filter((e) => !e.seenAsToast).map((e) => e.id)
@@ -1006,6 +1237,7 @@ function ChronoSection({
         {section.groups.map((group, idx) => {
           const groupKey = group.correlationId ?? group.entries[0]!.id;
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
+          const flatIndex = indexOffset + idx;
           return (
             <div key={groupKey}>
               {isDivider && (
@@ -1015,13 +1247,30 @@ function ChronoSection({
                   onMarkRead={() => onMarkIdsRead(newSinceUnreadIds, { resetLastClosed: true })}
                 />
               )}
-              {renderGroup(group, onDismiss, onDismissThread, {
-                flatIndex: indexOffset + idx,
-                focusedIndex,
-                setRowRef,
-                onRowFocus,
-                onDropdownOpenChange,
-              })}
+              {renderGroup(
+                group,
+                onDismiss,
+                onDismissThread,
+                {
+                  flatIndex,
+                  focusedIndex,
+                  setRowRef,
+                  onRowFocus,
+                  onDropdownOpenChange,
+                },
+                buildSnoozeProps(
+                  group,
+                  flatIndex,
+                  snoozePendingIndex,
+                  snoozedThreads,
+                  snoozeRenderTime,
+                  {
+                    onConsumeSnoozePending,
+                    onSnooze: onSnoozeRow,
+                    onUnsnooze: onUnsnoozeRow,
+                  }
+                )
+              )}
             </div>
           );
         })}
@@ -1038,11 +1287,21 @@ interface RowRovingProps {
   onDropdownOpenChange: (open: boolean) => void;
 }
 
+interface SnoozeRowProps {
+  isSnoozePending: boolean;
+  isSnoozed: boolean;
+  snoozedUntil: number | undefined;
+  onConsumeSnoozePending: () => void;
+  onSnooze: (option: SnoozeDurationOption) => void;
+  onUnsnooze: () => void;
+}
+
 function renderGroup(
   group: ThreadGroup,
   onDismiss: (id: string) => void,
   onDismissThread: (correlationId: string) => void,
-  roving: RowRovingProps
+  roving: RowRovingProps,
+  snooze: SnoozeRowProps
 ) {
   const isFocused = roving.flatIndex === roving.focusedIndex;
   const tabIndex = isFocused ? 0 : -1;
@@ -1059,6 +1318,12 @@ function renderGroup(
         tabIndex={tabIndex}
         onRowFocus={handleFocus}
         onDropdownOpenChange={roving.onDropdownOpenChange}
+        isSnoozePending={snooze.isSnoozePending}
+        isSnoozed={snooze.isSnoozed}
+        snoozedUntil={snooze.snoozedUntil}
+        onConsumeSnoozePending={snooze.onConsumeSnoozePending}
+        onSnooze={snooze.onSnooze}
+        onUnsnooze={snooze.onUnsnooze}
       />
     );
   }
@@ -1074,8 +1339,40 @@ function renderGroup(
       role="listitem"
       onFocus={handleFocus}
       onDropdownOpenChange={roving.onDropdownOpenChange}
+      isSnoozePending={snooze.isSnoozePending}
+      isSnoozed={snooze.isSnoozed}
+      snoozedUntil={snooze.snoozedUntil}
+      onConsumeSnoozePending={snooze.onConsumeSnoozePending}
+      onSnooze={snooze.onSnooze}
+      onUnsnooze={snooze.onUnsnooze}
     />
   );
+}
+
+function buildSnoozeProps(
+  group: ThreadGroup,
+  flatIndex: number,
+  snoozePendingIndex: number | null,
+  snoozedThreads: Record<string, number>,
+  now: number,
+  handlers: {
+    onConsumeSnoozePending: () => void;
+    onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
+    onUnsnooze: (row: FlatRow) => void;
+  }
+): SnoozeRowProps {
+  const row = buildFlatRow(group);
+  const snoozedUntil = group.correlationId ? snoozedThreads[group.correlationId] : undefined;
+  const isSnoozed =
+    typeof snoozedUntil === "number" && Number.isFinite(snoozedUntil) && snoozedUntil > now;
+  return {
+    isSnoozePending: snoozePendingIndex === flatIndex && !!group.correlationId,
+    isSnoozed,
+    snoozedUntil: isSnoozed ? snoozedUntil : undefined,
+    onConsumeSnoozePending: handlers.onConsumeSnoozePending,
+    onSnooze: (option) => handlers.onSnooze(row, option),
+    onUnsnooze: () => handlers.onUnsnooze(row),
+  };
 }
 
 function ContextSectionHeader({
@@ -1157,6 +1454,12 @@ function NotificationThread({
   tabIndex,
   onRowFocus,
   onDropdownOpenChange,
+  isSnoozePending,
+  isSnoozed,
+  snoozedUntil,
+  onConsumeSnoozePending,
+  onSnooze,
+  onUnsnooze,
 }: {
   group: ThreadGroup;
   onDismiss: () => void;
@@ -1164,6 +1467,12 @@ function NotificationThread({
   tabIndex?: number;
   onRowFocus?: () => void;
   onDropdownOpenChange?: (open: boolean) => void;
+  isSnoozePending?: boolean;
+  isSnoozed?: boolean;
+  snoozedUntil?: number;
+  onConsumeSnoozePending?: () => void;
+  onSnooze?: (option: SnoozeDurationOption) => void;
+  onUnsnooze?: () => void;
 }) {
   const latest = group.entries[0];
   const isNew = group.entries.some((e) => !e.seenAsToast);
@@ -1201,6 +1510,12 @@ function NotificationThread({
         isNew={isNew}
         onDismiss={onDismiss}
         onDropdownOpenChange={onDropdownOpenChange}
+        isSnoozePending={isSnoozePending}
+        isSnoozed={isSnoozed}
+        snoozedUntil={snoozedUntil}
+        onConsumeSnoozePending={onConsumeSnoozePending}
+        onSnooze={onSnooze}
+        onUnsnooze={onUnsnooze}
       />
     </div>
   );

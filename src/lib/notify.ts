@@ -921,6 +921,17 @@ export function notify(payload: NotifyPayload): string {
       : false;
   const effectiveShouldToast = shouldToast || shouldToastThread;
 
+  // Auto-resurface: a snoozed thread that re-toasts (escalated severity,
+  // urgent, or full un-snooze) must clear its snooze before `addEntry`
+  // lands the new history row. Running this before the write keeps the
+  // store atomically consistent — observers never see an unread badge that
+  // counts the new entry while still hiding its thread behind the snooze
+  // filter. Routine same-severity updates do not pass `shouldReToast` and
+  // therefore stay snoozed, preserving the user's defer choice.
+  if (effectiveShouldToast && correlationId) {
+    useNotificationHistoryStore.getState().clearSnooze(correlationId);
+  }
+
   // Per-source rate-limit gate. Only consumes a token (and routes to the
   // overflow summary inbox row) when the notification would actually toast
   // in the current state — blurred/quiet/disabled paths already deliver

@@ -4,6 +4,7 @@ import {
   getEntriesByCorrelationId,
   pruneNotificationEntries,
   sanitizePersistedEntry,
+  sanitizeSnoozedThreads,
   READ_RETENTION_MS,
   ARCHIVED_RETENTION_MS,
   type NotificationHistoryEntry,
@@ -53,6 +54,7 @@ describe("notificationHistorySlice", () => {
       entries: [],
       unreadCount: 0,
       evictedToInboxCount: 0,
+      snoozedThreads: {},
     });
   });
 
@@ -1258,6 +1260,128 @@ describe("notificationHistorySlice", () => {
       });
       expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
       expect(result!.actions![0]!.variant).toBe("secondary");
+    });
+  });
+
+  describe("snoozedThreads", () => {
+    it("defaults to an empty map", () => {
+      expect(getState().snoozedThreads).toEqual({});
+    });
+
+    it("snoozeThread adds and overwrites the expiry for a correlationId", () => {
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("thread-1", until);
+      expect(getState().snoozedThreads["thread-1"]).toBe(until);
+      const later = until + 60_000;
+      getState().snoozeThread("thread-1", later);
+      expect(getState().snoozedThreads["thread-1"]).toBe(later);
+    });
+
+    it("snoozeThread ignores empty correlationId and non-finite timestamps", () => {
+      getState().snoozeThread("", Date.now() + 1000);
+      getState().snoozeThread("thread-x", Number.NaN);
+      getState().snoozeThread("thread-y", Number.POSITIVE_INFINITY);
+      expect(getState().snoozedThreads).toEqual({});
+    });
+
+    it("clearSnooze removes the entry", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().clearSnooze("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("clearSnooze is a no-op when nothing is snoozed", () => {
+      const before = getState();
+      getState().clearSnooze("missing");
+      expect(getState()).toBe(before);
+    });
+
+    it("clearExpiredSnoozes drops only past entries", () => {
+      const now = Date.now();
+      getState().snoozeThread("future", now + 60_000);
+      getState().snoozeThread("past", now + 50);
+      getState().clearExpiredSnoozes(now + 1000);
+      expect(getState().snoozedThreads).toEqual({ future: now + 60_000 });
+    });
+
+    it("clearExpiredSnoozes is a no-op when nothing has expired", () => {
+      getState().snoozeThread("future", Date.now() + 60_000);
+      const before = getState();
+      getState().clearExpiredSnoozes(Date.now());
+      expect(getState()).toBe(before);
+    });
+
+    it("unreadCount excludes snoozed correlationIds", () => {
+      addEntry({ correlationId: "panel-1", message: "first" });
+      addEntry({ correlationId: "panel-1", message: "second" });
+      addEntry({ correlationId: "panel-2", message: "other" });
+      addEntry({ message: "uncorrelated" });
+      expect(getState().unreadCount).toBe(4);
+
+      getState().snoozeThread("panel-1", Date.now() + 60_000);
+      expect(getState().unreadCount).toBe(2);
+
+      getState().clearSnooze("panel-1");
+      expect(getState().unreadCount).toBe(4);
+    });
+
+    it("unreadCount excludes a snoozed thread when a new entry lands on it", () => {
+      getState().snoozeThread("panel-1", Date.now() + 60_000);
+      addEntry({ correlationId: "panel-1", message: "new entry" });
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("dismissByCorrelationId clears the corresponding snooze", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().dismissByCorrelationId("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("archiveByCorrelationId clears the corresponding snooze", () => {
+      addEntry({ correlationId: "thread-1", message: "stuck" });
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().archiveByCorrelationId("thread-1");
+      expect(getState().snoozedThreads["thread-1"]).toBeUndefined();
+    });
+
+    it("clearAll empties snoozedThreads", () => {
+      getState().snoozeThread("thread-1", Date.now() + 60_000);
+      getState().clearAll();
+      expect(getState().snoozedThreads).toEqual({});
+    });
+  });
+
+  describe("sanitizeSnoozedThreads", () => {
+    it("returns empty map for non-object input", () => {
+      expect(sanitizeSnoozedThreads(null)).toEqual({});
+      expect(sanitizeSnoozedThreads(undefined)).toEqual({});
+      expect(sanitizeSnoozedThreads("nope")).toEqual({});
+      expect(sanitizeSnoozedThreads(42)).toEqual({});
+    });
+
+    it("drops keys with blank ids or non-numeric values", () => {
+      const result = sanitizeSnoozedThreads(
+        {
+          "": Date.now() + 60_000,
+          "thread-1": "not-a-number",
+          "thread-2": Number.NaN,
+          "thread-3": Number.POSITIVE_INFINITY,
+        },
+        Date.now()
+      );
+      expect(result).toEqual({});
+    });
+
+    it("drops keys whose snooze already expired", () => {
+      const now = Date.now();
+      const result = sanitizeSnoozedThreads(
+        {
+          past: now - 1,
+          future: now + 60_000,
+        },
+        now
+      );
+      expect(result).toEqual({ future: now + 60_000 });
     });
   });
 });

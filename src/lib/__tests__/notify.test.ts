@@ -2920,6 +2920,78 @@ describe("notify() — thread re-promotion (#9008)", () => {
     // to the summary row) rather than bypassing the rate limiter.
     expect(useNotificationStore.getState().notifications.length).toBe(toastsBefore);
   });
+
+  describe("snooze auto-resurface (#9200)", () => {
+    it("clears the snooze when a thread escalates", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({
+        type: "warning",
+        correlationId: "build",
+        message: "Build degraded",
+        priority: "low",
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeUndefined();
+    });
+
+    it("keeps the snooze when a same-severity update lands on a snoozed thread", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      const until = Date.now() + 60_000;
+      useNotificationHistoryStore.setState({ snoozedThreads: { build: until } });
+      notify({
+        type: "info",
+        correlationId: "build",
+        message: "Still building",
+        priority: "low",
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBe(until);
+    });
+
+    it("clears the snooze on an urgent payload regardless of severity", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({
+        type: "info",
+        correlationId: "build",
+        message: "Urgent ping",
+        priority: "low",
+        urgent: true,
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeUndefined();
+    });
+
+    it("leaves snoozes on other correlationIds untouched", () => {
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      const otherUntil = Date.now() + 60_000;
+      useNotificationHistoryStore.setState({
+        snoozedThreads: {
+          build: Date.now() + 60_000,
+          unrelated: otherUntil,
+        },
+      });
+      notify({
+        type: "warning",
+        correlationId: "build",
+        message: "Escalated",
+        priority: "low",
+      });
+      const after = useNotificationHistoryStore.getState().snoozedThreads;
+      expect(after["build"]).toBeUndefined();
+      expect(after["unrelated"]).toBe(otherUntil);
+    });
+
+    it("does nothing when the incoming notify has no correlationId", () => {
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({ type: "error", message: "Lone error", priority: "low" });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeDefined();
+    });
+  });
 });
 
 describe("EVENT_POLICY manifest routing", () => {
