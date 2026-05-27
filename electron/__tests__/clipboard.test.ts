@@ -8,6 +8,12 @@ vi.mock("electron", () => ({
   clipboard: { readImage: vi.fn(), writeImage: vi.fn(), writeText: vi.fn(), readText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn(), createFromPath: vi.fn() },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  // `clipboard.ts` transitively constructs the `projectStore` singleton, whose
+  // constructor calls `app.getPath("userData")`. Without `app` on the mock the
+  // suite fails whenever it is the first file in its vitest worker to trigger
+  // that construction (otherwise the cached singleton skips the constructor) —
+  // a worker-ordering flake. Stub `getPath` so the import is order-independent.
+  app: { getPath: vi.fn(() => osMockState.base) },
 }));
 
 // Redirect os.tmpdir() to a throwaway directory so the cleanup operates on real
