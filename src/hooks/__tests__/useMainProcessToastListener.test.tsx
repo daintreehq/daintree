@@ -15,6 +15,7 @@ type ToastCallback = (payload: {
   type: "success" | "error" | "info" | "warning";
   title?: string;
   message: string;
+  duration?: number;
   rateLimitKey?: string;
   action?: { label: string; ipcChannel: string };
 }) => void;
@@ -95,6 +96,20 @@ describe("useMainProcessToastListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ rateLimitKey: "cloud-teardown-failure" })
     );
+  });
+
+  it("threads duration through to notify when provided", () => {
+    renderHook(() => useMainProcessToastListener());
+
+    act(() => {
+      capturedCallback!({
+        type: "info",
+        message: "acme.linear: Synced",
+        duration: 3000,
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ duration: 3000 }));
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {

@@ -115,6 +115,22 @@ export const FileDecorationContributionSchema = z
 
 export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
 
+/**
+ * Validates the options passed to `host.showToast`. Both the main-process path
+ * (plugin `activate` code) and any future renderer path (SDK React hooks over
+ * IPC) converge on this schema. `priority` and `action` are intentionally
+ * absent — plugins cannot set them, so the banned `priority:"low"` +
+ * `type:"error"` combo is structurally impossible. Strict so unknown fields
+ * from plugin authors are rejected loudly rather than silently dropped.
+ */
+export const PluginToastOptionsSchema = z
+  .object({
+    message: z.string().trim().min(1).max(2000),
+    type: z.enum(["info", "success", "warning", "error"]).default("info"),
+    durationMs: z.number().int().positive().max(60_000).optional(),
+  })
+  .strict();
+
 export const PluginManifestSchema = z
   .strictObject({
     name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {

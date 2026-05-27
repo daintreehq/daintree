@@ -60,7 +60,7 @@ The `commands[].name` maps to `src/say-hello.ts` by filesystem convention. Its d
 import { showToast } from "@daintreehq/plugin-sdk";
 
 export default async function sayHello() {
-  await showToast({ title: "Hello from my plugin" });
+  await showToast({ message: "Hello from my plugin" });
 }
 ```
 

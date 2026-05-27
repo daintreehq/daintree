@@ -11,6 +11,7 @@ import type {
   NormalizedPRState,
   ResourceRef,
 } from "./forge.js";
+import type { NotificationType } from "./notification.js";
 
 export interface PanelContribution {
   id: string;
@@ -200,6 +201,23 @@ export interface PluginWorktreeSnapshot {
   readonly createdAt?: number;
 }
 
+/**
+ * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
+ * app's internal `notify()` surface: plugins cannot set `priority` (a
+ * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
+ * `eslint.config.js`), pass a `ReactNode` message, or attach an action button
+ * (plugins have no IPC channel to wire one to). `message` is namespaced with the
+ * plugin's id (`{pluginId}: {message}`) by the host for provenance.
+ */
+export interface PluginToastOptions {
+  /** Toast body. String only across the IPC boundary — no `ReactNode`. */
+  message: string;
+  /** Maps directly to the app's `NotificationType`. Defaults to `"info"`. */
+  type?: NotificationType;
+  /** Auto-dismiss delay in milliseconds. Defaults to the app's per-type default. */
+  durationMs?: number;
+}
+
 export interface PluginHostApi {
   readonly pluginId: string;
   registerHandler(channel: string, handler: PluginIpcHandler): void;
@@ -271,6 +289,19 @@ export interface PluginHostApi {
    * unloaded.
    */
   invalidateFileDecorations(scope: string, paths?: string[]): void;
+  /**
+   * Surface a toast notification. The host namespaces the message as
+   * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
+   * plugin's id since `pluginId` is bound to the host at activation. Routes
+   * through the app's `notify()` path so rate-limit, quiet-hours, and
+   * inbox-history semantics apply identically to plugin toasts.
+   *
+   * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
+   * call it from post-activation subscription callbacks and timers. It becomes
+   * a silent no-op once the plugin is unloaded. Invalid options (empty message,
+   * unknown `type`) reject so authoring mistakes surface loudly.
+   */
+  showToast(options: PluginToastOptions): Promise<void>;
 }
 
 export type PluginActivate = (

@@ -23,7 +23,7 @@ interface ValidateFn {
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
-import { PluginManifestSchema } from "../schemas/plugin.js";
+import { PluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -819,6 +819,33 @@ export class PluginService {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:decorations-changed",
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
+        });
+      },
+      // NOT revoke-guarded for the same reason as invalidateFileDecorations:
+      // plugins fire toasts from post-activation callbacks and timers. Liveness
+      // is plugin membership, so it no-ops silently once the plugin unloads.
+      showToast: async (options) => {
+        if (!this.plugins.has(pluginId)) return;
+        const parsed = PluginToastOptionsSchema.safeParse(options);
+        if (!parsed.success) {
+          throw new Error(
+            `Plugin "${pluginId}" showToast: invalid options — ${parsed.error.issues
+              .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+              .join("; ")}`
+          );
+        }
+        // Provenance: prefix the message with the plugin id so users can see
+        // which plugin raised the toast. pluginId is bound to the host closure
+        // at activation and cannot be spoofed.
+        //
+        // rateLimitKey scopes the rate-limit bucket per plugin+type. Without it
+        // plugin toasts fall into the global type-keyed bucket and a burst of
+        // unrelated system toasts could silently suppress a plugin's toast.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: parsed.data.type,
+          message: `${pluginId}: ${parsed.data.message}`,
+          duration: parsed.data.durationMs,
+          rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
         });
       },
     };
