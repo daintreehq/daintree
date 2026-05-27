@@ -1,4 +1,9 @@
-import { getAppThemeCssVariables, resolveAppTheme, type AppColorScheme } from "@shared/theme";
+import {
+  getAppThemeById,
+  getAppThemeCssVariables,
+  resolveAppTheme,
+  type AppColorScheme,
+} from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
 
 const RED_GREEN_OVERRIDES: Record<string, string> = {
@@ -101,6 +106,19 @@ export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): 
 }
 
 export function applyDefaultAppTheme(root: HTMLElement): AppColorScheme {
+  // Prefer the persisted scheme seeded by the main process (via preload) so the
+  // first paint matches the saved theme instead of flashing a
+  // prefers-color-scheme default before the async theme config resolves (#9169).
+  // Only built-in ids resolve synchronously here — custom schemes load during
+  // the async useAppThemeConfig phase, so an unknown id falls through to the
+  // prefers-color-scheme default rather than painting the wrong built-in theme.
+  const seededId = window.__DAINTREE_INITIAL_THEME__?.colorSchemeId;
+  const seededScheme = seededId ? getAppThemeById(seededId) : undefined;
+  if (seededScheme) {
+    applyAppThemeToRoot(root, seededScheme);
+    return seededScheme;
+  }
+
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const schemeId = prefersDark ? "daintree" : "bondi";
   const scheme = resolveAppTheme(schemeId);

@@ -131,6 +131,15 @@ export type { ElectronAPI };
 const isDemoMode =
   !process.argv.some((a) => a.includes("app.asar")) && process.argv.includes("--demo-mode");
 
+// Persisted color scheme id passed from the main process via
+// webPreferences.additionalArguments. Read synchronously here (process.argv is
+// available even under sandbox: true) so the renderer can apply the saved theme
+// on its very first paint instead of a prefers-color-scheme default (#9169).
+const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id=";
+const initialColorSchemeId = process.argv
+  .find((a) => a.startsWith(INITIAL_COLOR_SCHEME_ARG))
+  ?.slice(INITIAL_COLOR_SCHEME_ARG.length);
+
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
 // Instead, we use window.postMessage to transfer it to the main world.
@@ -2661,4 +2670,13 @@ if (process.env.DAINTREE_E2E_MODE === "1") {
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
 if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
   contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+}
+
+// Surface the persisted color scheme id (seeded via additionalArguments) so the
+// renderer applies the saved theme on first paint, eliminating the flash of the
+// prefers-color-scheme default before the async theme config resolves (#9169).
+if (initialColorSchemeId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_THEME__", {
+    colorSchemeId: initialColorSchemeId,
+  });
 }

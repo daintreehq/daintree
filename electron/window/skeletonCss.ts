@@ -7,7 +7,7 @@
  * Called from both createWindow (initial load) and ProjectViewManager
  * (project switch cold starts).
  */
-import type { WebContents } from "electron";
+import { nativeTheme, type WebContents } from "electron";
 import { store } from "../store.js";
 import { resolveAppTheme, getAppThemeCssVariables } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
@@ -16,6 +16,39 @@ import {
   appCustomSchemesWriteSchema,
   migrateCustomSchemes,
 } from "../schemas/customSchemes.js";
+
+/**
+ * Command-line argument carrying the persisted color scheme id from the main
+ * process into each renderer context. Read synchronously in preload.cts from
+ * `process.argv` (available even under `sandbox: true`) and exposed to the
+ * renderer as `window.__DAINTREE_INITIAL_THEME__` so first paint applies the
+ * saved theme instead of a `prefers-color-scheme` default (#9169).
+ */
+export const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id";
+
+/**
+ * Resolves the color scheme id to seed the renderer with on cold start.
+ * Mirrors the fallback logic in createWindow and getAppThemeConfig: the raw
+ * persisted id when present (without resolving `followSystem` — that happens
+ * post-mount), else Daintree's dark default, or Bondi when the OS prefers a
+ * light appearance.
+ */
+export function resolveInitialColorSchemeId(): string {
+  const themeConfig = store.get("appTheme");
+  if (
+    themeConfig &&
+    typeof themeConfig === "object" &&
+    !Array.isArray(themeConfig) &&
+    "colorSchemeId" in themeConfig &&
+    typeof themeConfig.colorSchemeId === "string" &&
+    themeConfig.colorSchemeId.trim()
+  ) {
+    return themeConfig.colorSchemeId.trim();
+  }
+  return process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
+    ? "daintree"
+    : "bondi";
+}
 
 export function injectSkeletonCss(wc: WebContents): void {
   const appState = store.get("appState");
