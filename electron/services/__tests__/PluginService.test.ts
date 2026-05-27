@@ -1791,6 +1791,57 @@ describe("createHost — registerAction", () => {
     );
   });
 
+  it("rejects a descriptor id that already includes the plugin prefix", async () => {
+    const { host } = await makeHost();
+    expect(() =>
+      host.registerAction({ ...validDescriptor(), id: "acme.act-host.doThing" }, () => undefined)
+    ).toThrow(/must not include the plugin prefix/);
+  });
+
+  it("rejects invalid kind, whitespace title, and whitespace category like the IPC path", async () => {
+    const { host } = await makeHost();
+    expect(() =>
+      host.registerAction({ ...validDescriptor(), kind: "navigation" }, () => undefined)
+    ).toThrow(/invalid kind/i);
+    expect(() =>
+      host.registerAction({ ...validDescriptor(), title: "   " }, () => undefined)
+    ).toThrow(/non-empty title/);
+    expect(() =>
+      host.registerAction({ ...validDescriptor(), category: "   " }, () => undefined)
+    ).toThrow(/non-empty category/);
+  });
+
+  it("passes undefined to the handler when dispatched with no args", async () => {
+    const { service, host } = await makeHost();
+    const handler = vi.fn().mockReturnValue("ok");
+    host.registerAction(validDescriptor(), handler);
+
+    await service.dispatchHandler(
+      "acme.act-host",
+      "acme.act-host.doThing",
+      makeCtx("acme.act-host"),
+      []
+    );
+    expect(handler).toHaveBeenCalledWith(undefined);
+  });
+
+  it("does not fall through to an IPC handler sharing the action's dotted name", async () => {
+    const { service, host } = await makeHost();
+    const ipcHandler = vi.fn().mockReturnValue("ipc");
+    // A regular IPC handler registered under the same dotted name as the action.
+    service.registerHandler("acme.act-host", "acme.act-host.doThing", ipcHandler);
+    host.registerAction(validDescriptor(), () => "action");
+
+    service.unregisterPluginAction("acme.act-host", "acme.act-host.doThing");
+
+    await expect(
+      service.dispatchHandler("acme.act-host", "acme.act-host.doThing", makeCtx("acme.act-host"), [
+        {},
+      ])
+    ).rejects.toThrow(/No plugin action handler registered/);
+    expect(ipcHandler).not.toHaveBeenCalled();
+  });
+
   it("raises effectiveDanger to confirm when the manifest grants a high-risk permission", async () => {
     const { service, host } = await makeHost("acme.act-risky", {
       permissions: ["fs:project-read", "shell:exec"],
@@ -1842,7 +1893,7 @@ describe("createHost — registerAction", () => {
       service.dispatchHandler("acme.act-host", "acme.act-host.doThing", makeCtx("acme.act-host"), [
         {},
       ])
-    ).rejects.toThrow(/No plugin handler registered/);
+    ).rejects.toThrow(/No plugin action handler registered/);
   });
 });
 

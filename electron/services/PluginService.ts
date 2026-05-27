@@ -826,6 +826,15 @@ export class PluginService {
             `Plugin "${pluginId}" registerAction: descriptor.id must be a non-empty string`
           );
         }
+        // The host owns namespacing — a plugin that pre-includes its own prefix
+        // would otherwise be registered under a double-prefixed id
+        // (`{pluginId}.{pluginId}.{name}`) that nothing references. Reject loudly
+        // rather than silently mis-register.
+        if (descriptor.id.startsWith(`${pluginId}.`)) {
+          throw new Error(
+            `Plugin "${pluginId}" registerAction: descriptor.id must not include the plugin prefix. Pass only the action name (e.g. "doThing").`
+          );
+        }
         if (typeof handler !== "function") {
           throw new Error(`Plugin "${pluginId}" registerAction: handler must be a function`);
         }
@@ -994,6 +1003,12 @@ export class PluginService {
       if (actionHandler) {
         return await actionHandler(args[0]);
       }
+      // The channel sits in this plugin's action namespace but no handler is
+      // bound (e.g. the action was unregistered and a stale dispatch arrived).
+      // Don't fall through to handlerMap — an IPC handler that happened to be
+      // registered under the same dotted name uses a different calling
+      // convention (ctx + spread args, not args[0]).
+      throw new Error(`No plugin action handler registered for ${channel}`);
     }
 
     const key = `${pluginId}:${channel}`;
