@@ -267,6 +267,18 @@ describe("globalRecipes IPC adversarial", () => {
     expect(projectStoreMock.addGlobalRecipe).toHaveBeenCalledWith(recipe);
   });
 
+  it("addRecipe rejects a context-dependent secret (Datadog key named via env key)", async () => {
+    await expect(
+      getHandler(CHANNELS.GLOBAL_ADD_RECIPE)(fakeEvent(), {
+        recipe: {
+          ...validRecipe(),
+          terminals: [{ type: "terminal", env: { DD_API_KEY: "a".repeat(32) } }],
+        },
+      })
+    ).rejects.toThrow(/secret.*datadog-key|DD_API_KEY/i);
+    expect(projectStoreMock.addGlobalRecipe).not.toHaveBeenCalled();
+  });
+
   it("cleanup removes all four handlers", () => {
     expect(ipcHandlers.size).toBe(4);
     cleanup();

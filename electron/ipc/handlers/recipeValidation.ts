@@ -42,8 +42,14 @@ export function assertNoSecretEnvValues(terminals: RecipeTerminal[]): void {
     const env = terminals[i]?.env;
     if (!env) continue;
     for (const [key, rawValue] of Object.entries(env)) {
-      if (typeof rawValue !== "string") continue;
-      const match = findSecretInValue(rawValue);
+      if (typeof rawValue !== "string") {
+        throw new Error(`Recipe terminal ${i} env "${key}" must be a string`);
+      }
+      // Several scrubber patterns are context-dependent — they only match when
+      // the key name precedes the value (e.g. `AWS_SECRET_ACCESS_KEY=...`,
+      // `DD_API_KEY=...`, `api_key=...`). Test the bare value first, then the
+      // `KEY=value` form so those patterns can anchor on the surrounding name.
+      const match = findSecretInValue(rawValue) ?? findSecretInValue(`${key}=${rawValue}`);
       if (match) {
         throw new Error(
           `Recipe terminal ${i} env "${key}" contains a secret (pattern: ${match.name}). ` +

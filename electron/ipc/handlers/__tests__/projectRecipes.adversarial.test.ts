@@ -322,6 +322,45 @@ describe("projectRecipes IPC adversarial", () => {
     expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
   });
 
+  it("addRecipe rejects a context-dependent secret (AWS key named via env key)", async () => {
+    await expect(
+      getHandler(CHANNELS.PROJECT_ADD_RECIPE)(fakeEvent(), {
+        projectId: "p1",
+        recipe: {
+          ...validRecipe(),
+          terminals: [
+            { type: "terminal", env: { AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" } },
+          ],
+        },
+      })
+    ).rejects.toThrow(/secret.*aws-secret-access-key|AWS_SECRET_ACCESS_KEY/i);
+    expect(projectStoreMock.addRecipe).not.toHaveBeenCalled();
+  });
+
+  it("addRecipe rejects a non-string env value", async () => {
+    await expect(
+      getHandler(CHANNELS.PROJECT_ADD_RECIPE)(fakeEvent(), {
+        projectId: "p1",
+        recipe: {
+          ...validRecipe(),
+          terminals: [{ type: "terminal", env: { TOKEN: { nested: SECRET_PAT } } } as never],
+        },
+      })
+    ).rejects.toThrow(/must be a string/i);
+    expect(projectStoreMock.addRecipe).not.toHaveBeenCalled();
+  });
+
+  it("syncInRepoRecipes writes nothing when a later recipe carries a secret", async () => {
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    await expect(
+      getHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES)(fakeEvent(), {
+        projectId: "p1",
+        recipes: [validRecipe(), { ...validRecipe(), id: "r2", terminals: [secretTerminal()] }],
+      })
+    ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
+    expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
+  });
+
   it("cleanup removes all eleven handlers", () => {
     expect(ipcHandlers.size).toBe(11);
     cleanup();
