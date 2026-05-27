@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The service module statically imports the electron-store-backed `store` for
+// its singleton factory. These tests exercise the class directly with injected
+// callbacks, so stub `store` to keep the unit test hermetic (no electron).
+vi.mock("../../store.js", () => ({
+  store: { get: vi.fn(() => ({})), set: vi.fn() },
+}));
+
 import { events, type DaintreeEventMap } from "../events.js";
 import { PluginActionAuditService } from "../PluginActionAuditService.js";
 

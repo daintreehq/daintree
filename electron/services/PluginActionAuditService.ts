@@ -1,3 +1,4 @@
+// eager-import-allow: wires the plugin-audit ring buffer to the synchronous electron-store slice at boot (global service, mirrors ActionBreadcrumbService)
 import { randomUUID } from "node:crypto";
 import type {
   PluginActionAuditRecord,
@@ -13,6 +14,7 @@ import {
 import type { ActionSource, ActionDanger } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import type { TypedEventBus } from "./events.js";
+import { store } from "../store.js";
 
 const FLUSH_DEBOUNCE_MS = 1000;
 const MAX_PLAINTEXT_CHARS = 4096;
@@ -241,10 +243,8 @@ let instance: PluginActionAuditService | null = null;
 
 export function getPluginActionAuditService(): PluginActionAuditService {
   if (!instance) {
-    // Lazy require to avoid pulling the electron-store module into unit tests
-    // that exercise the class directly with injected callbacks.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { store } = require("../store.js") as typeof import("../store.js");
+    // `store` is the lazy electron-store Proxy — importing it doesn't initialize
+    // the backing store, and the singleton is only constructed on first use.
     instance = new PluginActionAuditService(
       (patch) => {
         const current = (store.get("plugins") ?? {}) as Record<string, unknown>;

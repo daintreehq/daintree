@@ -377,7 +377,7 @@
     "pipelineErrors": []
   },
   "src/components/Diagnostics/DiagnosticsActions.tsx": {
-    "success": 4,
+    "success": 5,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -408,6 +408,16 @@
   },
   "src/components/Diagnostics/LogsContent.tsx": {
     "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Diagnostics/PerfContent.tsx": {
+    "success": 6,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -2166,6 +2176,26 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Settings/PluginActionAuditLogViewer.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Settings/PluginActionsSettingsTab.tsx": {
+    "success": 0,
+    "skip": 0,
+    "error": 1,
+    "pipeline": 0,
+    "hintCount": 1,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Settings/PortalSettingsTab.tsx": {
     "success": 3,
     "skip": 0,
@@ -2636,6 +2666,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/Terminal/BannerOverflowMenu.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/Terminal/ContentGrid.tsx": {
     "success": 1,
     "skip": 0,
@@ -3008,6 +3048,16 @@
   },
   "src/components/Terminal/TerminalPane.tsx": {
     "success": 3,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/components/Terminal/TerminalPaneSkeleton.tsx": {
+    "success": 1,
     "skip": 0,
     "error": 0,
     "pipeline": 0,
@@ -3403,7 +3453,7 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/CrossWorktreeDiff.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 2,
     "pipeline": 0,
@@ -3745,7 +3795,7 @@
     "pipelineErrors": []
   },
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 1,
     "pipeline": 0,
@@ -5005,6 +5055,16 @@
     "pipelineErrors": []
   },
   "src/hooks/app/useHomeDir.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
+  "src/hooks/app/useNotificationHistoryPruning.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,
