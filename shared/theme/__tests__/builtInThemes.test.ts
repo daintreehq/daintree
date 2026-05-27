@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
 import { getThemeContrastWarnings } from "../contrast.js";
+import { getSurfaceRampMetrics, hexToOklchL } from "../oklch.js";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
@@ -205,6 +206,44 @@ describe("built-in themes", () => {
       ).toBeGreaterThanOrEqual(0.25);
     }
   });
+
+  it("hexToOklchL anchors at known sRGB endpoints", () => {
+    // Sanity-pin Ottosson's sRGB→LMS path: pure black maps to L=0, pure white to L≈1.
+    // Catches sign flips, matrix transposes, and gamma errors before they ripple
+    // through the surface ramp gate below.
+    expect(hexToOklchL("#000000")).toBeCloseTo(0, 4);
+    expect(hexToOklchL("#ffffff")).toBeCloseTo(1, 4);
+  });
+
+  it.each(BUILT_IN_THEME_SOURCES.map((s) => [s.id, s] as const))(
+    "surface ramp for %s is monotonic, perceptible, and not runaway",
+    (_id, source) => {
+      // Surface elevation ramps (grid → sidebar → canvas → panel → elevated) must:
+      // (1) be monotonically lighter so depth ordering is unambiguous;
+      // (2) keep every adjacent step at or above the just-noticeable-difference
+      //     floor — dark themes get 0.015 ΔL (≈1 OKLCH JND, shadows can't compensate
+      //     at low luminance); light themes get 0.020 ΔL (1 JND is sufficient because
+      //     ambient cues help, and white-ceiling headroom is tight);
+      // (3) keep the largest step within 2.0× the smallest — a runaway elevated jump
+      //     reads as a discontinuity rather than the next floor in the ramp.
+      const metrics = getSurfaceRampMetrics(source.palette.surfaces);
+      const minStepFloor = source.type === "dark" ? 0.015 : 0.02;
+      const maxRatio = 2.0;
+      const diag = `${source.id} L=[grid=${metrics.lightness.grid.toFixed(4)}, sidebar=${metrics.lightness.sidebar.toFixed(4)}, canvas=${metrics.lightness.canvas.toFixed(4)}, panel=${metrics.lightness.panel.toFixed(4)}, elevated=${metrics.lightness.elevated.toFixed(4)}] steps=[${metrics.steps.gridToSidebar.toFixed(4)}, ${metrics.steps.sidebarToCanvas.toFixed(4)}, ${metrics.steps.canvasToPanel.toFixed(4)}, ${metrics.steps.panelToElevated.toFixed(4)}] min=${metrics.minStep.toFixed(4)} max=${metrics.maxStep.toFixed(4)} ratio=${metrics.ratio.toFixed(2)}`;
+      expect(
+        metrics.monotonic,
+        `${diag} — surfaces must be monotonically lighter from grid to elevated`
+      ).toBe(true);
+      expect(
+        metrics.minStep,
+        `${diag} — smallest step is below the ${minStepFloor} ΔL floor for ${source.type} themes`
+      ).toBeGreaterThanOrEqual(minStepFloor);
+      expect(
+        metrics.ratio,
+        `${diag} — step-uniformity ratio exceeds the ${maxRatio} ceiling`
+      ).toBeLessThanOrEqual(maxRatio);
+    }
+  );
 
   it("dark themes override toolbar-control-armed-shadow with a white-tinted hairline; light themes inherit the black-tinted CSS fallback", () => {
     // Dark themes must provide a white-tinted hairline override — the CSS fallback
