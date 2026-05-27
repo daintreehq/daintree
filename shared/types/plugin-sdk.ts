@@ -30,8 +30,8 @@ export type {
   ViewContribution,
   ViewLocation,
   McpServerContribution,
-  PluginPermission,
-  BuiltInPluginPermission,
+  PluginCapability,
+  BuiltInPluginCapability,
   PluginActionContribution,
 } from "./plugin.js";
 
