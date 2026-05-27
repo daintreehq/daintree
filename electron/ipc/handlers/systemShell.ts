@@ -1,11 +1,11 @@
 import { app, shell } from "electron";
 import os from "os";
 import * as nodePath from "path";
-import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { resolveContainedPath } from "./pathGuard.js";
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
@@ -49,65 +49,40 @@ const DENIED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
 
 const DENIED_EXTENSIONS = new Set<string>(DENIED_EXTENSIONS_BY_PLATFORM[process.platform] ?? []);
 
-/**
- * Guard a renderer-supplied path before forwarding it to a system sink
- * (shell.openPath / EditorService.openFile). Rejects non-absolute paths,
- * executable extensions, and any path not contained within a known project
- * root or the app's userData dir (where crash logs live). Containment uses
- * fs.realpath on both sides — re-resolved at call time — to defeat symlink
- * substitution, matching the pattern in electron/ipc/handlers/files.ts.
- */
-async function assertPathAllowed(targetPath: string): Promise<void> {
-  if (!nodePath.isAbsolute(targetPath)) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: "Only absolute paths are allowed",
-      context: { targetPath },
-    });
-  }
-
-  const ext = nodePath.extname(targetPath).toLowerCase();
+function assertExtensionAllowed(candidate: string): void {
+  const ext = nodePath.extname(candidate).toLowerCase();
   if (DENIED_EXTENSIONS.has(ext)) {
     throw new AppError({
       code: "INVALID_PATH",
       message: `Refusing to open executable file type: ${ext}`,
-      context: { targetPath, ext },
+      context: { candidate, ext },
     });
   }
+}
 
-  let realTarget: string;
-  try {
-    realTarget = await nodeFs.promises.realpath(targetPath);
-  } catch (error) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: "Could not resolve path",
-      context: { targetPath },
-      cause: error instanceof Error ? error : undefined,
-    });
-  }
+/**
+ * Guard a renderer-supplied path before forwarding it to a system sink
+ * (shell.openPath / EditorService.openFile). Rejects non-absolute paths,
+ * executable extensions, and any path not contained within a known project
+ * root or the app's userData dir (where crash logs live). The extension is
+ * checked twice — on the raw input and on the realpath-resolved target — so a
+ * benignly-named symlink (`notes.txt` → `Evil.app`) inside a root can't smuggle
+ * an executable past the deny-list. Returns the resolved path so the caller
+ * hands the canonical target to the sink, shrinking the TOCTOU window.
+ */
+async function assertPathAllowed(targetPath: string): Promise<string> {
+  assertExtensionAllowed(targetPath);
 
   const roots = projectStore.getAllProjects().map((p) => p.path);
   roots.push(app.getPath("userData"));
 
-  for (const root of roots) {
-    let realRoot: string;
-    try {
-      realRoot = await nodeFs.promises.realpath(root);
-    } catch {
-      // A stale or deleted root can't contain anything — skip it.
-      continue;
-    }
-    if (realTarget === realRoot || realTarget.startsWith(realRoot + nodePath.sep)) {
-      return;
-    }
-  }
+  const realTarget = await resolveContainedPath(targetPath, roots);
 
-  throw new AppError({
-    code: "OUTSIDE_ROOT",
-    message: "Path is outside all known project roots",
-    context: { targetPath },
-  });
+  // shell.openPath / openFile follow symlinks, so re-check the resolved
+  // extension to defeat a safe-named symlink pointing at an executable.
+  assertExtensionAllowed(realTarget);
+
+  return realTarget;
 }
 
 export function registerSystemShellHandlers(_deps: HandlerDependencies): () => void {
@@ -131,8 +106,8 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
 
   const handleSystemOpenPath = async ({ path: targetPath }: SystemOpenPathPayload) => {
     try {
-      await assertPathAllowed(targetPath);
-      const errorString = await shell.openPath(targetPath);
+      const realTarget = await assertPathAllowed(targetPath);
+      const errorString = await shell.openPath(realTarget);
       if (errorString) {
         throw new Error(`Failed to open path: ${errorString}`);
       }
@@ -155,7 +130,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     col,
     projectId,
   }: SystemOpenInEditorPayload) => {
-    await assertPathAllowed(targetPath);
+    const realTarget = await assertPathAllowed(targetPath);
 
     let editorConfig = null;
     if (projectId) {
@@ -168,7 +143,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     }
 
     const { openFile } = await import("../../services/EditorService.js");
-    await openFile(targetPath, line, col, editorConfig);
+    await openFile(realTarget, line, col, editorConfig);
   };
   handlers.push(
     typedHandleValidated(

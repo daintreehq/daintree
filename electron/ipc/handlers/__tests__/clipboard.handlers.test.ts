@@ -26,12 +26,28 @@ const fsPromisesMock = vi.hoisted(() => ({
   stat: vi.fn(),
   unlink: vi.fn(),
   writeFile: vi.fn(() => Promise.resolve()),
-  realpath: vi.fn((p: string) => Promise.resolve(p)),
   open: vi.fn(),
-  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
+  constants: { O_RDONLY: 1, O_NOFOLLOW: 0x20000 },
 }));
 
 vi.mock("node:fs/promises", () => fsPromisesMock);
+
+// pathGuard.ts resolves containment via the "fs" module's promises.realpath.
+const fsModuleMock = vi.hoisted(() => ({
+  promises: {
+    realpath: vi.fn<(p: string) => Promise<string>>((p: string) => Promise.resolve(p)),
+  },
+}));
+
+vi.mock("fs", () => ({ default: fsModuleMock, ...fsModuleMock }));
+
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn<() => Array<{ path: string }>>(() => []),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
+}));
 
 vi.mock("node:crypto", () => ({
   randomBytes: vi.fn(() => ({ toString: () => "abc123" })),
@@ -505,15 +521,17 @@ describe("clipboard:thumbnail-from-path handler", () => {
     resize: () => ({ toPNG: () => Buffer.from([0x89, 0x50]) }),
   });
 
-  const makeFileHandle = (readFile: () => Promise<Buffer>) => ({
+  const makeFileHandle = (readFile: () => Promise<Buffer>, size = 1024) => ({
     readFile: vi.fn(readFile),
+    stat: vi.fn(() => Promise.resolve({ size })),
     close: vi.fn(() => Promise.resolve()),
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: realpath echoes its input so containment is path-prefix based.
-    fsPromisesMock.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    fsModuleMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    projectStoreMock.getAllProjects.mockReturnValue([]);
     cleanup = registerClipboardHandlers();
   });
 
@@ -533,14 +551,29 @@ describe("clipboard:thumbnail-from-path handler", () => {
       thumbnailDataUrl: string;
     };
 
-    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, expect.any(Number));
+    // Exact flag assertion: dropping O_NOFOLLOW must fail this test.
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 1 | 0x20000);
     expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
     expect(handle.close).toHaveBeenCalled();
     expect(result.filePath).toBe(filePath);
     expect(result.thumbnailDataUrl).toMatch(/^data:image\/png;base64,/);
   });
 
-  it("rejects a path outside the clipboard dir with OUTSIDE_ROOT", async () => {
+  it("reads a drag-dropped image contained in a project root", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: "/repo" }]);
+    const filePath = "/repo/assets/photo.png";
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue(makeFakeImage());
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    const result = (await handler(fakeEvent, filePath)) as { filePath: string };
+
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 1 | 0x20000);
+    expect(result.filePath).toBe(filePath);
+  });
+
+  it("rejects a path outside every allowed root with OUTSIDE_ROOT", async () => {
     const handler = getHandler("clipboard:thumbnail-from-path");
     await expect(handler(fakeEvent, "/etc/passwd")).rejects.toMatchObject({
       name: "AppError",
@@ -558,8 +591,24 @@ describe("clipboard:thumbnail-from-path handler", () => {
       code: "INVALID_PATH",
     });
 
-    expect(fsPromisesMock.realpath).not.toHaveBeenCalled();
+    expect(fsModuleMock.promises.realpath).not.toHaveBeenCalled();
     expect(fsPromisesMock.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized file via stat before reading it", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "huge.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89])), 20 * 1024 * 1024 + 1);
+    fsPromisesMock.open.mockResolvedValue(handle);
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
   });
 
   it("rejects a symlink escape where the fd resolves outside the root (ELOOP)", async () => {

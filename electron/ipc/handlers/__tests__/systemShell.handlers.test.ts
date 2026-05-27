@@ -140,6 +140,32 @@ describe("system:open-path containment", () => {
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
+  it("rejects a safe-named symlink that resolves to a denied extension", async () => {
+    const link = `${PROJECT_ROOT}/notes.txt`;
+    const payload = `${PROJECT_ROOT}/Evil.desktop`;
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(p === link ? payload : p)
+    );
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    await expect(handler(fakeEvent, { path: link })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("opens the realpath-resolved target, not the original path", async () => {
+    const link = `${PROJECT_ROOT}/link.png`;
+    const resolved = `${PROJECT_ROOT}/real.png`;
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(p === link ? resolved : p)
+    );
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    await handler(fakeEvent, { path: link });
+    expect(shellMock.openPath).toHaveBeenCalledWith(resolved);
+  });
+
   it("propagates a non-empty error string from shell.openPath", async () => {
     shellMock.openPath.mockResolvedValueOnce("no app associated");
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);

@@ -7,6 +7,8 @@ import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
 import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { resolveContainedPath } from "./pathGuard.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -134,55 +136,17 @@ async function handleThumbnailFromPath(
   filePath: string
 ): Promise<{ filePath: string; thumbnailDataUrl: string }> {
   // The renderer supplies this path, so it is untrusted. Constrain it to the
-  // clipboard temp dir (the only legitimate source) and read it through an
-  // O_NOFOLLOW file descriptor + createFromBuffer rather than the path-taking
-  // nativeImage.createFromPath — that API follows symlinks in C++, leaving a
-  // TOCTOU window an fs.realpath check alone can't close. Mirrors the safe
-  // read pattern in electron/ipc/handlers/files.ts.
-  if (!path.isAbsolute(filePath)) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: "Only absolute paths are allowed",
-      context: { filePath },
-    });
-  }
+  // clipboard temp dir or a known project root (drag-dropped images live
+  // inside the repo; out-of-root images degrade gracefully to a file chip),
+  // and read it through an O_NOFOLLOW file descriptor + createFromBuffer
+  // rather than the path-taking nativeImage.createFromPath — that API follows
+  // symlinks in C++, leaving a TOCTOU window an fs.realpath check alone can't
+  // close. Mirrors the safe read pattern in electron/ipc/handlers/files.ts.
+  const roots = [getClipboardDir(), ...projectStore.getAllProjects().map((p) => p.path)];
+  await resolveContainedPath(filePath, roots);
 
-  const clipboardDir = getClipboardDir();
-  let realRoot: string;
-  try {
-    realRoot = await fs.realpath(clipboardDir);
-  } catch (error) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: "Clipboard directory does not exist",
-      context: { clipboardDir },
-      cause: error instanceof Error ? error : undefined,
-    });
-  }
-
-  let realFile: string;
-  try {
-    realFile = await fs.realpath(filePath);
-  } catch (error) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: "Could not resolve image path",
-      context: { filePath },
-      cause: error instanceof Error ? error : undefined,
-    });
-  }
-
-  const contained = realFile === realRoot || realFile.startsWith(realRoot + path.sep);
-  if (!contained) {
-    throw new AppError({
-      code: "OUTSIDE_ROOT",
-      message: "Image is outside the clipboard directory",
-      context: { filePath },
-    });
-  }
-
-  // Open the user-supplied filePath (not realFile) with O_NOFOLLOW so a
-  // final-component symlink injected after the realpath check is rejected
+  // Open the user-supplied filePath (not the realpath) with O_NOFOLLOW so a
+  // final-component symlink injected after the containment check is rejected
   // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
   // remains the primary defense there.
   let buffer: Buffer;
@@ -198,6 +162,17 @@ async function handleThumbnailFromPath(
     });
   }
   try {
+    // Cap the read so a large file planted in the (often world-writable) temp
+    // dir can't exhaust the main-process heap before decoding.
+    const stat = await fileHandle.stat();
+    if (stat.size > CLIPBOARD_IMAGE_MAX_BYTES) {
+      throw new AppError({
+        code: "PAYLOAD_TOO_LARGE",
+        message: `Image exceeds ${CLIPBOARD_IMAGE_MAX_BYTES} byte limit`,
+        userMessage: "That image is too large to preview.",
+        context: { filePath, size: stat.size, limit: CLIPBOARD_IMAGE_MAX_BYTES },
+      });
+    }
     buffer = await fileHandle.readFile();
   } finally {
     await fileHandle.close().catch(() => {});
