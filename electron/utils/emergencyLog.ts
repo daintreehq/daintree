@@ -2,7 +2,7 @@
 import { appendFileSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
-import { scrubSecrets } from "./secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
 const MAX_LOG_SIZE = 1024 * 1024; // 1MB
 

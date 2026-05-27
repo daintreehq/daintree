@@ -10,7 +10,7 @@ import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
-import { scrubSecrets } from "../../utils/secretScrubber.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import type {
   HelpTokenValidator,

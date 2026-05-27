@@ -5,7 +5,7 @@ import { app, screen } from "electron";
 import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
 import { getPtyManager } from "./PtyManager.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 

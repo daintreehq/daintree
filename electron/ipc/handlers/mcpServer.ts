@@ -6,7 +6,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { MCP_SERVER_METHOD_CHANNELS } from "./mcpServer.preload.js";
 import { broadcastToRenderer } from "../utils.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
-import { scrubSecrets } from "../../utils/secretScrubber.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import type {
   ActiveBearerRecord,
   AssistantTurnRecord,

@@ -4,7 +4,7 @@ import { app } from "electron";
 import { store } from "../store.js";
 import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
 import type { SanitizedTelemetryEvent } from "../../shared/types/ipc/telemetryPreview.js";
-import { scrubSecrets } from "../utils/secretScrubber.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../utils/pathScrubber.js";
 import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPreviewBroadcaster.js";
 import { getWritesSuppressed } from "./diskPressureState.js";

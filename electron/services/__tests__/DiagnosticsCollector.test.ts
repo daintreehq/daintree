@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scrubSecrets } from "../../utils/secretScrubber.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 
 // We test the module-level helpers by importing them indirectly.
 // Since redactDeep and withTimeout are not exported, we test them
