@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 
 import { LOCAL_ERROR_SETTLE_MS, getPerformanceModeFloor } from "@/lib/animationUtils";
 
-import { useRecoveryPriority, type RecoveryBannerSlot } from "./useRecoveryPriority";
+import { useGlobalBannerPriority, type GlobalBannerSlot } from "./useGlobalBannerPriority";
 
 /** Classification of pane-local error banners. Determines whether an active
- *  global recovery cause (see `useRecoveryPriority`) suppresses the banner.
+ *  global recovery cause (see `useGlobalBannerPriority`) suppresses the banner.
  *
  *  - `backend-dependent` — the banner describes a failure whose only recovery
  *    path runs through the backend (spawn, reconnect, restart). Always
@@ -19,17 +19,14 @@ import { useRecoveryPriority, type RecoveryBannerSlot } from "./useRecoveryPrior
  */
 export type LocalErrorCategory = "backend-dependent" | "parse-error" | "permission-error";
 
-/** Thin alias for `useRecoveryPriority`. Returns the active global recovery
+/** Thin alias for `useGlobalBannerPriority`. Returns the active global recovery
  *  cause (or `null` if none). Co-located so callers of
  *  `useShouldSuppressLocalError` import both names from the same module. */
-export function useActiveGlobalCause(): RecoveryBannerSlot {
-  return useRecoveryPriority();
+export function useActiveGlobalCause(): GlobalBannerSlot {
+  return useGlobalBannerPriority();
 }
 
-function isSuppressedByGlobalCause(
-  cause: RecoveryBannerSlot,
-  category: LocalErrorCategory
-): boolean {
+function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalErrorCategory): boolean {
   if (cause === null) return false;
   switch (category) {
     case "backend-dependent":
