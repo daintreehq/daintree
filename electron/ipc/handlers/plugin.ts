@@ -30,7 +30,7 @@ import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRe
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 import { pluginAuditService } from "../../services/pluginAuditService.js";
 import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
-import { scrubSecrets } from "../../utils/secretScrubber.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 
 const scrubSummary = (s: string): string => scrubSecrets(sanitizePath(s));
