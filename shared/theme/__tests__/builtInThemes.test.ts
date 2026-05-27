@@ -60,7 +60,9 @@ describe("built-in themes", () => {
   it("no two built-in themes share an identical accentSecondary hex", () => {
     const seen = new Map<string, string>();
     for (const source of BUILT_IN_THEME_SOURCES) {
-      const hex = normalizeHex(source.palette.accentSecondary);
+      const secondary = source.palette.accentSecondary;
+      if (!secondary) continue;
+      const hex = normalizeHex(secondary);
       const prior = seen.get(hex);
       expect(prior, `${source.id} accentSecondary ${hex} duplicates ${prior}`).toBeUndefined();
       seen.set(hex, source.id);
@@ -79,11 +81,13 @@ describe("built-in themes", () => {
       lab: hexToOklab(source.palette.accent),
     }));
     for (let i = 0; i < labs.length; i++) {
+      const a = labs[i]!;
       for (let j = i + 1; j < labs.length; j++) {
-        const distance = oklabDistance(labs[i].lab, labs[j].lab);
+        const b = labs[j]!;
+        const distance = oklabDistance(a.lab, b.lab);
         expect(
           distance,
-          `${labs[i].id} (${labs[i].hex}) and ${labs[j].id} (${labs[j].hex}) primary accents are ` +
+          `${a.id} (${a.hex}) and ${b.id} (${b.hex}) primary accents are ` +
             `${distance.toFixed(3)} apart in OKLab — below the ${THRESHOLD} categorical floor`
         ).toBeGreaterThanOrEqual(THRESHOLD);
       }
