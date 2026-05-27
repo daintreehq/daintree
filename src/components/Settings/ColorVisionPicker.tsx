@@ -29,7 +29,11 @@ const SWATCH_TOKENS = [
   { label: "Success", var: "--theme-status-success" },
   { label: "Danger", var: "--theme-status-danger" },
   { label: "Warning", var: "--theme-status-warning" },
+  { label: "Info", var: "--theme-status-info" },
   { label: "Active", var: "--theme-activity-active" },
+  { label: "Keyword", var: "--theme-syntax-keyword" },
+  { label: "String", var: "--theme-syntax-string" },
+  { label: "Comment", var: "--theme-syntax-comment" },
 ];
 
 function SwatchPreview() {
