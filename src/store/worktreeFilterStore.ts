@@ -171,6 +171,11 @@ const GLOBAL_KEY = "daintree-worktree-filters";
  */
 function resolveProjectIdFromUrl(): string {
   if (typeof window === "undefined") return "default";
+  // Prefer the id seeded by preload via additionalArguments (#9162); preload
+  // runs before this module evaluates, so the global is available. Fall back to
+  // the `?projectId=` query string (initial-window load) and finally "default".
+  const seeded = window.__DAINTREE_INITIAL_PROJECT__?.id;
+  if (seeded && seeded.length > 0) return seeded;
   try {
     const fromUrl = new URLSearchParams(window.location.search).get("projectId");
     return fromUrl && fromUrl.length > 0 ? fromUrl : "default";

@@ -420,6 +420,36 @@
         animation: skeleton-shimmer 1.5s linear infinite;
       }
 
+      /* ── Project identity (painted on cold-start switch — #9162) ──
+         When the main process resolves the destination project it sets the
+         title's text content and adds these classes, collapsing the shimmer
+         placeholder into real "emoji  name" text and tinting the logo with the
+         project's accent color. */
+      .skeleton-title.skeleton-title--identified {
+        width: auto;
+        height: auto;
+        min-height: 28px;
+        overflow: visible;
+        background: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        font-weight: 600;
+        line-height: 1.4;
+        color: var(--theme-text-primary, #e4e4e7);
+        opacity: 0;
+        animation: skeleton-reveal 400ms ease-out forwards;
+      }
+      .skeleton-title.skeleton-title--identified::after {
+        content: none;
+        animation: none;
+      }
+      .skeleton-logo-section--identified .skeleton-logo {
+        color: var(--theme-accent-primary, #e4e4e7);
+        opacity: 0.16;
+      }
+
       /* ── Tagline (real text — synced with WelcomeScreen.tsx) ── */
       .skeleton-tagline {
         margin-top: 12px;
@@ -892,6 +922,12 @@
           opacity: 1;
         }
         .skeleton-tagline {
+          animation: none;
+          opacity: 1;
+        }
+        /* Show the painted project name immediately — its reveal is motion, not
+           a timing signal, so reduced-motion users must still see it (#9162). */
+        .skeleton-title.skeleton-title--identified {
           animation: none;
           opacity: 1;
         }

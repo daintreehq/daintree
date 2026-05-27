@@ -83,8 +83,14 @@ vi.mock("../../ipc/errorHandlers.js", () => ({
 
 vi.mock("../skeletonCss.js", () => ({
   injectSkeletonCss: vi.fn(),
+  injectSkeletonProjectIdentity: vi.fn(),
   INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
+  INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
+}));
+
+vi.mock("../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: vi.fn(() => null) },
 }));
 
 vi.mock("../../utils/webContentsLifecycle.js", () => ({

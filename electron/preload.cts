@@ -151,6 +151,17 @@ const initialColorSchemeId = process.argv
   .find((a) => a.startsWith(INITIAL_COLOR_SCHEME_ARG))
   ?.slice(INITIAL_COLOR_SCHEME_ARG.length);
 
+// Destination project id passed from the main process via additionalArguments,
+// replacing the former `?projectId=` query string so the document URL stays
+// static and the V8 bytecode cache is shared across projects (#9162). Read the
+// same way as the color scheme above and exposed as
+// `window.__DAINTREE_INITIAL_PROJECT__` so renderer stores resolve their scope
+// without parsing the URL.
+const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id=";
+const initialProjectId = process.argv
+  .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
+  ?.slice(INITIAL_PROJECT_ID_ARG.length);
+
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
 // Instead, we use window.postMessage to transfer it to the main world.
@@ -2704,5 +2715,14 @@ if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" && !isPackagedBuild)
 if (initialColorSchemeId) {
   contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_THEME__", {
     colorSchemeId: initialColorSchemeId,
+  });
+}
+
+// Surface the destination project id (seeded via additionalArguments) so the
+// renderer resolves its project scope without a `?projectId=` query string,
+// keeping the document URL static for V8 bytecode cache reuse (#9162).
+if (initialProjectId) {
+  contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
+    id: initialProjectId,
   });
 }

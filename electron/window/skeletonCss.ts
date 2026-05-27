@@ -9,8 +9,13 @@
  */
 import { nativeTheme, type WebContents } from "electron";
 import { store } from "../store.js";
-import { resolveAppTheme, getAppThemeCssVariables } from "../../shared/theme/index.js";
+import {
+  resolveAppTheme,
+  getAppThemeCssVariables,
+  applyAccentOverrideToScheme,
+} from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
+import type { Project } from "../../shared/types/project.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -25,6 +30,17 @@ import {
  * saved theme instead of a `prefers-color-scheme` default (#9169).
  */
 export const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id";
+
+/**
+ * Command-line argument carrying the destination project id from the main
+ * process into each project-switch `WebContentsView`. Replaces the former
+ * `?projectId=` query string on `loadURL` so the document URL stays static
+ * across projects, keeping the V8 bytecode cache (`v8CacheOptions: "code"`)
+ * keyed to a single URL instead of fragmenting one entry per project (#9162).
+ * Read synchronously in preload.cts from `process.argv` and exposed as
+ * `window.__DAINTREE_INITIAL_PROJECT__`.
+ */
+export const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id";
 
 /**
  * Resolves the color scheme id to seed the renderer with on cold start.
@@ -50,7 +66,14 @@ export function resolveInitialColorSchemeId(): string {
     : "bondi";
 }
 
-export function injectSkeletonCss(wc: WebContents): void {
+/**
+ * Inject the first-paint skeleton CSS custom properties. When a cold-start
+ * project switch supplies the destination `project`, its accent color (when
+ * set) overrides the theme's native accent tokens so the skeleton paints the
+ * project's brand color before React mounts (#9162). Passing `null`/`undefined`
+ * (the initial-window path) leaves the resolved scheme untouched.
+ */
+export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
   const focusMode = appState?.focusMode ?? false;
@@ -81,7 +104,10 @@ export function injectSkeletonCss(wc: WebContents): void {
     }
   }
   const scheme = resolveAppTheme(colorSchemeId, customSchemes);
-  const themeVars = getAppThemeCssVariables(scheme);
+  // Paint the destination project's accent on cold starts. Safe to call
+  // unconditionally — a missing or invalid color returns the scheme unchanged.
+  const themedScheme = applyAccentOverrideToScheme(scheme, project?.color);
+  const themeVars = getAppThemeCssVariables(themedScheme);
 
   // Build CSS string
   const lines: string[] = [":root {"];
@@ -113,4 +139,30 @@ export function injectSkeletonCss(wc: WebContents): void {
   }
 
   void wc.insertCSS(lines.join("\n"), { cssOrigin: "user" });
+}
+
+/**
+ * Paint the destination project's name and emoji into the cold-start skeleton's
+ * title element via `executeJavaScript` (#9162). CSS alone can't set text
+ * content on `.skeleton-title`, so this mutates the DOM directly. Must run
+ * after `dom-ready` (the element must exist) — the no-op shimmer placeholder
+ * stays for projects with no resolvable name. The injected values are passed
+ * through `JSON.stringify` so emoji and arbitrary names can't break out of the
+ * string literal.
+ */
+export function injectSkeletonProjectIdentity(
+  wc: WebContents,
+  project: Pick<Project, "name" | "emoji"> | null | undefined
+): void {
+  const name = typeof project?.name === "string" ? project.name.trim() : "";
+  if (!name) return;
+  const emoji = typeof project?.emoji === "string" ? project.emoji.trim() : "";
+  const label = emoji ? `${emoji}  ${name}` : name;
+  const labelLiteral = JSON.stringify(label);
+  const script = `(function(){try{var t=document.querySelector('#startup-skeleton .skeleton-title');if(t){t.textContent=${labelLiteral};t.classList.add('skeleton-title--identified');}var s=document.querySelector('#startup-skeleton .skeleton-logo-section');if(s){s.classList.add('skeleton-logo-section--identified');}}catch(e){}})();`;
+  void wc.executeJavaScript(script, true).catch(() => {
+    // Best-effort first-paint enhancement: a destroyed/navigated context is
+    // expected during rapid project switching. Swallow — the generic skeleton
+    // remains a correct fallback.
+  });
 }

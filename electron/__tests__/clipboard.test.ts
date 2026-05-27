@@ -28,6 +28,13 @@ vi.mock("../services/ProjectStore.js", () => ({
     getCurrentProjectId: vi.fn(() => null),
   },
 
+// The clipboard handler imports the projectStore singleton, whose constructor
+// reaches for Electron's `app` at module-eval time. Stub it so this test stays
+// isolated from the real store (the cleanup logic only reads project paths).
+vi.mock("../services/ProjectStore.js", () => ({
+  projectStore: { getAllProjects: () => [] },
+}));
+
 // Redirect os.tmpdir() to a throwaway directory so the cleanup operates on real
 // files we control. The base dir is created inside the factory where the real
 // os module is still available.

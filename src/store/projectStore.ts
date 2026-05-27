@@ -166,6 +166,13 @@ function cancelProjectReadRequests(): void {
 function getLocationProjectId(): string | null {
   if (typeof window === "undefined") return null;
 
+  // Prefer the id seeded by preload via additionalArguments (#9162). The
+  // `?projectId=` query string fallback covers the initial-window load
+  // (createWindow.ts still passes it) and any test/shell view without the
+  // bootstrap global.
+  const seeded = window.__DAINTREE_INITIAL_PROJECT__?.id;
+  if (seeded) return seeded;
+
   try {
     return new URL(window.location.href).searchParams.get("projectId");
   } catch {
