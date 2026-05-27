@@ -161,7 +161,7 @@ describe("when clause evaluator", () => {
   describe("integration: parse + evaluate", () => {
     it("evaluates real-world when clause", () => {
       const ctx: WhenClauseContext = {
-        panel: { kind: "terminal", agentState: "idle" } as any,
+        panel: { kind: "terminal", agentState: "idle" },
       };
       expect(evaluate(parse("panel.kind == 'terminal' && panel.agentState == 'idle'"), ctx)).toBe(
         true
@@ -170,16 +170,21 @@ describe("when clause evaluator", () => {
 
     it("fails when condition doesn't match", () => {
       const ctx: WhenClauseContext = {
-        panel: { kind: "browser" } as any,
+        panel: { kind: "browser" },
       };
       expect(evaluate(parse("panel.kind == 'terminal'"), ctx)).toBe(false);
     });
 
     it("handles deeply nested context", () => {
       const ctx: WhenClauseContext = {
-        nested: { deeply: { value: "target" } } as any,
+        nested: { deeply: { value: "target" } },
       };
       expect(evaluate(parse("nested.deeply.value == 'target'"), ctx)).toBe(true);
+    });
+
+    it("undefined propagates through dotted path as falsy", () => {
+      const ctx: WhenClauseContext = { a: undefined };
+      expect(evaluate(parse("a.b"), ctx)).toBe(false);
     });
   });
 });

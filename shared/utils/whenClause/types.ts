@@ -1,6 +1,6 @@
-export type ContextKeyValue = string | boolean | null | undefined;
+export type ContextKeyValue = string | boolean | null | undefined | WhenClauseContext;
 
-export type WhenClauseContext = Record<string, ContextKeyValue>;
+export type WhenClauseContext = { [key: string]: ContextKeyValue };
 
 export interface LiteralNode {
   kind: "literal";

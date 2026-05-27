@@ -544,18 +544,18 @@ export class PluginService {
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
-      registerPluginMenuItem(manifest.name, menuItem);
       trackPluginExpression(manifest.name, menuItem.when);
+      registerPluginMenuItem(manifest.name, menuItem);
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
-      registerPluginKeybinding(manifest.name, keybinding);
       trackPluginExpression(manifest.name, keybinding.when);
+      registerPluginKeybinding(manifest.name, keybinding);
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
-      registerPluginContextMenuItem(manifest.name, ctxMenu);
       trackPluginExpression(manifest.name, ctxMenu.when);
+      registerPluginContextMenuItem(manifest.name, ctxMenu);
     }
 
     if (manifest.contributes.experimental_views.length > 0) {

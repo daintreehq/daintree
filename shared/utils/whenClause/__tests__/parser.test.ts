@@ -44,6 +44,21 @@ describe("when clause parser", () => {
       const ast = parse("a.b.c.d");
       expect(ast).toEqual({ kind: "identifier", path: ["a", "b", "c", "d"] });
     });
+
+    it("parses identifier starting with 'true' prefix as identifier, not boolean", () => {
+      const ast = parse("trueValue");
+      expect(ast).toEqual({ kind: "identifier", path: ["trueValue"] });
+    });
+
+    it("parses identifier starting with 'false' prefix as identifier, not boolean", () => {
+      const ast = parse("falseFlag");
+      expect(ast).toEqual({ kind: "identifier", path: ["falseFlag"] });
+    });
+
+    it("parses dotted identifier where root starts with 'true'", () => {
+      const ast = parse("true.foo");
+      expect(ast).toEqual({ kind: "identifier", path: ["true", "foo"] });
+    });
   });
 
   describe("equality", () => {
@@ -209,6 +224,28 @@ describe("when clause parser", () => {
           right: { kind: "identifier", path: ["b"] },
         },
         right: { kind: "identifier", path: ["c"] },
+      });
+    });
+  });
+
+  describe("whitespace handling", () => {
+    it("handles tab-separated tokens", () => {
+      const ast = parse("a\t&&\tb");
+      expect(ast).toEqual({
+        kind: "binary",
+        operator: "&&",
+        left: { kind: "identifier", path: ["a"] },
+        right: { kind: "identifier", path: ["b"] },
+      });
+    });
+
+    it("handles newline-separated tokens", () => {
+      const ast = parse("a\n&&\nb");
+      expect(ast).toEqual({
+        kind: "binary",
+        operator: "&&",
+        left: { kind: "identifier", path: ["a"] },
+        right: { kind: "identifier", path: ["b"] },
       });
     });
   });

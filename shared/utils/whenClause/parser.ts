@@ -1,6 +1,6 @@
 import type { ASTNode, BinaryOpNode, IdentifierNode, LiteralNode, UnaryOpNode } from "./types";
 
-const IDENT_RE = /^[a-zA-Z_][\w.]*$/;
+const IDENT_RE = /^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*/;
 const UNSUPPORTED_OPS: Array<[RegExp, string]> = [
   [/^=~/, "regex operator `=~` is not yet supported"],
   [/^in\b/, "`in` operator is not yet supported"],
@@ -34,8 +34,12 @@ class Tokenizer {
         throw new ParseError(msg, this.pos);
       }
     }
-    if (slice.startsWith("true") || slice.startsWith("false")) return "bool";
-    if (IDENT_RE.test(slice[0]!)) return "ident";
+    const m = slice.match(IDENT_RE);
+    if (m) {
+      const ident = m[0]!;
+      if (ident === "true" || ident === "false") return "bool";
+      return "ident";
+    }
     throw new ParseError(`unexpected token "${slice[0]}"`, this.pos);
   }
 
@@ -84,7 +88,7 @@ class Tokenizer {
       return "!";
     }
 
-    const m = slice.match(/^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*/);
+    const m = slice.match(IDENT_RE);
     if (m) {
       const ident = m[0]!;
       if (ident === "true") {
@@ -103,7 +107,7 @@ class Tokenizer {
   }
 
   private skipWhitespace(): void {
-    while (this.pos < this.input.length && this.input[this.pos] === " ") {
+    while (this.pos < this.input.length && /\s/.test(this.input[this.pos]!)) {
       this.pos++;
     }
   }
