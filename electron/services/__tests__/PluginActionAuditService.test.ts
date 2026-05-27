@@ -155,6 +155,68 @@ describe("PluginActionAuditService", () => {
     expect(service.setMaxRecords(999_999).maxRecords).toBe(5000);
   });
 
+  it("flushes to the store after the debounce window (oldest-first)", () => {
+    vi.useFakeTimers();
+    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig);
+    svc.append({
+      pluginId: "p",
+      actionId: "first",
+      source: "user",
+      danger: "safe",
+      argsHash: "",
+      durationMs: 1,
+      result: "success",
+    });
+    svc.append({
+      pluginId: "p",
+      actionId: "second",
+      source: "user",
+      danger: "safe",
+      argsHash: "",
+      durationMs: 1,
+      result: "success",
+    });
+    expect(store.raw().auditLog).toBeUndefined();
+    vi.advanceTimersByTime(1000);
+    const persisted = store.raw().auditLog as Array<{ actionId: string }>;
+    // Stored oldest-first (getRecords reverses for display).
+    expect(persisted.map((r) => r.actionId)).toEqual(["first", "second"]);
+    svc.dispose();
+  });
+
+  it("dispose() flushes pending records synchronously", () => {
+    vi.useFakeTimers();
+    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig);
+    svc.append({
+      pluginId: "p",
+      actionId: "x",
+      source: "user",
+      danger: "safe",
+      argsHash: "",
+      durationMs: 1,
+      result: "success",
+    });
+    expect(store.raw().auditLog).toBeUndefined();
+    svc.dispose(); // flushes without advancing the debounce timer
+    expect((store.raw().auditLog as unknown[]).length).toBe(1);
+  });
+
+  it("hydrate rejects records missing string pluginId/actionId", () => {
+    const seeded = makeConfigStore({
+      auditLog: [
+        { id: "ok", pluginId: "p", actionId: "a", ts: 1, schemaVersion: 1 },
+        { id: "bad-plugin", pluginId: null, actionId: "a" },
+        { id: "no-action", pluginId: "p" },
+        { pluginId: "p", actionId: "a" }, // missing id
+      ],
+    });
+    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig);
+    const records = svc.getRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.id).toBe("ok");
+    svc.dispose();
+  });
+
   it("hydrates persisted records on first read", () => {
     const seeded = makeConfigStore({
       auditLog: [

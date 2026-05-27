@@ -98,10 +98,17 @@ export class PluginActionAuditService {
     const config = this.readConfig();
     const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
     const cap = this.normalizeMaxRecords(config.auditMaxRecords);
-    const safe = persisted.filter(
-      (r: unknown): r is PluginActionAuditRecord =>
-        r !== null && typeof r === "object" && typeof (r as { id?: unknown }).id === "string"
-    );
+    const safe = persisted.filter((r: unknown): r is PluginActionAuditRecord => {
+      if (r === null || typeof r !== "object") return false;
+      const rec = r as { id?: unknown; pluginId?: unknown; actionId?: unknown };
+      // Require the fields the viewer reads unguarded (`pluginId.toLowerCase()`,
+      // `actionId.toLowerCase()`) so a manually corrupted store can't crash it.
+      return (
+        typeof rec.id === "string" &&
+        typeof rec.pluginId === "string" &&
+        typeof rec.actionId === "string"
+      );
+    });
     this.records = safe.length > cap ? safe.slice(safe.length - cap) : safe;
     this.hydrated = true;
   }

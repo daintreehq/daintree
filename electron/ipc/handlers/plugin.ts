@@ -253,7 +253,7 @@ async function handleSetAuditMaxRecords(max: number): Promise<PluginAuditConfig>
       `max must be between ${PLUGIN_AUDIT_MIN_RECORDS} and ${PLUGIN_AUDIT_MAX_RECORDS}`
     );
   }
-  return getPluginActionAuditService().setAuditMaxRecords(max);
+  return getPluginActionAuditService().setMaxRecords(max);
 }
 
 async function handleExportAuditLog(records: PluginActionAuditRecord[]): Promise<boolean> {
