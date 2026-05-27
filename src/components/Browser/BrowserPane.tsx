@@ -877,16 +877,14 @@ export function BrowserPane({
                 }
                 severity="error"
                 animated={false}
-                actions={[
-                  {
-                    id: "reload",
-                    label: "Reload",
-                    icon: RotateCw,
-                    variant: "dangerFilled",
-                    onClick: handleReload,
-                    ariaLabel: "Reload page",
-                  },
-                ]}
+                action={{
+                  id: "reload",
+                  label: "Reload",
+                  icon: RotateCw,
+                  variant: "dangerFilled",
+                  onClick: handleReload,
+                  ariaLabel: "Reload page",
+                }}
                 onClose={() => {
                   setCrashState("none");
                   setCrashDetails(null);
@@ -901,16 +899,14 @@ export function BrowserPane({
                 description="The page may be stuck in a long-running script."
                 severity="warning"
                 animated={false}
-                actions={[
-                  {
-                    id: "reload",
-                    label: "Reload",
-                    icon: RotateCw,
-                    variant: "danger",
-                    onClick: handleReload,
-                    ariaLabel: "Reload page",
-                  },
-                ]}
+                action={{
+                  id: "reload",
+                  label: "Reload",
+                  icon: RotateCw,
+                  variant: "danger",
+                  onClick: handleReload,
+                  ariaLabel: "Reload page",
+                }}
                 onClose={() => setCrashState("none")}
               />
             )}
