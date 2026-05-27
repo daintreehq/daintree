@@ -40,9 +40,6 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
   // The plugin's UI and functional contributions.
   "contributes": {
-    "commands": [
-      /* ... */
-    ],
     "panels": [
       /* ... */
     ],
@@ -52,29 +49,19 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "menuItems": [
       /* ... */
     ],
-    "views": [
+    "experimental_views": [
       /* ... */
     ],
-    "mcpServers": [
+    "experimental_mcpServers": [
       /* ... */
     ],
-    "skills": [
+    "forgeProviders": [
       /* ... */
     ],
-    "keybindings": [
-      /* ... */
-    ],
-    "settings": [
-      /* ... */
-    ],
-    "contextMenus": [
+    "fileDecorationProviders": [
       /* ... */
     ],
   },
-
-  // Explicit activation. Optional. Only "onStartupFinished" is supported.
-  // Commands, panels, views etc. are activated implicitly when invoked.
-  "activationEvents": ["onStartupFinished"],
 }
 ```
 
@@ -136,7 +123,7 @@ If the running Daintree version doesn't satisfy the range, the plugin is rejecte
 
 Daintree is pre-1.0. Pin tightly during this phase — a plugin that works on Daintree 0.8 may not work on 0.9 without changes.
 
-### `capabilities`
+### `permissions`
 
 Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Five high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_PERMISSIONS` set. A forthcoming scoped object form (`{ name, scopes }`) and `mcp:*` tokens are not yet parsed. See the [trust model](./trust-model.md) for the full contract.
 
@@ -161,15 +148,7 @@ Declare honestly. The install UI lists what you've declared and users judge plug
 
 ### `contributes`
 
-Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays. See the full [Contribution points reference](./contribution-points.md) for every type.
-
-### `activationEvents`
-
-Array of explicit activation triggers. Only `onStartupFinished` is supported.
-
-Daintree infers most activation events from contribution points automatically. A plugin declaring `commands[{ name: "foo" }]` implicitly activates when `foo` runs. You don't need to list `onCommand:foo` explicitly — and Daintree will reject it if you try.
-
-Use `onStartupFinished` only for plugins that need to do background work without any user-triggered entry point. Example: a plugin that watches a file and emits notifications. Most plugins don't need this.
+Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays. Fields prefixed with `experimental_` are reserved shapes that are validated by the schema but not yet wired to a runtime — the prefix signals that the shape may change before the feature ships. See the full [Contribution points reference](./contribution-points.md) for every type.
 
 ## Validation
 

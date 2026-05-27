@@ -10,38 +10,9 @@ Each section below documents a contribution point, its schema, an example, and c
 - **Planned** — design locked, implementation in progress
 - **Future** — not yet committed
 
-## Commands — _Shipped_
+## Commands — _Runtime only_
 
-Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items.
-
-```json
-{
-  "contributes": {
-    "commands": [
-      {
-        "name": "plan-from-issue",
-        "title": "Plan From Issue",
-        "description": "Turn a Linear issue into a branch and agent session.",
-        "category": "Linear Planner",
-        "danger": "confirm",
-        "keywords": ["linear", "plan", "issue"]
-      }
-    ]
-  }
-}
-```
-
-**Fields:**
-
-| Field | Required | Notes |
-| --- | --- | --- |
-| `name` | yes | Matches `/^[a-z0-9][a-z0-9-]*$/`. Namespaced at runtime as `{pluginId}.{name}`. Also determines the handler file path — see below. |
-| `title` | yes | Palette label. |
-| `description` | yes | Subtitle in the palette and command detail views. |
-| `category` | yes | Grouping label; keep consistent across commands in the same plugin. |
-| `kind` | no | `"command"` (default) or `"query"`. Queries are expected to be read-only and idempotent. |
-| `danger` | no | `"safe"` (default) or `"confirm"`. A `confirm` command requires `{ confirmed: true }` when invoked by an agent. See [action-system](../architecture/action-system.md) for how danger works across the IDE. |
-| `keywords` | no | Extra search terms for the palette. |
+Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. They are registered at runtime via `host.registerAction()` during `activate()`, not declared in `plugin.json`. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
 
 **Handler binding** — two ways:
 
@@ -82,9 +53,7 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-If a command is declared in the manifest but no handler is bound — neither a filesystem file nor an imperative registration — running it produces a user-visible toast: `Command "{pluginId}.{name}" has no handler`. If an imperative registration references a name not in the manifest, it's allowed but the command doesn't appear in the palette or menus until you add it to the manifest.
-
-See the [Host API](./host-api.md#registeraction) reference for the full signature.
+If a command is registered imperatively but no handler is bound, running it produces a user-visible toast: `Command "{pluginId}.{name}" has no handler`.
 
 ## Panels — _Shipped_
 
@@ -126,12 +95,12 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 ## Views — _Planned_
 
-Views are the React components that render inside a panel. They depend on Daintree's renderer plugin host, which is in active development. The manifest shape is locked and stable; the runtime wiring is landing in the next phase.
+Views are the React components that render inside a panel. They depend on Daintree's renderer plugin host, which is in active development. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked.
 
 ```json
 {
   "contributes": {
-    "views": [
+    "experimental_views": [
       {
         "id": "dashboard",
         "name": "Cost Dashboard",
@@ -232,6 +201,8 @@ Menu items add entries to Daintree's application menus.
 
 ## Keybindings — _Planned_
 
+> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
+
 Keybindings map a key combination to an action.
 
 ```json
@@ -259,6 +230,8 @@ Keybindings map a key combination to an action.
 Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `src/services/KeybindingService.ts:325` for the registration API.
 
 ## Settings schema — _Planned_
+
+> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
 
 Declares user-configurable settings for your plugin.
 
@@ -300,6 +273,8 @@ Changes fire a subscription callback, so you don't need to reactivate to pick th
 
 ## Context menus — _Planned_
 
+> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
+
 Adds entries to right-click menus on specific UI elements.
 
 ```json
@@ -323,12 +298,12 @@ Context menus follow the same `actionId` dispatch pattern as menu items.
 
 ## MCP servers — _Planned_
 
-Declares Model Context Protocol servers the plugin ships. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest shape is validated but the `experimental_` prefix signals that it may change before the feature ships — use with awareness that the contract is not yet locked. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
   "contributes": {
-    "mcpServers": [
+    "experimental_mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",
@@ -356,6 +331,8 @@ Daintree supervises the process: lazy spawn on first tool use, hard kill on Dain
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
 ## Skills — _Planned_
+
+> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
 
 Markdown-defined capability snippets that extend Daintree's built-in MCP server. Agents running in Daintree gain access to them through Daintree's MCP connection.
 

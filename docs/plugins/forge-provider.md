@@ -59,7 +59,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry — there is no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
-| `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
+| `viewRefs` | no | IDs of `experimental_views` contributions shown under this provider's panel section. |
 
 The `forgeProviders` contribution point is also documented in [Contribution points](./contribution-points.md#forge-providers).
 

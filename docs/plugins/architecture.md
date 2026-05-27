@@ -8,7 +8,7 @@ A plugin's life has five phases:
 
 1. **Discovery** — startup scan of `~/.daintree/plugins/`
 2. **Manifest validation** — `plugin.json` parsed, validated against the Zod schema
-3. **Registration** — eager contribution points (panels, toolbar buttons, menu items, manifest-declared commands) registered in the respective registries
+3. **Registration** — eager contribution points (panels, toolbar buttons, menu items) registered in the respective registries
 4. **Activation** — plugin's `main` module imported, `activate(host)` called (lazy — triggered by first use)
 5. **Disposal** — on unload, the cleanup cascade runs in reverse
 
@@ -22,7 +22,7 @@ The `plugins` root is configurable for testing via the `PluginService` construct
 
 ### Manifest validation
 
-Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes`. The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
+Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
 
 The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch produces a user-visible toast and the plugin is skipped.
 
@@ -33,18 +33,17 @@ Most contributions register eagerly at plugin-load time so the UI reflects them 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
 - `menuItems` → `registerPluginMenuItem()` in `electron/services/pluginMenuRegistry.ts`
-- `commands` → registered as synthetic action definitions in the `ActionService`; handler is resolved lazily
 
-Contributions that require code (e.g., a command handler, a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
+Commands are not declared in the manifest. They are registered at runtime via `host.registerAction()` during `activate()`. This keeps the manifest as a static shape contract and the action system as a runtime concern.
+
+Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed.
 
 ### Activation
 
 A plugin's `activate(host)` function runs when something first needs the plugin's code. Triggers:
 
-- User runs a manifest-declared command
+- User runs a plugin-registered command
 - User opens a plugin-contributed panel
-- An agent calls a tool from a plugin-shipped MCP server (MCP servers themselves are supervised separately — see below)
-- `onStartupFinished` activation event (only explicit event supported)
 
 When triggered, Daintree:
 
@@ -191,6 +190,44 @@ What the host derives from declared capabilities:
 - A compound-permission lattice, scope attenuation, and MCP advertisement gates are forthcoming (#9247, #9234). See the trust model for the complete list.
 
 The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
+
+## Host-derived classification
+
+The host is the sole authority on action danger classification. A plugin's self-reported `danger` in `registerPluginAction()` is advisory only — the host computes `effectiveDanger` and the renderer reads only that field for classification decisions.
+
+### Why host-derived
+
+Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. A plugin could declare `danger: "safe"` on a destructive action and bypass the confirm dialog, MRU-rail exclusion, and `repeatLast` eligibility. The host now computes an authoritative `effectiveDanger` so a plugin cannot misclassify.
+
+### Mechanism
+
+`PluginService.registerPluginAction()` consults the set `CONFIRM_TRIGGERING_PERMISSIONS` (defined in `PluginService.ts`):
+
+| Permission           | Effect            |
+| -------------------- | ----------------- |
+| `shell:exec`         | Raises to confirm |
+| `git:write`          | Raises to confirm |
+| `fs:project-write`   | Raises to confirm |
+| `fs:user-data-write` | Raises to confirm |
+| `agent:invoke`       | Raises to confirm |
+
+When a plugin's declared manifest `permissions` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value.
+
+The rule is one-way: the host **may only raise danger, never lower it**. A plugin that declares `danger: "confirm"` keeps confirm regardless of permissions; a plugin that declares `danger: "safe"` is raised if it holds a high-risk permission.
+
+### Renderer contract
+
+The renderer reads `PluginActionDescriptor.effectiveDanger` (not `danger`) for:
+
+- Whether the confirm dialog gates agent-initiated dispatches
+- MRU-rail eligibility in the action palette
+- `ActionService.repeatLast` eligibility
+
+If `effectiveDanger` is absent (e.g. a stale descriptor from a pre-migration cache), the renderer must fail safe to `"confirm"`.
+
+### Scope
+
+This classification is host-side UX policy on Daintree's own action system. It does not block the plugin from executing code, calling IPC directly, or making network requests — those are gated by the curation trust model, not by runtime enforcement (see [Capability disclosure](#capability-disclosure)).
 
 ## Signing and kill-switch
 

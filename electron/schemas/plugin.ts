@@ -50,7 +50,8 @@ export const MenuItemContributionSchema = z.object({
 /**
  * Reserved contribution point. Shape is validated but the runtime does not
  * yet act on these entries — `PluginService` logs a warning and skips them.
- * See `docs/architecture/plugin-views-and-mcp-servers.md`.
+ * The `experimental_` prefix signals that the shape may change before the
+ * feature ships. See `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z.object({
   id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
@@ -137,12 +138,12 @@ export const PluginManifestSchema = z
       .optional(),
     permissions: z.array(PluginPermissionSchema).default([]),
     contributes: z
-      .object({
+      .strictObject({
         panels: z.array(PanelContributionSchema).default([]),
         toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
         menuItems: z.array(MenuItemContributionSchema).default([]),
-        views: z.array(ViewContributionSchema).default([]),
-        mcpServers: z.array(McpServerContributionSchema).default([]),
+        experimental_views: z.array(ViewContributionSchema).default([]),
+        experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
         forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
         fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
       })
@@ -150,8 +151,8 @@ export const PluginManifestSchema = z
         panels: [],
         toolbarButtons: [],
         menuItems: [],
-        views: [],
-        mcpServers: [],
+        experimental_views: [],
+        experimental_mcpServers: [],
         forgeProviders: [],
         fileDecorationProviders: [],
       }),

@@ -58,8 +58,9 @@ export interface MenuItemContribution {
 
 /**
  * Reserved contribution point — validated by the manifest schema but ignored
- * at load time with a "not yet implemented" warning. See
- * `docs/architecture/plugin-views-and-mcp-servers.md` for the design RFC.
+ * at load time with a "not yet implemented" warning. The `experimental_`
+ * prefix signals that the shape may change before the feature ships.
+ * See `docs/plugins/architecture.md` for the renderer host design.
  */
 export type ViewLocation = "panel" | "sidebar";
 
@@ -100,8 +101,8 @@ export interface PluginManifest {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
-    views: ViewContribution[];
-    mcpServers: McpServerContribution[];
+    experimental_views: ViewContribution[];
+    experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
   };
