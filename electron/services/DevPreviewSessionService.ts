@@ -586,7 +586,7 @@ export class DevPreviewSessionService {
             this.updateSession(session, {
               status: "stopped",
               url: null,
-              assignedUrl: null,
+              predictedUrl: null,
               error: null,
               terminalId: null,
               isRestarting: false,
