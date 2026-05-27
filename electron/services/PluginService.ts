@@ -176,13 +176,24 @@ export class PluginService {
   }> = [];
   private initialized = false;
   /**
-   * Plugin ids that are owned by a built-in plugin but currently disabled in
-   * Preferences. Held alongside `this.plugins` so the user-dir scan cannot
-   * register a third-party plugin under a trusted first-party namespace just
-   * because the matching built-in is turned off — the namespace stays claimed
-   * even when the activation is skipped.
+   * Plugin ids that are currently disabled in Preferences and were therefore
+   * skipped at load time. Held alongside `this.plugins` so a later dir scan
+   * cannot register a different plugin under a claimed namespace just because
+   * the matching plugin is turned off — the namespace stays reserved even when
+   * activation is skipped. Covers both built-in and user plugins (#9284).
    */
-  private reservedBuiltinNames = new Set<string>();
+  private reservedNames = new Set<string>();
+  /**
+   * Manifest metadata for plugins skipped because they're disabled, keyed by
+   * `manifest.name`. Populated at `loadPlugin()` skip time so `listPlugins()`
+   * can still surface disabled plugins (with `disabled: true`) for the
+   * Preferences toggle, without re-scanning directories. Built-in entries win
+   * on a name collision (loaded first), mirroring the duplicate guard.
+   */
+  private disabledPlugins = new Map<
+    string,
+    { manifest: PluginManifest; dir: string; isBuiltin: boolean }
+  >();
   private pluginsRoot: string;
   /**
    * Optional override for the built-in plugins directory. When unset, the
@@ -317,18 +328,18 @@ export class PluginService {
   }
 
   /**
-   * Read disabled built-in plugin ids from the user store. Defensive against
-   * missing keys (in-memory fallback during tests) and read failures —
-   * a failed read returns an empty set so all built-ins activate, matching
-   * the safest startup behavior.
+   * Read disabled plugin ids (built-in and user) from the user store.
+   * Defensive against missing keys (in-memory fallback during tests) and read
+   * failures — a failed read returns an empty set so all plugins activate,
+   * matching the safest startup behavior.
    */
-  private getDisabledBuiltinIds(): Set<string> {
+  private getDisabledIds(): Set<string> {
     try {
-      const value = store.get("plugins") as { disabledBuiltins?: unknown } | undefined;
-      const list = Array.isArray(value?.disabledBuiltins) ? value.disabledBuiltins : [];
+      const value = store.get("plugins") as { disabled?: unknown } | undefined;
+      const list = Array.isArray(value?.disabled) ? value.disabled : [];
       return new Set(list.filter((id): id is string => typeof id === "string"));
     } catch (err) {
-      console.warn("[PluginService] Failed to read disabled built-in plugins from store:", err);
+      console.warn("[PluginService] Failed to read disabled plugins from store:", err);
       return new Set();
     }
   }
@@ -348,7 +359,8 @@ export class PluginService {
     }
 
     const pluginDirs = entries.filter((e) => e.isDirectory());
-    const disabled = opts.isBuiltin ? this.getDisabledBuiltinIds() : null;
+    // Disabled state applies to built-in and user plugins alike (#9284).
+    const disabled = this.getDisabledIds();
     const results = await Promise.allSettled(
       pluginDirs.map((d) => this.loadPlugin(root, d.name, { isBuiltin: opts.isBuiltin, disabled }))
     );
@@ -365,7 +377,7 @@ export class PluginService {
   private async loadPlugin(
     root: string,
     dirName: string,
-    opts: { isBuiltin: boolean; disabled: Set<string> | null }
+    opts: { isBuiltin: boolean; disabled: Set<string> }
   ): Promise<LoadedPlugin | null> {
     const pluginDir = path.join(root, dirName);
     const manifestPath = path.join(pluginDir, "plugin.json");
@@ -398,18 +410,28 @@ export class PluginService {
 
     const manifest = parseResult.data;
 
-    // Built-ins disabled in Preferences are skipped entirely — neither
-    // registered in the plugins map nor activated. The disable persists in
-    // electron-store and takes effect on next launch. The name is reserved
-    // so a user plugin in the next scan cannot hijack a trusted first-party
-    // namespace just because its built-in is off.
-    if (opts.isBuiltin && opts.disabled?.has(manifest.name)) {
-      console.log(`[PluginService] Built-in plugin "${manifest.name}" is disabled, skipping`);
-      this.reservedBuiltinNames.add(manifest.name);
+    // Plugins disabled in Preferences are skipped entirely — neither
+    // registered in the plugins map nor activated — for both built-in and
+    // user plugins (#9284). The disable persists in electron-store and takes
+    // effect on next launch. The name is reserved so a later dir scan cannot
+    // hijack a claimed namespace just because the matching plugin is off; the
+    // manifest is tracked so listPlugins() can still surface it for the toggle.
+    if (opts.disabled.has(manifest.name)) {
+      console.log(
+        `[PluginService] ${opts.isBuiltin ? "Built-in" : "User"} plugin "${manifest.name}" is disabled, skipping`
+      );
+      this.reservedNames.add(manifest.name);
+      if (!this.disabledPlugins.has(manifest.name)) {
+        this.disabledPlugins.set(manifest.name, {
+          manifest,
+          dir: pluginDir,
+          isBuiltin: opts.isBuiltin,
+        });
+      }
       return null;
     }
 
-    if (this.plugins.has(manifest.name) || this.reservedBuiltinNames.has(manifest.name)) {
+    if (this.plugins.has(manifest.name) || this.reservedNames.has(manifest.name)) {
       console.error(
         `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName} — rejecting`
       );
@@ -1062,13 +1084,50 @@ export class PluginService {
   }
 
   listPlugins(): LoadedPluginInfo[] {
-    return Array.from(this.plugins.values()).map((p) => ({
+    const active: LoadedPluginInfo[] = Array.from(this.plugins.values()).map((p) => ({
       manifest: p.manifest,
       dir: p.dir,
       loadedAt: p.loadedAt,
       isBuiltin: p.isBuiltin,
       archiveHash: p.archiveHash,
+      disabled: false,
     }));
+    // Surface plugins skipped at startup because they're disabled so the
+    // Preferences toggle can list and re-enable them (#9284). They carry no
+    // `loadedAt` — the main module never ran — so it's reported as 0.
+    const disabled: LoadedPluginInfo[] = Array.from(this.disabledPlugins.values()).map((p) => ({
+      manifest: p.manifest,
+      dir: p.dir,
+      loadedAt: 0,
+      isBuiltin: p.isBuiltin,
+      disabled: true,
+    }));
+    return [...active, ...disabled];
+  }
+
+  /**
+   * Toggle a plugin's disabled state in Preferences (#9284). Persists to
+   * `plugins.disabled` in electron-store; the change takes effect on next
+   * launch (no synchronous unload — the renderer surfaces a restart-required
+   * cue). Idempotent: enabling an already-enabled plugin or disabling an
+   * already-disabled one is a no-op write. Permissive by design — the store is
+   * a declared-intent list, not a live registry, so no existence check.
+   */
+  setEnabled(pluginId: string, enabled: boolean): void {
+    if (typeof pluginId !== "string" || pluginId.length === 0) {
+      throw new Error("setEnabled: pluginId must be a non-empty string");
+    }
+    if (typeof enabled !== "boolean") {
+      throw new Error("setEnabled: enabled must be a boolean");
+    }
+    const plugins = (store.get("plugins") as { disabled?: unknown } | undefined) ?? {};
+    const current = Array.isArray(plugins.disabled)
+      ? plugins.disabled.filter((id): id is string => typeof id === "string")
+      : [];
+    const next = enabled
+      ? current.filter((id) => id !== pluginId)
+      : Array.from(new Set([...current, pluginId]));
+    store.set("plugins", { ...plugins, disabled: next } as never);
   }
 
   /**

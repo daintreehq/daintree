@@ -1109,7 +1109,7 @@ describe("PluginService integration — built-in plugin loading", () => {
   });
 
   it("does not register contributions for a disabled built-in", async () => {
-    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled"] });
+    storeState.set("plugins", { disabled: ["daintree.disabled"] });
     await writeBuiltinPlugin("daintree.disabled", {
       name: "daintree.disabled",
       version: "1.0.0",
@@ -1124,7 +1124,12 @@ describe("PluginService integration — built-in plugin loading", () => {
 
     expect(getPanelKindConfig("daintree.disabled.x")).toBeUndefined();
     expect(getToolbarButtonConfig("plugin.daintree.disabled.b")).toBeUndefined();
-    expect(service.listPlugins()).toEqual([]);
+    // The plugin is still listed (as disabled) so the Preferences toggle can
+    // re-enable it — only its contributions are withheld.
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.name).toBe("daintree.disabled");
+    expect(listed[0].disabled).toBe(true);
   });
 
   it("activates a built-in plugin's main entry through the standard lifecycle", async () => {
@@ -1165,13 +1170,16 @@ describe("PluginService integration — built-in plugin loading", () => {
         main: mainFile,
       })
     );
-    storeState.set("plugins", { disabledBuiltins: ["daintree.disabled-main"] });
+    storeState.set("plugins", { disabled: ["daintree.disabled-main"] });
 
     const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
     await service.initialize();
 
     expect(readMarker(markerKey)).toBeUndefined();
-    expect(service.listPlugins()).toEqual([]);
+    const listed = service.listPlugins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.name).toBe("daintree.disabled-main");
+    expect(listed[0].disabled).toBe(true);
   });
 
   it("loads remaining built-ins and user plugins when one built-in has a malformed manifest", async () => {

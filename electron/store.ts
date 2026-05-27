@@ -307,13 +307,19 @@ export interface StoreSchema {
    */
   logLevelOverrides: Record<string, string>;
   /**
-   * Plugin runtime state. `disabledBuiltins` lists built-in plugin ids
-   * (manifest.name) the user has disabled from Preferences. PluginService
-   * filters these out at startup; built-ins cannot be uninstalled, only
-   * disabled — disable takes effect on next launch.
+   * Plugin runtime state. `disabled` lists plugin ids (manifest.name) the user
+   * has disabled from Preferences — covering both built-in and user-installed
+   * plugins. PluginService filters these out at startup; disabling takes effect
+   * on next launch (built-ins additionally cannot be uninstalled, only
+   * disabled). `disabledBuiltins` is the legacy built-ins-only field; kept as
+   * an optional `@deprecated` key so `clearInvalidConfig` doesn't strip a
+   * persisted value before migration021 merges it into `disabled` (the merge
+   * runs after `new Store()`). New code reads `disabled`.
    */
   plugins: {
-    disabledBuiltins: string[];
+    disabled: string[];
+    /** @deprecated Merged into `disabled` by migration021 (#9284). Read-only carryover. */
+    disabledBuiltins?: string[];
     /** Master switch for the plugin-action audit log. Defaults to true. */
     auditEnabled: boolean;
     /** Ring-buffer cap for persisted plugin-action audit records. */
@@ -489,7 +495,7 @@ const storeOptions = {
     lastUpdateCheck: null,
     logLevelOverrides: {},
     plugins: {
-      disabledBuiltins: [],
+      disabled: [],
       auditEnabled: true,
       auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
     },

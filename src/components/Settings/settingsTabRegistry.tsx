@@ -96,6 +96,7 @@ const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
+const importPluginsTab = () => import("./PluginsTab");
 const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
@@ -152,6 +153,7 @@ const LazyMcpServerSettingsTab = lazy(() =>
 const LazyPluginActionsSettingsTab = lazy(() =>
   importPluginActionsSettingsTab().then((m) => ({ default: m.PluginActionsSettingsTab }))
 );
+const LazyPluginsTab = lazy(() => importPluginsTab().then((m) => ({ default: m.PluginsTab })));
 const LazyDaintreeAssistantSettingsTab = lazy(() =>
   importDaintreeAssistantSettingsTab().then((m) => ({ default: m.DaintreeAssistantSettingsTab }))
 );
@@ -1350,7 +1352,39 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Integrations",
     label: "Plugins",
-    headerTitle: "Plugins",
+    icon: <Plug className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importPluginsTab,
+    LazyComponent: LazyPluginsTab,
+    searchNavDescription: "Enable or disable installed plugins",
+    searchNavKeywords: ["integrations", "plugins", "extensions", "enable", "disable", "addons"],
+    sections: [
+      {
+        id: "plugins-installed",
+        section: "Installed plugins",
+        title: "Installed plugins",
+        description: "Turn installed plugins on or off. Changes take effect after restart.",
+        keywords: [
+          "plugin",
+          "plugins",
+          "enable",
+          "disable",
+          "extension",
+          "addon",
+          "builtin",
+          "uninstall",
+          "turn off",
+        ],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
+    id: "plugin-actions",
+    scope: "global",
+    group: "Integrations",
+    label: "Plugin actions",
+    headerTitle: "Plugin actions",
     icon: <ScrollText className="w-4 h-4" />,
     importKind: "lazy",
     importer: importPluginActionsSettingsTab,
@@ -1770,7 +1804,8 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
-  plugins: <ScrollText className="w-5 h-5 text-text-secondary" />,
+  plugins: <Plug className="w-5 h-5 text-text-secondary" />,
+  "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,
   environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
   privacy: <Shield className="w-5 h-5 text-text-secondary" />,
   troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,

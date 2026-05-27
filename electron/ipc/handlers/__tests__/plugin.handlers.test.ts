@@ -4,6 +4,7 @@ const mockDispatchHandler = vi.fn();
 const mockRegisterHandler = vi.fn();
 const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
+const mockSetEnabled = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
@@ -11,6 +12,7 @@ const mockUnregisterPluginAction = vi.fn();
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
+    setEnabled: (...args: unknown[]) => mockSetEnabled(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
@@ -69,8 +71,9 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(17);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(18);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
@@ -144,6 +147,16 @@ describe("registerPluginHandlers", () => {
 
     const result = await listHandler();
     expect(result).toBe(plugins);
+  });
+
+  it("PLUGIN_SET_ENABLED handler delegates to pluginService.setEnabled", async () => {
+    registerPluginHandlers();
+    const setEnabledHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:set-enabled"
+    )![1] as (...args: unknown[]) => unknown;
+
+    await setEnabledHandler({}, "acme.my-plugin", false);
+    expect(mockSetEnabled).toHaveBeenCalledWith("acme.my-plugin", false);
   });
 
   it("PLUGIN_INVOKE handler delegates to pluginService.dispatchHandler for trusted senders", async () => {

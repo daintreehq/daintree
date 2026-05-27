@@ -41,6 +41,10 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
   return pluginService.listPlugins();
 }
 
+async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
+  pluginService.setEnabled(pluginId, enabled);
+}
+
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
   return getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
@@ -275,6 +279,7 @@ export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
     list: op(PLUGIN_METHOD_CHANNELS.list, handleList),
+    setEnabled: op(PLUGIN_METHOD_CHANNELS.setEnabled, handleSetEnabled),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),

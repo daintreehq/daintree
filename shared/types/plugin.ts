@@ -127,6 +127,14 @@ export interface LoadedPluginInfo {
    * that lands.
    */
   archiveHash?: string;
+  /**
+   * True when the plugin is present in `plugins.disabled` and was therefore
+   * skipped at startup (its main module never ran, contributions never
+   * registered). Disabled plugins still appear in the list so the user can
+   * re-enable them; toggling takes effect on next launch. Absent/false means
+   * the plugin is loaded and active.
+   */
+  disabled?: boolean;
 }
 
 export interface PluginIpcContext {
