@@ -3551,3 +3551,119 @@ describe("PluginService.installPlugin", () => {
     service.dispose();
   });
 });
+
+describe("PluginService.installPlugin failure and rollback paths", () => {
+  const validManifest = (name: string, version = "1.0.0") => ({
+    name,
+    version,
+    displayName: "Test plugin",
+  });
+
+  function pluginsRoot(): string {
+    return path.join(tmpDir, "plugins");
+  }
+
+  async function makeSourceDir(label: string, manifest: Record<string, unknown>): Promise<string> {
+    const dir = path.join(tmpDir, "src", label);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+    return dir;
+  }
+
+  async function makeBrokenSource(
+    label: string,
+    manifest: Record<string, unknown>
+  ): Promise<string> {
+    const dir = await makeSourceDir(label, { ...manifest, main: "index.js" });
+    await fs.writeFile(path.join(dir, "index.js"), "throw new Error('boom at module eval');");
+    return dir;
+  }
+
+  it("fails with LOAD_FAILED and installs nothing when the main entry throws", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const src = await makeBrokenSource("broken", validManifest("acme.broken"));
+
+    const result = await service.installPlugin({ sourcePath: src });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("LOAD_FAILED");
+    expect(service.hasPlugin("acme.broken")).toBe(false);
+    const plugins = storeMock._state.get("plugins") as
+      | { installed?: Record<string, unknown> }
+      | undefined;
+    expect(plugins?.installed?.["acme.broken"]).toBeUndefined();
+    const entries = await fs.readdir(pluginsRoot());
+    expect(entries.includes("acme.broken")).toBe(false);
+    expect(entries.some((e) => e.startsWith(".tmp"))).toBe(false);
+    service.dispose();
+  });
+
+  it("rolls back to the previous version when an upgrade's main entry throws", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const v1 = await makeSourceDir("good-v1", validManifest("acme.rollback", "1.0.0"));
+    await service.installPlugin({ sourcePath: v1 });
+    expect(service.hasPlugin("acme.rollback")).toBe(true);
+
+    const v2 = await makeBrokenSource("broken-v2", validManifest("acme.rollback", "2.0.0"));
+    const result = await service.installPlugin({ sourcePath: v2 });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("LOAD_FAILED");
+    // Previous version restored on disk and in the registry.
+    expect(service.hasPlugin("acme.rollback")).toBe(true);
+    const listed = service.listPlugins().filter((p) => p.manifest.name === "acme.rollback");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].manifest.version).toBe("1.0.0");
+    const onDisk = JSON.parse(
+      await fs.readFile(path.join(pluginsRoot(), "acme.rollback", "plugin.json"), "utf-8")
+    );
+    expect(onDisk.version).toBe("1.0.0");
+    const entries = await fs.readdir(pluginsRoot());
+    expect(entries.some((e) => e.startsWith(".tmp"))).toBe(false);
+    service.dispose();
+  });
+
+  it("preserves the original plugin on disk when the mid-swap rename fails", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const v1 = await makeSourceDir("keep-v1", validManifest("acme.keep", "1.0.0"));
+    await service.installPlugin({ sourcePath: v1 });
+
+    const v2 = await makeSourceDir("keep-v2", validManifest("acme.keep", "2.0.0"));
+    // The first rename in the swap moves the current dir aside; force it to
+    // fail so the install aborts before the new version is in place.
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementationOnce(async () => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+
+    const result = await service.installPlugin({ sourcePath: v2 });
+    renameSpy.mockRestore();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("IO_ERROR");
+    // The original v1 directory must still be intact on disk — never deleted.
+    const onDisk = JSON.parse(
+      await fs.readFile(path.join(pluginsRoot(), "acme.keep", "plugin.json"), "utf-8")
+    );
+    expect(onDisk.version).toBe("1.0.0");
+    service.dispose();
+  });
+
+  it("leaves an already-installed plugin untouched when a later install fails validation", async () => {
+    const service = new PluginService(pluginsRoot());
+    await service.initialize();
+    const existing = await makeSourceDir("existing", validManifest("acme.existing"));
+    await service.installPlugin({ sourcePath: existing });
+    expect(service.hasPlugin("acme.existing")).toBe(true);
+
+    const bad = await makeSourceDir("reserved", validManifest("daintree.reserved"));
+    const result = await service.installPlugin({ sourcePath: bad });
+
+    expect(result.ok).toBe(false);
+    expect(service.hasPlugin("acme.existing")).toBe(true);
+    expect(service.hasPlugin("daintree.reserved")).toBe(false);
+    service.dispose();
+  });
+});

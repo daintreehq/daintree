@@ -433,7 +433,19 @@ export class PluginService {
   private async loadPlugin(
     root: string,
     dirName: string,
-    opts: { isBuiltin: boolean; disabled: Set<string> | null }
+    opts: {
+      isBuiltin: boolean;
+      disabled: Set<string> | null;
+      /**
+       * When true (the install path), a failure importing or activating the
+       * plugin's `main` entry is treated as fatal: the partial registration is
+       * unwound via {@link unloadPlugin} and the error is rethrown so the
+       * installer can roll back. The default startup scan leaves this false so
+       * an activation error degrades gracefully (logged, plugin stays
+       * registered) — unchanged behavior for built-in and boot-time loads.
+       */
+      rethrowMainError?: boolean;
+    }
   ): Promise<LoadedPlugin | null> {
     const pluginDir = path.join(root, dirName);
     const manifestPath = path.join(pluginDir, "plugin.json");
@@ -615,6 +627,14 @@ export class PluginService {
         const record = toPluginLoadErrorRecord(err);
         this.pluginLoadErrors.set(manifest.name, record);
         console.error(`[PluginService] Failed to load main entry for ${manifest.name}:`, err);
+        if (opts.rethrowMainError) {
+          // Unwind the partial registration (contributions registered above,
+          // plus the registry insert) before rethrowing so the installer can
+          // roll back from a clean slate rather than leaving a half-activated
+          // plugin in the map.
+          this.unloadPlugin(manifest.name);
+          throw err;
+        }
       }
     } else {
       this.pluginLoadErrors.delete(manifest.name);
@@ -1379,17 +1399,22 @@ export class PluginService {
       }
 
       // 6. Swap. Unload any existing user version and move its directory aside
-      // so a load failure can roll back to it.
+      // so a load failure can roll back to it. `oldDir` is assigned ONLY after
+      // the rename succeeds — assigning it before would make the rollback
+      // paths trust a park dir that doesn't exist and delete the still-intact
+      // original via `rm(finalPath)`.
       finalPath = path.join(this.pluginsRoot, manifest.name);
       if (current) {
         this.unloadPlugin(manifest.name);
-        oldDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
-        await fs.rename(current.dir, oldDir);
+        const parkDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
+        await fs.rename(current.dir, parkDir);
+        oldDir = parkDir;
       } else if (await pathExists(finalPath)) {
         // On-disk remnant from a prior crash that never registered. Move it
         // aside too so the rename target is clear.
-        oldDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
-        await fs.rename(finalPath, oldDir);
+        const parkDir = path.join(this.pluginsRoot, `.tmp-old-${randomUUID()}`);
+        await fs.rename(finalPath, parkDir);
+        oldDir = parkDir;
       }
 
       try {
@@ -1405,25 +1430,43 @@ export class PluginService {
         }
       }
 
-      // 7. Load the freshly-installed plugin. On failure, roll back to the
-      // previous version (if any).
-      const loaded = await this.loadPlugin(this.pluginsRoot, manifest.name, {
-        isBuiltin: false,
-        disabled: null,
-      });
+      // 7. Load the freshly-installed plugin. `rethrowMainError` makes an
+      // import/activate failure fatal so a broken upgrade rolls back to the
+      // prior version instead of silently replacing it with a non-functional
+      // one (the default scan swallows activation errors and would return a
+      // truthy plugin here).
+      let loaded: LoadedPlugin | null = null;
+      try {
+        loaded = await this.loadPlugin(this.pluginsRoot, manifest.name, {
+          isBuiltin: false,
+          disabled: null,
+          rethrowMainError: true,
+        });
+      } catch (loadErr) {
+        console.error(
+          `[PluginService] Installed plugin "${manifest.name}" failed to load:`,
+          loadErr
+        );
+        loaded = null;
+      }
       if (!loaded) {
         await fs.rm(finalPath, { recursive: true, force: true }).catch(() => {});
         if (oldDir) {
+          const parked = oldDir;
           try {
-            await fs.rename(oldDir, finalPath);
+            await fs.rename(parked, finalPath);
             oldDir = null;
             await this.loadPlugin(this.pluginsRoot, manifest.name, {
               isBuiltin: false,
               disabled: null,
             });
           } catch (err) {
+            // Restore failed — keep `oldDir` pointing at the park dir but null
+            // the field so the `finally` sweep can't delete the only surviving
+            // copy. It stays as a dot-prefixed (unscanned) recovery artifact.
+            oldDir = null;
             console.error(
-              `[PluginService] Rollback failed restoring previous "${manifest.name}":`,
+              `[PluginService] Rollback failed restoring previous "${manifest.name}"; previous version preserved at ${parked}:`,
               err
             );
           }
@@ -1455,21 +1498,28 @@ export class PluginService {
 
       return { ok: true, manifest, archiveHash };
     } catch (err) {
-      // An exception escaped after the swap began (e.g. a rename failed). If a
-      // previous version was parked, restore it so the user isn't left with a
-      // missing plugin; the partially-installed dir is cleared first.
+      // An exception escaped after the swap began (e.g. the temp→final rename
+      // failed). If a previous version was parked, restore it so the user isn't
+      // left without a plugin; the partially-installed dir is cleared first.
       if (oldDir && finalPath) {
+        const parked = oldDir;
         const restoreTarget = finalPath;
         try {
           await fs.rm(restoreTarget, { recursive: true, force: true }).catch(() => {});
-          await fs.rename(oldDir, restoreTarget);
+          await fs.rename(parked, restoreTarget);
           oldDir = null;
           await this.loadPlugin(this.pluginsRoot, path.basename(restoreTarget), {
             isBuiltin: false,
             disabled: null,
           }).catch(() => {});
         } catch (restoreErr) {
-          console.error("[PluginService] Rollback failed restoring previous plugin:", restoreErr);
+          // As above: protect the park dir from the `finally` sweep when the
+          // restore couldn't complete.
+          oldDir = null;
+          console.error(
+            `[PluginService] Rollback failed restoring previous plugin; previous version preserved at ${parked}:`,
+            restoreErr
+          );
         }
       }
       return {
@@ -1478,8 +1528,11 @@ export class PluginService {
       };
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      // Any oldDir still set here is an orphaned park dir (restore already ran
-      // or wasn't needed) — sweep it best-effort.
+      // Defensive only: every success and failure path above either consumes
+      // the park dir (success) or nulls `oldDir` to protect the backup when a
+      // restore couldn't complete, so `oldDir` is normally null here. This
+      // guards against a future code path forgetting to clean up — it can never
+      // run while a restore is still depending on the backup.
       if (oldDir) {
         await fs.rm(oldDir, { recursive: true, force: true }).catch(() => {});
       }
