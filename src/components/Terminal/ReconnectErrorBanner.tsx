@@ -1,5 +1,5 @@
-import { Clock, RotateCcw, WifiOff } from "lucide-react";
-import { InlineStatusBanner } from "./InlineStatusBanner";
+import { Clock, RotateCcw, WifiOff, type LucideIcon } from "lucide-react";
+import { InlineStatusBanner, type InlineStatusBannerSeverity } from "./InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import type { TerminalReconnectError } from "@/types";
 
@@ -12,37 +12,17 @@ export interface ReconnectErrorBannerProps {
   className?: string;
 }
 
-function getErrorTitle(type: TerminalReconnectError["type"]): string {
-  switch (type) {
-    case "timeout":
-      return "Reconnection timed out";
-    case "not_found":
-      return "Previous session not found";
-    default:
-      return "Reconnection failed";
-  }
+interface ReconnectBannerConfig {
+  title: string;
+  severity: InlineStatusBannerSeverity;
+  icon: LucideIcon;
 }
 
-function getErrorSeverity(type: TerminalReconnectError["type"]): "warning" | "error" {
-  switch (type) {
-    case "timeout":
-      return "warning";
-    case "not_found":
-    case "error":
-      return "error";
-    default:
-      return "warning";
-  }
-}
-
-function getErrorIcon(type: TerminalReconnectError["type"]) {
-  switch (type) {
-    case "timeout":
-      return Clock;
-    default:
-      return WifiOff;
-  }
-}
+const RECONNECT_BANNER_CONFIG = {
+  timeout: { title: "Reconnection timed out", severity: "warning", icon: Clock },
+  not_found: { title: "Previous session not found", severity: "error", icon: WifiOff },
+  error: { title: "Reconnection failed", severity: "error", icon: WifiOff },
+} as const satisfies Record<TerminalReconnectError["type"], ReconnectBannerConfig>;
 
 export function ReconnectErrorBanner({
   terminalId,
@@ -52,7 +32,7 @@ export function ReconnectErrorBanner({
   isRestarting = false,
   className,
 }: ReconnectErrorBannerProps) {
-  const severity = getErrorSeverity(error.type);
+  const config = RECONNECT_BANNER_CONFIG[error.type];
   const retryAction = {
     id: "retry",
     label: "Retry",
@@ -67,11 +47,11 @@ export function ReconnectErrorBanner({
   // Severity is computed from the error type, so branch on it to satisfy the
   // discriminated union on `InlineStatusBanner` (error banners take a single
   // `action`). Either way this banner shows exactly one action.
-  if (severity === "error") {
+  if (config.severity === "error") {
     return (
       <InlineStatusBanner
-        icon={getErrorIcon(error.type)}
-        title={getErrorTitle(error.type)}
+        icon={config.icon}
+        title={config.title}
         description={boundedErrorText(error.message)}
         severity="error"
         action={retryAction}
@@ -83,10 +63,10 @@ export function ReconnectErrorBanner({
 
   return (
     <InlineStatusBanner
-      icon={getErrorIcon(error.type)}
-      title={getErrorTitle(error.type)}
+      icon={config.icon}
+      title={config.title}
       description={boundedErrorText(error.message)}
-      severity={severity}
+      severity={config.severity}
       action={retryAction}
       onClose={() => onDismiss(terminalId)}
       className={className}
