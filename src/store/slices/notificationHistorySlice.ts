@@ -106,6 +106,32 @@ const VALID_TYPES: ReadonlySet<NotificationHistoryEntry["type"]> = new Set([
   "warning",
 ]);
 
+// Clock-skew allowance for entries that look slightly in the future on
+// hydration (different process boot times, NTP drift). Anything beyond a
+// minute is treated as garbage rather than a valid future timestamp.
+const FUTURE_TIMESTAMP_SLACK_MS = 60_000;
+
+function sanitizeActions(raw: unknown): NotificationHistoryEntry["actions"] {
+  if (!Array.isArray(raw)) return undefined;
+  const validated: NotificationHistoryAction[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Record<string, unknown>;
+    if (typeof a.label !== "string" || a.label.length === 0) continue;
+    if (typeof a.actionId !== "string" || a.actionId.length === 0) continue;
+    validated.push({
+      label: a.label,
+      actionId: a.actionId as ActionId,
+      actionArgs:
+        a.actionArgs && typeof a.actionArgs === "object"
+          ? (a.actionArgs as Record<string, unknown>)
+          : undefined,
+      variant: typeof a.variant === "string" ? (a.variant as NotificationActionVariant) : undefined,
+    });
+  }
+  return validated.length === 0 ? undefined : validated;
+}
+
 /**
  * Defensively coerce a value off the wire into a `NotificationHistoryEntry`,
  * or `null` if the shape is unrecoverable. `message` is forced to a string —
@@ -119,12 +145,24 @@ export function sanitizePersistedEntry(raw: unknown): NotificationHistoryEntry |
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id.length === 0) return null;
   if (typeof r.timestamp !== "number" || !Number.isFinite(r.timestamp)) return null;
+  // Reject implausible timestamps: <=0 or far in the future. Bounds protect
+  // against corrupt localStorage holding values that would otherwise live in
+  // the inbox until the year ~2286.
+  if (r.timestamp <= 0 || r.timestamp > Date.now() + FUTURE_TIMESTAMP_SLACK_MS) return null;
   if (typeof r.type !== "string" || !VALID_TYPES.has(r.type as NotificationHistoryEntry["type"])) {
     return null;
   }
   const message = typeof r.message === "string" ? r.message : "";
+  // archivedAt: 0 / negative / future is coerced to null so the existing
+  // falsy "is archived" checks in the slice (`!entry.archivedAt`) stay
+  // consistent with the type-level `number | null` model.
   const archivedAt =
-    typeof r.archivedAt === "number" && Number.isFinite(r.archivedAt) ? r.archivedAt : null;
+    typeof r.archivedAt === "number" &&
+    Number.isFinite(r.archivedAt) &&
+    r.archivedAt > 0 &&
+    r.archivedAt <= Date.now() + FUTURE_TIMESTAMP_SLACK_MS
+      ? r.archivedAt
+      : null;
   return {
     id: r.id,
     type: r.type as NotificationHistoryEntry["type"],
@@ -137,12 +175,11 @@ export function sanitizePersistedEntry(raw: unknown): NotificationHistoryEntry |
     countable: r.countable !== false,
     archivedAt,
     supersedeKey: typeof r.supersedeKey === "string" ? r.supersedeKey : undefined,
-    context: r.context && typeof r.context === "object"
-      ? (r.context as NotificationHistoryEntry["context"])
-      : undefined,
-    actions: Array.isArray(r.actions)
-      ? (r.actions as NotificationHistoryEntry["actions"])
-      : undefined,
+    context:
+      r.context && typeof r.context === "object"
+        ? (r.context as NotificationHistoryEntry["context"])
+        : undefined,
+    actions: sanitizeActions(r.actions),
   };
 }
 

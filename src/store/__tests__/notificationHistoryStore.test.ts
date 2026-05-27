@@ -1180,5 +1180,80 @@ describe("notificationHistorySlice", () => {
       expect(result!.supersedeKey).toBe("k");
       expect(result!.title).toBe("t");
     });
+
+    it("rejects timestamps <= 0", () => {
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: 0, type: "info", message: "x" })
+      ).toBeNull();
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: -1, type: "info", message: "x" })
+      ).toBeNull();
+    });
+
+    it("rejects timestamps far in the future (beyond clock-skew allowance)", () => {
+      const farFuture = Date.now() + 365 * 24 * 60 * 60 * 1000;
+      expect(
+        sanitizePersistedEntry({ id: "a", timestamp: farFuture, type: "info", message: "x" })
+      ).toBeNull();
+    });
+
+    it("coerces archivedAt: 0 to null (preserves truthy-check consistency)", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        archivedAt: 0,
+      });
+      expect(result!.archivedAt).toBeNull();
+    });
+
+    it("drops action entries with non-string label or actionId", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [
+          null,
+          { label: { bad: true }, actionId: "panel.focus" },
+          { label: "ok", actionId: 99 },
+          { label: "good", actionId: "panel.focus" },
+        ],
+      });
+      expect(result!.actions).toHaveLength(1);
+      expect(result!.actions![0]!.label).toBe("good");
+      expect(result!.actions![0]!.actionId).toBe("panel.focus");
+    });
+
+    it("drops the actions field entirely when no element survives validation", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [null, null, { label: "", actionId: "" }],
+      });
+      expect(result!.actions).toBeUndefined();
+    });
+
+    it("preserves valid actionArgs and variant on action elements", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "info",
+        message: "x",
+        actions: [
+          {
+            label: "go",
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p1" },
+            variant: "secondary",
+          },
+        ],
+      });
+      expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
+      expect(result!.actions![0]!.variant).toBe("secondary");
+    });
   });
 });
