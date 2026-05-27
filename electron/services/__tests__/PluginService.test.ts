@@ -4021,9 +4021,11 @@ describe("hello-daintree sample fixture", () => {
   it("declares the first-party name and the wired contribution points", async () => {
     const manifest = PluginManifestSchema.parse(await readManifest());
     expect(manifest.name).toBe("daintree.hello");
+    expect(manifest.engines?.daintree).toBe(">=0.11.0");
     expect(manifest.contributes.toolbarButtons).toHaveLength(1);
     expect(manifest.contributes.toolbarButtons[0].id).toBe("ping");
     expect(manifest.contributes.menuItems).toHaveLength(1);
+    expect(manifest.contributes.fileDecorationProviders).toHaveLength(1);
     expect(manifest.contributes.fileDecorationProviders[0].scopes).toEqual(["hello:*"]);
   });
 });
