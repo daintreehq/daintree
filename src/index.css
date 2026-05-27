@@ -1755,6 +1755,7 @@ body,
   .animate-agent-pulse,
   .animate-breathe,
   .status-working,
+  .panel-state-compiling,
   .panel-state-working {
     transition: none;
   }
@@ -1853,6 +1854,17 @@ body,
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 15%, transparent),
     0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
+}
+
+/* Compiling state — neutral surface treatment surfacing framework compile
+ * activity (HMR rebuilds, lazy-compilation bursts). Uses --color-border-subtle
+ * (not the accent token) per the accent-restraint constraint. Ambient Tier 1
+ * signal: less prominent than working/waiting, more visible than hibernated. */
+.panel-state-compiling {
+  border-color: color-mix(in oklab, var(--color-border-subtle) 60%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 10%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
 }
 
 /* Working state hint — static colored border. Was a 4s infinite breathe,
@@ -2603,6 +2615,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-left-color: Highlight;
   }
 
+  .panel-state-compiling {
+    border-color: GrayText;
+  }
+
   .panel-state-waiting {
     border-color: Highlight;
     outline: 2px solid Highlight;
@@ -2713,6 +2729,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-left-width: 2px;
   }
 
+  .panel-state-compiling,
   .panel-state-waiting,
   .panel-state-working,
   .panel-state-hibernated {

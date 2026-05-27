@@ -1177,4 +1177,154 @@ describe("DevPreviewSessionService", () => {
       ).toBe("stopped");
     });
   });
+
+  describe("compile markers", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    async function sessionToRunning(): Promise<string> {
+      vi.useRealTimers();
+      const started = await service.ensure(baseRequest);
+      const tid = started.terminalId!;
+      ptyClient.emitData(tid, "ready at http://localhost:4173\n");
+      await vi.waitFor(() => {
+        const s = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+        expect(s.status).toBe("running");
+      });
+      vi.useFakeTimers();
+      onStateChanged.mockClear();
+      return tid;
+    }
+
+    it("arms then publishes Compiling after 1000ms during running session", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+
+      await vi.advanceTimersByTimeAsync(500);
+      let state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(500);
+      state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBe("Compiling");
+
+      await vi.advanceTimersByTimeAsync(1500);
+      state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("fires compile marker during starting with pendingUrl set", async () => {
+      mockHttpError();
+      vi.useRealTimers();
+      const started = await service.ensure(baseRequest);
+      const tid = started.terminalId!;
+      ptyClient.emitData(tid, "http://localhost:3000\n");
+      await vi.waitFor(() => {
+        const s = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+        expect(s.status).toBe("starting");
+        expect(s.url).toBeNull();
+      });
+
+      vi.useFakeTimers();
+      onStateChanged.mockClear();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBe("Compiling");
+    });
+
+    it("readyMarker within arm window cancels compile and never publishes", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(400);
+      ptyClient.emitData(tid, "webpack compiled successfully");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("second compile marker while visible resets auto-clear timer", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      // Advance 1300ms: auto-clear fires at 1500ms from publish, 200ms remain.
+      await vi.advanceTimersByTimeAsync(1300);
+
+      // Second compile marker resets the auto-clear timer.
+      ptyClient.emitData(tid, "Compiling /new-route");
+
+      // Old timer point (200ms later): should be suppressed (was cancelled).
+      await vi.advanceTimersByTimeAsync(200);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      // Still visible 1100ms later (1400ms since reset, 100ms before new auto-clear).
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      // Auto-clear fires after remaining 200ms (1500ms since reset).
+      await vi.advanceTimersByTimeAsync(200);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBeUndefined();
+    });
+
+    it("stop clears arm timer and never publishes", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(500);
+
+      await service.stop({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("error in data handler clears compile timers", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      ptyClient.emitData(tid, "Error: EACCES: permission denied");
+
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.status).toBe("error");
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("terminal exit clears compile timers", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      ptyClient.emitExit(tid, 0);
+
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+
+    it("readyMarker during active compile clears label early", async () => {
+      const tid = await sessionToRunning();
+
+      ptyClient.emitData(tid, "compiling...");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId }).phaseLabel).toBe("Compiling");
+
+      ptyClient.emitData(tid, "webpack compiled successfully");
+
+      const state = service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId });
+      expect(state.phaseLabel).toBeUndefined();
+    });
+  });
 });

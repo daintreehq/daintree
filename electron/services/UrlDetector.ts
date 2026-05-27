@@ -6,6 +6,7 @@ export interface ScanResult {
   error: DevServerError | null;
   buffer: string;
   readyMarker: boolean;
+  compileMarker: boolean;
 }
 
 // Startup readiness lines printed by common dev servers once the HTTP server is
@@ -21,6 +22,20 @@ const READY_MARKERS: RegExp[] = [
   // webpack-dev-server / CRA / webpack-dev-middleware
   /webpack\s+compiled\s+successfully/i,
   /\[webpack-dev-middleware\]\s+compiled\s+successfully/i,
+];
+
+// HMR / recompilation start patterns emitted during a running session. These
+// signal the framework is actively rebuilding, distinct from startup readiness
+// markers which signal the first bind.
+const COMPILE_MARKERS: RegExp[] = [
+  // webpack: "compiling..." (webpack-dev-server, CRA, Storybook)
+  /compiling\.\.\./i,
+  // Vite HMR: "[vite] hmr update /src/App.tsx"
+  /\[vite\]\s+hmr\s+update/i,
+  // Vite full reload: "[vite] page reload src/main.tsx"
+  /\[vite\]\s+page\s+reload/i,
+  // Next.js webpack mode: "Compiling /route" (word-anchored to avoid matching "Compiled")
+  /\bcompiling\s+\//i,
 ];
 
 export class UrlDetector {
@@ -43,12 +58,14 @@ export class UrlDetector {
 
     const strippedChunk = stripAnsiAndOscCodes(data);
     const readyMarker = READY_MARKERS.some((pattern) => pattern.test(strippedChunk));
+    const compileMarker = COMPILE_MARKERS.some((pattern) => pattern.test(strippedChunk));
 
     return {
       url: preferredUrl,
       error,
       buffer: newBuffer,
       readyMarker,
+      compileMarker,
     };
   }
 

@@ -61,8 +61,9 @@ interface DevPreviewSession extends DevPreviewSessionState {
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
-  compilingEmitted: boolean;
+  compiling: boolean;
   compilingTimer: ReturnType<typeof setTimeout> | null;
+  compilingClearTimer: ReturnType<typeof setTimeout> | null;
   forceKilled?: boolean;
   // Crash-loop guard state. crashCount is the number of consecutive fast
   // install→crash cycles in the current window; devSpawnedAt marks when the
@@ -101,6 +102,8 @@ const STALE_START_RECOVERY_MS = 10000;
 const STARTUP_REPLAY_DELAY_MS = 1500;
 const REPLAY_HISTORY_MAX_LINES = 300;
 const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
+const COMPILE_ARM_MS = 1000;
+const COMPILE_CLEAR_MS = 1500;
 
 // Per-session crash-loop guard. A broken config (missing deps that an install
 // can't fix) otherwise drives an unbounded install→crash→reinstall cycle that
@@ -866,8 +869,9 @@ export class DevPreviewSessionService {
       isRunningInstall: false,
       installAttemptedGeneration: null,
       startupReplayTimer: null,
-      compilingEmitted: false,
+      compiling: false,
       compilingTimer: null,
+      compilingClearTimer: null,
       crashCount: 0,
       devSpawnedAt: null,
       backoffAbort: null,
@@ -1410,7 +1414,11 @@ export class DevPreviewSessionService {
       clearTimeout(session.compilingTimer);
       session.compilingTimer = null;
     }
-    session.compilingEmitted = false;
+    if (session.compilingClearTimer !== null) {
+      clearTimeout(session.compilingClearTimer);
+      session.compilingClearTimer = null;
+    }
+    session.compiling = false;
     if (session.phaseLabel === "Compiling") {
       session.phaseLabel = undefined;
     }
@@ -1446,8 +1454,6 @@ export class DevPreviewSessionService {
       // readiness marker to accelerate it again.
       session.markerSeen = false;
 
-      this.clearCompiling(session);
-
       this.pollServerReadiness(session, result.url, abort.signal, session.generation);
       urlJustStarted = true;
     }
@@ -1465,29 +1471,59 @@ export class DevPreviewSessionService {
       this.pollServerReadiness(session, session.pendingUrl, abort.signal, session.generation);
     }
 
-    // A readyMarker without a pending URL (post-install, pre-URL detection)
-    // signals the framework is compiling. Debounce at 600ms to avoid label
-    // flicker from markers that fire on consecutive data chunks.
+    // Compile marker detection fires whenever the framework emits a
+    // compile-start line (HMR rebuild, initial compilation burst). Uses a
+    // two-stage timer: arm debounce prevents flicker from rapid marker
+    // bursts, auto-clear removes the signal when markers go quiet.
     if (
-      result.readyMarker &&
-      !session.compilingEmitted &&
-      session.status === "starting" &&
-      !session.pendingUrl &&
-      !session.isRunningInstall &&
-      session.compilingTimer === null
+      result.compileMarker &&
+      session.status !== "stopped" &&
+      session.status !== "error" &&
+      !session.isRunningInstall
     ) {
-      session.compilingTimer = setTimeout(() => {
-        session.compilingTimer = null;
-        if (
-          session.status === "starting" &&
-          !session.pendingUrl &&
-          !session.url &&
-          !session.compilingEmitted
-        ) {
-          session.compilingEmitted = true;
-          this.updateSession(session, { phaseLabel: "Compiling" });
+      if (session.compiling) {
+        // Already visible — reset the auto-clear timer so the signal
+        // persists through a burst (HMR chains, multi-file saves).
+        if (session.compilingClearTimer !== null) {
+          clearTimeout(session.compilingClearTimer);
+          session.compilingClearTimer = setTimeout(() => {
+            session.compilingClearTimer = null;
+            this.clearCompiling(session);
+            this.onStateChanged(this.toPublicState(session));
+          }, COMPILE_CLEAR_MS);
         }
-      }, 600);
+      } else if (session.compilingTimer === null) {
+        // Start the arm debounce — if no additional markers arrive before
+        // COMPILE_ARM_MS, publish the Compiling label.
+        session.compilingTimer = setTimeout(() => {
+          session.compilingTimer = null;
+          if (
+            session.status === "stopped" ||
+            session.status === "error" ||
+            session.isRunningInstall
+          ) {
+            return;
+          }
+          session.compiling = true;
+          this.updateSession(session, { phaseLabel: "Compiling" });
+          session.compilingClearTimer = setTimeout(() => {
+            session.compilingClearTimer = null;
+            this.clearCompiling(session);
+            this.onStateChanged(this.toPublicState(session));
+          }, COMPILE_CLEAR_MS);
+        }, COMPILE_ARM_MS);
+      }
+    }
+
+    // A readyMarker during an active compile phase cancels both timers
+    // and clears the label early — the framework signaled completion.
+    if (result.readyMarker && (session.compiling || session.compilingTimer !== null)) {
+      if (session.compilingTimer !== null) {
+        clearTimeout(session.compilingTimer);
+        session.compilingTimer = null;
+      }
+      this.clearCompiling(session);
+      this.onStateChanged(this.toPublicState(session));
     }
 
     if (!result.error) return;
