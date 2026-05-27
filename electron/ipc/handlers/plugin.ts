@@ -20,6 +20,8 @@ import {
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
+import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
+import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import {
   getRegisteredForgeProviders,
   type RegisteredForgeProvider,
@@ -53,6 +55,14 @@ async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
 
 async function handleMenuItems() {
   return getPluginMenuItems();
+}
+
+async function handleKeybindings() {
+  return getPluginKeybindings();
+}
+
+async function handleContextMenuItems() {
+  return getPluginContextMenuItems();
 }
 
 async function handleValidateActionIds(actionIds: string[]): Promise<void> {
@@ -282,6 +292,8 @@ export const pluginNamespace = defineIpcNamespace({
     setEnabled: op(PLUGIN_METHOD_CHANNELS.setEnabled, handleSetEnabled),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
     menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
+    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
+    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
     getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet),
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),

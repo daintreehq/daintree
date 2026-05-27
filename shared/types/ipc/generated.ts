@@ -583,6 +583,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").MenuItemContribution }[];
   };
+  "plugin:keybindings": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
+  };
+  "plugin:context-menu-items": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
+  };
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];

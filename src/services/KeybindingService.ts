@@ -14,6 +14,9 @@ import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
+import { evaluate } from "@shared/utils/whenClause/evaluator";
+import { parse } from "@shared/utils/whenClause/parser";
+import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -27,6 +30,21 @@ const builtInActionIdSet: ReadonlySet<string> = new Set([
   ...KEY_ACTION_VALUES,
 ]);
 
+const whenAstCache = new Map<string, ReturnType<typeof parse>>();
+
+function evaluateWhenClause(when: string, ctx: WhenClauseContext): boolean {
+  try {
+    let ast = whenAstCache.get(when);
+    if (!ast) {
+      ast = parse(when);
+      whenAstCache.set(when, ast);
+    }
+    return evaluate(ast, ctx);
+  } catch {
+    return false;
+  }
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -36,6 +54,7 @@ class KeybindingService {
   private lastInvalidKey: string | null = null;
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
+  private whenContext: WhenClauseContext = {};
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -221,6 +240,10 @@ class KeybindingService {
     }
   }
 
+  setWhenContext(ctx: WhenClauseContext): void {
+    this.whenContext = ctx;
+  }
+
   getScope(): KeyScope {
     return this.currentScope;
   }
@@ -365,6 +388,7 @@ class KeybindingService {
     for (const arr of this.bindings.values()) {
       for (const binding of arr) {
         if (!this.scopeAllows(binding.scope)) continue;
+        if (binding.when && !evaluateWhenClause(binding.when, this.whenContext)) continue;
 
         const hasOverride = this.overrides.has(binding.actionId);
         const effectiveCombo = hasOverride

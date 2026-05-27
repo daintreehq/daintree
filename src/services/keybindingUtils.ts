@@ -16,6 +16,7 @@ export interface KeybindingConfig {
 // accepts plugin-defined IDs via the ActionId open union.
 export type RegisteredKeybindingConfig = Omit<KeybindingConfig, "actionId"> & {
   actionId: ActionId;
+  when?: string;
 };
 
 // "conflict": same combo as an existing binding in an overlapping scope.

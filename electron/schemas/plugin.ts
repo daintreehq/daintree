@@ -45,6 +45,20 @@ export const MenuItemContributionSchema = z.object({
   actionId: z.string().min(1),
   location: z.enum(["terminal", "file", "view", "help"]),
   accelerator: z.string().optional(),
+  when: z.string().min(1).optional(),
+});
+
+export const KeybindingContributionSchema = z.object({
+  actionId: z.string().min(1),
+  combo: z.string().min(1),
+  when: z.string().min(1).optional(),
+});
+
+export const ContextMenuContributionSchema = z.object({
+  actionId: z.string().min(1),
+  location: z.enum(["worktree", "terminal", "panel", "file"]),
+  label: z.string().min(1),
+  when: z.string().min(1).optional(),
 });
 
 /**
@@ -158,6 +172,8 @@ export const PluginManifestSchema = z
         panels: z.array(PanelContributionSchema).default([]),
         toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
         menuItems: z.array(MenuItemContributionSchema).default([]),
+        keybindings: z.array(KeybindingContributionSchema).default([]),
+        contextMenus: z.array(ContextMenuContributionSchema).default([]),
         experimental_views: z.array(ViewContributionSchema).default([]),
         experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
         forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
@@ -167,6 +183,8 @@ export const PluginManifestSchema = z
         panels: [],
         toolbarButtons: [],
         menuItems: [],
+        keybindings: [],
+        contextMenus: [],
         experimental_views: [],
         experimental_mcpServers: [],
         forgeProviders: [],

@@ -51,6 +51,18 @@ import {
 } from "../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import {
+  registerPluginKeybinding,
+  unregisterPluginKeybindings,
+} from "./pluginKeybindingRegistry.js";
+import {
+  registerPluginContextMenuItem,
+  unregisterPluginContextMenuItems,
+} from "./pluginContextMenuRegistry.js";
+import {
+  trackPluginExpression,
+  unregisterPlugin as unregisterWhenClausePlugin,
+} from "./WhenClauseService.js";
+import {
   registerForgeProviderImpl,
   registerForgeProviders,
   unregisterForgeProviderImpl,
@@ -533,6 +545,17 @@ export class PluginService {
 
     for (const menuItem of manifest.contributes.menuItems) {
       registerPluginMenuItem(manifest.name, menuItem);
+      trackPluginExpression(manifest.name, menuItem.when);
+    }
+
+    for (const keybinding of manifest.contributes.keybindings) {
+      registerPluginKeybinding(manifest.name, keybinding);
+      trackPluginExpression(manifest.name, keybinding.when);
+    }
+
+    for (const ctxMenu of manifest.contributes.contextMenus) {
+      registerPluginContextMenuItem(manifest.name, ctxMenu);
+      trackPluginExpression(manifest.name, ctxMenu.when);
     }
 
     if (manifest.contributes.experimental_views.length > 0) {
@@ -1106,6 +1129,15 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
+      unregisterPluginKeybindings(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterPluginContextMenuItems", () =>
+      unregisterPluginContextMenuItems(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWhenClausePlugin", () =>
+      unregisterWhenClausePlugin(pluginId)
+    );
     runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () =>
       unregisterPluginToolbarButtons(pluginId)
     );

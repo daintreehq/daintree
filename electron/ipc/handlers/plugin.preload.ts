@@ -10,6 +10,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   setEnabled: "plugin:set-enabled",
   toolbarButtons: "plugin:toolbar-buttons",
   menuItems: "plugin:menu-items",
+  keybindings: "plugin:keybindings",
+  contextMenuItems: "plugin:context-menu-items",
   validateActionIds: "plugin:validate-action-ids",
   getActions: "plugin:actions-get",
   registerAction: "plugin:actions-register",
