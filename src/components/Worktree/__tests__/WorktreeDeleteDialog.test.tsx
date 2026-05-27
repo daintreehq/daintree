@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
-import type { WorktreeChanges, GitStatus } from "shared/types/git";
+import type { WorktreeChanges, GitStatus } from "@shared/types/git";
 
 vi.stubGlobal(
   "ResizeObserver",

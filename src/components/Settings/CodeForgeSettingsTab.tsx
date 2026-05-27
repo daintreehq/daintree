@@ -7,7 +7,8 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
-import { GitBranch, Github, Key, Check, AlertCircle } from "lucide-react";
+import { GitBranch, Key, Check, AlertCircle } from "lucide-react";
+import { GitHubIcon } from "@/components/icons/brands";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ import { logError } from "@/utils/logger";
 type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
 
 function getForgeIcon(id: string): ForgeIcon {
-  return id === "github" ? Github : GitBranch;
+  return id === "github" ? GitHubIcon : GitBranch;
 }
 
 const GENERAL_ID = "general";
@@ -101,7 +102,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         {isGeneral && <ForgeIntegrationsTab />}
 
         {isGitHub && (
-          <ForgeProviderCard name="GitHub" Icon={Github}>
+          <ForgeProviderCard name="GitHub" Icon={GitHubIcon}>
             <GitHubSettingsTab />
           </ForgeProviderCard>
         )}
