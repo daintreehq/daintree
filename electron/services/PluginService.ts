@@ -584,7 +584,7 @@ export class PluginService {
       get pluginId() {
         return pluginId;
       },
-      registerHandler: (
+      registerHandler: ((
         channel: string,
         schemaOrHandler: PluginChannelSchema | PluginIpcHandler,
         maybeHandler?: PluginIpcHandler
@@ -594,8 +594,19 @@ export class PluginService {
             `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
           );
         }
-        this.registerHandler(pluginId, channel, schemaOrHandler, maybeHandler);
-      },
+        if (maybeHandler !== undefined) {
+          // Typed form: registerHandler(channel, schema, handler)
+          this.registerHandler(
+            pluginId,
+            channel,
+            schemaOrHandler as PluginChannelSchema,
+            maybeHandler
+          );
+        } else {
+          // Untyped form: registerHandler(channel, handler)
+          this.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
+        }
+      }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         if (revoked) {
           throw new Error(
@@ -948,11 +959,14 @@ export class PluginService {
   }
 
   registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void;
-  registerHandler(
+  registerHandler<TArgs extends z.ZodType, TResult extends z.ZodType = z.ZodType>(
     pluginId: string,
     channel: string,
-    schema: PluginChannelSchema,
-    handler: PluginIpcHandler
+    schema: PluginChannelSchema<TArgs, TResult>,
+    handler: (
+      ctx: PluginIpcContext,
+      payload: z.output<TArgs>
+    ) => z.input<TResult> | Promise<z.input<TResult>>
   ): void;
   registerHandler(
     pluginId: string,

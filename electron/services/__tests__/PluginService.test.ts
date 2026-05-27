@@ -1282,7 +1282,9 @@ describe("PluginService typed channel registerHandler + capability gate", () => 
   });
 
   it("returns VALIDATION_FAILED when the handler result violates the result schema", async () => {
-    const handler = vi.fn(() => ({ wrong: true }));
+    // Cast bypasses the result-schema return-type check so we can exercise the
+    // runtime result-validation path with a deliberately off-contract return.
+    const handler = vi.fn(() => ({ wrong: true })) as never;
     service.registerHandler(
       "acme.test-plugin",
       "typed-result",
