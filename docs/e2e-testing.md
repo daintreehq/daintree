@@ -39,17 +39,17 @@ Tests are split into nine Playwright projects:
 
 `playwright.config.ts` at the project root defines the projects. All `full-*` buckets share `coreTimeout` and `retries: 2 (CI)`. `core` and `online` keep their own timeouts; `nightly` runs at workers=1 with no retries.
 
-| Project         | testDir                 | retries (CI) | workers |
-| --------------- | ----------------------- | ------------ | ------- |
-| core            | `./e2e/core`            | 2            | 1-2     |
-| full-terminal   | `./e2e/full/terminal`   | 2            | 1-2     |
-| full-worktree   | `./e2e/full/worktree`   | 2            | 1-2     |
-| full-presets    | `./e2e/full/presets`    | 2            | 1-2     |
-| full-platform   | `./e2e/full/platform`   | 2            | 1-2     |
-| full-panels     | `./e2e/full/panels`     | 2            | 1-2     |
-| full-resilience | `./e2e/full/resilience` | 2            | 1-2     |
-| online          | `./e2e/online`          | 1            | 1-2     |
-| nightly         | `./e2e/nightly`         | 0            | 1       |
+| Project         | testDir                 | retries (CI) | failOnFlakyTests | workers |
+| --------------- | ----------------------- | ------------ | ---------------- | ------- |
+| core            | `./e2e/core`            | 2            | true             | 1-2     |
+| full-terminal   | `./e2e/full/terminal`   | 2            | false            | 1-2     |
+| full-worktree   | `./e2e/full/worktree`   | 2            | false            | 1-2     |
+| full-presets    | `./e2e/full/presets`    | 2            | false            | 1-2     |
+| full-platform   | `./e2e/full/platform`   | 2            | false            | 1-2     |
+| full-panels     | `./e2e/full/panels`     | 2            | false            | 1-2     |
+| full-resilience | `./e2e/full/resilience` | 2            | false            | 1-2     |
+| online          | `./e2e/online`          | 2            | true             | 1-2     |
+| nightly         | `./e2e/nightly`         | 0            | false            | 1       |
 
 ## Directory Structure
 

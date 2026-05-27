@@ -39,6 +39,7 @@ export default defineConfig({
       testDir: "./e2e/core",
       timeout: coreTimeout,
       retries: isCI ? 2 : 0,
+      failOnFlakyTests: true,
     },
     {
       name: "full-terminal",
@@ -81,6 +82,7 @@ export default defineConfig({
       testDir: "./e2e/online",
       timeout: onlineTimeout,
       retries: isCI ? 2 : 0,
+      failOnFlakyTests: true,
     },
     {
       name: "nightly",
