@@ -12,6 +12,9 @@ const ipcMainMock = vi.hoisted(() => ({
   on: vi.fn(),
   removeListener: vi.fn(),
 }));
+const windowRefMock = vi.hoisted(() => ({
+  activeWebContents: null as { id: number; send: ReturnType<typeof vi.fn> } | null,
+}));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
@@ -31,6 +34,15 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
+}));
+vi.mock("../../window/windowRef.js", () => ({
+  // No registry — force the getProjectViewManager() fallback path, which the
+  // dispatch tests drive via windowRefMock.activeWebContents.
+  getWindowRegistry: () => null,
+  getProjectViewManager: () =>
+    windowRefMock.activeWebContents
+      ? { getActiveView: () => ({ webContents: windowRefMock.activeWebContents }) }
+      : null,
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
@@ -1755,6 +1767,145 @@ describe("createHost — host.dispatch (#9280)", () => {
     expect(result).toEqual({
       ok: false,
       error: { code: "VALIDATION_ERROR", message: expect.stringContaining("actionId") },
+    });
+  });
+});
+
+describe("host.dispatch — renderer bridge round-trip (#9280)", () => {
+  interface FakeWebContents {
+    id: number;
+    send: ReturnType<typeof vi.fn>;
+    once: ReturnType<typeof vi.fn>;
+    removeListener: ReturnType<typeof vi.fn>;
+    isDestroyed: () => boolean;
+  }
+
+  function makeFakeWebContents(id: number): FakeWebContents {
+    return {
+      id,
+      send: vi.fn(),
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      isDestroyed: () => false,
+    };
+  }
+
+  /**
+   * Build a service whose constructor-registered response handler is captured,
+   * with a fake active WebContents the dispatch bridge will target. Returns the
+   * host, the captured response handler, and the fake WebContents.
+   */
+  async function setupDispatchService(
+    pluginId: string,
+    webContentsId = 42
+  ): Promise<{
+    service: PluginService;
+    host: ReturnType<CreateHostShape>["host"];
+    wc: FakeWebContents;
+    respond: (event: { sender: { id: number } }, payload: unknown) => void;
+  }> {
+    await writePlugin(pluginId.replace(/\W/g, "-"), { name: pluginId, version: "1.0.0" });
+    const wc = makeFakeWebContents(webContentsId);
+    windowRefMock.activeWebContents = wc as unknown as {
+      id: number;
+      send: ReturnType<typeof vi.fn>;
+    };
+
+    ipcMainMock.on.mockClear();
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const respond = ipcMainMock.on.mock.calls[0]![1] as (
+      event: { sender: { id: number } },
+      payload: unknown
+    ) => void;
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(pluginId);
+    return { service, host, wc, respond };
+  }
+
+  afterEach(() => {
+    windowRefMock.activeWebContents = null;
+  });
+
+  it("sends the request to the active WebContents and resolves the renderer's result", async () => {
+    const { host, wc, respond } = await setupDispatchService("acme.rt");
+
+    const pending = host.dispatch("terminal.new", { foo: 1 });
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    const [, payload] = wc.send.mock.calls[0]! as [string, { requestId: string; pluginId: string }];
+    expect(payload.pluginId).toBe("acme.rt");
+
+    respond(
+      { sender: { id: wc.id } },
+      { requestId: payload.requestId, result: { ok: true, result: 7 } }
+    );
+    await expect(pending).resolves.toEqual({ ok: true, result: 7 });
+  });
+
+  it("ignores a response from an unexpected sender (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { host, wc, respond } = await setupDispatchService("acme.sender");
+
+    const pending = host.dispatch("terminal.new");
+    const [, payload] = wc.send.mock.calls[0]! as [string, { requestId: string }];
+
+    // Wrong sender id — must not resolve the pending promise.
+    respond({ sender: { id: wc.id + 1 } }, { requestId: payload.requestId, result: { ok: true } });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+
+    // Correct sender still settles it.
+    respond({ sender: { id: wc.id } }, { requestId: payload.requestId, result: { ok: true } });
+    await expect(pending).resolves.toEqual({ ok: true });
+    warnSpy.mockRestore();
+  });
+
+  it("resolves concurrent out-of-order dispatches to their own results", async () => {
+    const { host, wc, respond } = await setupDispatchService("acme.concurrent");
+
+    const p1 = host.dispatch("a.one");
+    const p2 = host.dispatch("a.two");
+    const id1 = (wc.send.mock.calls[0]![1] as { requestId: string }).requestId;
+    const id2 = (wc.send.mock.calls[1]![1] as { requestId: string }).requestId;
+
+    // Reply in reverse order.
+    respond({ sender: { id: wc.id } }, { requestId: id2, result: { ok: true, result: "two" } });
+    respond({ sender: { id: wc.id } }, { requestId: id1, result: { ok: true, result: "one" } });
+
+    await expect(p1).resolves.toEqual({ ok: true, result: "one" });
+    await expect(p2).resolves.toEqual({ ok: true, result: "two" });
+  });
+
+  it("surfaces EXECUTION_ERROR when the response omits a result", async () => {
+    const { host, wc, respond } = await setupDispatchService("acme.noresult");
+
+    const pending = host.dispatch("terminal.new");
+    const { requestId } = wc.send.mock.calls[0]![1] as { requestId: string };
+
+    respond({ sender: { id: wc.id } }, { requestId });
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Missing dispatch result" },
+    });
+  });
+
+  it("settles an in-flight dispatch with PLUGIN_UNLOADED when the plugin unloads", async () => {
+    const { service, host } = await setupDispatchService("acme.unload-pending");
+
+    const pending = host.dispatch("terminal.new");
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin(
+      "acme.unload-pending"
+    );
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      error: { code: "PLUGIN_UNLOADED", message: expect.stringContaining("acme.unload-pending") },
     });
   });
 });

@@ -159,6 +159,8 @@ type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktr
 
 /** Pending `host.dispatch` round-trip, keyed by requestId in {@link PluginService.pendingDispatches}. */
 interface PendingPluginDispatch {
+  /** Originating plugin, so unloadPlugin() can settle just its slice of pending dispatches. */
+  pluginId: string;
   resolve: (result: ActionDispatchResult) => void;
   timer: ReturnType<typeof setTimeout>;
   webContentsId: number;
@@ -972,6 +974,7 @@ export class PluginService {
       };
 
       this.pendingDispatches.set(requestId, {
+        pluginId,
         resolve,
         timer,
         webContentsId,
@@ -1023,7 +1026,13 @@ export class PluginService {
     clearTimeout(pending.timer);
     pending.destroyedCleanup();
     this.pendingDispatches.delete(requestId);
-    pending.resolve(result as ActionDispatchResult);
+    // Defensive: a malformed reply (valid requestId, missing result) must not
+    // resolve the plugin's promise with undefined — surface it as an error.
+    pending.resolve(
+      result != null
+        ? (result as ActionDispatchResult)
+        : { ok: false, error: { code: "EXECUTION_ERROR", message: "Missing dispatch result" } }
+    );
   }
 
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
@@ -1243,6 +1252,21 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
     );
+
+    // Settle any in-flight host.dispatch for this plugin before removing it from
+    // the map, so an awaited dispatch resolves PLUGIN_UNLOADED now rather than
+    // succeeding after the plugin's cleanup has run (or waiting out the 30s
+    // timeout). Mirrors dispose()'s blanket settlement, scoped to one plugin.
+    for (const [requestId, pending] of this.pendingDispatches) {
+      if (pending.pluginId !== pluginId) continue;
+      clearTimeout(pending.timer);
+      pending.destroyedCleanup();
+      this.pendingDispatches.delete(requestId);
+      pending.resolve({
+        ok: false,
+        error: { code: "PLUGIN_UNLOADED", message: `Plugin "${pluginId}" was unloaded` },
+      });
+    }
 
     this.plugins.delete(pluginId);
     this.pluginLoadErrors.delete(pluginId);
