@@ -137,6 +137,14 @@ describe("PluginAuditService hydration", () => {
     });
     expect(service.getRecords()).toHaveLength(1);
   });
+
+  it("falls back to a valid severity when a persisted result is unrecognized", () => {
+    const { service } = makeFixture({
+      auditLog: [{ id: "x", timestamp: 1, pluginId: "p", channel: "c", result: "bogus" }],
+    });
+    const [record] = service.getRecords();
+    expect(record!.severity).toBe("info");
+  });
 });
 
 describe("PluginAuditService flushing", () => {

@@ -168,7 +168,11 @@ async function handleFileDecorationsGet(
   const results = await Promise.allSettled(
     impls.map(({ impl }) =>
       Promise.race([
-        impl.provideDecorations(scope, cleanPaths),
+        // `Promise.resolve().then(...)` so a provider that *throws synchronously*
+        // (rather than returning a rejected promise) becomes a rejection the
+        // settle loop can audit — a raw throw here would escape `allSettled`
+        // and reject the whole IPC call with zero audit records.
+        Promise.resolve().then(() => impl.provideDecorations(scope, cleanPaths)),
         new Promise<typeof DECORATION_TIMEOUT>((resolve) =>
           setTimeout(() => resolve(DECORATION_TIMEOUT), DECORATION_PROVIDER_TIMEOUT_MS)
         ),

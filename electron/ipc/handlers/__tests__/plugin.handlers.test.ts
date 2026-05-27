@@ -123,6 +123,7 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-unregister");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:forge-providers-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:file-decorations-get");
   });
 
   it("PLUGIN_LIST handler delegates to pluginService.listPlugins", async () => {
@@ -814,6 +815,36 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("audits a synchronously-throwing provider and still returns the healthy one", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.sync-throw",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn(() => {
+            throw new Error("sync boom");
+          }),
+        },
+      },
+      {
+        pluginId: "p.good",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "5" } }) },
+      },
+    ]);
+    const handler = getHandler();
+    // The whole IPC call must not reject just because one provider threw.
+    expect(await handler({}, "worktree-diff:/r", ["a.ts"])).toEqual({ "a.ts": { badge: "5" } });
+    expect(mockAppendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "p.sync-throw",
+        result: "error",
+        errorCode: "PROVIDER_REJECTED",
+      })
+    );
   });
 
   it("does not audit when every provider settles successfully", async () => {

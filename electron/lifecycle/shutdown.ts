@@ -204,6 +204,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/McpServerService.js")
             .then(({ mcpServerService }) => mcpServerService.stop())
             .catch(() => {}),
+          // Flush the plugin audit ring buffer's debounced (unref'd) timer so
+          // records written within the last 2s aren't lost on quit. Lazy-import
+          // guarded like MCP — the module only loads if plugin IPC ran.
+          import("../services/pluginAuditService.js")
+            .then(({ pluginAuditService }) => pluginAuditService.flushNow())
+            .catch(() => {}),
           // Revoke and remove any in-flight help-session dirs. Same lazy-import
           // guard as MCP — the module only loads if a help session was provisioned.
           import("../services/HelpSessionService.js")

@@ -54,12 +54,16 @@ export class PluginAuditService {
         ...r,
         source: "plugin",
         schemaVersion: (r.schemaVersion as number) ?? PLUGIN_AUDIT_SCHEMA_VERSION,
+        // Fall back to "info" so a persisted record with an unrecognized
+        // `result` (which `computePluginAuditSeverity` can't map) never
+        // surfaces an `undefined` severity through the typed `getRecords()`.
         severity:
           (r.severity as string) ??
           computePluginAuditSeverity(
             r.result as PluginAuditResult,
             r.errorCode as string | undefined
-          ),
+          ) ??
+          "info",
       } as PluginAuditRecord;
     });
     this.records = backfilled.length > cap ? backfilled.slice(backfilled.length - cap) : backfilled;
