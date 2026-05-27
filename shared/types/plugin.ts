@@ -131,6 +131,22 @@ export interface LoadedPluginInfo {
    * that lands.
    */
   archiveHash?: string;
+  /**
+   * The user's current desired state: true when the plugin id is present in the
+   * persisted `plugins.disabled` list. This drives the Preferences toggle and
+   * is read live, so it reflects edits made this session (not just the startup
+   * snapshot). Disabled plugins still appear in the list so the user can
+   * re-enable them. Absent/false means the user wants the plugin enabled.
+   */
+  disabled?: boolean;
+  /**
+   * True when the desired state (`disabled`) diverges from what's actually
+   * running this session — i.e. the user toggled the plugin but the change
+   * (load or unload) only takes effect on next launch. Drives the
+   * "Restart required" cue. Recomputed on every `listPlugins()` call, so it
+   * survives a Preferences-tab remount.
+   */
+  pendingRestart?: boolean;
 }
 
 export interface PluginIpcContext {

@@ -896,6 +896,21 @@ describe("MigrationRunner", () => {
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
   });
 
+  it("runs migration021 from v20 under the full barrel, merging disabledBuiltins (#9284)", async () => {
+    const store = createMockStore(storePath, {
+      _schemaVersion: 20,
+      plugins: { disabledBuiltins: ["daintree.github"] },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    const plugins = store.data.plugins as Record<string, unknown>;
+    expect(plugins.disabled).toEqual(["daintree.github"]);
+    expect("disabledBuiltins" in plugins).toBe(false);
+  });
+
   it("does nothing when there are no pending migrations", async () => {
     const store = createMockStore(storePath, { _schemaVersion: 2 });
     const runner = new MigrationRunner(store as never);

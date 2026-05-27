@@ -995,8 +995,8 @@ describe("PluginService built-in plugin loading", () => {
     }
   });
 
-  it("skips built-ins listed in plugins.disabledBuiltins", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: ["daintree.muted"] });
+  it("skips built-ins listed in plugins.disabled but still lists them as disabled", async () => {
+    storeMock._state.set("plugins", { disabled: ["daintree.muted"] });
     await writeBuiltinPlugin("muted", {
       name: "daintree.muted",
       version: "1.0.0",
@@ -1010,11 +1010,15 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     const plugins = service.listPlugins();
-    expect(plugins.map((p) => p.manifest.name)).toEqual(["daintree.kept"]);
+    const kept = plugins.find((p) => p.manifest.name === "daintree.kept");
+    const muted = plugins.find((p) => p.manifest.name === "daintree.muted");
+    expect(kept?.disabled).toBe(false);
+    expect(muted?.disabled).toBe(true);
+    expect(muted?.isBuiltin).toBe(true);
   });
 
-  it("disabledBuiltins does not affect user plugins with the same name", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: ["acme.user-plugin"] });
+  it("skips user plugins listed in plugins.disabled and lists them as disabled", async () => {
+    storeMock._state.set("plugins", { disabled: ["acme.user-plugin"] });
     await writePlugin("acme.user-plugin", {
       name: "acme.user-plugin",
       version: "1.0.0",
@@ -1025,10 +1029,22 @@ describe("PluginService built-in plugin loading", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(true);
     expect(plugins[0].isBuiltin).toBe(false);
   });
 
-  it("treats missing plugins.disabledBuiltins as empty (no exception)", async () => {
+  it("marks active plugins with disabled=false", async () => {
+    await writePlugin("acme.active", { name: "acme.active", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(false);
+  });
+
+  it("treats missing plugins.disabled as empty (no exception)", async () => {
     // store has no "plugins" key at all (in-memory fallback shape)
     await writeBuiltinPlugin("daintree.helper", {
       name: "daintree.helper",
@@ -1039,10 +1055,11 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
-  it("ignores malformed disabledBuiltins values defensively", async () => {
-    storeMock._state.set("plugins", { disabledBuiltins: "not-an-array" });
+  it("ignores malformed disabled values defensively", async () => {
+    storeMock._state.set("plugins", { disabled: "not-an-array" });
     await writeBuiltinPlugin("daintree.helper", {
       name: "daintree.helper",
       version: "1.0.0",
@@ -1052,33 +1069,102 @@ describe("PluginService built-in plugin loading", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
+    expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
-  it("reserves a disabled built-in's namespace against a hijacking user plugin", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      storeMock._state.set("plugins", { disabledBuiltins: ["daintree.github"] });
-      await writeBuiltinPlugin("github", {
-        name: "daintree.github",
-        version: "1.0.0",
-        description: "first-party",
-      });
-      await writePlugin("hijacker", {
-        name: "daintree.github",
-        version: "9.9.9",
-        description: "third-party impostor",
-      });
+  it("a disabled name collision keeps the built-in entry (loaded first) for the toggle", async () => {
+    storeMock._state.set("plugins", { disabled: ["daintree.github"] });
+    await writeBuiltinPlugin("github", {
+      name: "daintree.github",
+      version: "1.0.0",
+      description: "first-party",
+    });
+    await writePlugin("hijacker", {
+      name: "daintree.github",
+      version: "9.9.9",
+      description: "third-party impostor",
+    });
 
+    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].disabled).toBe(true);
+    expect(plugins[0].isBuiltin).toBe(true);
+    expect(plugins[0].manifest.description).toBe("first-party");
+  });
+
+  describe("setEnabled", () => {
+    it("adds a plugin id to plugins.disabled when disabling", () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"] });
+    });
+
+    it("removes a plugin id from plugins.disabled when enabling", () => {
+      storeMock._state.set("plugins", { disabled: ["acme.foo", "acme.bar"] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", true);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.bar"] });
+    });
+
+    it("is idempotent — disabling an already-disabled plugin does not duplicate it", () => {
+      storeMock._state.set("plugins", { disabled: ["acme.foo"] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"] });
+    });
+
+    it("preserves other keys in the plugins object", () => {
+      storeMock._state.set("plugins", { disabled: [], other: "keep" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+      service.setEnabled("acme.foo", false);
+
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["acme.foo"], other: "keep" });
+    });
+
+    it("throws on an empty or whitespace-only plugin id", () => {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      expect(() => service.setEnabled("", false)).toThrow(/non-empty string/);
+      expect(() => service.setEnabled("   ", false)).toThrow(/non-empty string/);
+    });
+
+    it("listPlugins reflects a runtime disable as disabled+pendingRestart without restart", async () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      await writePlugin("acme.runtime", { name: "acme.runtime", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
 
-      expect(service.listPlugins()).toEqual([]);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Duplicate plugin name "daintree.github"`)
-      );
-    } finally {
-      errorSpy.mockRestore();
-    }
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: false });
+
+      service.setEnabled("acme.runtime", false);
+
+      // Still running this session, but the desired state is now off.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: true });
+    });
+
+    it("listPlugins reflects a runtime re-enable of a launch-disabled plugin", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.off"] });
+      await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: false });
+
+      service.setEnabled("acme.off", true);
+
+      // Not running this session, but the desired state is now on.
+      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
+    });
   });
 });
 

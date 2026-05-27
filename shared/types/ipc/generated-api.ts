@@ -341,6 +341,9 @@ export interface GeneratedElectronAPI {
     setAuditMaxRecords(
       ...args: IpcInvokeMap["plugin:set-audit-max-records"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-audit-max-records"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;

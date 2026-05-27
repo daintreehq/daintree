@@ -776,6 +776,7 @@ export const CHANNELS = {
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
+  PLUGIN_SET_ENABLED: "plugin:set-enabled",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",

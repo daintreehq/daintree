@@ -595,6 +595,10 @@ export interface GeneratedIpcInvokeMap {
     args: [max: number];
     result: import("./pluginAudit.js").PluginAuditConfig;
   };
+  "plugin:set-enabled": {
+    args: [pluginId: string, enabled: boolean];
+    result: void;
+  };
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];

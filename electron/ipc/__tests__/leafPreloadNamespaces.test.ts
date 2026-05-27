@@ -134,6 +134,7 @@ describe("leaf preload namespace bindings", () => {
 
     it("plugin matches (plugin:invoke intentionally excluded)", () => {
       expect(PLUGIN_METHOD_CHANNELS.list).toBe(CHANNELS.PLUGIN_LIST);
+      expect(PLUGIN_METHOD_CHANNELS.setEnabled).toBe(CHANNELS.PLUGIN_SET_ENABLED);
       expect(PLUGIN_METHOD_CHANNELS.toolbarButtons).toBe(CHANNELS.PLUGIN_TOOLBAR_BUTTONS);
       expect(PLUGIN_METHOD_CHANNELS.menuItems).toBe(CHANNELS.PLUGIN_MENU_ITEMS);
       expect(PLUGIN_METHOD_CHANNELS.validateActionIds).toBe(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS);
