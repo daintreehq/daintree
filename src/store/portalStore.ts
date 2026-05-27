@@ -470,14 +470,15 @@ const portalStoreCreator: StateCreator<
     const persistedActiveTabId = persisted.activeTabId;
     const activeTabId =
       typeof persistedActiveTabId === "string" &&
-      persistedTabs.some((t) => t.id === persistedActiveTabId)
+      persistedTabs.some((t) => t != null && t.id === persistedActiveTabId)
         ? persistedActiveTabId
-        : (persistedTabs[0]?.id ?? null);
+        : (persistedTabs.find((t) => t != null)?.id ?? null);
 
     return {
       ...currentState,
       ...persisted,
       links,
+      tabs: persistedTabs,
       width:
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH)

@@ -412,6 +412,38 @@ describe("portalStore persistence migration", () => {
     expect(store.getState().activeTabId).toBe("tab-only");
   });
 
+  it("does not crash when persisted tabs contains a null entry", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [null, { id: "tab-keep", title: "Keep", url: "https://example.com" }],
+        activeTabId: "tab-keep",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-keep");
+  });
+
+  it("falls back to currentState.tabs when persisted tabs is non-array", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: "corrupted",
+        activeTabId: "tab-1",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(Array.isArray(store.getState().tabs)).toBe(true);
+  });
+
   it("falls back to the first persisted tab when activeTabId is malformed", async () => {
     const persistedBlob = JSON.stringify({
       version: 0,

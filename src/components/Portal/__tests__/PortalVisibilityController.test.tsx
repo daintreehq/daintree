@@ -337,6 +337,54 @@ describe("PortalVisibilityController", () => {
     });
   });
 
+  it("defers markTabCreated until after portal.show resolves", async () => {
+    // The skeleton in PortalDock derives visibility from !createdTabs.has(activeTabId).
+    // If markTabCreated runs right after create (before bounds polling + show), the
+    // skeleton clears prematurely. Verify createdTabs stays empty between create
+    // and show, and only gains the id after show resolves.
+    const createDeferred = deferredPromise();
+    const showDeferred = deferredPromise();
+    portal.create.mockImplementationOnce(() => createDeferred.promise);
+    portal.show.mockImplementationOnce(() => showDeferred.promise);
+
+    vi.spyOn(document, "getElementById").mockReturnValue({
+      getBoundingClientRect: () => createPlaceholderRect(),
+    } as unknown as HTMLElement);
+
+    render(<PortalVisibilityController />);
+
+    act(() => {
+      usePortalStore.setState({
+        isOpen: true,
+        activeTabId: "tab-1",
+        tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com/docs" }],
+        createdTabs: new Set<string>(),
+      });
+    });
+
+    // Pre-create: nothing marked
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
+
+    createDeferred.resolve();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Post-create, pre-show: still not marked — this is the window the skeleton
+    // needs to remain visible across.
+    expect(portal.show).toHaveBeenCalledTimes(1);
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
+
+    showDeferred.resolve();
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    // Post-show: now marked, skeleton can clear
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+  });
+
   it("restores the persisted active tab on cold start, not the first tab", async () => {
     vi.spyOn(document, "getElementById").mockReturnValue({
       getBoundingClientRect: () => createPlaceholderRect(),
