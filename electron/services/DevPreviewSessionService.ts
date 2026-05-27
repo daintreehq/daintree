@@ -25,6 +25,7 @@ import {
 } from "./DevPreviewRequestValidators.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -97,17 +98,73 @@ export class DevPreviewSessionService {
   private disposed = false;
   private readonly portRegistry = new Map<string, number>(); // sessionKey -> allocated port
   private readonly worktreeToSession = new Map<string, string>(); // worktreeId -> sessionKey
+  // Spawn metadata for sessions that were running when Daintree last closed,
+  // loaded once at first init. A panel with a matching entry and no live
+  // session reports status "restored-stopped" so the UI can offer a restart.
+  // Entries are dropped the moment a real session is created for that key.
+  private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number) => void;
 
   constructor(
     private readonly ptyClient: PtyClient,
-    private readonly onStateChanged: (state: DevPreviewSessionState) => void
+    private readonly onStateChanged: (state: DevPreviewSessionState) => void,
+    restoredEntries: readonly DevPreviewManifestEntry[] = [],
+    // Persists the running-session manifest. Invoked on two kinds of event:
+    // when a session ENTERS a running state (so a later crash can restore it),
+    // and after an EXPLICIT user stop (so the manifest stops offering a restart
+    // for a server the user deliberately stopped). Deliberately NOT invoked from
+    // handleExit — a process exit at shutdown must leave the manifest intact so
+    // the next launch can offer the restart (#9094).
+    private readonly onPersistManifest: (entries: DevPreviewManifestEntry[]) => void = () => {}
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+    for (const entry of restoredEntries) {
+      this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
+    }
+  }
+
+  private persistManifest(): void {
+    if (this.disposed) return;
+    try {
+      this.onPersistManifest(this.captureManifest());
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] persistManifest failed:", err);
+    }
+  }
+
+  /**
+   * Snapshot the spawn metadata of every currently-running session for the
+   * restore manifest. Captures only RUNNING_STATES — stopped/error sessions
+   * have nothing meaningful to restart. `lastKnownPort` comes from the port
+   * registry (populated even while a session is still starting, when `url` is
+   * not yet known) and is informational only.
+   *
+   * Must be called BEFORE the PTYs are killed at shutdown: a killed dev-server
+   * PTY fires `exit`, which transitions its session out of RUNNING_STATES, so a
+   * post-kill capture would return nothing.
+   */
+  captureManifest(): DevPreviewManifestEntry[] {
+    const entries: DevPreviewManifestEntry[] = [];
+    for (const [key, session] of this.sessions) {
+      if (!RUNNING_STATES.has(session.status)) continue;
+      if (!session.devCommand.trim() || !session.cwd) continue;
+      entries.push({
+        panelId: session.panelId,
+        projectId: session.projectId,
+        worktreeId: session.worktreeId,
+        cwd: session.cwd,
+        devCommand: session.devCommand,
+        env: session.env ? { ...session.env } : undefined,
+        turbopackEnabled: session.turbopackEnabled,
+        lastKnownPort: this.portRegistry.get(key) ?? null,
+        capturedAt: Date.now(),
+      });
+    }
+    return entries;
   }
 
   /**
@@ -128,10 +185,19 @@ export class DevPreviewSessionService {
 
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
-    if (!key) return null;
-    const session = this.sessions.get(key);
-    if (!session) return null;
-    return this.toPublicState(session);
+    if (key) {
+      const session = this.sessions.get(key);
+      if (session) return this.toPublicState(session);
+    }
+    // Fall back to a restore placeholder so callers (e.g. the worktree-delete
+    // dialog) still surface a dangling dev-preview panel that was running when
+    // Daintree last closed but hasn't been restarted yet. #9094.
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) {
+        return this.getSessionState(entry.projectId, entry.panelId);
+      }
+    }
+    return null;
   }
 
   dispose(): void {
@@ -486,6 +552,9 @@ export class DevPreviewSessionService {
         });
       }
     });
+    // Explicit user stop — drop this session from the restore manifest so the
+    // next launch doesn't offer to restart a server the user chose to stop.
+    this.persistManifest();
     return this.getSessionState(request.projectId, request.panelId);
   }
 
@@ -531,6 +600,7 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
   }
 
   async stopByProject(projectId: string): Promise<void> {
@@ -565,6 +635,7 @@ export class DevPreviewSessionService {
         });
       })
     );
+    this.persistManifest();
   }
 
   // Called from the renderer's worktree delete path BEFORE `git worktree
@@ -608,6 +679,15 @@ export class DevPreviewSessionService {
       })
     );
 
+    // Drop any restore placeholder for this worktree too — the worktree is
+    // being removed, so its dev server must not be offered for restart.
+    for (const [key, entry] of this.restoredEntries) {
+      if (entry.worktreeId === worktreeId) {
+        this.restoredEntries.delete(key);
+      }
+    }
+    this.persistManifest();
+
     if (errors.length > 0) {
       throw errors[0];
     }
@@ -622,6 +702,11 @@ export class DevPreviewSessionService {
     const key = createSessionKey(projectId, panelId);
     let session = this.sessions.get(key);
     if (session) return session;
+
+    // A real session supersedes any restore placeholder for this key — drop the
+    // manifest entry so getSessionState stops reporting "restored-stopped" once
+    // the user has restarted (or anything else spawned the server).
+    this.restoredEntries.delete(key);
 
     session = {
       panelId,
@@ -661,11 +746,12 @@ export class DevPreviewSessionService {
     const key = createSessionKey(projectId, panelId);
     const session = this.sessions.get(key);
     if (!session) {
+      const restored = this.restoredEntries.get(key);
       return {
         panelId,
         projectId,
-        worktreeId: undefined,
-        status: "stopped",
+        worktreeId: restored?.worktreeId,
+        status: restored ? "restored-stopped" : "stopped",
         url: null,
         predictedUrl: null,
         error: null,
@@ -717,6 +803,7 @@ export class DevPreviewSessionService {
     >
   ): void {
     if (this.disposed) return;
+    const wasRunning = RUNNING_STATES.has(session.status);
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
     if (updates.predictedUrl !== undefined) session.predictedUrl = updates.predictedUrl;
@@ -730,6 +817,14 @@ export class DevPreviewSessionService {
     session.updatedAt = Date.now();
     session.updatedAtPerformanceMs = performance.now();
     this.onStateChanged(this.toPublicState(session));
+
+    // Snapshot the manifest the moment a session enters a running state so an
+    // abrupt crash (SIGKILL/OOM, where shutdown hooks never run) can still
+    // restore it. Leaving a running state is handled by the explicit-stop
+    // sites — never here — so a shutdown PTY kill doesn't wipe the manifest.
+    if (!wasRunning && RUNNING_STATES.has(session.status)) {
+      this.persistManifest();
+    }
   }
 
   private async runLocked(key: string, task: () => Promise<void>): Promise<void> {

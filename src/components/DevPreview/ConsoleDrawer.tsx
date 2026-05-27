@@ -73,6 +73,11 @@ const STATUS_LABEL: Record<
     textClass: "text-server-error",
     dotClass: "bg-server-error",
   },
+  "restored-stopped": {
+    label: "Stopped",
+    textClass: "text-daintree-text/50",
+    dotClass: "bg-daintree-text/40",
+  },
 };
 
 const DRAWER_HEIGHT = 300;
