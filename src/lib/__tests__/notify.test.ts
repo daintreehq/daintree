@@ -167,6 +167,37 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
     });
 
+    // These cases assert the NotifyPayload discriminated union's shape. The
+    // runtime behaviour is incidental — the value of the assertion is a
+    // compile-time type check ensuring @ts-expect-error directives remain valid
+    // (removing them must produce an unused-directive diagnostic if the union
+    // ever widens, e.g. inboxMessage drifts back to optional on the ReactNode arm).
+    describe("NotifyPayload type contract (compile-time enforcement)", () => {
+      it("rejects ReactNode message without inboxMessage", () => {
+        // Wrapped in a no-op factory so the unused-variable check still fires
+        // on the `notify` call itself rather than on the surrounding payload.
+        const make = () =>
+          // @ts-expect-error ReactNode message requires inboxMessage
+          notify({ type: "info", message: React.createElement("span", null, "x") });
+        expect(typeof make).toBe("function");
+      });
+
+      it("accepts ReactNode message with inboxMessage", () => {
+        const make = () =>
+          notify({
+            type: "info",
+            message: React.createElement("span", null, "x"),
+            inboxMessage: "plain",
+          });
+        expect(typeof make).toBe("function");
+      });
+
+      it("accepts string message without inboxMessage", () => {
+        const make = () => notify({ type: "info", message: "plain" });
+        expect(typeof make).toBe("function");
+      });
+    });
+
     it("stores correlationId in history entry", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({

@@ -228,14 +228,32 @@ export const TOAST_DURATION: Record<NotificationType, number> = {
   info: 6000,
 };
 
-export interface CoalesceOptions {
+interface CoalesceOptionsBase {
   key: string;
   windowMs?: number;
-  buildMessage: (count: number) => string | ReactNode;
   buildTitle?: (count: number) => string | undefined;
-  buildInboxMessage?: (count: number) => string | undefined;
   buildAction?: (count: number) => NotificationAction | undefined;
 }
+
+/**
+ * Mirrors the `NotifyPayload` discriminated union for the coalesce patch path:
+ * a string `buildMessage` keeps `buildInboxMessage` optional, but a ReactNode
+ * `buildMessage` MUST be paired with a `buildInboxMessage` so the coalesced
+ * inbox row still carries plain-text content. Without this, a future caller
+ * with a rich `buildMessage` would silently overwrite the live notification's
+ * `inboxMessage` with `undefined` on coalesce.
+ */
+export type CoalesceOptions = CoalesceOptionsBase &
+  (
+    | {
+        buildMessage: (count: number) => string;
+        buildInboxMessage?: (count: number) => string | undefined;
+      }
+    | {
+        buildMessage: (count: number) => Exclude<ReactNode, string>;
+        buildInboxMessage: (count: number) => string | undefined;
+      }
+  );
 
 /**
  * Fields shared by every `notify()` payload, regardless of message shape.
