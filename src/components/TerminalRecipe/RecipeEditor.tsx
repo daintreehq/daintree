@@ -544,7 +544,7 @@ export function RecipeEditor({
                       />
                       <RecipeVariablePreview
                         initialPrompt={terminal.initialPrompt || ""}
-                        worktreeId={worktreeId}
+                        worktreeId={worktreeId ?? recipe?.worktreeId}
                       />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}

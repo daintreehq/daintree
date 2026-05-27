@@ -84,7 +84,7 @@ describe("RecipeVariablePreview", () => {
     renderPreview("Fix {{issue_number}} on {{branch_name}}", undefined);
 
     const badges = screen.getAllByText(/unresolved/);
-    expect(badges.length).toBeGreaterThanOrEqual(1);
+    expect(badges.length).toBe(2);
   });
 
   it("treats unknown {{var}} as literal text, not as unresolved", () => {
