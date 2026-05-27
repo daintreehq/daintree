@@ -1,6 +1,6 @@
 {
-  "count": 1258,
-  "moduleCount": 1258,
+  "count": 1259,
+  "moduleCount": 1259,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -1046,7 +1046,7 @@
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 325,
+      "line": 392,
       "pattern": "sync-store-get"
     },
     {
