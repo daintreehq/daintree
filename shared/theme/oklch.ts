@@ -10,7 +10,7 @@ function hexChannelToLinear(channel: number): number {
 
 export function hexToOklchL(hex: string): number {
   const clean = hex.trim().replace(/^#/, "");
-  if (clean.length !== 6) {
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
     throw new Error(`hexToOklchL expects #rrggbb form, got "${hex}"`);
   }
   const r = hexChannelToLinear(parseInt(clean.slice(0, 2), 16));

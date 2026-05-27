@@ -207,12 +207,38 @@ describe("built-in themes", () => {
     }
   });
 
-  it("hexToOklchL anchors at known sRGB endpoints", () => {
-    // Sanity-pin Ottosson's sRGB→LMS path: pure black maps to L=0, pure white to L≈1.
-    // Catches sign flips, matrix transposes, and gamma errors before they ripple
-    // through the surface ramp gate below.
+  it("hexToOklchL matches known sRGB reference points", () => {
+    // Sanity-pin Ottosson's sRGB→LMS path. Endpoints (black=0, white=1) confirm gamma
+    // and overall scaling; mid gray (#808080→0.5999) confirms the cube-root nonlinearity;
+    // pure red (#FF0000→0.6279) confirms the chromatic LMS matrix rows (a swapped R/B
+    // channel or wrong matrix coefficient would shift this materially).
     expect(hexToOklchL("#000000")).toBeCloseTo(0, 4);
     expect(hexToOklchL("#ffffff")).toBeCloseTo(1, 4);
+    expect(hexToOklchL("#808080")).toBeCloseTo(0.5999, 3);
+    expect(hexToOklchL("#ff0000")).toBeCloseTo(0.6279, 3);
+  });
+
+  it("hexToOklchL rejects non-#rrggbb input", () => {
+    // The contract is strict #rrggbb (lowercase or uppercase). All built-in theme
+    // palettes use that form; shorthand, alpha, or non-hex chars would be silently
+    // misparsed by parseInt and yield a phantom L value — the throw makes that loud.
+    expect(() => hexToOklchL("#fff")).toThrow();
+    expect(() => hexToOklchL("#ffffffff")).toThrow();
+    expect(() => hexToOklchL("#E8E6CG")).toThrow();
+    expect(() => hexToOklchL("")).toThrow();
+  });
+
+  it("every built-in source surfaces value is strict #rrggbb hex", () => {
+    // The ramp gate below depends on hexToOklchL, which only accepts #rrggbb. Catch
+    // any future theme that ships shorthand or alpha-channel hex before it reaches
+    // hexToOklchL's throw at runtime.
+    const hexRe = /^#[0-9a-fA-F]{6}$/;
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      for (const key of ["grid", "sidebar", "canvas", "panel", "elevated"] as const) {
+        const value = source.palette.surfaces[key];
+        expect(value, `${source.id} surfaces.${key} "${value}" must be #rrggbb`).toMatch(hexRe);
+      }
+    }
   });
 
   it.each(BUILT_IN_THEME_SOURCES.map((s) => [s.id, s] as const))(
