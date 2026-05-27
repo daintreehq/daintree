@@ -750,6 +750,9 @@ export const createAddPanelActions = (
             },
           };
         });
+
+        const after = get();
+        saveNormalized(after.panelsById, after.panelIds);
       }
     });
 
