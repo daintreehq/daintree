@@ -1,13 +1,13 @@
 /**
- * Third-round adversarial tests — assignedUrl leaks through every error/stop code path.
+ * Third-round adversarial tests — predictedUrl leaks through every error/stop code path.
  *
  * Bugs targeted:
- *   N – spawnSessionTerminal spawn-throw:  broadcast has stale assignedUrl
- *   P – ensure invalid-command path:       broadcast has stale assignedUrl
- *   Q – restart invalid-command path:      broadcast has stale assignedUrl
- *   R – handleData non-dep error output:   broadcast has stale assignedUrl
- *   S – runInstall spawn-throw path:       broadcast has stale assignedUrl
- *   T – pollServerReadiness timeout path:  broadcast has stale assignedUrl
+ *   N – spawnSessionTerminal spawn-throw:  broadcast has stale predictedUrl
+ *   P – ensure invalid-command path:       broadcast has stale predictedUrl
+ *   Q – restart invalid-command path:      broadcast has stale predictedUrl
+ *   R – handleData non-dep error output:   broadcast has stale predictedUrl
+ *   S – runInstall spawn-throw path:       broadcast has stale predictedUrl
+ *   T – pollServerReadiness timeout path:  broadcast has stale predictedUrl
  */
 
 import http from "node:http";
@@ -139,7 +139,7 @@ function createPtyClientMock() {
 
 // ─── suite ───────────────────────────────────────────────────────────────────
 
-describe("DevPreviewSessionService — assignedUrl must be null in every error broadcast (adversarial)", () => {
+describe("DevPreviewSessionService — predictedUrl must be null in every error broadcast (adversarial)", () => {
   const base = {
     panelId: "panel-1",
     projectId: "project-1",
@@ -171,10 +171,10 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
   });
 
   // ── Bug N ──────────────────────────────────────────────────────────────────
-  it("BUG-N: assignedUrl is null in error broadcast when spawn throws", async () => {
-    // First ensure succeeds and sets assignedUrl on the session.
+  it("BUG-N: predictedUrl is null in error broadcast when spawn throws", async () => {
+    // First ensure succeeds and sets predictedUrl on the session.
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(first.assignedUrl).toBeTruthy();
+    expect(first.predictedUrl).toBeTruthy();
 
     // Stop the session so the port stays allocated but the terminal is gone.
     // Next ensure will call spawnSessionTerminal again (spawn #2).
@@ -187,37 +187,37 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
 
     broadcasts.length = 0;
 
-    // Re-ensure → spawnSessionTerminal sets assignedUrl then spawn throws.
+    // Re-ensure → spawnSessionTerminal sets predictedUrl then spawn throws.
     await service.ensure({ ...base, worktreeId: "wt-1" });
 
-    // The error broadcast must have assignedUrl: null.
-    // Fails if spawnSessionTerminal's catch omits assignedUrl: null.
+    // The error broadcast must have predictedUrl: null.
+    // Fails if spawnSessionTerminal's catch omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 
   // ── Bug P ──────────────────────────────────────────────────────────────────
-  it("BUG-P: assignedUrl is null in error broadcast from ensure() with blank devCommand", async () => {
-    // Establish a running session so assignedUrl is populated.
+  it("BUG-P: predictedUrl is null in error broadcast from ensure() with blank devCommand", async () => {
+    // Establish a running session so predictedUrl is populated.
     const first = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(first.assignedUrl).toBeTruthy();
+    expect(first.predictedUrl).toBeTruthy();
 
     broadcasts.length = 0;
 
     // Re-ensure with an empty command → hits the commandError path.
     await service.ensure({ ...base, devCommand: "", worktreeId: "wt-1" });
 
-    // The error broadcast must have assignedUrl: null.
-    // Fails if ensure's commandError updateSession omits assignedUrl: null.
+    // The error broadcast must have predictedUrl: null.
+    // Fails if ensure's commandError updateSession omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 
   // ── Bug Q ──────────────────────────────────────────────────────────────────
-  it("BUG-Q: assignedUrl is null in error broadcast from restart() with stored blank devCommand", async () => {
-    // Establish session with assignedUrl.
+  it("BUG-Q: predictedUrl is null in error broadcast from restart() with stored blank devCommand", async () => {
+    // Establish session with predictedUrl.
     await service.ensure({ ...base, worktreeId: "wt-1" });
 
     // Corrupt devCommand to blank via a second ensure (exercises Bug P path too,
@@ -229,17 +229,17 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
     // restart() reads stored devCommand="" → hits the commandError path.
     await service.restart(base);
 
-    // The error broadcast must have assignedUrl: null.
-    // Fails if restart's commandError updateSession omits assignedUrl: null.
+    // The error broadcast must have predictedUrl: null.
+    // Fails if restart's commandError updateSession omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 
   // ── Bug R ──────────────────────────────────────────────────────────────────
-  it("BUG-R: assignedUrl is null in error broadcast from EACCES output on terminal", async () => {
+  it("BUG-R: predictedUrl is null in error broadcast from EACCES output on terminal", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     broadcasts.length = 0;
 
@@ -247,17 +247,17 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
     ptyClient.emitData(state.terminalId!, "Error: EACCES: permission denied /repo/server.js\n");
     await new Promise((r) => setTimeout(r, 10));
 
-    // The error broadcast must have assignedUrl: null.
-    // Fails if handleData's non-dep error updateSession omits assignedUrl: null.
+    // The error broadcast must have predictedUrl: null.
+    // Fails if handleData's non-dep error updateSession omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 
   // ── Bug S ──────────────────────────────────────────────────────────────────
-  it("BUG-S: assignedUrl is null in error broadcast when install spawn throws", async () => {
+  it("BUG-S: predictedUrl is null in error broadcast when install spawn throws", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Emit missing-deps output → needsInstall = true.
     ptyClient.emitData(state.terminalId!, "Error: Cannot find module 'express'\n");
@@ -274,15 +274,15 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
     ptyClient.emitExit(state.terminalId!, 1);
     await new Promise((r) => setTimeout(r, 30));
 
-    // The error broadcast from the install-spawn failure must have assignedUrl: null.
-    // Fails if runInstall's catch-path updateSession omits assignedUrl: null.
+    // The error broadcast from the install-spawn failure must have predictedUrl: null.
+    // Fails if runInstall's catch-path updateSession omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 
   // ── Bug T ──────────────────────────────────────────────────────────────────
-  it("BUG-T: assignedUrl is null in error broadcast when readiness poll times out", async () => {
+  it("BUG-T: predictedUrl is null in error broadcast when readiness poll times out", async () => {
     vi.useFakeTimers();
 
     // Rebuild service under fake timers so Date.now() is controlled.
@@ -297,7 +297,7 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
 
     // ensure() only uses the (mocked) net.createServer, no wall-clock sleeps.
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     broadcasts.length = 0;
 
@@ -308,10 +308,10 @@ describe("DevPreviewSessionService — assignedUrl must be null in every error b
     // Each 500ms poll-interval timer fires, http fails, loop re-checks deadline.
     await vi.advanceTimersByTimeAsync(31_000);
 
-    // The error broadcast must have assignedUrl: null.
-    // Fails if pollServerReadiness's !ready branch omits assignedUrl: null.
+    // The error broadcast must have predictedUrl: null.
+    // Fails if pollServerReadiness's !ready branch omits predictedUrl: null.
     const errorBroadcast = broadcasts.find((b) => b.status === "error");
     expect(errorBroadcast).toBeDefined();
-    expect(errorBroadcast!.assignedUrl).toBeNull();
+    expect(errorBroadcast!.predictedUrl).toBeNull();
   });
 });

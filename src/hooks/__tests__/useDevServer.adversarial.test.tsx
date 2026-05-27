@@ -36,7 +36,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
     worktreeId: overrides.worktreeId,
     status: overrides.status ?? "stopped",
     url: overrides.url ?? null,
-    assignedUrl: overrides.assignedUrl ?? null,
+    predictedUrl: overrides.predictedUrl ?? null,
     error: overrides.error ?? null,
     terminalId: overrides.terminalId ?? null,
     isRestarting: overrides.isRestarting ?? false,

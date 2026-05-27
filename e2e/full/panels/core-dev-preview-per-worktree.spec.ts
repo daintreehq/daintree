@@ -111,7 +111,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
   // ── Test 1 ─────────────────────────────────────────────────────────────────
 
-  test("main-worktree panel reaches Running and shows an assignedUrl", async () => {
+  test("main-worktree panel reaches Running and shows a predictedUrl", async () => {
     const { window } = ctx;
 
     // Confirm we start on the main worktree (default view).
@@ -137,7 +137,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     // Read the address bar URL and store for later comparison.
     // Note: the address bar displays a host-port form (e.g. "localhost:7514")
     // — protocol is stripped via getDisplayUrl(). Reconstruct the canonical
-    // URL so it matches the IPC `assignedUrl` shape later.
+    // URL so it matches the IPC `predictedUrl` shape later.
     const addressBar = window.locator(SEL.browser.addressBar).first();
     await expect(addressBar).toHaveValue(/localhost:\d+/, { timeout: T_MEDIUM });
     const displayUrl = (await addressBar.inputValue()).trim();
@@ -208,9 +208,9 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     expect(mainSession?.status).toBe("running");
     expect(featureSession?.status).toBe("running");
 
-    // Each session's assignedUrl must match what we observed in the address bar.
-    expect(mainSession?.assignedUrl).toBe(urlMain);
-    expect(featureSession?.assignedUrl).toBe(urlFeature);
+    // Each session's predictedUrl must match what we observed in the address bar.
+    expect(mainSession?.predictedUrl).toBe(urlMain);
+    expect(featureSession?.predictedUrl).toBe(urlFeature);
 
     // Sanity: the two sessions must have different panel IDs.
     expect(mainSession?.panelId).not.toBe(featureSession?.panelId);
@@ -257,6 +257,6 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
       mainWorktreeId
     );
     expect(mainAfter?.status).toBe("running");
-    expect(mainAfter?.assignedUrl).toBe(urlMain);
+    expect(mainAfter?.predictedUrl).toBe(urlMain);
   });
 });

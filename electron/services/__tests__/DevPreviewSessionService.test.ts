@@ -364,7 +364,7 @@ describe("DevPreviewSessionService", () => {
     const started = await service.ensure(baseRequest);
     expect(started.status).toBe("starting");
     expect(started.terminalId).toBeTruthy();
-    expect(started.assignedUrl).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(started.predictedUrl).toMatch(/^http:\/\/localhost:\d+$/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -374,7 +374,7 @@ describe("DevPreviewSessionService", () => {
         projectId: baseRequest.projectId,
       });
       expect(updated.status).toBe("running");
-      expect(updated.url).toBe(started.assignedUrl);
+      expect(updated.url).toBe(started.predictedUrl);
     });
   });
 
@@ -857,7 +857,7 @@ describe("DevPreviewSessionService", () => {
     // After a port-free timeout the registry entry is released so the next
     // ensure() picks a fresh candidate via allocatePort.
     const restarted = await service.ensure(baseRequest);
-    expect(restarted.assignedUrl).not.toBe(started.assignedUrl);
+    expect(restarted.predictedUrl).not.toBe(started.predictedUrl);
   });
 
   it("transitions to stopped when waitForPortFree succeeds", async () => {

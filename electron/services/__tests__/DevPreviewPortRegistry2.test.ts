@@ -2,9 +2,9 @@
  * Second-round adversarial tests for DevPreviewSessionService (quick-2 follow-up).
  *
  * Bugs targeted:
- *   I – stopByPanel success: onStateChanged broadcast has stale assignedUrl (assignedUrl: null omitted)
+ *   I – stopByPanel success: onStateChanged broadcast has stale predictedUrl (predictedUrl: null omitted)
  *   J – stopByProject success: same stale broadcast
- *   K – stopByPanel error-catch: onStateChanged broadcast has stale assignedUrl
+ *   K – stopByPanel error-catch: onStateChanged broadcast has stale predictedUrl
  *   L – worktreeToSession not cleaned up after stopByPanel / stopByProject (memory leak)
  *   M – getByWorktree IPC handler: accepts blank / whitespace / non-string worktreeId
  */
@@ -112,7 +112,7 @@ function createPtyClientMock() {
 
 // ─── suite ───────────────────────────────────────────────────────────────────
 
-describe("DevPreviewSessionService — stale assignedUrl broadcasts & map cleanup (adversarial)", () => {
+describe("DevPreviewSessionService — stale predictedUrl broadcasts & map cleanup (adversarial)", () => {
   const base = {
     panelId: "panel-1",
     projectId: "project-1",
@@ -143,10 +143,10 @@ describe("DevPreviewSessionService — stale assignedUrl broadcasts & map cleanu
   });
 
   // ── Bug I ──────────────────────────────────────────────────────────────────
-  it("BUG-I: last onStateChanged broadcast from stopByPanel has assignedUrl: null", async () => {
-    // Ensure a session so assignedUrl is populated.
+  it("BUG-I: last onStateChanged broadcast from stopByPanel has predictedUrl: null", async () => {
+    // Ensure a session so predictedUrl is populated.
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     broadcasts.length = 0; // reset — watch only stop broadcasts
 
@@ -155,14 +155,14 @@ describe("DevPreviewSessionService — stale assignedUrl broadcasts & map cleanu
     // At least one broadcast must have been emitted for the stop.
     expect(broadcasts.length).toBeGreaterThan(0);
 
-    // The final broadcast must have assignedUrl: null.
-    // Fails when updateSession({ status: "stopped", ... }) omits assignedUrl: null.
+    // The final broadcast must have predictedUrl: null.
+    // Fails when updateSession({ status: "stopped", ... }) omits predictedUrl: null.
     const lastBroadcast = broadcasts[broadcasts.length - 1];
-    expect(lastBroadcast.assignedUrl).toBeNull();
+    expect(lastBroadcast.predictedUrl).toBeNull();
   });
 
   // ── Bug J ──────────────────────────────────────────────────────────────────
-  it("BUG-J: last onStateChanged broadcast from stopByProject has assignedUrl: null", async () => {
+  it("BUG-J: last onStateChanged broadcast from stopByProject has predictedUrl: null", async () => {
     await service.ensure({ ...base, worktreeId: "wt-1" });
 
     broadcasts.length = 0;
@@ -171,15 +171,15 @@ describe("DevPreviewSessionService — stale assignedUrl broadcasts & map cleanu
 
     expect(broadcasts.length).toBeGreaterThan(0);
 
-    // Fails when updateSession({ status: "stopped", ... }) in stopByProject omits assignedUrl.
+    // Fails when updateSession({ status: "stopped", ... }) in stopByProject omits predictedUrl.
     const lastBroadcast = broadcasts[broadcasts.length - 1];
-    expect(lastBroadcast.assignedUrl).toBeNull();
+    expect(lastBroadcast.predictedUrl).toBeNull();
   });
 
   // ── Bug K ──────────────────────────────────────────────────────────────────
-  it("BUG-K: onStateChanged broadcast from stopByPanel error-catch has assignedUrl: null", async () => {
+  it("BUG-K: onStateChanged broadcast from stopByPanel error-catch has predictedUrl: null", async () => {
     const state = await service.ensure({ ...base, worktreeId: "wt-1" });
-    expect(state.assignedUrl).toBeTruthy();
+    expect(state.predictedUrl).toBeTruthy();
 
     // Make stopSessionTerminal throw by killing the pty then making kill() throw.
     ptyClient.kill.mockImplementationOnce(() => {
@@ -194,10 +194,10 @@ describe("DevPreviewSessionService — stale assignedUrl broadcasts & map cleanu
     // Must have emitted at least one broadcast for the error state.
     expect(broadcasts.length).toBeGreaterThan(0);
 
-    // The final broadcast must have assignedUrl: null.
-    // Fails when the catch-branch updateSession({ status: "error", ... }) omits assignedUrl: null.
+    // The final broadcast must have predictedUrl: null.
+    // Fails when the catch-branch updateSession({ status: "error", ... }) omits predictedUrl: null.
     const lastBroadcast = broadcasts[broadcasts.length - 1];
-    expect(lastBroadcast.assignedUrl).toBeNull();
+    expect(lastBroadcast.predictedUrl).toBeNull();
   });
 
   // ── Bug L ──────────────────────────────────────────────────────────────────
