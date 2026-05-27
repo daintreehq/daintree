@@ -16,11 +16,18 @@ export interface DiagnosticCopyButtonProps {
   className?: string;
 }
 
+// sanitizeErrorText() preserves HT/LF/CR by design (it's intended for multi-line
+// log text). For a single-line copy payload those would split values across
+// lines when pasted; collapse them to spaces here.
+function flattenWhitespace(text: string): string {
+  return sanitizeErrorText(text).replace(/[\t\r\n]+/g, " ");
+}
+
 function formatDiagnostics(diagnostics: SpawnDiagnostics): string {
   const parts: string[] = [];
   if (typeof diagnostics.errno === "number") parts.push(`errno=${diagnostics.errno}`);
-  if (diagnostics.syscall) parts.push(`syscall=${sanitizeErrorText(diagnostics.syscall)}`);
-  if (diagnostics.path) parts.push(`path=${sanitizeErrorText(diagnostics.path)}`);
+  if (diagnostics.syscall) parts.push(`syscall=${flattenWhitespace(diagnostics.syscall)}`);
+  if (diagnostics.path) parts.push(`path=${flattenWhitespace(diagnostics.path)}`);
   return parts.join(" ");
 }
 

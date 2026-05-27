@@ -38,8 +38,11 @@ const SCROLLBACK_BANNER_CONFIG = {
   error: {
     title: "Scrollback restore failed",
     icon: History,
-    description: (message) =>
-      `${boundedErrorText(message)} The terminal still works — only its earlier output is missing.`,
+    description: (message) => {
+      const sanitized = boundedErrorText(message);
+      const tail = "The terminal still works — only its earlier output is missing.";
+      return sanitized ? `${sanitized} ${tail}` : tail;
+    },
   },
 } as const satisfies Record<TerminalScrollbackRestoreError["type"], ScrollbackBannerConfig>;
 

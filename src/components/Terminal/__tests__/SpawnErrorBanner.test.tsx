@@ -120,14 +120,21 @@ describe("SpawnErrorBanner", () => {
     expect(screen.getByText(title)).toBeTruthy();
   });
 
-  it("renders the PENDING_SPAWNS_CAPPED title", () => {
-    renderBanner("PENDING_SPAWNS_CAPPED");
-    expect(screen.getByText(/too many pending restarts/i)).toBeTruthy();
+  // Hardcoded oracles — guard against a copy-table transposition that the
+  // table-driven test above would silently accept.
+  it.each([
+    ["ENOENT", "Couldn't find shell or command"],
+    ["EACCES", "Couldn't execute shell"],
+    ["ENOTDIR", "Invalid working directory"],
+    ["PENDING_SPAWNS_CAPPED", "Too many pending restarts"],
+    ["UNKNOWN", "Couldn't start terminal"],
+  ] as const)("renders the expected title for %s", (code, expected) => {
+    renderBanner(code);
+    expect(screen.getByText(expected)).toBeTruthy();
   });
 
   it("renders the UNKNOWN code with the message as description", () => {
     renderBanner("UNKNOWN");
-    expect(screen.getByText(/couldn't start terminal/i)).toBeTruthy();
     expect(screen.getByText(/simulated UNKNOWN error/i)).toBeTruthy();
   });
 
@@ -249,7 +256,7 @@ describe("SpawnErrorBanner", () => {
       expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bin/missing");
     });
 
-    it("renders the diagnostics section but not the copy button when clipboard is unavailable", () => {
+    it("still renders the copy button when clipboard is unavailable, but clicking is a no-op", () => {
       const original = navigator.clipboard;
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
@@ -258,7 +265,10 @@ describe("SpawnErrorBanner", () => {
       try {
         renderBanner("ENOENT", { errno: -2, syscall: "spawn", path: "/bin/x" });
         const button = screen.getByRole("button", { name: /copy diagnostics/i });
-        fireEvent.click(button);
+        expect(button).toBeTruthy();
+        expect(() => fireEvent.click(button)).not.toThrow();
+        // Label stays at "Copy diagnostics" (never flips to "Diagnostics copied").
+        expect(screen.queryByRole("button", { name: /diagnostics copied/i })).toBeNull();
       } finally {
         Object.defineProperty(navigator, "clipboard", {
           configurable: true,

@@ -83,6 +83,13 @@ describe("ScrollbackRestoreErrorBanner", () => {
     expect(screen.queryByText(/should not appear/i)).toBeNull();
   });
 
+  it("omits a leading space when the error message is empty", () => {
+    renderBanner("error", { message: "" });
+    const text = screen.getByText(/the terminal still works/i).textContent ?? "";
+    expect(text.startsWith(" ")).toBe(false);
+    expect(text).toBe("The terminal still works — only its earlier output is missing.");
+  });
+
   it("invokes onRestart with the terminal id when reset is clicked", () => {
     const onRestart = vi.fn();
     renderBanner("error", { onRestart });

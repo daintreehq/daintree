@@ -48,6 +48,22 @@ describe("DiagnosticCopyButton", () => {
     expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bad/path");
   });
 
+  it("writes the same sanitized payload to clipboard as it displays", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(<DiagnosticCopyButton diagnostics={{ path: "\x1b[31m/bad/path", syscall: "spawn" }} />);
+    fireEvent.click(screen.getByRole("button", { name: /copy diagnostics/i }));
+    expect(writeText).toHaveBeenCalledWith("syscall=spawn path=/bad/path");
+  });
+
+  it("collapses newlines/tabs/carriage-returns in path or syscall to single spaces", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(<DiagnosticCopyButton diagnostics={{ path: "/a/b\n/c\td", syscall: "spa\rwn" }} />);
+    fireEvent.click(screen.getByRole("button", { name: /copy diagnostics/i }));
+    expect(writeText).toHaveBeenCalledWith("syscall=spa wn path=/a/b /c d");
+  });
+
   it("writes the formatted payload to clipboard and shows Copied state", async () => {
     vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
