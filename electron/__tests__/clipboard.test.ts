@@ -11,8 +11,10 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   // The clipboard handler transitively imports the projectStore singleton,
   // whose constructor reads app.getPath("userData"). Include `app` so the
-  // module graph instantiates regardless of suite ordering.
-  app: { getPath: vi.fn(() => "/tmp/clipboard-test-user-data") },
+  // module graph instantiates regardless of suite ordering — keeps this suite
+  // self-sufficient and not dependent on a sibling test polluting the shared
+  // electron mock with `app` first.
+  app: { getPath: vi.fn(() => "/tmp/daintree-clipboard-test-userdata") },
 }));
 
 // clipboard.ts imports projectStore from ProjectStore.js which imports
@@ -25,7 +27,6 @@ vi.mock("../services/ProjectStore.js", () => ({
     getAllProjects: vi.fn(() => []),
     getCurrentProjectId: vi.fn(() => null),
   },
-}));
 
 // Redirect os.tmpdir() to a throwaway directory so the cleanup operates on real
 // files we control. The base dir is created inside the factory where the real

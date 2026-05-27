@@ -210,6 +210,13 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/PluginActionAuditService.js")
             .then(({ getPluginActionAuditService }) => getPluginActionAuditService().flushNow())
             .catch(() => {}),
+          // Flush any forge audit records still inside the 2s debounce window.
+          // The flush timer is unref()'d so Node won't keep the process alive
+          // for it — without this drain, the last few records are lost on quit.
+          // Lazy-imported: the module only loads if a forge handler ran.
+          import("../services/forge/forgeAuditService.js")
+            .then(({ forgeAuditService }) => forgeAuditService.flushNow())
+            .catch(() => {}),
           // Revoke and remove any in-flight help-session dirs. Same lazy-import
           // guard as MCP — the module only loads if a help session was provisioned.
           import("../services/HelpSessionService.js")

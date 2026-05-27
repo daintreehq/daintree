@@ -13,6 +13,7 @@ import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
+import { auditForgeCall } from "../../services/forge/forgeAuditService.js";
 import type { AuthValidation, CredentialField } from "../../../shared/types/forge.js";
 
 /**
@@ -181,7 +182,14 @@ export function registerForgeSettingsHandlers(): () => void {
           return { valid: false, error: "Provider not activated. Open it in Settings first." };
         }
 
-        const validation = await impl.validateToken(primaryValue);
+        const validation = await auditForgeCall(
+          { providerId, methodName: "validateToken", argsSummary: "" },
+          () => impl.validateToken(primaryValue),
+          // A rejected credential is a resolved call but a failed outcome —
+          // audit it as an error so bad-token bursts surface in anomaly
+          // detection rather than hiding behind result: "success".
+          (validation) => (validation.valid ? "success" : "error")
+        );
         if (!validation.valid) {
           return validation;
         }

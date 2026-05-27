@@ -606,6 +606,16 @@ describe("persistence boundary hardening", () => {
       const { createSafeJSONStorage } = await import("../persistence/safeStorage");
       const storage = createSafeJSONStorage<{ value: number }>();
 
+      // Other tests in this suite also trigger permanent fallbacks, each firing
+      // notify via an *unawaited* dynamic `import("@/lib/notify")`. Those
+      // in-flight dispatches can resolve here — while our spy is the active
+      // mock — and inflate the count (seen as 2-6 under CI ordering). Drain the
+      // queue so any stragglers land, then clear the spy so we count only this
+      // instance's dispatch. The per-instance `hasNotifiedPermanentFallback`
+      // guard guarantees exactly one regardless.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      notifySpy.mockClear();
+
       storage.setItem("notify-key-1", { state: { value: 1 }, version: 1 });
       storage.setItem("notify-key-2", { state: { value: 2 }, version: 1 });
 

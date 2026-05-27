@@ -1,6 +1,7 @@
 import { CHANNELS } from "../channels.js";
 import { typedHandle } from "../utils.js";
 import { resolveForCwd } from "./forgeResolution.js";
+import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type { ListOptions } from "../../../shared/types/forge.js";
 
 /**
@@ -100,8 +101,17 @@ export function registerForgeDataHandlers(): () => void {
         const cwd = requireCwd(payload.cwd);
         const opts = payload.opts ?? {};
         return coalesce(`${cwd}::listIssues::${listOptionsKey(opts)}`, async () => {
-          const { impl, repoRef } = await resolveForCwd(cwd);
-          return impl.listIssues(repoRef, opts);
+          const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+          return auditForgeCall(
+            {
+              providerId: namespaceId,
+              methodName: "listIssues",
+              repoOwner: repoRef.owner,
+              repoName: repoRef.repo,
+              argsSummary: summarizeForgeArgs("listIssues", opts),
+            },
+            () => impl.listIssues(repoRef, opts)
+          );
         });
       }
     )
@@ -115,8 +125,17 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       const opts = payload.opts ?? {};
       return coalesce(`${cwd}::listPRs::${listOptionsKey(opts)}`, async () => {
-        const { impl, repoRef } = await resolveForCwd(cwd);
-        return impl.listPRs(repoRef, opts);
+        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "listPRs",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("listPRs", opts),
+          },
+          () => impl.listPRs(repoRef, opts)
+        );
       });
     })
   );
@@ -129,8 +148,18 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
       return coalesce(`${cwd}::getIssue::${issueNumber}`, async () => {
-        const { impl, repoRef } = await resolveForCwd(cwd);
-        return impl.getIssue(repoRef, issueNumber);
+        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "getIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("getIssue", issueNumber),
+          },
+          () => impl.getIssue(repoRef, issueNumber),
+          (value) => (value === null ? "not-found" : "success")
+        );
       });
     })
   );
@@ -143,8 +172,18 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       const prNumber = requirePositiveInt(payload.prNumber, "PR number");
       return coalesce(`${cwd}::getPR::${prNumber}`, async () => {
-        const { impl, repoRef } = await resolveForCwd(cwd);
-        return impl.getPR(repoRef, prNumber);
+        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "getPR",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("getPR", prNumber),
+          },
+          () => impl.getPR(repoRef, prNumber),
+          (value) => (value === null ? "not-found" : "success")
+        );
       });
     })
   );
@@ -155,8 +194,16 @@ export function registerForgeDataHandlers(): () => void {
         throw new Error("Invalid payload");
       }
       const cwd = requireCwd(payload.cwd);
-      const { impl, repoRef } = await resolveForCwd(cwd);
-      return impl.getRepoMetadata(repoRef);
+      const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+      return auditForgeCall(
+        {
+          providerId: namespaceId,
+          methodName: "getRepoMetadata",
+          repoOwner: repoRef.owner,
+          repoName: repoRef.repo,
+        },
+        () => impl.getRepoMetadata(repoRef)
+      );
     })
   );
 
