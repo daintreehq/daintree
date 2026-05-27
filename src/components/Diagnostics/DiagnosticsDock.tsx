@@ -10,15 +10,18 @@ import {
   DIAGNOSTICS_DEFAULT_HEIGHT,
 } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store";
+import { usePerfMetricsStore } from "@/store/perfMetricsStore";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
 import { TelemetryContent } from "./TelemetryContent";
+import { PerfContent } from "./PerfContent";
 import {
   ProblemsActions,
   LogsActions,
   EventsActions,
   TelemetryActions,
+  PerfActions,
 } from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
@@ -84,6 +87,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     setMaxHeight,
   } = useDiagnosticsStore();
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
+  const failedBudgetCount = usePerfMetricsStore((state) => state.failedBudgetCount);
   const prevErrorCountRef = useRef(0);
 
   useEffect(() => {
@@ -287,6 +291,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
     { id: "telemetry", label: "Telemetry" },
+    { id: "perf", label: "Perf", badge: failedBudgetCount },
   ];
 
   return (
@@ -360,6 +365,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
           {activeTab === "telemetry" && <TelemetryActions />}
+          {activeTab === "perf" && <PerfActions />}
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -415,6 +421,16 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             className="h-full"
           >
             <TelemetryContent />
+          </div>
+        )}
+        {activeTab === "perf" && (
+          <div
+            id="diagnostics-perf-panel"
+            role="tabpanel"
+            aria-labelledby="diagnostics-perf-tab"
+            className="h-full"
+          >
+            <PerfContent />
           </div>
         )}
       </div>
