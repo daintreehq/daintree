@@ -54,7 +54,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { store } from "../store.js";
-import { projectStore } from "./ProjectStore.js";
+import type { projectStore as ProjectStoreSingleton } from "./ProjectStore.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
@@ -608,7 +608,7 @@ export class PluginService {
             throw new Error(`Plugin "${pluginId}" settings.get: key must be a non-empty string`);
           }
           const scope = this.resolveSettingsScope(pluginId, options?.scope);
-          const filePath = this.getSettingsFilePath(pluginId, scope);
+          const filePath = await this.getSettingsFilePath(pluginId, scope);
           if (!filePath) return undefined; // project scope with no active project
           const data = await this.readSettingsFile(filePath);
           return (Object.prototype.hasOwnProperty.call(data, key) ? data[key] : undefined) as
@@ -643,7 +643,7 @@ export class PluginService {
             );
           }
           const scope = this.resolveSettingsScope(pluginId, options?.scope);
-          const filePath = this.getSettingsFilePath(pluginId, scope);
+          const filePath = await this.getSettingsFilePath(pluginId, scope);
           if (!filePath) {
             throw new Error(
               `Plugin "${pluginId}" settings.set: cannot write project-scoped key "${key}" — no active project`
@@ -973,14 +973,34 @@ export class PluginService {
   }
 
   /**
+   * Lazily resolve the `projectStore` singleton. Imported dynamically rather
+   * than statically so merely importing `PluginService` does not evaluate
+   * `ProjectStore` (whose constructor calls `app.getPath`) — that side effect
+   * broke unrelated test files whose `electron` mock omits `app`. Only the
+   * project-scope settings path actually needs it.
+   */
+  private projectStoreRef: typeof ProjectStoreSingleton | null = null;
+  private async getProjectStore(): Promise<typeof ProjectStoreSingleton> {
+    if (!this.projectStoreRef) {
+      const mod = await import("./ProjectStore.js");
+      this.projectStoreRef = mod.projectStore;
+    }
+    return this.projectStoreRef;
+  }
+
+  /**
    * Resolve the settings file path for a plugin and scope. Returns `undefined`
    * for project scope when no project is active (callers translate that into a
    * `get` returning `undefined` / a `set` rejection). The pluginId is already
    * validated by `SCOPED_PLUGIN_NAME_PATTERN` (alphanumeric + dot + hyphen),
    * so it is filesystem-safe as a filename without further sanitization.
    */
-  private getSettingsFilePath(pluginId: string, scope: SettingsScope): string | undefined {
+  private async getSettingsFilePath(
+    pluginId: string,
+    scope: SettingsScope
+  ): Promise<string | undefined> {
     if (scope === "project") {
+      const projectStore = await this.getProjectStore();
       const projectPath = projectStore.getCurrentProject()?.path;
       if (!projectPath) return undefined;
       return path.join(projectPath, ".daintree", "plugin-settings", `${pluginId}.json`);
