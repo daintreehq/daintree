@@ -11,6 +11,7 @@ export const DEV_PREVIEW_METHOD_CHANNELS = {
   getByWorktree: "dev-preview:get-by-worktree",
   getDestructivePreviewMeta: "dev-preview:get-destructive-preview-meta",
   getDestructivePreviewSizes: "dev-preview:get-destructive-preview-sizes",
+  stopByWorktree: "dev-preview:stop-by-worktree",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DEV_PREVIEW_METHOD_CHANNELS;

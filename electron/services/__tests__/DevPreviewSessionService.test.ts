@@ -923,6 +923,67 @@ describe("DevPreviewSessionService", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(initialSpawnCount);
   });
 
+  describe("stopByWorktree", () => {
+    it("stops the session matching the given worktreeId", async () => {
+      const wtA = await service.ensure({
+        panelId: "panel-a",
+        projectId: "project-1",
+        cwd: "/repo/a",
+        devCommand: "npm run dev",
+        worktreeId: "wt-target",
+      });
+      const wtB = await service.ensure({
+        panelId: "panel-b",
+        projectId: "project-1",
+        cwd: "/repo/b",
+        devCommand: "npm run dev",
+        worktreeId: "wt-other",
+      });
+
+      await service.stopByWorktree("wt-target");
+
+      expect(ptyClient.kill).toHaveBeenCalledWith(wtA.terminalId, "dev-preview:worktree-delete");
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(wtB.terminalId, expect.anything());
+
+      const stopped = service.getState({ panelId: "panel-a", projectId: "project-1" });
+      const surviving = service.getState({ panelId: "panel-b", projectId: "project-1" });
+      expect(stopped.status).toBe("stopped");
+      expect(stopped.terminalId).toBeNull();
+      expect(surviving.terminalId).toBe(wtB.terminalId);
+    });
+
+    it("is a no-op when no session matches the worktreeId", async () => {
+      await service.ensure({
+        ...baseRequest,
+        worktreeId: "wt-other",
+      });
+
+      await expect(service.stopByWorktree("wt-missing")).resolves.toBeUndefined();
+      expect(ptyClient.kill).not.toHaveBeenCalled();
+    });
+
+    it("rejects when the underlying terminal kill fails", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const session = await service.ensure({
+        ...baseRequest,
+        worktreeId: "wt-failing",
+      });
+
+      ptyClient.kill.mockImplementation((id: string) => {
+        if (id === session.terminalId) {
+          throw new Error("kill failed");
+        }
+      });
+
+      await expect(service.stopByWorktree("wt-failing")).rejects.toThrow(/kill failed/);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[DevPreviewSessionService] stopByWorktree failed for session",
+        expect.objectContaining({ worktreeId: "wt-failing" })
+      );
+    });
+  });
+
   it("continues stop-by-panel cleanup when one session stop fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

@@ -567,6 +567,52 @@ export class DevPreviewSessionService {
     );
   }
 
+  // Called from the renderer's worktree delete path BEFORE `git worktree
+  // remove` runs. On Windows the dev server holds a directory lock — if the
+  // session isn't stopped first, the removal fails outright (#9084). The
+  // first stop failure rejects so the caller can abort the delete before
+  // git removal makes a partial mess.
+  async stopByWorktree(worktreeId: string): Promise<void> {
+    const targets = [...this.sessions.entries()].filter(
+      ([, session]) => session.worktreeId === worktreeId
+    );
+
+    const errors: unknown[] = [];
+    await Promise.all(
+      targets.map(async ([key, session]) => {
+        await this.runLocked(key, async () => {
+          try {
+            await this.stopSessionTerminal(session, "worktree-delete");
+            this.updateSession(session, {
+              status: "stopped",
+              url: null,
+              assignedUrl: null,
+              error: null,
+              terminalId: null,
+              isRestarting: false,
+            });
+            this.sessions.delete(key);
+            releasePort(this.portRegistry, key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
+          } catch (err) {
+            const message = formatErrorMessage(err, "Failed to stop dev preview");
+            console.warn("[DevPreviewSessionService] stopByWorktree failed for session", {
+              panelId: session.panelId,
+              projectId: session.projectId,
+              worktreeId: session.worktreeId,
+              error: message,
+            });
+            errors.push(err);
+          }
+        });
+      })
+    );
+
+    if (errors.length > 0) {
+      throw errors[0];
+    }
+  }
+
   getState(request: DevPreviewSessionRequest): DevPreviewSessionState {
     validateSessionRequest(request);
     return this.getSessionState(request.projectId, request.panelId);

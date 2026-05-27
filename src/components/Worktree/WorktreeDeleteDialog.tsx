@@ -23,6 +23,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [closeTerminals, setCloseTerminals] = useState(true);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [confirmInput, setConfirmInput] = useState("");
+  const [hasDevPreview, setHasDevPreview] = useState(false);
 
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
 
@@ -62,7 +63,29 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setCloseTerminals(true);
       setDeleteBranch(false);
       setConfirmInput("");
+      setHasDevPreview(false);
     }
+  }, [isOpen, worktree.id]);
+
+  // Disclose a running dev server in the "What will happen" list so the user
+  // isn't surprised when the cascade runs (Tier D2 destructive action rule).
+  // Guard against stale-closure on unmount/worktree change (lesson #4754).
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    window.electron.devPreview
+      .getByWorktree({ worktreeId: worktree.id })
+      .then((state) => {
+        if (cancelled) return;
+        setHasDevPreview(state !== null && state.status !== "stopped");
+      })
+      .catch(() => {
+        // Disclosure is informational; failing to fetch should not block
+        // the dialog. The actual stop attempt happens in runDeleteAsync.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, worktree.id]);
 
   useEffect(() => {
@@ -190,6 +213,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               >
                 {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be
                 closed
+              </li>
+              <li
+                className={cn(
+                  "text-sm",
+                  hasDevPreview ? "text-daintree-text" : "text-daintree-text/40 line-through"
+                )}
+              >
+                Dev server will be stopped
               </li>
               <li
                 className={cn(

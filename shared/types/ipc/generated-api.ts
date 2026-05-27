@@ -111,6 +111,9 @@ export interface GeneratedElectronAPI {
     stopByPanel(
       ...args: IpcInvokeMap["dev-preview:stop-by-panel"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop-by-panel"]["result"]>;
+    stopByWorktree(
+      ...args: IpcInvokeMap["dev-preview:stop-by-worktree"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:stop-by-worktree"]["result"]>;
   };
   eventInspector: {
     clear(
