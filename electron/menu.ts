@@ -76,10 +76,30 @@ function handleUpdateMenuClick(): void {
 // rebuilds — a stale listener would mutate items that no longer exist.
 let unsubscribeUpdateMenuState: (() => void) | null = null;
 
+// Last window + CLI-availability service the menu was built with, captured so a
+// data-only rebuild (e.g. plugin menu items changing) can re-run the template
+// without the caller threading those refs through. See rebuildApplicationMenu.
+let lastMenuWindow: BrowserWindow | null = null;
+let lastMenuCliAvailabilityService: CliAvailabilityService | undefined;
+
+/**
+ * Rebuild the application menu in place using the window + CLI-availability
+ * service from the most recent {@link createApplicationMenu} call. Used by the
+ * plugin menu-item broadcast so application-menu locations (`view`, `help`,
+ * `file`, `terminal`) reflect plugin load/unload without a project switch.
+ * No-op until the menu has been built once, or if the captured window is gone.
+ */
+export function rebuildApplicationMenu(): void {
+  if (!lastMenuWindow || lastMenuWindow.isDestroyed()) return;
+  createApplicationMenu(lastMenuWindow, lastMenuCliAvailabilityService);
+}
+
 export function createApplicationMenu(
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): void {
+  lastMenuWindow = mainWindow;
+  lastMenuCliAvailabilityService = cliAvailabilityService;
   const getTargetBrowserWindow = (
     browserWindow: Electron.BaseWindow | undefined
   ): BrowserWindow | null => {

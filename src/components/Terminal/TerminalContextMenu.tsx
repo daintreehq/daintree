@@ -8,6 +8,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { usePluginMenuItems } from "@/hooks/usePluginMenuItems";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -94,6 +95,9 @@ export function TerminalContextMenu({
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
+  // Plugin-contributed items for the terminal context menu. Pulled on mount and
+  // kept in sync via push; empty until a plugin contributes a `"terminal"` item.
+  const pluginTerminalItems = usePluginMenuItems("terminal");
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -796,6 +800,23 @@ export function TerminalContextMenu({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill Terminal
           </ContextMenuItem>
+          {pluginTerminalItems.length > 0 && (
+            <>
+              <ContextMenuSeparator />
+              {pluginTerminalItems.map(({ pluginId, item }) => (
+                <ContextMenuItem
+                  key={`${pluginId}:${item.actionId}:${item.label}`}
+                  onSelect={() =>
+                    void actionService.dispatch(item.actionId, undefined, {
+                      source: sourceRef.current,
+                    })
+                  }
+                >
+                  {item.label}
+                </ContextMenuItem>
+              ))}
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     </>

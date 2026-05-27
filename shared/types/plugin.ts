@@ -58,6 +58,11 @@ export interface MenuItemContribution {
   actionId: string;
   location: MenuItemLocation;
   accelerator?: string;
+  /**
+   * Visibility expression evaluated by the when-clause runtime (#9273). Until
+   * that lands, consumers pass it through unfiltered — items always show.
+   */
+  when?: string;
 }
 
 /**

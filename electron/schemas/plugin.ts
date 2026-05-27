@@ -45,6 +45,9 @@ export const MenuItemContributionSchema = z.object({
   actionId: z.string().min(1),
   location: z.enum(["terminal", "file", "view", "help"]),
   accelerator: z.string().optional(),
+  // Visibility expression evaluated by the when-clause runtime (#9273). Until
+  // that lands, the field is accepted but not evaluated — items always show.
+  when: z.string().optional(),
 });
 
 /**

@@ -1845,6 +1845,13 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin menu item registry events (main → renderer). No `complete` flag —
+  // menu items have no persisted renderer-side state to sweep (unlike toolbar
+  // buttons' pinned preferences), so every broadcast is a full replacement.
+  "plugin:menu-items-changed": {
+    items: { pluginId: string; item: import("../plugin.js").MenuItemContribution }[];
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1928,6 +1935,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin menu item registry (global broadcast)
+  | "plugin:menu-items-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready

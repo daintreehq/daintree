@@ -49,7 +49,11 @@ import {
   unregisterPluginToolbarButtons,
   getAllPluginToolbarButtonConfigs,
 } from "../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
+import {
+  registerPluginMenuItem,
+  unregisterPluginMenuItems,
+  getPluginMenuItems,
+} from "./pluginMenuRegistry.js";
 import {
   registerForgeProviderImpl,
   registerForgeProviders,
@@ -245,6 +249,18 @@ export class PluginService {
    * partial/growing snapshot (concurrent load + deferred init) and must not.
    */
   private toolbarButtonsBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as the toolbar-button flag. No `complete`
+   * companion — menu items carry no persisted renderer-side state to sweep, so
+   * every broadcast is a full replacement and load/unload are symmetric.
+   */
+  private menuItemsBroadcastPending = false;
+  /**
+   * Main-side listeners (e.g. the application-menu rebuild) notified whenever
+   * the plugin menu-item set changes. Distinct from the renderer broadcast
+   * because the application menu is built in main and can't read renderer state.
+   */
+  private menuItemsChangedListeners: Array<() => void> = [];
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
 
@@ -274,6 +290,7 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    this.menuItemsChangedListeners = [];
     this.disposeRegistrySubscriptions();
   }
 
@@ -533,6 +550,9 @@ export class PluginService {
 
     for (const menuItem of manifest.contributes.menuItems) {
       registerPluginMenuItem(manifest.name, menuItem);
+    }
+    if (manifest.contributes.menuItems.length > 0) {
+      this.scheduleMenuItemsBroadcast();
     }
 
     if (manifest.contributes.experimental_views.length > 0) {
@@ -1078,7 +1098,6 @@ export class PluginService {
       this.cleanupMap.delete(pluginId);
     }
     this.flushPluginEventCleanups(pluginId);
-
     // Capture the unloaded plugin's declared decoration scopes before clearing
     // the registry so we can tell any renderer that was showing them to
     // re-pull (it will now resolve no impl and clear). Without this, stale
@@ -1106,6 +1125,7 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
+    runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () => this.scheduleMenuItemsBroadcast());
     runUnloadStep(pluginId, "unregisterPluginToolbarButtons", () =>
       unregisterPluginToolbarButtons(pluginId)
     );
@@ -1430,6 +1450,49 @@ export class PluginService {
       name: "plugin:toolbar-buttons-changed",
       payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
     });
+  }
+
+  /**
+   * Register a main-side listener invoked whenever the plugin menu-item set
+   * changes (load/unload). Used by the application-menu rebuild, which lives in
+   * main and can't subscribe to the renderer broadcast. Returns a disposer.
+   */
+  onMenuItemsChanged(listener: () => void): () => void {
+    this.menuItemsChangedListeners.push(listener);
+    return () => {
+      const idx = this.menuItemsChangedListeners.indexOf(listener);
+      if (idx !== -1) this.menuItemsChangedListeners.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Coalesce the N `registerPluginMenuItem` calls a plugin makes on load (and
+   * the single bulk removal on unload) into one snapshot broadcast per tick,
+   * mirroring {@link scheduleToolbarButtonsBroadcast}.
+   */
+  private scheduleMenuItemsBroadcast(): void {
+    if (this.disposed) return;
+    if (this.menuItemsBroadcastPending) return;
+    this.menuItemsBroadcastPending = true;
+    queueMicrotask(() => {
+      this.menuItemsBroadcastPending = false;
+      if (this.disposed) return;
+      this.broadcastPluginMenuItems();
+    });
+  }
+
+  private broadcastPluginMenuItems(): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:menu-items-changed",
+      payload: { items: getPluginMenuItems() },
+    });
+    for (const listener of this.menuItemsChangedListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error("[PluginService] menu-items-changed listener threw:", err);
+      }
+    }
   }
 }
 

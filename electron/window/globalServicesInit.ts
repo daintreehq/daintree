@@ -302,6 +302,15 @@ export async function initGlobalServices(
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
+      // Rebuild the application menu when plugin menu items change so `view` /
+      // `help` / `file` / `terminal` application-menu locations reflect plugin
+      // load/unload. Dynamic import breaks the menu.ts → windowServices.ts →
+      // globalServicesInit.ts static cycle; rebuildApplicationMenu reuses the
+      // window captured by the startup createApplicationMenu call.
+      const { rebuildApplicationMenu } = await import("../menu.js");
+      pluginService.onMenuItemsChanged(() => {
+        rebuildApplicationMenu();
+      });
     },
   });
 
