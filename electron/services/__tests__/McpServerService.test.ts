@@ -913,7 +913,7 @@ describe("McpServerService", () => {
     await client.callTool({ name: "actions.list", arguments: {} });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const payload = dispatchMock.mock.calls[0]![0] as DispatchRequest;
+    const payload = (dispatchMock.mock.calls[0] as unknown as [DispatchRequest])[0];
     // External (api-key) dispatch carries display-only identity: the 4-char
     // token suffix and a non-empty user-agent. The raw key never crosses.
     expect(payload.callerInfo).toBeDefined();
