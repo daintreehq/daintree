@@ -174,7 +174,7 @@ export function RecipesTab({
   };
 
   const getRecipeScope = (recipe: TerminalRecipe): { label: string; isGlobal: boolean } => {
-    if (isInRepoRecipeId(recipe.id)) return { label: "Project (in-repo)", isGlobal: false };
+    if (isInRepoRecipeId(recipe.id)) return { label: "Team", isGlobal: false };
     if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
     if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };
     const worktree = worktreeMap.get(recipe.worktreeId);
@@ -202,7 +202,9 @@ export function RecipesTab({
         <div id="project-default-recipe" className="space-y-2">
           {!recipesLoading &&
             defaultWorktreeRecipeId &&
-            !recipes.find((r) => r.id === defaultWorktreeRecipeId && !r.worktreeId) && (
+            !recipes.find(
+              (r) => r.id === defaultWorktreeRecipeId && !r.worktreeId && !r.shadowedBy
+            ) && (
               <div
                 className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20"
                 role="alert"
@@ -247,12 +249,17 @@ export function RecipesTab({
             <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
-                const isEligibleForDefault = !recipe.worktreeId;
+                const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
                 const isDefault = recipe.id === defaultWorktreeRecipeId;
+                const isShadowed = !!recipe.shadowedBy;
                 return (
                   <div
                     key={recipe.id}
-                    className="p-3 hover:bg-muted/50 transition-colors group cursor-default"
+                    className={
+                      isShadowed
+                        ? "p-3 hover:bg-muted/50 transition-colors group cursor-default opacity-60"
+                        : "p-3 hover:bg-muted/50 transition-colors group cursor-default"
+                    }
                   >
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
@@ -284,6 +291,11 @@ export function RecipesTab({
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
+                          {isShadowed && (
+                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                              Overridden
+                            </span>
+                          )}
                           {isDefault && (
                             <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                               <Pin className="h-3 w-3" />

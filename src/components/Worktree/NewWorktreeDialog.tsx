@@ -120,7 +120,10 @@ export function NewWorktreeDialog({
   const hasAnyEnvironments = Object.keys(resourceEnvironments ?? {}).length > 0;
 
   const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
-  const globalRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const globalRecipes = useMemo(
+    () => recipes.filter((r) => !r.worktreeId && !r.shadowedBy),
+    [recipes]
+  );
 
   const {
     branchInput,

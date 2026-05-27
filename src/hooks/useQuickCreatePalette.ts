@@ -43,10 +43,11 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const [assignToSelf, setAssignToSelf] = useState(true);
   const comboCountRef = useRef(0);
 
-  const hasRecipes = recipes.length > 0;
+  const visibleRecipes = recipes.filter((r) => !r.shadowedBy);
+  const hasRecipes = visibleRecipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
     ? [
-        ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
+        ...visibleRecipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
         { _kind: "customize", id: "__customize__", name: "Customize…" },
       ]
     : [];

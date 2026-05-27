@@ -55,6 +55,10 @@ function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe
     const { agentModelId: _m, agentLaunchFlags: _f, ...rest } = terminal;
     return rest;
   });
+  if (recipe.shadowedBy !== undefined) {
+    const { shadowedBy: _s, ...rest } = recipe;
+    return changed ? { ...rest, terminals } : rest;
+  }
   return changed ? { ...recipe, terminals } : recipe;
 }
 
@@ -176,10 +180,13 @@ function mergeRecipes(
   projectRecipes: TerminalRecipe[],
   inRepoRecipes: TerminalRecipe[] = []
 ): TerminalRecipe[] {
-  // Project-local recipes that share a name with an in-repo recipe are shadowed
+  // Project-local recipes that share a name with an in-repo recipe are kept but
+  // marked as shadowed so the UI can surface them dimmed instead of hiding them.
   const inRepoNames = new Set(inRepoRecipes.map((r) => r.name));
-  const visibleProject = projectRecipes.filter((r) => !inRepoNames.has(r.name));
-  return [...globalRecipes, ...visibleProject, ...inRepoRecipes];
+  const projectWithMarkers = projectRecipes.map((r) =>
+    inRepoNames.has(r.name) ? { ...r, shadowedBy: r.name } : r
+  );
+  return [...globalRecipes, ...projectWithMarkers, ...inRepoRecipes];
 }
 
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
@@ -322,6 +329,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const updatedRecipe: TerminalRecipe = {
       ...recipe,
+      shadowedBy: undefined,
       ...sanitizedUpdates,
       id: newId,
       name: sanitizedUpdates.name ?? recipe.name,
@@ -438,7 +446,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!currentProjectId) throw new Error("No current project");
 
     const isGlobal = recipe.projectId === undefined;
-    const { projectId: _, worktreeId: _w, ...rest } = recipe;
+    const { projectId: _, worktreeId: _w, shadowedBy: _s, ...rest } = recipe;
     const promoted: TerminalRecipe = { ...rest, id: stableInRepoId(recipe.name) };
 
     const prevGlobal = get().globalRecipes;
@@ -500,7 +508,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   getRecipeById: (id) => {
-    return get().recipes.find((r) => r.id === id);
+    const recipe = get().recipes.find((r) => r.id === id);
+    if (recipe?.shadowedBy) {
+      return get().inRepoRecipes.find((r) => r.name === recipe.name) ?? recipe;
+    }
+    return recipe;
   },
 
   runRecipe: async (recipeId, worktreePath, worktreeId, context, options) => {
@@ -513,6 +525,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe ${recipeId} not found`);
     }
 
+    // getRecipeById resolves shadowed recipes to the winner, so use the resolved id
+    const resolvedId = recipe.id;
+
     const now = Date.now();
     // Atomic in-memory append — folding the read+write into a `set` callback
     // closes over the freshest state, so two near-simultaneous runs don't both
@@ -520,7 +535,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set((state) => {
       const apply = (list: TerminalRecipe[]) =>
         list.map((r) => {
-          if (r.id !== recipeId) return r;
+          if (r.id !== resolvedId) return r;
           return {
             ...r,
             lastUsedAt: now,
@@ -536,10 +551,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     });
     // Persist using the freshest snapshot so any racing run's contribution is
     // preserved in the persisted history rather than clobbered.
-    const persistSnapshot = get().recipes.find((r) => r.id === recipeId);
+    const persistSnapshot = get().recipes.find((r) => r.id === resolvedId);
     if (persistSnapshot) {
       get()
-        .updateRecipe(recipeId, {
+        .updateRecipe(resolvedId, {
           lastUsedAt: persistSnapshot.lastUsedAt,
           usageHistory: persistSnapshot.usageHistory,
         })
@@ -676,15 +691,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!recipe) {
       return null;
     }
-    // Export without projectId - it will be assigned on import
-    const { projectId: _projectId, ...exportableRecipe } = recipe;
+    // Export without projectId and shadowedBy - they are assigned/derived on import
+    const { projectId: _projectId, shadowedBy: _shadowedBy, ...exportableRecipe } = recipe;
     return JSON.stringify(exportableRecipe, null, 2);
   },
 
   exportRecipeToFile: async (id) => {
     const recipe = get().getRecipeById(id);
     if (!recipe) return false;
-    const { projectId: _p, ...exportable } = recipe;
+    const { projectId: _p, shadowedBy: _s, ...exportable } = recipe;
     const json = JSON.stringify(exportable, null, 2);
     return projectClient.exportRecipeToFile(recipe.name, json);
   },

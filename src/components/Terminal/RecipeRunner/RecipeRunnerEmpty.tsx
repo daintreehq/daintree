@@ -46,9 +46,13 @@ export function RecipeRunnerEmpty({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-text-muted text-center">
-          Launch agents, dev servers, and terminals together with one click
-        </p>
+        <div className="text-xs text-text-muted text-center space-y-1">
+          <p>Launch agents, dev servers, and terminals together with one click</p>
+          <p>
+            Recipes you save to the repo are shared as team recipes. Personal recipes stay on this
+            machine.
+          </p>
+        </div>
       )}
       <div className="flex justify-center">
         <button
