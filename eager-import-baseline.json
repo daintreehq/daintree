@@ -1,6 +1,6 @@
 {
-  "count": 1263,
-  "moduleCount": 1263,
+  "count": 1268,
+  "moduleCount": 1268,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -1068,7 +1068,12 @@
     },
     {
       "file": "electron/services/PluginService.ts",
-      "line": 327,
+      "line": 370,
+      "pattern": "sync-store-get"
+    },
+    {
+      "file": "electron/services/PluginService.ts",
+      "line": 1250,
       "pattern": "sync-store-get"
     },
     {
@@ -1403,57 +1408,57 @@
     },
     {
       "file": "electron/store.ts",
-      "line": 538,
+      "line": 544,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 540,
+      "line": 546,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 555,
+      "line": 561,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 570,
+      "line": 576,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 571,
+      "line": 577,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 573,
+      "line": 579,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 588,
+      "line": 594,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 590,
+      "line": 596,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 607,
+      "line": 613,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 616,
+      "line": 622,
       "pattern": "sync-fs"
     },
     {
       "file": "electron/store.ts",
-      "line": 617,
+      "line": 623,
       "pattern": "sync-fs"
     },
     {

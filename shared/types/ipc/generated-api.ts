@@ -305,6 +305,9 @@ export interface GeneratedElectronAPI {
     clearAuditLog(
       ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:clear-audit-log"]["result"]>;
+    contextMenuItems(
+      ...args: IpcInvokeMap["plugin:context-menu-items"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-menu-items"]["result"]>;
     exportAuditLog(
       ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
@@ -326,6 +329,9 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    keybindings(
+      ...args: IpcInvokeMap["plugin:keybindings"]["args"]
+    ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;

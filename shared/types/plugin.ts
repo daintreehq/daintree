@@ -33,6 +33,7 @@ export interface ToolbarButtonContribution {
 }
 
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
+export type ContextMenuLocation = "worktree" | "terminal" | "panel" | "file";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
@@ -58,6 +59,20 @@ export interface MenuItemContribution {
   actionId: string;
   location: MenuItemLocation;
   accelerator?: string;
+  when?: string;
+}
+
+export interface KeybindingContribution {
+  actionId: string;
+  combo: string;
+  when?: string;
+}
+
+export interface ContextMenuContribution {
+  actionId: string;
+  location: ContextMenuLocation;
+  label: string;
+  when?: string;
 }
 
 /**
@@ -105,6 +120,8 @@ export interface PluginManifest {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
+    keybindings: KeybindingContribution[];
+    contextMenus: ContextMenuContribution[];
     experimental_views: ViewContribution[];
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];

@@ -555,6 +555,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "plugin:context-menu-items": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
+  };
   "plugin:export-audit-log": {
     args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
     result: boolean;
@@ -574,6 +578,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:get-audit-records": {
     args: [];
     result: import("./pluginAudit.js").PluginActionAuditRecord[];
+  };
+  "plugin:keybindings": {
+    args: [];
+    result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
   };
   "plugin:list": {
     args: [];
