@@ -152,6 +152,12 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+          # Distinguishes pre-release AppX versions — parseInt() in electron-builder's
+          # getVersionInWeirdWindowsForm discards semver suffixes, so 0.14.1-rc.1 and
+          # 0.14.1 would both map to 0.14.1.0 in the manifest. BUILD_NUMBER fills the
+          # 4th slot so every build gets a unique A.B.C.D for Store update detection.
+          # github.run_number is per-workflow monotonic (~weekly releases → fits uint16).
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build
           # Hard security gate (#9148) — fail before packaging if any E2E
