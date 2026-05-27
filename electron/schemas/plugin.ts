@@ -50,7 +50,8 @@ export const MenuItemContributionSchema = z.object({
 /**
  * Reserved contribution point. Shape is validated but the runtime does not
  * yet act on these entries — `PluginService` logs a warning and skips them.
- * See `docs/architecture/plugin-views-and-mcp-servers.md`.
+ * The `experimental_` prefix signals that the shape may change before the
+ * feature ships. See `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z.object({
   id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
