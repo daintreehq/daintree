@@ -9,6 +9,11 @@ import { buildReportIssueUrl } from "./buildReportIssueUrl";
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/plugin";
 import { notify } from "@/lib/notify";
 
+// Upper bound on how long the report path waits for the plugin diagnostics
+// snapshot before proceeding without it. Generous for serializing ≤500
+// capped-message lines; guards the Report button from a stalled IPC call.
+const PLUGIN_DIAGNOSTICS_TIMEOUT_MS = 2000;
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: React.ComponentType<ErrorFallbackProps>;
@@ -175,7 +180,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         pluginDiagnostics = fetchDiagnostics
           ? await Promise.race([
               fetchDiagnostics,
-              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
+              new Promise<undefined>((resolve) =>
+                setTimeout(() => resolve(undefined), PLUGIN_DIAGNOSTICS_TIMEOUT_MS)
+              ),
             ])
           : undefined;
       } catch {
