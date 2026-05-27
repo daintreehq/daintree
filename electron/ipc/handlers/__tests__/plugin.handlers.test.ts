@@ -42,6 +42,13 @@ vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
 }));
 
+const mockAppendAuditRecord = vi.fn();
+vi.mock("../../../services/pluginAuditService.js", () => ({
+  pluginAuditService: {
+    appendRecord: (...args: unknown[]) => mockAppendAuditRecord(...args),
+  },
+}));
+
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
 vi.mock("electron", () => ({
@@ -224,6 +231,77 @@ describe("registerPluginHandlers", () => {
       "plugin:invoke rejected: untrusted sender"
     );
     expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits a successful dispatch", async () => {
+    mockDispatchHandler.mockResolvedValue({ data: "hello" });
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    await invokeHandler(
+      { senderFrame: { url: "app://daintree/" }, sender: { id: 42 } },
+      "acme.my-plugin",
+      "get-data",
+      "arg1"
+    );
+    expect(mockAppendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "acme.my-plugin",
+        channel: "get-data",
+        result: "success",
+        webContentsId: 42,
+      })
+    );
+    expect(mockAppendAuditRecord.mock.calls[0][0]).not.toHaveProperty("errorCode");
+  });
+
+  it("PLUGIN_INVOKE audits a thrown dispatch with DISPATCH_THREW and rethrows", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("boom"));
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    await expect(
+      invokeHandler({ senderFrame: { url: "app://daintree/" }, sender: { id: 5 } }, "x", "y")
+    ).rejects.toThrow("boom");
+    expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "x",
+        channel: "y",
+        result: "error",
+        errorCode: "DISPATCH_THREW",
+        webContentsId: 5,
+      })
+    );
+  });
+
+  it("PLUGIN_INVOKE audits an untrusted sender with UNTRUSTED_SENDER", async () => {
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    await expect(
+      invokeHandler(
+        { senderFrame: { url: "https://evil.com/x.html" }, sender: { id: 8 } },
+        "acme.my-plugin",
+        "get-data"
+      )
+    ).rejects.toThrow("untrusted sender");
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+    expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "acme.my-plugin",
+        channel: "get-data",
+        result: "rejected",
+        errorCode: "UNTRUSTED_SENDER",
+        webContentsId: 8,
+      })
+    );
   });
 });
 
@@ -681,6 +759,74 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("audits a rejecting provider with PROVIDER_REJECTED and not the healthy one", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.bad",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockRejectedValue(new Error("boom")) },
+      },
+      {
+        pluginId: "p.good",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "3" } }) },
+      },
+    ]);
+    const handler = getHandler();
+    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    expect(mockAppendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "p.bad",
+        channel: "plugin:file-decorations-get",
+        contributionId: "d",
+        scope: "worktree-diff:/r",
+        result: "error",
+        errorCode: "PROVIDER_REJECTED",
+      })
+    );
+  });
+
+  it("audits a timed-out provider with TIMEOUT", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetFileDecorationImpls.mockReturnValue([
+        {
+          pluginId: "p.hang",
+          contributionId: "d",
+          impl: { provideDecorations: vi.fn().mockReturnValue(new Promise(() => {})) },
+        },
+      ]);
+      const handler = getHandler();
+      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(3000);
+      await promise;
+      expect(mockAppendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "p.hang",
+          channel: "plugin:file-decorations-get",
+          result: "error",
+          errorCode: "TIMEOUT",
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not audit when every provider settles successfully", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.good",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "1" } }) },
+      },
+    ]);
+    const handler = getHandler();
+    await handler({}, "s:1", ["a.ts"]);
+    expect(mockAppendAuditRecord).not.toHaveBeenCalled();
   });
 });
 

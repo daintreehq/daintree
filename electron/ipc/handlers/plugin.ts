@@ -28,6 +28,15 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import { pluginAuditService } from "../../services/pluginAuditService.js";
+import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
+import { scrubSecrets } from "../../utils/secretScrubber.js";
+import { sanitizePath } from "../../utils/pathScrubber.js";
+
+const scrubSummary = (s: string): string => scrubSecrets(sanitizePath(s));
+
+/** Synthetic channel id used for file-decoration provider audit records. */
+const FILE_DECORATIONS_AUDIT_CHANNEL = "plugin:file-decorations-get";
 
 async function handleList(): Promise<LoadedPluginInfo[]> {
   return pluginService.listPlugins();
@@ -153,6 +162,9 @@ async function handleFileDecorationsGet(
   if (impls.length === 0) return {};
 
   const merged: Record<string, FileDecoration> = {};
+  // Capture a per-provider start so a rejection's audited duration reflects
+  // the time until it actually rejected; a timeout always lands at ~the budget.
+  const starts = impls.map(() => Date.now());
   const results = await Promise.allSettled(
     impls.map(({ impl }) =>
       Promise.race([
@@ -164,6 +176,7 @@ async function handleFileDecorationsGet(
     )
   );
 
+  const scrubbedScope = sanitizePath(scope);
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const { pluginId, contributionId } = impls[i];
@@ -172,12 +185,34 @@ async function handleFileDecorationsGet(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" failed for scope "${scope}":`,
         r.reason
       );
+      // Audit failures only — successful settles run at render-tree-change
+      // frequency and would bloat the ring buffer (#9240).
+      pluginAuditService.appendRecord({
+        pluginId,
+        channel: FILE_DECORATIONS_AUDIT_CHANNEL,
+        contributionId,
+        scope: scrubbedScope,
+        argsSummary: scrubbedScope,
+        result: "error",
+        errorCode: "PROVIDER_REJECTED",
+        durationMs: Date.now() - starts[i]!,
+      });
       continue;
     }
     if (r.value === DECORATION_TIMEOUT) {
       console.warn(
         `[Plugin] fileDecorationProvider "${pluginId}.${contributionId}" timed out after ${DECORATION_PROVIDER_TIMEOUT_MS}ms for scope "${scope}"`
       );
+      pluginAuditService.appendRecord({
+        pluginId,
+        channel: FILE_DECORATIONS_AUDIT_CHANNEL,
+        contributionId,
+        scope: scrubbedScope,
+        argsSummary: scrubbedScope,
+        result: "error",
+        errorCode: "TIMEOUT",
+        durationMs: Date.now() - starts[i]!,
+      });
       continue;
     }
     if (!r.value || typeof r.value !== "object") continue;
@@ -244,17 +279,52 @@ export function registerPluginHandlers(): () => void {
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
+      const start = Date.now();
+      const webContentsId = event.sender.id;
+      const argsSummary = summarizeMcpArgs(args, scrubSummary);
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+        // Security-relevant rejection — audit even though it throws (#9240).
+        pluginAuditService.appendRecord({
+          pluginId,
+          channel,
+          argsSummary,
+          result: "rejected",
+          errorCode: "UNTRUSTED_SENDER",
+          durationMs: Date.now() - start,
+          webContentsId,
+        });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
       const ctx: PluginIpcContext = {
         projectId: null,
         worktreeId: null,
-        webContentsId: event.sender.id,
+        webContentsId,
         pluginId,
       };
-      return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+      try {
+        const result = await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+        pluginAuditService.appendRecord({
+          pluginId,
+          channel,
+          argsSummary,
+          result: "success",
+          durationMs: Date.now() - start,
+          webContentsId,
+        });
+        return result;
+      } catch (err) {
+        pluginAuditService.appendRecord({
+          pluginId,
+          channel,
+          argsSummary,
+          result: "error",
+          errorCode: "DISPATCH_THREW",
+          durationMs: Date.now() - start,
+          webContentsId,
+        });
+        throw err;
+      }
     }
   );
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));

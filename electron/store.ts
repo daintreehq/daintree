@@ -14,6 +14,8 @@ import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
 import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mcpServer.js";
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
+import type { PluginAuditRecord } from "../shared/types/ipc/plugin.js";
+import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/plugin.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
@@ -306,6 +308,12 @@ export interface StoreSchema {
    */
   plugins: {
     disabledBuiltins: string[];
+    /** Kill switch for the plugin IPC audit ring buffer. */
+    auditEnabled: boolean;
+    /** Ring-buffer cap, clamped to [PLUGIN_AUDIT_MIN_RECORDS, PLUGIN_AUDIT_MAX_RECORDS]. */
+    auditMaxRecords: number;
+    /** Persisted audit records for the plugin host (`plugin:invoke` + file decorations). */
+    auditLog?: PluginAuditRecord[];
   };
   /**
    * Global default forge provider id for newly opened projects. `null` (or
@@ -476,6 +484,8 @@ const storeOptions = {
     logLevelOverrides: {},
     plugins: {
       disabledBuiltins: [],
+      auditEnabled: true,
+      auditMaxRecords: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
     },
   },
   cwd: process.env.DAINTREE_USER_DATA,

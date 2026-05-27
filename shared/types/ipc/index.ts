@@ -28,3 +28,4 @@ export * from "./webviewConsole.js";
 export * from "./demo.js";
 export * from "./telemetryPreview.js";
 export * from "./help.js";
+export * from "./plugin.js";
