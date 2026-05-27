@@ -106,9 +106,9 @@ describe("SpawnErrorBanner", () => {
       // Resource-limit errors make "Terminal limits" the primary inline action.
       expect(overflow().contains(limits)).toBe(false);
       // Retry is demoted into the overflow for these codes.
-      expect(overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))).toBe(
-        true
-      );
+      expect(
+        overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))
+      ).toBe(true);
     }
   );
 
@@ -136,9 +136,9 @@ describe("SpawnErrorBanner", () => {
     fireEvent.click(changeDir);
     expect(onUpdateCwd).toHaveBeenCalledWith("t-1");
     // Retry is demoted into the overflow for cwd errors.
-    expect(overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))).toBe(
-      true
-    );
+    expect(
+      overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))
+    ).toBe(true);
   });
 
   it("invokes onTrash from the overflow menu", () => {

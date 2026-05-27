@@ -335,9 +335,7 @@ export function BlockedNavBanner({
         contextLine={url}
         severity="error"
         action={primary}
-        trailingSlot={
-          overflow.length > 0 ? <BannerOverflowMenu actions={overflow} /> : undefined
-        }
+        trailingSlot={overflow.length > 0 ? <BannerOverflowMenu actions={overflow} /> : undefined}
         onClose={handleDismiss}
         role={role}
       />

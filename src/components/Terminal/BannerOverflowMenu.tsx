@@ -18,7 +18,10 @@ interface BannerOverflowMenuProps {
  * options behind a `⋯` trigger — the same shape `SafeModeBanner` uses for its
  * details popover. Renders nothing when there are no overflow actions.
  */
-export function BannerOverflowMenu({ actions, ariaLabel = "More options" }: BannerOverflowMenuProps) {
+export function BannerOverflowMenu({
+  actions,
+  ariaLabel = "More options",
+}: BannerOverflowMenuProps) {
   const [open, setOpen] = useState(false);
 
   if (actions.length === 0) return null;

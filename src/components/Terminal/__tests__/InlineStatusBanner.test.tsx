@@ -31,7 +31,12 @@ beforeAll(() => {
 describe("InlineStatusBanner", () => {
   it("defaults to role='alert' and emits no aria-live attribute", () => {
     render(
-      <InlineStatusBanner icon={XCircle} title="Something broke" severity="error" animated={false} />
+      <InlineStatusBanner
+        icon={XCircle}
+        title="Something broke"
+        severity="error"
+        animated={false}
+      />
     );
     const region = screen.getByRole("alert");
     expect(region.hasAttribute("aria-live")).toBe(false);
@@ -71,7 +76,9 @@ describe("InlineStatusBanner", () => {
     ["info", Info, "--color-status-info"],
     ["success", CheckCircle2, "--color-status-success"],
   ] as const)("renders %s severity using its status token", (severity, icon, token) => {
-    render(<InlineStatusBanner icon={icon} title={severity} severity={severity} animated={false} />);
+    render(
+      <InlineStatusBanner icon={icon} title={severity} severity={severity} animated={false} />
+    );
     const region = screen.getByRole("alert");
     expect(region.style.backgroundColor).toContain(token);
     expect(region.style.borderBottom).toContain(token);

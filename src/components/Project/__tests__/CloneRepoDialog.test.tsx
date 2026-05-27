@@ -126,12 +126,7 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
         <span>{title}</span>
         <span>{description}</span>
         {actionList.map((a) => (
-          <button
-            key={a.id}
-            type="button"
-            aria-label={a.ariaLabel}
-            onClick={a.onClick}
-          >
+          <button key={a.id} type="button" aria-label={a.ariaLabel} onClick={a.onClick}>
             {a.label}
           </button>
         ))}
