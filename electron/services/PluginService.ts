@@ -85,6 +85,8 @@ interface LoadedPlugin {
   resolvedMain?: string;
   loadedAt: number;
   isBuiltin: boolean;
+  /** SHA-256 hex digest of the `.dntr` archive, set by the installer at install time. */
+  archiveHash?: string;
 }
 
 /**
@@ -1065,7 +1067,25 @@ export class PluginService {
       dir: p.dir,
       loadedAt: p.loadedAt,
       isBuiltin: p.isBuiltin,
+      archiveHash: p.archiveHash,
     }));
+  }
+
+  /**
+   * Record the archive hash for a loaded plugin. Called by the installer (F21)
+   * after computing SHA-256 over the `.dntr` archive bytes.
+   * Rejects non-hex inputs — only lowercase SHA-256 hex digests are valid.
+   */
+  setPluginArchiveHash(pluginId: string, archiveHash: string): void {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return;
+    if (!/^[a-f0-9]{64}$/.test(archiveHash)) {
+      console.warn(
+        `[PluginService] setPluginArchiveHash for "${pluginId}": invalid hash format, ignoring`
+      );
+      return;
+    }
+    plugin.archiveHash = archiveHash;
   }
 
   /**
