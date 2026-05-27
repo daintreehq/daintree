@@ -85,13 +85,15 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   /**
-   * Prune `pinnedButtons` entries for plugin buttons (`plugin.` prefix) that
-   * are no longer in the loaded plugin set. `pinnedButtons` is renderer-local
-   * persisted state with no main-process access, so an uninstalled plugin's
-   * stale hide entry can only be swept here, driven by the plugin lifecycle
-   * snapshot in `usePluginToolbarButtons`. Built-in (non-`plugin.`) keys are
-   * never touched. No-ops (returns state unchanged) when nothing is stale so
-   * the per-snapshot call doesn't churn the persist layer.
+   * Prune `pinnedButtons` entries for plugin buttons that are no longer in the
+   * loaded plugin set. Plugin button ids are namespaced `{pluginId}.{id}` and
+   * therefore always contain a dot; built-in toolbar button ids never do, so a
+   * dot is the discriminator. `pinnedButtons` is renderer-local persisted state
+   * with no main-process access, so an uninstalled plugin's stale hide entry
+   * can only be swept here, driven by the plugin lifecycle snapshot in
+   * `usePluginToolbarButtons`. Built-in (dot-free) keys are never touched.
+   * No-ops (returns state unchanged) when nothing is stale so the per-snapshot
+   * call doesn't churn the persist layer.
    */
   sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
@@ -155,7 +157,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
-            (key) => key.startsWith("plugin.") && !validSet.has(key)
+            (key) => key.includes(".") && !validSet.has(key)
           );
           if (staleKeys.length === 0) return state;
           const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
@@ -182,7 +184,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 8,
+      version: 9,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -293,6 +295,18 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // valid v8 shape so `merge()` doesn't fall back to overwriting the
             // freshly-built `pinnedButtons` with the default empty map.
             state.layout = { pinnedButtons: {} } as unknown as Record<string, unknown>;
+          }
+        }
+        if (version < 9) {
+          // Plugin toolbar button ids dropped the redundant `plugin.` prefix,
+          // standardizing on `{pluginId}.{id}` (#9281). Strip stale
+          // `plugin.`-prefixed `pinnedButtons` keys so they don't linger as
+          // orphaned hide entries that never match a registered button.
+          const layout = state.layout as { pinnedButtons?: Record<string, unknown> } | undefined;
+          if (layout?.pinnedButtons) {
+            for (const key of Object.keys(layout.pinnedButtons)) {
+              if (key.startsWith("plugin.")) delete layout.pinnedButtons[key];
+            }
           }
         }
         return state as unknown as ToolbarPreferencesState;

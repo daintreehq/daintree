@@ -31,7 +31,10 @@ export function getAllPluginToolbarButtonConfigs(): ToolbarButtonConfig[] {
 }
 
 export function isRegisteredPluginButton(id: string): boolean {
-  return id.startsWith("plugin.") && id in TOOLBAR_BUTTON_REGISTRY;
+  // Every entry in the registry is a plugin-contributed button by definition,
+  // so registry membership is the sole discriminator now that button ids no
+  // longer carry a `plugin.` prefix.
+  return id in TOOLBAR_BUTTON_REGISTRY;
 }
 
 export function unregisterPluginToolbarButtons(pluginId: string): void {

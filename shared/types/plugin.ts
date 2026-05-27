@@ -28,6 +28,35 @@ export interface ToolbarButtonContribution {
   priority?: 1 | 2 | 3 | 4 | 5;
 }
 
+/**
+ * A `contributes.commands` entry. Each command is registered at load time as a
+ * synthetic plugin action with id `{pluginId}.{name}` (see {@link pluginActionId}).
+ * `name` doubles as the filesystem-convention handler stem: the host probes
+ * `src/{name}.{ts,tsx,js,mjs}` and lazily imports the module's default export on
+ * first dispatch. A command with no matching handler file (and no imperative
+ * registration) still appears in the palette but surfaces a "no handler" error
+ * when dispatched.
+ */
+export interface CommandContribution {
+  name: string;
+  title: string;
+  description: string;
+  category: string;
+  kind: "command" | "query";
+  danger: "safe" | "confirm";
+  keywords?: string[];
+}
+
+/**
+ * Canonical namespacing for plugin-contributed identifiers. Both action ids and
+ * toolbar button ids resolve to `{pluginId}.{name}` — keeping the construction
+ * in one helper prevents the prefix drift that previously left toolbar buttons
+ * on a divergent `plugin.{pluginId}.{id}` form.
+ */
+export function pluginActionId(pluginId: string, name: string): string {
+  return `${pluginId}.${name}`;
+}
+
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 
 export const BUILT_IN_PLUGIN_PERMISSIONS = [
@@ -98,6 +127,7 @@ export interface PluginManifest {
   permissions?: PluginPermission[];
   contributes: {
     panels: PanelContribution[];
+    commands: CommandContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
     views: ViewContribution[];

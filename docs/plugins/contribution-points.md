@@ -196,7 +196,7 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `plugin.{pluginId}.{id}`. |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | Registered icon ID. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |

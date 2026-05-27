@@ -17,7 +17,7 @@ export interface PluginToolbarButtonState {
  * once a push arrives, a later-resolving mount-time pull is dropped to avoid
  * rolling back state (mirrors `usePluginPanelKinds`).
  *
- * Stale `plugin.` entries in the `toolbarPreferencesStore` `pinnedButtons`
+ * Stale plugin-button entries in the `toolbarPreferencesStore` `pinnedButtons`
  * map (renderer-local persisted state, no main-process access) are pruned
  * here off the lifecycle snapshot — but ONLY off an authoritative one. The
  * pull and load-time pushes are partial/growing (plugins load concurrently
@@ -74,7 +74,7 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
   }, []);
 
   const buttonIds = Array.from(configs.keys()) as PluginToolbarButtonId[];
-  const isRegistered = (id: string) => id.startsWith("plugin.") && configs.has(id);
+  const isRegistered = (id: string) => configs.has(id);
 
   return { buttonIds, configs, isRegistered };
 }

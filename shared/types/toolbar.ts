@@ -1,7 +1,7 @@
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "../config/agentIds.js";
 
-/** Identifier for plugin-contributed toolbar buttons (namespaced as plugin.name.buttonId) */
-export type PluginToolbarButtonId = `plugin.${string}`;
+/** Identifier for plugin-contributed toolbar buttons (namespaced as `{pluginId}.{buttonId}`) */
+export type PluginToolbarButtonId = `${string}.${string}`;
 
 /** Identifier for any toolbar button (built-in or plugin-contributed) */
 export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;

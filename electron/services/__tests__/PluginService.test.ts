@@ -312,6 +312,41 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
     }
   });
 
+  it("defaults contributes.commands to [] when contributes is absent", () => {
+    const result = PluginManifestSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.commands).toEqual([]);
+    }
+  });
+
+  it("applies kind/danger defaults to a command and accepts required-only fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        commands: [{ name: "do-thing", title: "Do", description: "d", category: "c" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.commands[0]).toMatchObject({
+        name: "do-thing",
+        kind: "command",
+        danger: "safe",
+      });
+    }
+  });
+
+  it("rejects a command name that violates the slug pattern", () => {
+    const result = PluginManifestSchema.safeParse({
+      ...validBase,
+      contributes: {
+        commands: [{ name: "Do_Thing", title: "Do", description: "d", category: "c" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("defaults contributes.forgeProviders to [] when contributes is an empty object", () => {
     const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
@@ -722,7 +757,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.toolbar-test.my-btn",
+        id: "acme.toolbar-test.my-btn",
         label: "My Button",
         iconId: "puzzle",
         actionId: "acme.toolbar-test.doThing",
@@ -753,7 +788,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.acme.default-priority.btn",
+        id: "acme.default-priority.btn",
         priority: 3,
       })
     );
@@ -1763,6 +1798,195 @@ describe("createHost — registerForgeProvider", () => {
     // path during unloadPlugin — independent from the bulk unregisterForgeProviderImpls
     // belt-and-suspenders call.
     expect(unregisterForgeProviderImpl).toHaveBeenCalledWith("acme.forge-flush", "github", impl);
+  });
+});
+
+describe("Manifest commands", () => {
+  it("registers a manifest command as a plugin action descriptor", async () => {
+    await writePlugin("cmd-desc", {
+      name: "acme.cmd-desc",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            name: "do-thing",
+            title: "Do Thing",
+            description: "Does a thing",
+            category: "Demo",
+            danger: "confirm",
+            keywords: ["demo"],
+          },
+        ],
+      },
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const action = service.listPluginActions().find((a) => a.id === "acme.cmd-desc.do-thing");
+    expect(action).toMatchObject({
+      pluginId: "acme.cmd-desc",
+      id: "acme.cmd-desc.do-thing",
+      title: "Do Thing",
+      description: "Does a thing",
+      category: "Demo",
+      kind: "command",
+      danger: "confirm",
+      effectiveDanger: "confirm",
+    });
+    expect(action?.keywords).toEqual(["demo"]);
+  });
+
+  it("defaults command kind and danger when omitted", async () => {
+    await writePlugin("cmd-defaults", {
+      name: "acme.cmd-defaults",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const action = service.listPluginActions().find((a) => a.id === "acme.cmd-defaults.run");
+    expect(action).toMatchObject({ kind: "command", danger: "safe", effectiveDanger: "safe" });
+  });
+
+  it("lazily imports and dispatches a filesystem-convention handler", async () => {
+    await writePlugin("cmd-fs", {
+      name: "acme.cmd-fs",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-fs", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(
+      path.join(srcDir, "run.mjs"),
+      "export default (ctx, args) => ({ ok: true, ctxPlugin: ctx.pluginId, args });\n"
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const ctx = makeCtx("acme.cmd-fs");
+    const result = await service.dispatchHandler("acme.cmd-fs", "acme.cmd-fs.run", ctx, [{ n: 1 }]);
+    expect(result).toEqual({ ok: true, ctxPlugin: "acme.cmd-fs", args: { n: 1 } });
+
+    // Second dispatch reuses the cached default export and still resolves.
+    const result2 = await service.dispatchHandler("acme.cmd-fs", "acme.cmd-fs.run", ctx, [
+      { n: 2 },
+    ]);
+    expect(result2).toMatchObject({ ok: true, args: { n: 2 } });
+  });
+
+  it("prefers the earlier extension when multiple handler files exist", async () => {
+    await writePlugin("cmd-precedence", {
+      name: "acme.cmd-precedence",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-precedence", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    // `.js` precedes `.mjs`; only the `.js` handler should be imported.
+    await fs.writeFile(path.join(srcDir, "run.js"), "export default () => 'from-js';\n");
+    await fs.writeFile(path.join(srcDir, "run.mjs"), "export default () => 'from-mjs';\n");
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const result = await service.dispatchHandler(
+      "acme.cmd-precedence",
+      "acme.cmd-precedence.run",
+      makeCtx("acme.cmd-precedence"),
+      []
+    );
+    expect(result).toBe("from-js");
+  });
+
+  it("throws 'no handler' on dispatch when a command has no handler file", async () => {
+    await writePlugin("cmd-nohandler", {
+      name: "acme.cmd-nohandler",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "ghost", title: "Ghost", description: "No file", category: "Demo" }],
+      },
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // The command is still registered (visible in the palette).
+    expect(service.listPluginActions().some((a) => a.id === "acme.cmd-nohandler.ghost")).toBe(true);
+
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-nohandler",
+        "acme.cmd-nohandler.ghost",
+        makeCtx("acme.cmd-nohandler"),
+        []
+      )
+    ).rejects.toThrow(/Command "acme\.cmd-nohandler\.ghost" has no handler/);
+  });
+
+  it("skips a command whose id collides with a built-in action", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // "worktree.overview" + "open" resolves to the built-in "worktree.overview.open".
+    await writePlugin("cmd-collide", {
+      name: "worktree.overview",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "open", title: "Open", description: "Collides", category: "Demo" }],
+      },
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPluginActions().some((a) => a.id === "worktree.overview.open")).toBe(false);
+    await expect(
+      service.dispatchHandler(
+        "worktree.overview",
+        "worktree.overview.open",
+        makeCtx("worktree.overview"),
+        []
+      )
+    ).rejects.toThrow(/No plugin handler registered/);
+    errorSpy.mockRestore();
+  });
+
+  it("clears command handlers on unload", async () => {
+    await writePlugin("cmd-unload", {
+      name: "acme.cmd-unload",
+      version: "1.0.0",
+      contributes: {
+        commands: [{ name: "run", title: "Run", description: "Runs", category: "Demo" }],
+      },
+    });
+    const srcDir = path.join(tmpDir, "cmd-unload", "src");
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(path.join(srcDir, "run.mjs"), "export default () => 'ok';\n");
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(
+      await service.dispatchHandler(
+        "acme.cmd-unload",
+        "acme.cmd-unload.run",
+        makeCtx("acme.cmd-unload"),
+        []
+      )
+    ).toBe("ok");
+
+    service.unloadPlugin("acme.cmd-unload");
+    await expect(
+      service.dispatchHandler(
+        "acme.cmd-unload",
+        "acme.cmd-unload.run",
+        makeCtx("acme.cmd-unload"),
+        []
+      )
+    ).rejects.toThrow(/No plugin handler registered/);
   });
 });
 

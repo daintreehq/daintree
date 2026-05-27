@@ -4,6 +4,7 @@ import { BUILT_IN_PLUGIN_PERMISSIONS } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PanelContribution,
+  CommandContribution,
   ToolbarButtonContribution,
   MenuItemContribution,
   ViewContribution,
@@ -28,6 +29,20 @@ export const PanelContributionSchema = z.object({
   canRestart: z.boolean().default(false),
   canConvert: z.boolean().default(false),
   showInPalette: z.boolean().default(true),
+});
+
+const COMMAND_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+export const CommandContributionSchema = z.object({
+  name: z.string().min(1).max(64).regex(COMMAND_NAME_PATTERN, {
+    error: "Command name must match /^[a-z0-9][a-z0-9-]*$/",
+  }),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  category: z.string().min(1),
+  kind: z.enum(["command", "query"]).default("command"),
+  danger: z.enum(["safe", "confirm"]).default("safe"),
+  keywords: z.array(z.string().min(1)).optional(),
 });
 
 export const ToolbarButtonContributionSchema = z.object({
@@ -139,6 +154,7 @@ export const PluginManifestSchema = z
     contributes: z
       .object({
         panels: z.array(PanelContributionSchema).default([]),
+        commands: z.array(CommandContributionSchema).default([]),
         toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
         menuItems: z.array(MenuItemContributionSchema).default([]),
         views: z.array(ViewContributionSchema).default([]),
@@ -148,6 +164,7 @@ export const PluginManifestSchema = z
       })
       .default({
         panels: [],
+        commands: [],
         toolbarButtons: [],
         menuItems: [],
         views: [],
@@ -161,6 +178,7 @@ export const PluginManifestSchema = z
 export type {
   PluginManifest,
   PanelContribution,
+  CommandContribution,
   ToolbarButtonContribution,
   MenuItemContribution,
   ViewContribution,

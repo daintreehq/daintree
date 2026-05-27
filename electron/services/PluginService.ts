@@ -16,6 +16,8 @@ import type {
   PluginActionDescriptor,
   BuiltInPluginPermission,
 } from "../../shared/types/plugin.js";
+import { pluginActionId } from "../../shared/types/plugin.js";
+import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -55,6 +57,22 @@ import { store } from "../store.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+
+/** Filesystem-convention handler extensions, probed in precedence order. */
+const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
+
+/**
+ * Lazily-built lookup of built-in action ids for command-collision rejection.
+ * `BUILT_IN_ACTION_IDS` is a static array; the Set is memoised on first use so
+ * each `loadPlugin()` does an O(1) membership check instead of a linear scan.
+ */
+let builtInActionIdSet: Set<string> | null = null;
+function getBuiltInActionIdSet(): Set<string> {
+  if (!builtInActionIdSet) {
+    builtInActionIdSet = new Set<string>(BUILT_IN_ACTION_IDS);
+  }
+  return builtInActionIdSet;
+}
 
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
@@ -151,6 +169,20 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
+  /**
+   * Resolved handler file path for each manifest command, keyed by action id
+   * (`{pluginId}.{name}`). Populated at load time by probing
+   * `src/{name}.{ext}`; absent entries mean no handler file was found (the
+   * command dispatches to a "no handler" error). The `import()` itself is
+   * deferred to first dispatch to keep activation within budget.
+   */
+  private commandHandlerPaths = new Map<string, string>();
+  /**
+   * Memoised default export for each manifest command, keyed by action id.
+   * Filled on first dispatch so subsequent calls skip the module loader
+   * entirely. Cleared per-plugin on unload.
+   */
+  private commandHandlerFns = new Map<string, PluginIpcHandler>();
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
    * Most recent activation error per plugin id. Populated by the catch in
@@ -473,7 +505,7 @@ export class PluginService {
     }
 
     for (const btn of manifest.contributes.toolbarButtons) {
-      const buttonId = `plugin.${manifest.name}.${btn.id}` as PluginToolbarButtonId;
+      const buttonId = pluginActionId(manifest.name, btn.id) as PluginToolbarButtonId;
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
@@ -518,6 +550,12 @@ export class PluginService {
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
     this.plugins.set(manifest.name, plugin);
+
+    // Wire manifest commands before importing main so the filesystem-convention
+    // handlers are dispatchable even if `activate()` later throws. Each command
+    // resolves to an action id `{pluginId}.{name}` and binds a lazy handler that
+    // imports `src/{name}.{ext}` on first dispatch.
+    await this.registerManifestCommands(manifest, pluginDir);
 
     if (plugin.resolvedMain) {
       try {
@@ -914,6 +952,117 @@ export class PluginService {
     return resolved;
   }
 
+  /**
+   * Register every `contributes.commands` entry as a synthetic plugin action.
+   * For each command: reject ids that collide with a built-in action, probe the
+   * `src/{name}.{ext}` handler file (storing the resolved path for lazy import),
+   * register the descriptor via {@link registerPluginAction}, and bind a lazy
+   * dispatch handler into `handlerMap` so `plugin:invoke` routes to it. Commands
+   * with no handler file are still registered (visible in the palette) but throw
+   * a "no handler" error when dispatched — never at load time.
+   */
+  private async registerManifestCommands(
+    manifest: PluginManifest,
+    pluginDir: string
+  ): Promise<void> {
+    const builtins = getBuiltInActionIdSet();
+    for (const cmd of manifest.contributes.commands) {
+      const actionId = pluginActionId(manifest.name, cmd.name);
+      if (builtins.has(actionId)) {
+        console.error(
+          `[PluginService] Plugin "${manifest.name}" command "${cmd.name}" resolves to action id "${actionId}", which collides with a built-in action — skipping`
+        );
+        continue;
+      }
+
+      const resolvedPath = await this.resolveCommandHandlerPath(pluginDir, cmd.name);
+      if (resolvedPath) {
+        this.commandHandlerPaths.set(actionId, resolvedPath);
+      }
+
+      try {
+        this.registerPluginAction(manifest.name, {
+          id: actionId,
+          title: cmd.title,
+          description: cmd.description,
+          category: cmd.category,
+          kind: cmd.kind,
+          danger: cmd.danger,
+          keywords: cmd.keywords,
+        });
+      } catch (err) {
+        console.error(
+          `[PluginService] Failed to register manifest command "${actionId}" for "${manifest.name}":`,
+          err
+        );
+        this.commandHandlerPaths.delete(actionId);
+        continue;
+      }
+
+      // The renderer dispatches the action by its full id, so the handler is
+      // keyed `{pluginId}:{actionId}` to match `dispatchHandler`'s lookup.
+      this.handlerMap.set(`${manifest.name}:${actionId}`, this.makeCommandHandler(actionId));
+    }
+  }
+
+  /**
+   * Probe `src/{name}.{ext}` for the command handler file, returning the first
+   * existing path in {@link COMMAND_HANDLER_EXTENSIONS} precedence order, or
+   * `null` if none exist (or the path escapes the plugin directory). The
+   * `access` check runs at load time; only the `import()` is deferred.
+   */
+  private async resolveCommandHandlerPath(pluginDir: string, name: string): Promise<string | null> {
+    for (const ext of COMMAND_HANDLER_EXTENSIONS) {
+      const candidate = this.resolveEntryPath(pluginDir, path.join("src", `${name}${ext}`));
+      if (!candidate) continue;
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch {
+        // Not present at this extension — try the next.
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Build the lazy dispatch handler for a manifest command. On first call it
+   * imports the resolved handler module and caches its default export; later
+   * calls reuse the cached function. A command with no resolved handler file
+   * throws the documented "no handler" error so the renderer surfaces a toast.
+   */
+  private makeCommandHandler(actionId: string): PluginIpcHandler {
+    return async (ctx, ...args) => {
+      let fn = this.commandHandlerFns.get(actionId);
+      if (!fn) {
+        const resolvedPath = this.commandHandlerPaths.get(actionId);
+        if (!resolvedPath) {
+          throw new Error(`Command "${actionId}" has no handler`);
+        }
+        const mod = (await import(pathToFileURL(resolvedPath).href)) as { default?: unknown };
+        if (typeof mod.default !== "function") {
+          throw new Error(
+            `Command "${actionId}" handler module "${resolvedPath}" has no default export function`
+          );
+        }
+        fn = mod.default as PluginIpcHandler;
+        this.commandHandlerFns.set(actionId, fn);
+      }
+      return await fn(ctx, ...args);
+    };
+  }
+
+  /** Drop cached command handler paths/functions for an unloaded plugin. */
+  private removeCommandHandlers(pluginId: string): void {
+    const prefix = `${pluginId}.`;
+    for (const key of [...this.commandHandlerPaths.keys()]) {
+      if (key.startsWith(prefix)) this.commandHandlerPaths.delete(key);
+    }
+    for (const key of [...this.commandHandlerFns.keys()]) {
+      if (key.startsWith(prefix)) this.commandHandlerFns.delete(key);
+    }
+  }
+
   hasPlugin(pluginId: string): boolean {
     return this.plugins.has(pluginId);
   }
@@ -1002,6 +1151,7 @@ export class PluginService {
     // impl steps are split so a throw in the descriptor unregister doesn't
     // strand the impl unregister and vice versa.
     runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
+    runUnloadStep(pluginId, "removeCommandHandlers", () => this.removeCommandHandlers(pluginId));
     runUnloadStep(pluginId, "unregisterPluginActions", () =>
       this.unregisterPluginActions(pluginId)
     );
