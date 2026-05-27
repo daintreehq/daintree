@@ -241,6 +241,8 @@ export interface TerminalRecipe {
   usageHistory?: number[];
   /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
   autoAssign?: "always" | "never" | "prompt";
+  /** Set at merge time when this recipe is shadowed by a higher-tier recipe with the same name */
+  shadowedBy?: string;
 }
 
 /** Returns the effective autoAssign mode for a recipe, defaulting to "always" for legacy recipes */

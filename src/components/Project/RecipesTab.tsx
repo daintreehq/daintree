@@ -174,7 +174,7 @@ export function RecipesTab({
   };
 
   const getRecipeScope = (recipe: TerminalRecipe): { label: string; isGlobal: boolean } => {
-    if (isInRepoRecipeId(recipe.id)) return { label: "Project (in-repo)", isGlobal: false };
+    if (isInRepoRecipeId(recipe.id)) return { label: "Team", isGlobal: false };
     if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
     if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };
     const worktree = worktreeMap.get(recipe.worktreeId);

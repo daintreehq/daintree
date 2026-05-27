@@ -52,7 +52,9 @@ export function DockLaunchMenuItems({
   // Subscribe inside the menu so the listener only runs while open.
   const recipes = useRecipeStore((s) => s.recipes);
   const visibleRecipes = recipes.filter(
-    (r) => r.worktreeId === undefined || r.worktreeId === (activeWorktreeId ?? undefined)
+    (r) =>
+      !r.shadowedBy &&
+      (r.worktreeId === undefined || r.worktreeId === (activeWorktreeId ?? undefined))
   );
 
   return (

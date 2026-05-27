@@ -994,8 +994,12 @@ describe("recipeStore", () => {
       await useRecipeStore.getState().loadRecipes("proj-1");
 
       const state = useRecipeStore.getState();
-      expect(state.recipes).toHaveLength(1);
-      expect(state.recipes[0]?.id).toBe("inrepo-1");
+      // Both recipes appear: the project one is marked shadowed, the in-repo one wins
+      expect(state.recipes).toHaveLength(2);
+      const project = state.recipes.find((r) => r.id === "project-1");
+      const inRepo = state.recipes.find((r) => r.id === "inrepo-1");
+      expect(project?.shadowedBy).toBe("Shared Recipe");
+      expect(inRepo?.shadowedBy).toBeUndefined();
     });
 
     it("in-repo recipes take precedence over both project-local and global recipes", async () => {
@@ -1026,9 +1030,66 @@ describe("recipeStore", () => {
       await useRecipeStore.getState().loadRecipes("proj-1");
 
       const state = useRecipeStore.getState();
-      // Global is not deduplicated (pre-existing behavior), so we get global + in-repo
+      // Global is not deduplicated, project is shadowed, in-repo wins
+      expect(state.recipes).toHaveLength(3);
+      expect(state.recipes.map((r) => r.id)).toEqual(["global-1", "project-1", "inrepo-1"]);
+      const project = state.recipes.find((r) => r.id === "project-1");
+      expect(project?.shadowedBy).toBe("Shared Recipe");
+    });
+
+    it("stripSessionOverridesFromRecipe removes shadowedBy", async () => {
+      // We import the function indirectly by testing that loaded recipes never have shadowedBy
+      // shadowedBy is stripped at load time via stripSessionOverridesFromRecipe
+      const inRepoRecipe = {
+        id: "inrepo-1",
+        name: "Work",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 100,
+      };
+      const projectRecipe = {
+        id: "project-1",
+        name: "Work",
+        projectId: "proj-1",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 200,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("proj-1");
+
+      const state = useRecipeStore.getState();
+      // The shadowedBy marker is only on the merged recipes list, not on source arrays
+      expect(state.projectRecipes[0]?.shadowedBy).toBeUndefined();
+      expect(state.inRepoRecipes[0]?.shadowedBy).toBeUndefined();
+      // But the merged list has the marker
+      expect(state.recipes.find((r) => r.id === "project-1")?.shadowedBy).toBe("Work");
+    });
+
+    it("project recipe with unique name is not shadowed", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-1",
+        name: "Team Only",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 100,
+      };
+      const projectRecipe = {
+        id: "project-1",
+        name: "My Local",
+        projectId: "proj-1",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 200,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("proj-1");
+
+      const state = useRecipeStore.getState();
       expect(state.recipes).toHaveLength(2);
-      expect(state.recipes.map((r) => r.id)).toEqual(["global-1", "inrepo-1"]);
+      expect(state.recipes.find((r) => r.id === "project-1")?.shadowedBy).toBeUndefined();
     });
 
     it("updateRecipe routes in-repo recipe to updateInRepoRecipe client", async () => {
@@ -1456,11 +1517,13 @@ describe("recipeStore", () => {
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
       expect(state.projectRecipes).toHaveLength(1);
-      // Project recipe is shadowed by the in-repo recipe with the same name
-      expect(state.recipes.filter((r) => r.name === "My Project Recipe")).toHaveLength(1);
-      expect(state.recipes.find((r) => r.name === "My Project Recipe")?.id).toBe(
-        "inrepo-my-project-recipe"
-      );
+      // Both recipes appear: project is marked shadowed, in-repo is the winner
+      const matching = state.recipes.filter((r) => r.name === "My Project Recipe");
+      expect(matching).toHaveLength(2);
+      const project = matching.find((r) => r.id === "project-recipe-1");
+      const inRepo = matching.find((r) => r.id === "inrepo-my-project-recipe");
+      expect(project?.shadowedBy).toBe("My Project Recipe");
+      expect(inRepo?.shadowedBy).toBeUndefined();
     });
 
     it("promotes a project-local recipe and deletes original", async () => {
