@@ -37,6 +37,14 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const storeMock = vi.hoisted(() => ({
+  get: vi.fn<(key: string) => unknown>(() => undefined),
+}));
+
+vi.mock("../../../store.js", () => ({
+  store: storeMock,
+}));
+
 const openFileMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../../services/EditorService.js", () => ({
@@ -79,6 +87,9 @@ function getHandler(channel: string): Handler {
 
 const fakeEvent = {};
 const PROJECT_ROOT = "/Users/me/project";
+// Derived from the default pattern `{parent-dir}/{base-folder}-worktrees/{branch-slug}`
+// applied to PROJECT_ROOT.
+const WORKTREE_PARENT = "/Users/me/project-worktrees";
 
 describe("system:open-path containment", () => {
   let cleanup: () => void;
@@ -88,6 +99,7 @@ describe("system:open-path containment", () => {
     fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    storeMock.get.mockReturnValue(undefined);
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -182,6 +194,7 @@ describe("system:open-in-editor containment", () => {
     fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    storeMock.get.mockReturnValue(undefined);
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -201,5 +214,90 @@ describe("system:open-in-editor containment", () => {
       code: "OUTSIDE_ROOT",
     });
     expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  // ReviewHub legitimately opens scripts for viewing in the editor. The
+  // launcher deny-list (which blocks .sh / .ps1 / .bat / .desktop) must not
+  // apply here — editors read the file, they don't execute it.
+  it("allows opening script extensions for viewing (deny-list relaxed)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    // Use a platform-appropriate scripty extension. `.desktop` is denied on
+    // both darwin and linux; `.ps1` is denied on win32.
+    const scriptPath =
+      process.platform === "win32"
+        ? `${PROJECT_ROOT}/scripts/deploy.ps1`
+        : `${PROJECT_ROOT}/scripts/setup.desktop`;
+    await handler(fakeEvent, { path: scriptPath });
+    expect(openFileMock).toHaveBeenCalledWith(scriptPath, undefined, undefined, null);
+  });
+});
+
+describe("system path-allowlist: worktree parent dirs", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    appMock.getPath.mockImplementation((name: string) => `/userdata/${name}`);
+    storeMock.get.mockReturnValue(undefined);
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("opens a path inside the default worktree parent dir (Reveal in Finder on worktree card)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    const worktreePath = `${WORKTREE_PARENT}/feature-issue-9149`;
+    await handler(fakeEvent, { path: worktreePath });
+    expect(shellMock.openPath).toHaveBeenCalledWith(worktreePath);
+  });
+
+  it("opens a file inside a worktree (ReviewHub file-open click)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+    const filePath = `${WORKTREE_PARENT}/feature-issue-9149/src/index.ts`;
+    await handler(fakeEvent, { path: filePath, line: 1, col: 1 });
+    expect(openFileMock).toHaveBeenCalledWith(filePath, 1, 1, null);
+  });
+
+  it("honors a globally-configured worktree pattern in addition to the default", async () => {
+    // Configure an alternative pattern. Both the configured and the default
+    // parent should be admitted (so changing the pattern doesn't lock the
+    // user out of previously-created worktrees).
+    storeMock.get.mockImplementation((key: string) =>
+      key === "worktreeConfig.pathPattern"
+        ? "{parent-dir}/{base-folder}.wt/{branch-slug}"
+        : undefined
+    );
+    // Re-register so the handler picks up the mock (the handler itself reads
+    // the store on each call, so this is technically unnecessary — but kept
+    // explicit to mirror the production startup order).
+    cleanup();
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    const customParent = "/Users/me/project.wt";
+    const customWorktree = `${customParent}/feature-x`;
+    await handler(fakeEvent, { path: customWorktree });
+    expect(shellMock.openPath).toHaveBeenCalledWith(customWorktree);
+
+    // The default parent stays admitted too.
+    shellMock.openPath.mockClear();
+    const legacyWorktree = `${WORKTREE_PARENT}/legacy-branch`;
+    await handler(fakeEvent, { path: legacyWorktree });
+    expect(shellMock.openPath).toHaveBeenCalledWith(legacyWorktree);
+  });
+
+  it("still rejects sibling-prefix paths that share a worktree-parent prefix", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    // `/Users/me/project-worktrees-evil/...` shares a string prefix with the
+    // worktree parent dir but isn't actually contained — the realpath +
+    // separator check in pathGuard must still reject it.
+    await expect(
+      handler(fakeEvent, { path: `${WORKTREE_PARENT}-evil/secret.txt` })
+    ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 });

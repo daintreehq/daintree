@@ -165,12 +165,12 @@ async function handleThumbnailFromPath(
     // Cap the read so a large file planted in the (often world-writable) temp
     // dir can't exhaust the main-process heap before decoding.
     const stat = await fileHandle.stat();
-    if (stat.size > CLIPBOARD_IMAGE_MAX_BYTES) {
+    if (stat.size > MAX_IMAGE_BYTES) {
       throw new AppError({
         code: "PAYLOAD_TOO_LARGE",
-        message: `Image exceeds ${CLIPBOARD_IMAGE_MAX_BYTES} byte limit`,
+        message: `Image exceeds ${MAX_IMAGE_BYTES} byte limit`,
         userMessage: "That image is too large to preview.",
-        context: { filePath, size: stat.size, limit: CLIPBOARD_IMAGE_MAX_BYTES },
+        context: { filePath, size: stat.size, limit: MAX_IMAGE_BYTES },
       });
     }
     buffer = await fileHandle.readFile();
