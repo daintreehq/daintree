@@ -19,11 +19,15 @@ export interface PluginToolbarButtonState {
  *
  * Stale `plugin.` entries in the `toolbarPreferencesStore` `pinnedButtons`
  * map (renderer-local persisted state, no main-process access) are pruned
- * here off the lifecycle snapshot — but ONLY off an authoritative one. The
- * pull and load-time pushes are partial/growing (plugins load concurrently
- * and `initialize()` is deferred), so sweeping against them would wipe a
- * not-yet-loaded plugin's hide preference. Only a `complete` push (a plugin
- * unload — i.e. uninstall, the exact case the sweep exists for) is swept.
+ * here off the lifecycle snapshot — but ONLY off an authoritative one. A
+ * load-time push is partial/growing (plugins load concurrently), so sweeping
+ * against it would wipe a not-yet-loaded plugin's hide preference. The pull
+ * and the unload push both carry a `complete` flag: the pull handler awaits
+ * the deferred `initialize()` before returning, so its snapshot is complete
+ * (this is what lets an LRU-revived view sweep a plugin uninstalled while it
+ * was evicted — #9285); an unload push is complete because the registry
+ * reflects the full post-uninstall set at broadcast time. Only complete
+ * snapshots are swept.
  */
 export function usePluginToolbarButtons(): PluginToolbarButtonState {
   const [configs, setConfigs] = useState<Map<string, ToolbarButtonConfig>>(new Map());
@@ -49,12 +53,13 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
 
     void electron.plugin
       .toolbarButtons()
-      .then((buttons) => {
+      .then(({ buttons, complete }) => {
         if (disposed) return;
         if (pushReceived) return;
-        // Pull is a display-only safety net: deferred `initialize()` means it
-        // can resolve before all plugins have registered, so never sweep here.
-        sync(buttons, false);
+        // The handler awaits `initialize()` before returning, so `complete`
+        // is true once the scan has settled — a revived view then sweeps any
+        // plugin uninstalled while it was evicted (#9285).
+        sync(buttons, complete);
       })
       .catch((err: unknown) => {
         logWarn("[PluginToolbarButtons] Failed to fetch initial plugin toolbar buttons", {

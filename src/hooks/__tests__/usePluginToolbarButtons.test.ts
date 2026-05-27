@@ -37,13 +37,16 @@ beforeEach(() => {
     },
   });
   vi.resetModules();
-  toolbarButtonsMock.mockResolvedValue([]);
+  toolbarButtonsMock.mockResolvedValue({ buttons: [], complete: true });
   onToolbarButtonsChangedMock.mockReturnValue(() => {});
 });
 
 describe("usePluginToolbarButtons", () => {
-  it("exposes plugin buttons from the mount-time pull without sweeping", async () => {
-    toolbarButtonsMock.mockResolvedValue([pluginButton("plugin.acme.foo")]);
+  it("exposes plugin buttons from the mount-time pull and sweeps on a complete snapshot", async () => {
+    toolbarButtonsMock.mockResolvedValue({
+      buttons: [pluginButton("plugin.acme.foo")],
+      complete: true,
+    });
     const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
 
     const { result } = renderHook(() => usePluginToolbarButtons());
@@ -51,11 +54,30 @@ describe("usePluginToolbarButtons", () => {
     await waitFor(() => {
       expect(result.current.buttonIds).toContain("plugin.acme.foo");
     });
-    // Pull is partial under deferred init — must never prune persisted prefs.
+    // The handler awaits initialize(), so a complete pull is authoritative and
+    // sweeps a plugin uninstalled while this view was evicted (#9285).
+    expect(sweepMock).toHaveBeenCalledWith(["plugin.acme.foo"]);
+  });
+
+  it("does not sweep on a partial (complete=false) pull", async () => {
+    toolbarButtonsMock.mockResolvedValue({
+      buttons: [pluginButton("plugin.acme.foo")],
+      complete: false,
+    });
+    const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
+
+    const { result } = renderHook(() => usePluginToolbarButtons());
+
+    await waitFor(() => {
+      expect(result.current.buttonIds).toContain("plugin.acme.foo");
+    });
     expect(sweepMock).not.toHaveBeenCalled();
   });
 
   it("does not sweep on a partial (complete=false) load push", async () => {
+    // Keep the mount-time pull non-authoritative so this test isolates the
+    // push path (the default pull mock is complete=true and would sweep).
+    toolbarButtonsMock.mockResolvedValue({ buttons: [], complete: false });
     let emit: ((p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) | null = null;
     onToolbarButtonsChangedMock.mockImplementation(
       (cb: (p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) => {
@@ -73,6 +95,9 @@ describe("usePluginToolbarButtons", () => {
   });
 
   it("sweeps stale pinned buttons on an authoritative (complete=true) push", async () => {
+    // Non-authoritative pull so the only complete-snapshot sweep under test is
+    // the push below.
+    toolbarButtonsMock.mockResolvedValue({ buttons: [], complete: false });
     let emit: ((p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) | null = null;
     onToolbarButtonsChangedMock.mockImplementation(
       (cb: (p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) => {

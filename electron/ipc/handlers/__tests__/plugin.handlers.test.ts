@@ -7,6 +7,7 @@ const mockListPlugins = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
+const mockWaitForInitialized = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -17,6 +18,10 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    waitForInitialized: (...args: unknown[]) => mockWaitForInitialized(...args),
+    get isInitialized() {
+      return true;
+    },
   },
 }));
 
@@ -62,6 +67,7 @@ beforeEach(() => {
   mockListPluginActions.mockReturnValue([]);
   mockGetRegisteredForgeProviders.mockReturnValue([]);
   mockGetFileDecorationImpls.mockReturnValue([]);
+  mockWaitForInitialized.mockResolvedValue(undefined);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -494,6 +500,87 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
       "acme.my-plugin",
       "acme.my-plugin.doThing"
     );
+  });
+});
+
+describe("PLUGIN_TOOLBAR_BUTTONS handler", () => {
+  function getHandler() {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:toolbar-buttons"
+    )![1] as (...args: unknown[]) => unknown;
+  }
+
+  it("awaits pluginService.waitForInitialized before reading the registry", async () => {
+    let resolveInit: (() => void) | undefined;
+    mockWaitForInitialized.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveInit = resolve;
+      })
+    );
+    const config = {
+      id: "plugin.acme.foo",
+      label: "Foo",
+      iconId: "i",
+      actionId: "acme.do",
+      priority: 3,
+      pluginId: "acme",
+    };
+    mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.acme.foo"]);
+    mockGetToolbarButtonConfig.mockReturnValue(config);
+
+    const handler = getHandler();
+    const pending = handler({}) as Promise<{ buttons: unknown[]; complete: boolean }>;
+    // Registry must not be read until init settles.
+    expect(mockGetPluginToolbarButtonIds).not.toHaveBeenCalled();
+    resolveInit!();
+    const result = await pending;
+    expect(mockGetPluginToolbarButtonIds).toHaveBeenCalled();
+    expect(result).toEqual({ buttons: [config], complete: true });
+  });
+
+  it("returns { buttons: [], complete: true } when no plugin buttons are registered", async () => {
+    const handler = getHandler();
+    expect(await handler({})).toEqual({ buttons: [], complete: true });
+  });
+
+  it("filters out ids with no config", async () => {
+    mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.acme.foo", "plugin.orphan"]);
+    const config = {
+      id: "plugin.acme.foo",
+      label: "Foo",
+      iconId: "i",
+      actionId: "acme.do",
+      priority: 3,
+      pluginId: "acme",
+    };
+    mockGetToolbarButtonConfig.mockImplementation((id: string) =>
+      id === "plugin.acme.foo" ? config : undefined
+    );
+    const handler = getHandler();
+    expect(await handler({})).toEqual({ buttons: [config], complete: true });
+  });
+});
+
+describe("PLUGIN_ACTIONS_GET / PANEL_KINDS_GET init gating", () => {
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("PLUGIN_ACTIONS_GET awaits waitForInitialized before listing actions", async () => {
+    const handler = getHandler("plugin:actions-get");
+    await handler({});
+    expect(mockWaitForInitialized).toHaveBeenCalledTimes(1);
+    expect(mockListPluginActions).toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PANEL_KINDS_GET awaits waitForInitialized before reading kinds", async () => {
+    const handler = getHandler("plugin:panel-kinds-get");
+    await handler({});
+    expect(mockWaitForInitialized).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -573,7 +573,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:toolbar-buttons": {
     args: [];
-    result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+    result: {
+      buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+      complete: boolean;
+    };
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];

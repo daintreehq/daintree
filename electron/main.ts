@@ -336,6 +336,21 @@ if (!gotTheLock) {
       (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
       (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
         nodeV8.writeHeapSnapshot(filePath);
+      // Plugin install/uninstall harness for the lifecycle-sync spec (#9285).
+      // Loads/unloads a fixture plugin directory at runtime so a spec can
+      // verify contribution sync survives LRU eviction without a production
+      // runtime-install IPC path. Gated on E2E mode only.
+      (globalThis as Record<string, unknown>).__daintreeE2ELoadPlugin = async (dir: string) => {
+        const { pluginService } = await import("./services/PluginService.js");
+        await pluginService.waitForInitialized();
+        return pluginService.loadPluginDir(dir);
+      };
+      (globalThis as Record<string, unknown>).__daintreeE2EUnloadPlugin = async (
+        pluginId: string
+      ) => {
+        const { pluginService } = await import("./services/PluginService.js");
+        pluginService.unloadPlugin(pluginId);
+      };
     }
 
     // Clean up ProjectViewManager when the window's cleanup runs.

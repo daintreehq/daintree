@@ -174,6 +174,15 @@ export class PluginService {
   }> = [];
   private initialized = false;
   /**
+   * In-flight {@link initialize} run, shared by every concurrent caller so the
+   * plugin scan runs exactly once. Stays non-null after the first call (it
+   * resolves once init settles); the `initialized` early-return short-circuits
+   * later callers before they ever reach it. {@link waitForInitialized} reads
+   * this to block a cold-started renderer's pull until the scan completes
+   * instead of handing back an empty registry mid-init (#9285).
+   */
+  private initializePromise: Promise<void> | null = null;
+  /**
    * Plugin ids that are owned by a built-in plugin but currently disabled in
    * Preferences. Held alongside `this.plugins` so the user-dir scan cannot
    * register a third-party plugin under a trusted first-party namespace just
@@ -264,7 +273,16 @@ export class PluginService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    // Coalesce concurrent callers (the deferred boot task and any IPC handler
+    // that hit waitForInitialized() first) onto a single scan — without this
+    // both would re-run loadFromDir and the contribution registries would log
+    // "already registered, overwriting" warnings.
+    if (this.initializePromise) return this.initializePromise;
+    this.initializePromise = this.runInitialize();
+    return this.initializePromise;
+  }
 
+  private async runInitialize(): Promise<void> {
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
     const builtinDir = this.builtinPluginsRoot ?? this.getBuiltinDir();
@@ -280,8 +298,39 @@ export class PluginService {
       // Idempotency must hold even when a scan throws (e.g. EACCES on the
       // user dir): a retry would re-run the built-in scan and trigger
       // "already registered, overwriting" warnings from the contribution
-      // registries.
+      // registries. Set inside `finally` so a partial scan still flips the
+      // flag — a revived view should get whatever actually registered, not
+      // hang forever waiting on a failed init (see waitForInitialized).
       this.initialized = true;
+    }
+  }
+
+  /**
+   * Whether the one-time plugin scan has settled (successfully or not). Used by
+   * the toolbar-buttons IPC handler to mark a pulled snapshot as authoritative:
+   * once init is done the registry holds the complete set, so the renderer may
+   * safely sweep stale `plugin.*` pins against it.
+   */
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  /**
+   * Resolve once the plugin scan has settled. A cold-started (LRU-revived)
+   * renderer mounts its plugin hooks and pulls before the deferred init task
+   * has run; awaiting this in the pull handlers makes that pull return the
+   * real snapshot instead of an empty registry that a missed broadcast would
+   * never correct (#9285). Kicks off `initialize()` if nothing has yet, then
+   * swallows any scan rejection — init sets `initialized` in its `finally`, so
+   * a failed scan still unblocks callers with whatever registered, matching the
+   * containment in the deferred boot task.
+   */
+  async waitForInitialized(): Promise<void> {
+    if (this.initialized) return;
+    try {
+      await this.initialize();
+    } catch (err) {
+      console.warn("[PluginService] waitForInitialized: initialize() rejected:", err);
     }
   }
 
@@ -1057,6 +1106,17 @@ export class PluginService {
         console.error(`[PluginService] Event cleanup for "${pluginId}" threw during unload:`, err);
       }
     }
+  }
+
+  /**
+   * Load every plugin in `dir` as a user (non-built-in) plugin at runtime,
+   * outside the one-time boot scan. Returns the count loaded. Intended for the
+   * E2E install/uninstall harness (paired with {@link unloadPlugin}) so a spec
+   * can exercise lifecycle sync across LRU-evicted views without shipping a
+   * production runtime-install IPC path. Not wired to any user-facing surface.
+   */
+  async loadPluginDir(dir: string): Promise<number> {
+    return this.loadFromDir(dir, { isBuiltin: false });
   }
 
   listPlugins(): LoadedPluginInfo[] {

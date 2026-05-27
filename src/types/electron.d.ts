@@ -34,6 +34,12 @@ declare global {
       args?: unknown,
       options?: { source?: string; confirmed?: boolean }
     ) => unknown;
+    /**
+     * Per-view query of the renderer ActionService registry. Lets the plugin
+     * lifecycle-sync spec (#9285) assert that a revived view has (or no longer
+     * has) a plugin-registered action. E2E-gated like __daintreeDispatchAction.
+     */
+    __daintreeHasAction?: (actionId: string) => boolean;
   }
 }
 

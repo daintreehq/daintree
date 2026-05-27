@@ -747,6 +747,54 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toHaveLength(1);
   });
 
+  it("isInitialized reflects scan completion", async () => {
+    await writePlugin("init-flag", { name: "acme.init-flag", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    expect(service.isInitialized).toBe(false);
+    await service.initialize();
+    expect(service.isInitialized).toBe(true);
+  });
+
+  it("waitForInitialized resolves after the scan and exposes the loaded set", async () => {
+    await writePlugin("wait-test", { name: "acme.wait-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.waitForInitialized();
+    expect(service.isInitialized).toBe(true);
+    expect(service.listPlugins()).toHaveLength(1);
+  });
+
+  it("coalesces concurrent initialize/waitForInitialized onto one scan", async () => {
+    await writePlugin("coalesce", { name: "acme.coalesce", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    // Fire several entry points on the same tick — all must share one scan.
+    await Promise.all([
+      service.initialize(),
+      service.waitForInitialized(),
+      service.initialize(),
+      service.waitForInitialized(),
+    ]);
+    expect(service.listPlugins()).toHaveLength(1);
+  });
+
+  it("loadPluginDir loads plugins from a directory at runtime", async () => {
+    const service = new PluginService(path.join(tmpDir, "nonexistent"));
+    await service.initialize();
+    expect(service.listPlugins()).toHaveLength(0);
+
+    const runtimeDir = path.join(tmpDir, "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+    const pluginDir = path.join(runtimeDir, "late");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.late", version: "1.0.0" })
+    );
+
+    const loaded = await service.loadPluginDir(runtimeDir);
+    expect(loaded).toBe(1);
+    expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.late");
+  });
+
   it("registers toolbar buttons from plugin manifest", async () => {
     await writePlugin("toolbar-test", {
       name: "acme.toolbar-test",

@@ -33,10 +33,20 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
   return pluginService.listPlugins();
 }
 
-async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
-  return getPluginToolbarButtonIds()
+async function handleToolbarButtons(): Promise<{
+  buttons: ToolbarButtonConfig[];
+  complete: boolean;
+}> {
+  // Block a cold-started view's mount-time pull until the plugin scan settles,
+  // so it gets the full set instead of an empty registry mid-init (#9285).
+  await pluginService.waitForInitialized();
+  const buttons = getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
+  // Once init has settled the registry is authoritative, so the renderer may
+  // sweep stale `plugin.*` pins against this snapshot — the case (uninstall
+  // while the view was evicted) the pull-side sweep exists for.
+  return { buttons, complete: pluginService.isInitialized };
 }
 
 async function handleMenuItems() {
@@ -84,6 +94,9 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
 async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+  // See handleToolbarButtons: gate the cold-start pull on the plugin scan so a
+  // revived view doesn't register an empty action set (#9285).
+  await pluginService.waitForInitialized();
   return pluginService.listPluginActions();
 }
 
@@ -99,6 +112,9 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
 }
 
 async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
+  // See handleToolbarButtons: gate the cold-start pull on the plugin scan so a
+  // revived view's panel-kind registry isn't seeded empty (#9285).
+  await pluginService.waitForInitialized();
   return getPluginPanelKinds();
 }
 

@@ -640,6 +640,10 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     args?: unknown,
     options?: { source?: string; confirmed?: boolean }
   ) => actionService.dispatch(actionId as ActionId, args, options as ActionDispatchOptions);
+  // Per-view registry probe for the plugin lifecycle-sync spec (#9285): a
+  // revived view must reflect installs/uninstalls that happened while it was
+  // LRU-evicted.
+  window.__daintreeHasAction = (actionId: string) => actionService.has(actionId as ActionId);
 }
 
 export function getActionContext(): ActionContext {

@@ -282,9 +282,13 @@ export async function initGlobalServices(
     },
   });
 
-  // Plugin service — IPC handlers are registered eagerly in windowServices.ts
-  // and return empty lists from internal Maps until initialize() populates them.
-  // Plugin contributions broadcast on registration, so late init is renderer-safe.
+  // Plugin service — IPC handlers are registered eagerly in windowServices.ts.
+  // The pull handlers (getActions / toolbarButtons / getPanelKinds) now await
+  // pluginService.waitForInitialized() before reading their registries, so a
+  // cold-started (LRU-revived) view's mount-time pull blocks on this scan
+  // instead of seeing an empty Map and relying on a broadcast it may have
+  // already missed (#9285). This deferred run and that await coalesce onto the
+  // same one-time scan via initializePromise.
   registerDeferredTask({
     name: "plugin-service",
     run: async () => {
