@@ -547,6 +547,16 @@ class AutoUpdaterService {
       return;
     }
 
+    if (process.platform === "linux" && process.env.FLATPAK_ID) {
+      console.log("[MAIN] Auto-updater disabled: Linux Flatpak sandbox detected");
+      return;
+    }
+
+    if (process.platform === "linux" && process.env.SNAP) {
+      console.log("[MAIN] Auto-updater disabled: Linux Snap sandbox detected");
+      return;
+    }
+
     if (process.platform === "linux" && !process.env.APPIMAGE) {
       let hasPackageType = false;
       try {

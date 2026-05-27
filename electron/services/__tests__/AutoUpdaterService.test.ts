@@ -116,6 +116,8 @@ describe("AutoUpdaterService", () => {
     windowMock.webContents.isDestroyed.mockReturnValue(false);
     delete process.env.PORTABLE_EXECUTABLE_FILE;
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     Object.defineProperty(process, "resourcesPath", {
       value: "/mock/resources",
@@ -155,6 +157,8 @@ describe("AutoUpdaterService", () => {
       configurable: true,
     });
     delete process.env.APPIMAGE;
+    delete process.env.FLATPAK_ID;
+    delete process.env.SNAP;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -433,6 +437,24 @@ describe("AutoUpdaterService", () => {
       // Manual check should be a no-op since initialized is false
       autoUpdaterService.checkForUpdatesManually();
       expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when FLATPAK_ID is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.FLATPAK_ID = "com.daintreehq.Daintree";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when SNAP is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.SNAP = "/snap/daintree/current";
+
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
     });
 
     it("initializes normally on Linux when APPIMAGE is set", () => {
