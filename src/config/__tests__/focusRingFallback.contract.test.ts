@@ -283,6 +283,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "Review hub content container — focus lives on inner panels and inputs",
   },
   {
+    file: "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
+    fragment: '"outline-hidden"',
+    reason:
+      "Review hub file listbox — roving focus via aria-activedescendant; the active row owns the focus indicator, not the container (tabIndex=-1, programmatic focus only)",
+  },
+  {
     file: "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     fragment: "h-full flex flex-col outline-hidden",
     reason: "Grid layout container — focus owned by terminal pane children",
