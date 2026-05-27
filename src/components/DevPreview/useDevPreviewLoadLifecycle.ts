@@ -170,6 +170,7 @@ export function useDevPreviewLoadLifecycle({
 
     const handleRenderProcessGone = (e: Electron.RenderProcessGoneEvent) => {
       const { reason, exitCode } = e.details;
+      if (reason === "clean-exit") return;
       setIsLoading(false);
       setIsSlowLoad(false);
       if (slowLoadTimeoutRef.current) {
@@ -187,6 +188,7 @@ export function useDevPreviewLoadLifecycle({
       failLoadRetryCountRef.current = 0;
       setWebviewCrashed({ reason, exitCode });
       setWebviewLoadError(null);
+      onRenderProcessGone?.({ reason, exitCode });
     };
 
     const handleDidStartLoading = () => {

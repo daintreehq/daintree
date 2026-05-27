@@ -4,6 +4,12 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({
+  notify: (args: unknown) => notifyMock(args),
+}));
+
 type MockWebContents = {
   setUserAgent: ReturnType<typeof vi.fn>;
   getUserAgent: ReturnType<typeof vi.fn>;
@@ -284,6 +290,16 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     scrollPositionRef.current = undefined;
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
@@ -1421,6 +1437,123 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("Taking longer than usual");
+    });
+  });
+
+  describe("crash-loop notification", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      notifyMock.mockClear();
+    });
+
+    it("does not notify on the first crash", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("notifies on the second crash within 60 seconds", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Preview process crashed repeatedly",
+          priority: "high",
+          duration: 0,
+          supersedeKey: "dev-preview-crash-loop:dev-preview-panel-1",
+          correlationId: "dev-preview-panel-1",
+          context: { eventKind: "recovery" },
+        })
+      );
+    });
+
+    it("does not notify on second crash when outside 60-second window", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("notifies on third and subsequent crashes with the same supersedeKey", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(2);
+      expect(notifyMock.mock.calls[0][0].supersedeKey).toBe(
+        "dev-preview-crash-loop:dev-preview-panel-1"
+      );
+      expect(notifyMock.mock.calls[1][0].supersedeKey).toBe(
+        "dev-preview-crash-loop:dev-preview-panel-1"
+      );
+    });
+
+    it("filters clean-exit events", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "clean-exit", exitCode: 0 },
+        });
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
     });
   });
 });

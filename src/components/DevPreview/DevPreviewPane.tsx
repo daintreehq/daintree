@@ -65,6 +65,7 @@ import { isDevPreviewPanel, type ViewportPresetId } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
@@ -463,7 +464,20 @@ export function DevPreviewPane({
 
     if (timestamps.length < 2) {
       crashReloadRef.current();
+    } else {
+      notify({
+        type: "error",
+        title: "Preview process crashed repeatedly",
+        message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
+        priority: "high",
+        duration: 0,
+        context: { eventKind: "recovery" },
+        supersedeKey: `dev-preview-crash-loop:${id}`,
+        correlationId: id,
+      });
     }
+    // id intentionally omitted from deps — stable for component lifetime.
+    // Adding it would cause webview event listener churn through useDevPreviewLoadLifecycle.
   }, []);
 
   const {
