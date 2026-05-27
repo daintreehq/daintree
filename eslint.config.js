@@ -306,6 +306,20 @@ export default tseslint.config(
           message:
             "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
         },
+        {
+          // why: electron-updater's AppUpdater.channel setter unconditionally
+          // flips allowDowngrade=true on every assignment, silently stranding
+          // the stable-channel rollback guard from #7573. AutoUpdaterService
+          // routes channel changes through setFeedURL() + an explicit
+          // allowDowngrade assignment for this reason. Matches dot and bracket
+          // notation; aliased writes (`const u = autoUpdater; u.channel = …`)
+          // are out of scope — the direct form is the accidental drift path.
+          // See #9123.
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
+          message:
+            "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
+        },
       ],
     },
   },
