@@ -1174,17 +1174,24 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Reason: oom (exit code 9)");
     });
 
-    it("ignores memory-eviction reason — eviction placeholder owns that signal", () => {
+    it("surfaces the banner on OS-pressure memory-eviction (no Daintree eviction in flight)", () => {
+      // Chromium reports `memory-eviction` for two distinct paths:
+      //   (1) Daintree's own about:blank src swap from useWebviewEviction
+      //       (gated by evictingRef.current and handled by the eviction
+      //       placeholder).
+      //   (2) The OS killing the renderer under system memory pressure on a
+      //       visible panel. In path (2) evictingRef stays false and the
+      //       eviction placeholder never renders — the pane would go blank
+      //       silently without a crash banner. #9212.
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
       act(() => {
         emitRenderProcessGone(webview, "memory-eviction");
-        emitRenderProcessGone(webview, "memory-eviction");
       });
 
-      expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).not.toContain("Page process crashed");
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Page process crashed");
     });
 
     it("ignores clean-exit reason — intentional renderer shutdown", () => {
@@ -1252,6 +1259,86 @@ describe("BrowserPane webview lifecycle regression", () => {
       act(() => {
         onResponsive({ panelId: "browser-panel-1" });
       });
+      expect(container.textContent).toContain("Page process crashed");
+    });
+
+    it("does not let a stale unresponsive event replace a crashed banner", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const onUnresponsive = getUnresponsiveCallback();
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      expect(container.textContent).toContain("Page process crashed");
+
+      act(() => {
+        onUnresponsive({ panelId: "browser-panel-1" });
+      });
+      expect(container.textContent).toContain("Page process crashed");
+      expect(container.textContent).not.toContain("Page not responding");
+    });
+
+    it("clears stuck-load timer so a load timeout does not replace the crash banner", () => {
+      // The load-error overlay is rendered as absolute z-30 over the entire
+      // pane — without clearing the slow-load timer on crash, a pending 30s
+      // timeout would fire after the crash and stack a "Page Load Timed Out"
+      // overlay on top of the in-flow crash banner, hiding it entirely.
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        webview.setMockLoading(true);
+        emitWebviewEvent(webview, "did-start-loading");
+      });
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      expect(webview.stop).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Page process crashed");
+      expect(container.textContent).not.toContain("Page Load Timed Out");
+    });
+
+    it("auto-reloads again on a crash that lands just outside the 60s window", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_001);
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("Page process crashed");
+    });
+
+    it("does not auto-reload on a crash just inside the 60s window", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        vi.advanceTimersByTime(59_999);
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+
+      expect(webview.reload).toHaveBeenCalledTimes(1);
       expect(container.textContent).toContain("Page process crashed");
     });
   });

@@ -324,10 +324,14 @@ export function useWebviewEvents({
     const handleRenderProcessGone = (event: Event) => {
       const details = (event as Event & { details?: { reason: string; exitCode: number } }).details;
       if (!details) return;
-      // Webview eviction (about:blank src swap by useWebviewEviction) can race
-      // a memory-eviction crash report from Chromium; defer to the eviction
-      // placeholder rather than showing a duplicate crash banner.
-      if (details.reason === "clean-exit" || details.reason === "memory-eviction") return;
+      // `clean-exit` (exit code 0) is intentional renderer shutdown — never
+      // a crash. `memory-eviction` is filtered ONLY when Daintree itself
+      // triggered the eviction: the about:blank src swap in useWebviewEviction
+      // sets evictingRef and causes Chromium to report memory-eviction. When
+      // the OS kills the renderer under system memory pressure with no
+      // Daintree eviction in flight, the panel goes blank with no other UI
+      // signal — surface the crash banner. #9212.
+      if (details.reason === "clean-exit") return;
       if (evictingRef.current) return;
       setIsLoading(false);
       setIsSlowLoad(false);

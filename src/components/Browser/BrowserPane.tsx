@@ -269,6 +269,9 @@ export function BrowserPane({
     timestamps.push(now);
     crashTimestampsRef.current = timestamps;
 
+    // Clear any stale load-error overlay (z-30, absolute inset-0) — without
+    // this it would occlude the crash banner, which is an in-flow element.
+    setLoadError(null);
     setCrashDetails(details);
     setCrashState("crashed");
 
@@ -435,7 +438,14 @@ export function BrowserPane({
   useEffect(() => {
     const cleanupUnresponsive = window.electron.webview.onUnresponsive((data) => {
       if (data.panelId !== id) return;
-      setCrashState((prev) => (prev === "crashed" ? prev : "unresponsive"));
+      setCrashState((prev) => {
+        if (prev === "crashed") return prev;
+        // Clear any in-flight load error — the page is unresponsive, the
+        // error is no longer actionable, and its absolute z-30 overlay
+        // would occlude this banner.
+        setLoadError(null);
+        return "unresponsive";
+      });
     });
     const cleanupResponsive = window.electron.webview.onResponsive((data) => {
       if (data.panelId !== id) return;
@@ -459,6 +469,9 @@ export function BrowserPane({
     if (currentUrl && currentUrl !== "about:blank") {
       setCrashState("none");
       setCrashDetails(null);
+      // Don't carry the prior URL's crash history into the new URL's 60s
+      // window — that would mis-throttle the first auto-recovery there.
+      crashTimestampsRef.current = [];
     }
   }, [currentUrl]);
 
