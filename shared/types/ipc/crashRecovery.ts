@@ -79,6 +79,14 @@ export interface CrashLogEntry {
   watchdogMainPid?: number;
 }
 
+/**
+ * Why a panel was flagged `isSuspect`. `crash-window` = created within
+ * `SUSPECT_WINDOW_MS` of the crash. `repeated-suspect` is reserved for a
+ * future flow that propagates the quarantine ledger's consecutive-suspect
+ * count into the crash dialog; it is not produced yet.
+ */
+export type PanelSuspectReason = "crash-window" | "repeated-suspect";
+
 export interface PanelSummary {
   id: string;
   kind: string;
@@ -87,6 +95,8 @@ export interface PanelSummary {
   worktreeId?: string;
   location: "grid" | "dock";
   isSuspect: boolean;
+  /** Present only when `isSuspect` is true; drives per-panel reason copy. */
+  suspectReason?: PanelSuspectReason;
   agentState?: string;
   lastStateChange?: number;
 }

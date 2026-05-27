@@ -119,6 +119,7 @@ const mockPanels = [
     cwd: "/project",
     location: "dock" as const,
     isSuspect: true,
+    suspectReason: "crash-window" as const,
     agentState: "working",
   },
   { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
@@ -227,6 +228,64 @@ describe("CrashRecoveryDialog", () => {
     it("shows suspect badge on suspect panels", () => {
       setup();
       expect(screen.getByTestId("suspect-badge-t2")).toBeTruthy();
+      expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
+    it("shows per-panel reason text in the suspect badge title", () => {
+      setup();
+      expect(screen.getByTestId("suspect-badge-t2").getAttribute("title")).toBe(
+        "Created within 30 seconds of the crash"
+      );
+    });
+
+    it("renders an icon-only suspect badge with no title when suspectReason is absent", () => {
+      setup({
+        crash: {
+          panels: [
+            { id: "t1", kind: "terminal", title: "Shell", location: "grid", isSuspect: true },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
+    });
+
+    it("renders an icon-only badge with no title for an unknown suspectReason", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: true,
+              suspectReason: "some-future-reason" as never,
+            },
+          ],
+        },
+      });
+      const badge = screen.getByTestId("suspect-badge-t1");
+      expect(badge).toBeTruthy();
+      expect(badge.getAttribute("title")).toBeNull();
+    });
+
+    it("renders no suspect badge when suspectReason is set but isSuspect is false", () => {
+      setup({
+        crash: {
+          panels: [
+            {
+              id: "t1",
+              kind: "terminal",
+              title: "Shell",
+              location: "grid",
+              isSuspect: false,
+              suspectReason: "crash-window" as const,
+            },
+          ],
+        },
+      });
       expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
     });
 
