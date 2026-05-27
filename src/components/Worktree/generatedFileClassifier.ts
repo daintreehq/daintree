@@ -9,10 +9,10 @@ const LOCKFILE_BASENAMES = new Set([
   "yarn.lock",
   "bun.lock",
   "bun.lockb",
-  "Cargo.lock",
+  "cargo.lock",
   "go.sum",
-  "Gemfile.lock",
-  "Pipfile.lock",
+  "gemfile.lock",
+  "pipfile.lock",
   "poetry.lock",
   "composer.lock",
   "mix.lock",
@@ -59,7 +59,7 @@ const GENERATED_DIR_RE =
 
 // Content-header markers for auto-generated files — used only on newly-added
 // files whose first hunk starts at line 1.
-const GENERATED_HEADER_RE = /code generated.*do not edit|auto[-]?generated/i;
+const GENERATED_HEADER_RE = /code generated.*do not edit|auto[- ]?generated/i;
 const SNIFF_MAX_LINES = 20;
 const SNIFF_MAX_CHARS = 500;
 
