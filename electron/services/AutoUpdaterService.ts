@@ -184,11 +184,18 @@ class AutoUpdaterService {
   // UPDATE_QUIT_AND_INSTALL IPC handler. Both call sites need identical
   // behavior: defer past the menu-close frame via `setImmediate` (Windows
   // animation timing), then arm a macOS-only watchdog that force-exits if
-  // ShipIt fails to land its `app.quit()`. Wrapped `app.exit(0)` so a thrown
-  // exception in shutdown doesn't escape and become an unhandled rejection.
+  // ShipIt fails to land its `app.quit()`. `quitAndInstall()` is wrapped so
+  // a thrown exception still arms the watchdog (force-exit is still the
+  // right move — ShipIt has its best chance on the next launch), and the
+  // `app.exit(0)` inside the watchdog is wrapped so a shutdown-time throw
+  // doesn't become an unhandled rejection.
   private executeQuitAndInstall(): void {
     setImmediate(() => {
-      autoUpdater.quitAndInstall();
+      try {
+        autoUpdater.quitAndInstall();
+      } catch (err) {
+        console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+      }
       if (process.platform !== "darwin") return;
       this.watchdogTimeout = setTimeout(() => {
         this.watchdogTimeout = null;
@@ -476,6 +483,14 @@ class AutoUpdaterService {
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         this.setMenuState("idle");
+        // Drop the pending-install marker for the prior channel so the next
+        // boot doesn't fire a false-positive mismatch (issue #9261). The new
+        // channel's download will re-arm it via update-downloaded.
+        try {
+          store.delete("pendingUpdateVersion");
+        } catch (err) {
+          console.error("[MAIN] Failed to clear pendingUpdateVersion on channel switch:", err);
+        }
         // Transition to Idle done; now discard the staged installer on disk
         // and reconfigure the feed. Re-arm happens in the update-downloaded
         // handler when the new channel's download completes.
@@ -661,9 +676,13 @@ class AutoUpdaterService {
         // future electron-updater revision.
         if (typeof info.version === "string") {
           const trimmed = info.version.trim();
-          if (trimmed.length > 0 && semver.valid(trimmed)) {
+          // Persist the canonical semver form (no leading `v`, no `=` prefix)
+          // so the boot comparison round-trips cleanly against
+          // `app.getVersion()`, which already emits canonical form.
+          const canonical = trimmed.length > 0 ? semver.valid(trimmed) : null;
+          if (canonical) {
             try {
-              store.set("pendingUpdateVersion", trimmed);
+              store.set("pendingUpdateVersion", canonical);
             } catch (err) {
               console.error("[MAIN] Failed to persist pendingUpdateVersion:", err);
             }

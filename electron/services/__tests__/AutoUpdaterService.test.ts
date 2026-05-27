@@ -2195,6 +2195,20 @@ describe("AutoUpdaterService", () => {
       vi.advanceTimersByTime(60_000);
       expect(appMock.exit).not.toHaveBeenCalled();
     });
+
+    it("still arms the watchdog when autoUpdater.quitAndInstall throws", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        throw new Error("no staged installer");
+      });
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      expect(() => vi.advanceTimersToNextTimer()).not.toThrow();
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("pendingUpdateVersion persistence (issue #9261)", () => {
@@ -2259,6 +2273,79 @@ describe("AutoUpdaterService", () => {
         throw new Error("disk full");
       });
       expect(() => downloadedHandler({ version: "2.0.0" })).not.toThrow();
+    });
+
+    it("persists before broadcasting UPDATE_DOWNLOADED so a crash mid-event leaves the marker on disk", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      const setOrder =
+        (storeMock.set as Mock).mock.calls
+          .map((args, i) => ({ args, order: (storeMock.set as Mock).mock.invocationCallOrder[i] }))
+          .find((c) => c.args[0] === "pendingUpdateVersion")?.order ?? Infinity;
+      const broadcastOrder =
+        (broadcastMock as Mock).mock.calls
+          .map((args, i) => ({ args, order: (broadcastMock as Mock).mock.invocationCallOrder[i] }))
+          .find((c) => c.args[0] === CHANNELS.UPDATE_DOWNLOADED)?.order ?? -1;
+
+      expect(setOrder).toBeLessThan(broadcastOrder);
+    });
+
+    it("stores the canonical semver form (no leading v prefix)", () => {
+      downloadedHandler({ version: "v2.0.0" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+  });
+
+  describe("pendingUpdateVersion channel-switch clear (issue #9261)", () => {
+    it("clears the marker when the user switches channels", async () => {
+      autoUpdaterService.initialize();
+      const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1] as (info: { version: string }) => void;
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      downloadedHandler({ version: "2.0.0" });
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockClear();
+      await setChannelHandler({}, "nightly");
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+    });
+
+    it("does not clear the marker on a same-channel re-save", async () => {
+      autoUpdaterService.initialize();
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockClear();
+      await setChannelHandler({}, "stable");
+
+      expect(storeMock.delete).not.toHaveBeenCalledWith("pendingUpdateVersion");
+    });
+
+    it("does not throw if store.delete rejects during channel switch", async () => {
+      autoUpdaterService.initialize();
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1] as (event: unknown, channel: string) => Promise<unknown>;
+
+      storeMock.get.mockImplementation((key: string) =>
+        key === "updateChannel" ? "stable" : undefined
+      );
+      storeMock.delete.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      await expect(setChannelHandler({}, "nightly")).resolves.toBe("nightly");
     });
   });
 
