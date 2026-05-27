@@ -5,7 +5,7 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
-import Ajv, { type ValidateFunction } from "ajv/dist/2020";
+import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
