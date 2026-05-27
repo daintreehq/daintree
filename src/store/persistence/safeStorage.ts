@@ -1,7 +1,6 @@
 import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { notify } from "@/lib/notify";
 
 const fallbackStorageData = new Map<string, string>();
 
@@ -116,17 +115,21 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
   const notifyPermanentFallbackOnce = (): void => {
     if (hasNotifiedPermanentFallback) return;
     hasNotifiedPermanentFallback = true;
-    try {
-      notify({
-        type: "warning",
-        title: "Settings won't be saved",
-        message:
-          "Couldn't write to local storage, so changes made this session won't persist after restart.",
-        context: { eventKind: "settings" },
+    // Dynamic import to break the safeStorage <- notify <- notificationHistorySlice <- safeStorage
+    // module cycle that triggers a TDZ on `memoryStorage` if `notify` is imported statically.
+    void import("@/lib/notify")
+      .then(({ notify }) => {
+        notify({
+          type: "warning",
+          title: "Settings won't be saved",
+          message:
+            "Couldn't write to local storage, so changes made this session won't persist after restart.",
+          context: { eventKind: "settings" },
+        });
+      })
+      .catch(() => {
+        // The notification surface is best-effort — never let it break persistence.
       });
-    } catch {
-      // The notification surface is best-effort — never let it break persistence.
-    }
   };
 
   return {

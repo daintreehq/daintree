@@ -1,5 +1,5 @@
 import type { RecipeTerminal } from "../../../shared/types/project.js";
-import { findSecretInValue } from "../../utils/secretScrubber.js";
+import { findSecretInValue } from "../../../shared/utils/secretScrubber.js";
 
 const USAGE_HISTORY_LIMIT = 20;
 

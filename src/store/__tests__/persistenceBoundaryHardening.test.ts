@@ -609,7 +609,9 @@ describe("persistence boundary hardening", () => {
       storage.setItem("notify-key-1", { state: { value: 1 }, version: 1 });
       storage.setItem("notify-key-2", { state: { value: 2 }, version: 1 });
 
-      expect(notifySpy).toHaveBeenCalledTimes(1);
+      // notify is dispatched via a dynamic import to break a module cycle;
+      // wait for the microtask queue + import resolution to drain.
+      await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1));
     } finally {
       vi.doUnmock("@/lib/notify");
     }
