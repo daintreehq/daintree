@@ -4,6 +4,7 @@ import {
   UI_DOHERTY_THRESHOLD,
   UI_SKELETON_GATE_MS,
   UI_SKELETON_FLOOR_MS,
+  getPerformanceModeFloor,
 } from "@/lib/animationUtils";
 
 export function useDeferredLoading(isPending: boolean, delay: number): boolean {
@@ -41,19 +42,6 @@ export function useSkeletonGate(isPending: boolean): boolean {
   return useDeferredLoading(isPending, UI_SKELETON_GATE_MS);
 }
 
-/** Resolve the effective display floor, honoring the performance-mode bypass.
- *  Mirrors `getUiAnimationDuration`: performance mode collapses JS timers to 0
- *  so callers complete synchronously. Reduced-motion is intentionally NOT read
- *  here — CSS owns reduced-motion presentation, not JS timers. Reads
- *  `document.body` lazily (never at module load) for SSR/JSDOM safety. */
-function getEffectiveFloor(floorMs: number): number {
-  if (typeof document === "undefined") {
-    return floorMs;
-  }
-  const performanceMode = document.body?.dataset.performanceMode === "true";
-  return performanceMode ? 0 : floorMs;
-}
-
 /**
  * Hold a skeleton (or any loading placeholder) visible for at least `floorMs`
  * once it first shows, preventing a same-frame teardown flash when the
@@ -78,7 +66,7 @@ export function useSkeletonDisplayFloor(
   const shownAtRef = useRef<number | null>(isShowing ? Date.now() : null);
 
   useEffect(() => {
-    const floor = getEffectiveFloor(floorMs);
+    const floor = getPerformanceModeFloor(floorMs);
 
     const clearTimer = () => {
       if (timerRef.current !== null) {

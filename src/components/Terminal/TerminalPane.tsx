@@ -34,6 +34,7 @@ import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { TerminalPaneSkeleton } from "./TerminalPaneSkeleton";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
@@ -414,7 +415,6 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
-  const isHostConnected = backendStatus === "connected";
 
   const isHibernated = useIsHibernated(id);
 
@@ -1076,15 +1076,22 @@ function TerminalPaneComponent({
     spawnError,
     backendStatus,
   });
-  const showRestartError = isHostConnected && Boolean(restartError);
-  const showSpawnError = isHostConnected && Boolean(spawnError) && !restartError;
+  // Backend-dependent banners (restart / spawn / reconnect) describe failures
+  // whose only recovery path runs through the host, so they're hidden while
+  // any global recovery cause is active. The parse-error category covers
+  // scrollback-restore failures, which are independent of host connectivity
+  // (terminal still works) and stay visible during a backend flap.
+  const suppressBackendDependent = useShouldSuppressLocalError("backend-dependent");
+  const suppressParseError = useShouldSuppressLocalError("parse-error");
+  const showRestartError = !suppressBackendDependent && Boolean(restartError);
+  const showSpawnError = !suppressBackendDependent && Boolean(spawnError) && !restartError;
   const showReconnectError =
-    isHostConnected && Boolean(reconnectError) && !restartError && !spawnError;
+    !suppressBackendDependent && Boolean(reconnectError) && !restartError && !spawnError;
   // Scrollback restore is independent of PTY launch state (spawn/reconnect),
   // so it can co-exist with those banners. Only restartError, which already
   // implies a destroyed-and-respawning PTY, suppresses it.
   const showScrollbackRestoreError =
-    isHostConnected && Boolean(scrollbackRestoreError) && !restartError;
+    !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
   return (
