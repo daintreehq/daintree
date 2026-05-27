@@ -3,10 +3,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { PluginActionDescriptor } from "@shared/types/plugin";
 
-const { getActionsMock, onActionsChangedMock, invokeMock } = vi.hoisted(() => ({
+const { getActionsMock, onActionsChangedMock, invokeMock, notifyMock } = vi.hoisted(() => ({
   getActionsMock: vi.fn(),
   onActionsChangedMock: vi.fn(),
   invokeMock: vi.fn(),
+  notifyMock: vi.fn(),
+}));
+
+// Stub the notify surface so containment tests can assert on its call shape
+// without spinning up the full notification store + history wiring.
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 function descriptor(overrides: Partial<PluginActionDescriptor> = {}): PluginActionDescriptor {
@@ -283,6 +290,68 @@ describe("usePluginActions", () => {
     expect(settled).toEqual({ ok: true, result: undefined });
     expect(invokeMock).not.toHaveBeenCalled();
     expect(usePluginConfirmStore.getState().current).toBeNull();
+  });
+
+  it("surfaces an error toast when invoke rejects and returns undefined (boundary 2 — #9276)", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor();
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockRejectedValue(new Error("plugin handler exploded"));
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    const result = await actionService.dispatch(action.id, { x: 1 });
+
+    // The rejection is contained at the renderer boundary: the dispatch
+    // resolves successfully with undefined, never propagating the rejection
+    // back through ActionService's own catch (which would emit a *second*
+    // error path).
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Plugin action failed",
+        message: expect.stringContaining("acme.my-plugin"),
+      })
+    );
+  });
+
+  it("does NOT surface a toast when invoke rejects after the hook unmounts (boundary 2 — #9276)", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor();
+    getActionsMock.mockResolvedValue([action]);
+
+    // Capture the deferred reject so we can fire it strictly after unmount.
+    let rejectInvoke: ((err: Error) => void) | null = null;
+    invokeMock.mockImplementation(
+      () =>
+        new Promise<unknown>((_, reject) => {
+          rejectInvoke = reject;
+        })
+    );
+
+    const { unmount } = renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    // Capture the action's run() handle BEFORE unmount — after unmount the
+    // action is unregistered, so we have to dispatch first.
+    const pending = actionService.dispatch(action.id, { x: 1 });
+
+    unmount();
+    rejectInvoke!(new Error("late boom"));
+    const result = await pending;
+
+    // Run still returns undefined (boundary 2 swallows the throw) and
+    // ActionService wraps that as a successful dispatch.
+    expect(result).toEqual({ ok: true, result: undefined });
+    // Critical: no toast on a stale in-flight rejection.
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("does not clobber an already-registered built-in action of the same id", async () => {

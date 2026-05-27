@@ -52,6 +52,17 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   getForgeProviderImpl: vi.fn(),
   clearForgeProviderImplRegistry: vi.fn(),
 }));
+// Mocked so unload-cascade tests can simulate a throwing decoration unregister
+// without exercising the real (currently no-op) registry. Pre-existing tests
+// transitively touched these via unloadPlugin but never asserted call counts.
+vi.mock("../fileDecorationRegistry.js", () => ({
+  registerFileDecorationProviders: vi.fn(),
+  registerFileDecorationProviderImpl: vi.fn(),
+  unregisterFileDecorationProviders: vi.fn(),
+  unregisterFileDecorationProviderImpls: vi.fn(),
+  unregisterFileDecorationProviderImpl: vi.fn(),
+  scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
+}));
 
 import { PluginService } from "../PluginService.js";
 import { PluginManifestSchema } from "../../schemas/plugin.js";
@@ -75,6 +86,10 @@ import {
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "../forgeProviderRegistry.js";
+import {
+  unregisterFileDecorationProviders,
+  unregisterFileDecorationProviderImpls,
+} from "../fileDecorationRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -2810,5 +2825,267 @@ describe("reserved contribution point warnings", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// Boundary containment regression tests for issue #9276 — verify that a
+// plugin's exceptions can't escape the host. Each block covers one boundary:
+// activation, action dispatch, and the unload cascade.
+
+describe("Plugin exception containment (#9276)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  describe("Boundary 1 — activation failure", () => {
+    it("records the activation error on getPluginLoadError without rethrowing", async () => {
+      const pluginDir = path.join(tmpDir, "throws-activate");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-activate", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw new Error('boom on activate'); }"
+      );
+
+      const service = new PluginService(tmpDir);
+      // The host MUST NOT crash — initialize() should resolve.
+      await expect(service.initialize()).resolves.toBeUndefined();
+
+      const record = service.getPluginLoadError("acme.throws-activate");
+      expect(record).toBeDefined();
+      expect(record?.message).toBe("boom on activate");
+      expect(record?.stack).toContain("boom on activate");
+      expect(typeof record?.at).toBe("number");
+      // The plugin is still registered (manifest-declared contributions survive
+      // even if the JS main entry blows up).
+      expect(service.hasPlugin("acme.throws-activate")).toBe(true);
+    });
+
+    it("returns undefined when the plugin's activate succeeds", async () => {
+      const pluginDir = path.join(tmpDir, "clean-activate");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.clean-activate", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { return () => {}; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
+    });
+
+    it("returns undefined when the plugin declares no main entry", async () => {
+      await writePlugin("no-main", { name: "acme.no-main", version: "1.0.0" });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      expect(service.getPluginLoadError("acme.no-main")).toBeUndefined();
+    });
+
+    it("clears the recorded error after unload", async () => {
+      const pluginDir = path.join(tmpDir, "throws-then-unload");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-then-unload", version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw new Error('boom'); }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
+
+      service.unloadPlugin("acme.throws-then-unload");
+      expect(service.getPluginLoadError("acme.throws-then-unload")).toBeUndefined();
+    });
+
+    it("normalises non-Error throws into a load error record", async () => {
+      const pluginDir = path.join(tmpDir, "throws-string");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({ name: "acme.throws-string", version: "1.0.0", main: "main.mjs" })
+      );
+      // Throw a plain string — many plugin authors do this.
+      await fs.writeFile(
+        path.join(pluginDir, "main.mjs"),
+        "export function activate() { throw 'plain-string-failure'; }"
+      );
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const record = service.getPluginLoadError("acme.throws-string");
+      expect(record?.message).toBe("plain-string-failure");
+      expect(record?.stack).toBeUndefined();
+    });
+  });
+
+  describe("Boundary 2 — action handler throw", () => {
+    it("dispatchHandler rejects with the original error and logs to console.error", async () => {
+      await writePlugin("acme.throwy-handler", {
+        name: "acme.throwy-handler",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const original = new Error("handler boom");
+      service.registerHandler("acme.throwy-handler", "blow-up", () => {
+        throw original;
+      });
+
+      await expect(
+        service.dispatchHandler(
+          "acme.throwy-handler",
+          "blow-up",
+          makeCtx("acme.throwy-handler"),
+          []
+        )
+      ).rejects.toBe(original);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Handler "acme.throwy-handler:blow-up" threw:`),
+        original
+      );
+    });
+
+    it("dispatchHandler rejects with an async handler's rejection and logs", async () => {
+      await writePlugin("acme.async-throwy", {
+        name: "acme.async-throwy",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      const original = new Error("async boom");
+      service.registerHandler("acme.async-throwy", "blow-up", async () => {
+        throw original;
+      });
+
+      await expect(
+        service.dispatchHandler("acme.async-throwy", "blow-up", makeCtx("acme.async-throwy"), [])
+      ).rejects.toBe(original);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Handler "acme.async-throwy:blow-up" threw:`),
+        original
+      );
+    });
+  });
+
+  describe("Boundary 3 — unload cascade containment", () => {
+    it("continues past a throwing menu-items unregister and still clears the plugin", async () => {
+      await writePlugin("cascade-test", {
+        name: "acme.cascade-test",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+          toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
+          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterPluginMenuItems).mockImplementationOnce(() => {
+        throw new Error("menu unregister boom");
+      });
+
+      service.unloadPlugin("acme.cascade-test");
+
+      // Each step after the throwing one still ran:
+      expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterForgeProviderImpls).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.cascade-test");
+      expect(unregisterFileDecorationProviderImpls).toHaveBeenCalledWith("acme.cascade-test");
+
+      // Containment guarantees: plugin gone from registry, no rethrown error.
+      expect(service.hasPlugin("acme.cascade-test")).toBe(false);
+
+      // Disposer throws are warnings, not errors (per issue constraint).
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterPluginMenuItems" for "acme.cascade-test" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing toolbar unregister", async () => {
+      await writePlugin("toolbar-throws", {
+        name: "acme.toolbar-throws",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterPluginToolbarButtons).mockImplementationOnce(() => {
+        throw new Error("toolbar boom");
+      });
+
+      service.unloadPlugin("acme.toolbar-throws");
+
+      // Subsequent steps in cascade still run.
+      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.toolbar-throws");
+      expect(service.hasPlugin("acme.toolbar-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterPluginToolbarButtons" for "acme.toolbar-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
+
+    it("continues past a throwing forge-provider unregister", async () => {
+      await writePlugin("forge-throws", {
+        name: "acme.forge-throws",
+        version: "1.0.0",
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      vi.mocked(unregisterForgeProviders).mockImplementationOnce(() => {
+        throw new Error("forge boom");
+      });
+
+      service.unloadPlugin("acme.forge-throws");
+
+      // File decoration step still runs after the forge step throws.
+      expect(unregisterFileDecorationProviders).toHaveBeenCalledWith("acme.forge-throws");
+      expect(service.hasPlugin("acme.forge-throws")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Unload step "unregisterForgeProviders" for "acme.forge-throws" threw:`
+        ),
+        expect.any(Error)
+      );
+    });
   });
 });
