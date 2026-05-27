@@ -126,6 +126,7 @@ module.exports = async function () {
       applicationId: "Daintree",
       displayName: "Daintree",
       languages: ["en-US"],
+      setBuildNumber: true,
     },
     // NSIS (non-Store) Windows installer. Produces a single combined x64+arm64
     // `.exe`; the installer selects the right payload at runtime. Auto-update
