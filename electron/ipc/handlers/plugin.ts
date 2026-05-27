@@ -45,7 +45,10 @@ async function handleToolbarButtons(): Promise<{
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
   // Once init has settled the registry is authoritative, so the renderer may
   // sweep stale `plugin.*` pins against this snapshot — the case (uninstall
-  // while the view was evicted) the pull-side sweep exists for.
+  // while the view was evicted) the pull-side sweep exists for. `isInitialized`
+  // is true even if the scan threw (the finally in runInitialize still flips
+  // it); a plugin that failed to load has no buttons here, so sweeping its
+  // orphaned pins is the correct outcome rather than a data-loss bug.
   return { buttons, complete: pluginService.isInitialized };
 }
 

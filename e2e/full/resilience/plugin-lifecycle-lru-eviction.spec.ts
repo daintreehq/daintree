@@ -165,6 +165,12 @@ test.describe.serial("Full: plugin lifecycle sync survives LRU project-view evic
         displayName: "Lifecycle E2E",
         version: "1.0.0",
         engines: { daintree: "*" },
+        // A toolbar button contribution so load/unload also drive the gated
+        // toolbar-buttons pull + stale-prune sweep path on a revived view, not
+        // just the actions path.
+        contributes: {
+          toolbarButtons: [{ id: "ping", label: "Ping", iconId: "puzzle", actionId: ACTION_ID }],
+        },
       })
     );
 

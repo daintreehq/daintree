@@ -8,6 +8,7 @@ const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
 const mockWaitForInitialized = vi.fn();
+let mockIsInitialized = true;
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -20,7 +21,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
     waitForInitialized: (...args: unknown[]) => mockWaitForInitialized(...args),
     get isInitialized() {
-      return true;
+      return mockIsInitialized;
     },
   },
 }));
@@ -68,6 +69,7 @@ beforeEach(() => {
   mockGetRegisteredForgeProviders.mockReturnValue([]);
   mockGetFileDecorationImpls.mockReturnValue([]);
   mockWaitForInitialized.mockResolvedValue(undefined);
+  mockIsInitialized = true;
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -544,6 +546,12 @@ describe("PLUGIN_TOOLBAR_BUTTONS handler", () => {
     expect(await handler({})).toEqual({ buttons: [], complete: true });
   });
 
+  it("reports complete:false when the scan has not settled", async () => {
+    mockIsInitialized = false;
+    const handler = getHandler();
+    expect(await handler({})).toEqual({ buttons: [], complete: false });
+  });
+
   it("filters out ids with no config", async () => {
     mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.acme.foo", "plugin.orphan"]);
     const config = {
@@ -570,10 +578,18 @@ describe("PLUGIN_ACTIONS_GET / PANEL_KINDS_GET init gating", () => {
     ) => unknown;
   }
 
-  it("PLUGIN_ACTIONS_GET awaits waitForInitialized before listing actions", async () => {
+  it("PLUGIN_ACTIONS_GET does not read the registry until waitForInitialized resolves", async () => {
+    let resolveInit: (() => void) | undefined;
+    mockWaitForInitialized.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveInit = resolve;
+      })
+    );
     const handler = getHandler("plugin:actions-get");
-    await handler({});
-    expect(mockWaitForInitialized).toHaveBeenCalledTimes(1);
+    const pending = handler({}) as Promise<unknown>;
+    expect(mockListPluginActions).not.toHaveBeenCalled();
+    resolveInit!();
+    await pending;
     expect(mockListPluginActions).toHaveBeenCalled();
   });
 

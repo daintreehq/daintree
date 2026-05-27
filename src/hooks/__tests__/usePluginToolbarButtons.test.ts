@@ -94,6 +94,34 @@ describe("usePluginToolbarButtons", () => {
     expect(sweepMock).not.toHaveBeenCalled();
   });
 
+  it("a partial push before the pull resolves does not suppress the authoritative pull sweep", async () => {
+    // Regression for #9285: a load-time partial push must not flip pushReceived
+    // and drop the gated complete pull — the pull is the only snapshot that
+    // sweeps stale pins when a view revives after an uninstall it missed.
+    let resolvePull: (v: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void = () => {};
+    toolbarButtonsMock.mockReturnValue(
+      new Promise<{ buttons: ToolbarButtonConfig[]; complete: boolean }>((r) => {
+        resolvePull = r;
+      })
+    );
+    let emit: ((p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) | null = null;
+    onToolbarButtonsChangedMock.mockImplementation(
+      (cb: (p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
+    renderHook(() => usePluginToolbarButtons());
+
+    await waitFor(() => expect(emit).not.toBeNull());
+    emit!({ buttons: [pluginButton("plugin.acme.foo")], complete: false });
+    expect(sweepMock).not.toHaveBeenCalled();
+
+    resolvePull({ buttons: [pluginButton("plugin.acme.foo")], complete: true });
+    await waitFor(() => expect(sweepMock).toHaveBeenCalledWith(["plugin.acme.foo"]));
+  });
+
   it("sweeps stale pinned buttons on an authoritative (complete=true) push", async () => {
     // Non-authoritative pull so the only complete-snapshot sweep under test is
     // the push below.

@@ -68,7 +68,12 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
       });
 
     const cleanup = electron.plugin.onToolbarButtonsChanged((payload) => {
-      pushReceived = true;
+      // Only an authoritative (complete) push suppresses the mount-time pull.
+      // A partial load-time push (complete=false) must NOT set the flag: the
+      // gated pull resolves with the full set and is the only snapshot that
+      // sweeps stale pins on a revived view (#9285) — dropping it because a
+      // partial push arrived first would lose that reconciliation.
+      if (payload.complete) pushReceived = true;
       sync(payload.buttons, payload.complete);
     });
 

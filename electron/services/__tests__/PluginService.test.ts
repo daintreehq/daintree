@@ -763,6 +763,23 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toHaveLength(1);
   });
 
+  it("waitForInitialized resolves (and marks initialized) when the scan throws", async () => {
+    const service = new PluginService(tmpDir);
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readdirSpy = vi.spyOn(fs, "readdir").mockRejectedValueOnce(eacces);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // A non-ENOENT scan failure must not leave callers hanging — the finally in
+    // runInitialize flips initialized, and waitForInitialized swallows the
+    // rejection so a revived view unblocks with whatever registered.
+    await expect(service.waitForInitialized()).resolves.toBeUndefined();
+    expect(service.isInitialized).toBe(true);
+    expect(service.listPlugins()).toEqual([]);
+
+    readdirSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
   it("coalesces concurrent initialize/waitForInitialized onto one scan", async () => {
     await writePlugin("coalesce", { name: "acme.coalesce", version: "1.0.0" });
     const service = new PluginService(tmpDir);
