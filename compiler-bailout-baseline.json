@@ -285,6 +285,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx": {
+    "success": 6,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/DevPreview/DevPreviewLoadingState.tsx": {
     "success": 3,
     "skip": 0,
@@ -4314,6 +4324,16 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
+  "src/components/icons/brands/GitHubIcon.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0,
+    "hintCount": 0,
+    "errorBailouts": [],
+    "skipReasons": [],
+    "pipelineErrors": []
+  },
   "src/components/icons/brands/GoIcon.tsx": {
     "success": 1,
     "skip": 0,
@@ -5315,11 +5335,11 @@
     "pipelineErrors": []
   },
   "src/hooks/useFindInPage.ts": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0,
-    "hintCount": 0,
+    "hintCount": 1,
     "errorBailouts": [],
     "skipReasons": [],
     "pipelineErrors": []
