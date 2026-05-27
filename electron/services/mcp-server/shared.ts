@@ -91,6 +91,20 @@ export const MCP_TIER_ELEVATION_TTL_MS = 30 * 60 * 1000;
 export const MCP_GRANT_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * Hard wall-clock ceiling on a grant's total lifetime, measured from its
+ * immutable `issuedAt`. The sliding {@link MCP_GRANT_TTL_MS} window means a
+ * model that calls a granted tool more often than once per TTL could
+ * otherwise hold the grant indefinitely; this caps the total refreshable
+ * lifetime so `refresh()` is blocked and the grant is forcibly revoked once
+ * the ceiling elapses, mirroring `sudo`'s max-lifetime enforcement — the
+ * next out-of-baseline call then re-triggers the tier-mismatch banner and
+ * the user must re-approve (#9161). Intentionally equal to
+ * {@link MCP_SSE_IDLE_TIMEOUT_MS} and {@link MCP_TIER_ELEVATION_TTL_MS} so a
+ * grant can never outlive its SSE session.
+ */
+export const MCP_GRANT_MAX_LIFETIME_MS = 30 * 60 * 1000;
+
+/**
  * Periodic sweep cadence for the grant cache's lazy-expiry map. Lazy
  * eviction on read is the source of truth; the sweep is a memory-hygiene
  * pass that keeps idle sessions' expired entries from accumulating between

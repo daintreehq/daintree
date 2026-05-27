@@ -157,8 +157,9 @@ export interface McpAuditRecord {
  *   periodic sweep also drives this when an idle session's grant ages out
  *   without a follow-up read.
  * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
- *   teardown, or an idle reaper firing wiped the grant before its TTL
- *   elapsed. `revokedReason` distinguishes those sources.
+ *   teardown, an idle reaper firing, or the hard max-lifetime ceiling being
+ *   reached wiped the grant before its sliding TTL elapsed. `revokedReason`
+ *   distinguishes those sources.
  * - `tier.elevated`: a renderer-approved session-tier elevation
  *   (`HttpLifecycle.setSessionTier`) raised the session above its
  *   token-resolved baseline. `tier` is the new tier, `previousTier` the
@@ -175,7 +176,17 @@ export type McpGrantRecordType =
   | "tier.elevated"
   | "tier.decayed";
 
-export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle";
+/**
+ * Source of a `grant.revoked` transition.
+ * - `user`: explicit user-initiated revoke.
+ * - `session-ended`: the session was torn down.
+ * - `session-idle`: the idle reaper collected the session.
+ * - `grant-ceiling`: the hard max-lifetime ceiling from `issuedAt` elapsed
+ *   while the grant was still being actively refreshed; the user must
+ *   re-approve (#9161). Distinct from `grant.expired`, which is a passive
+ *   sliding-TTL timeout with no recent use.
+ */
+export type McpGrantRevokedReason = "user" | "session-ended" | "session-idle" | "grant-ceiling";
 
 export interface McpGrantRecord {
   type: McpGrantRecordType;

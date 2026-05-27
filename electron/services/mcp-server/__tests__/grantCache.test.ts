@@ -9,6 +9,7 @@ interface EmittedEvent {
 
 function newCache(opts?: {
   ttlMs?: number;
+  maxLifetimeMs?: number;
   sweepIntervalMs?: number;
   denialSilenceThreshold?: number;
   now?: () => number;
@@ -16,6 +17,9 @@ function newCache(opts?: {
   const emitted: EmittedEvent[] = [];
   const cache = new GrantCache({
     ttlMs: opts?.ttlMs ?? 1000,
+    // Default the ceiling well above the default TTL so existing tests are
+    // unaffected; ceiling tests pass an explicit small value.
+    maxLifetimeMs: opts?.maxLifetimeMs ?? 1_000_000,
     // Disable the sweep by default so the only timer in the test is the
     // one each test explicitly drives; the lazy-eviction path on `check`
     // is the contract we care about most.
@@ -151,6 +155,119 @@ describe("GrantCache.refresh — race guard (#2243)", () => {
   it("refresh of a missing entry no-ops", () => {
     const { cache } = newCache();
     expect(cache.refresh("s1", "git.commit", 0)).toBe(false);
+    cache.dispose();
+  });
+});
+
+describe("GrantCache max-lifetime ceiling (#9161)", () => {
+  it("refresh is blocked once the ceiling passes and emits grant.revoked/grant-ceiling", () => {
+    let now = 0;
+    // Ceiling 5000 sits above the 1000ms TTL so the grant is refreshable for
+    // a while, then hits the hard cap.
+    const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => now });
+    const entry = cache.issueGrant("s1", "git.commit");
+    emitted.length = 0;
+
+    // Within the ceiling: refresh slides the TTL window forward as usual.
+    now = 4000;
+    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(true);
+    expect(cache._peek("s1", "git.commit")?.expiresAt).toBe(5000);
+    expect(emitted).toHaveLength(0);
+
+    // Past the ceiling: refresh is denied, entry is evicted, event emitted.
+    now = 5001;
+    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(false);
+    expect(cache._peek("s1", "git.commit")).toBeUndefined();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload.type).toBe("grant.revoked");
+    expect(emitted[0].payload).toMatchObject({
+      revokedReason: "grant-ceiling",
+      toolId: "git.commit",
+    });
+
+    cache.dispose();
+  });
+
+  it("ceiling boundary is exclusive — refresh at exactly issuedAt + maxLifetimeMs still succeeds", () => {
+    let now = 0;
+    const { cache } = newCache({ ttlMs: 10_000, maxLifetimeMs: 5000, now: () => now });
+    const entry = cache.issueGrant("s1", "git.commit");
+
+    now = 5000; // exactly at the ceiling
+    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(true);
+    now = 5001; // one ms past
+    expect(cache.refresh("s1", "git.commit", entry.issuedAt)).toBe(false);
+
+    cache.dispose();
+  });
+
+  it("check evicts at the ceiling even when expiresAt is still in the future", () => {
+    let now = 0;
+    // TTL larger than the ceiling: a single grant's expiresAt stays in the
+    // future, so only the ceiling can evict it.
+    const { cache, emitted } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
+    cache.issueGrant("s1", "git.commit");
+    emitted.length = 0;
+
+    now = 5001;
+    const result = cache.check("s1", "git.commit");
+    expect(result.granted).toBe(false);
+    expect(emitted).toHaveLength(1);
+    // grant.revoked, NOT grant.expired — the ceiling is an active eviction.
+    expect(emitted[0].payload.type).toBe("grant.revoked");
+    expect(emitted[0].payload).toMatchObject({ revokedReason: "grant-ceiling" });
+
+    // Entry is gone — a subsequent check does not re-emit.
+    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(emitted).toHaveLength(1);
+
+    cache.dispose();
+  });
+
+  it("sweep evicts ceiling-expired entries with grant.revoked/grant-ceiling", () => {
+    let now = 0;
+    const { cache, emitted } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
+    cache.issueGrant("s1", "git.commit");
+    emitted.length = 0;
+
+    // expiresAt (100_000) is still in the future, so the TTL-only sweep would
+    // skip this entry — the ceiling branch must catch it.
+    now = 6000;
+    const evicted = cache.sweep();
+    expect(evicted).toBe(1);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload.type).toBe("grant.revoked");
+    expect(emitted[0].payload).toMatchObject({ revokedReason: "grant-ceiling" });
+
+    cache.dispose();
+  });
+
+  it("re-issuing after a ceiling hit resets the lifetime clock with a fresh issuedAt", () => {
+    let now = 0;
+    // TTL larger than the ceiling so the ceiling, not the sliding TTL, is the
+    // limiting factor for the assertions below.
+    const { cache } = newCache({ ttlMs: 100_000, maxLifetimeMs: 5000, now: () => now });
+    const original = cache.issueGrant("s1", "git.commit");
+
+    // Cross the ceiling, then the user re-approves: a fresh grant is minted.
+    now = 6000;
+    const reissued = cache.issueGrant("s1", "git.commit");
+    expect(reissued.issuedAt).toBe(6000);
+    expect(reissued.issuedAt).not.toBe(original.issuedAt);
+
+    // A stale in-flight refresh carrying the OLD issuedAt must no-op on the
+    // fresh entry (the #2243 race guard), leaving the new clock intact.
+    now = 6100;
+    expect(cache.refresh("s1", "git.commit", original.issuedAt)).toBe(false);
+    expect(cache._peek("s1", "git.commit")?.issuedAt).toBe(reissued.issuedAt);
+
+    // The new grant has its own independent ceiling window: still valid just
+    // before issuedAt + maxLifetimeMs (6000 + 5000 = 11000).
+    now = 10_999;
+    expect(cache.check("s1", "git.commit").granted).toBe(true);
+    now = 11_001;
+    expect(cache.check("s1", "git.commit").granted).toBe(false);
+
     cache.dispose();
   });
 });

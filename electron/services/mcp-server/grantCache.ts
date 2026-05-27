@@ -5,6 +5,7 @@ import type {
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
   MCP_DENIAL_SILENCE_THRESHOLD,
+  MCP_GRANT_MAX_LIFETIME_MS,
   MCP_GRANT_SWEEP_INTERVAL_MS,
   MCP_GRANT_TTL_MS,
 } from "./shared.js";
@@ -33,6 +34,14 @@ export interface GrantLifecycleEmitter {
 
 interface GrantCacheOptions {
   ttlMs?: number;
+  /**
+   * Hard wall-clock ceiling on a grant's total lifetime, measured from its
+   * immutable `issuedAt`. Once `now > issuedAt + maxLifetimeMs` the grant is
+   * forcibly revoked on the next `check`/`refresh`/`sweep` regardless of how
+   * recently the sliding TTL was refreshed. Defaults to
+   * {@link MCP_GRANT_MAX_LIFETIME_MS}.
+   */
+  maxLifetimeMs?: number;
   sweepIntervalMs?: number;
   denialSilenceThreshold?: number;
   /**
@@ -73,6 +82,7 @@ export class GrantCache {
   private readonly grants = new Map<string, GrantEntry>();
   private readonly denialCounts = new Map<string, number>();
   private readonly ttlMs: number;
+  private readonly maxLifetimeMs: number;
   private readonly sweepIntervalMs: number;
   private readonly denialSilenceThreshold: number;
   private readonly emit?: GrantLifecycleEmitter;
@@ -82,6 +92,7 @@ export class GrantCache {
 
   constructor(options: GrantCacheOptions = {}) {
     this.ttlMs = options.ttlMs ?? MCP_GRANT_TTL_MS;
+    this.maxLifetimeMs = options.maxLifetimeMs ?? MCP_GRANT_MAX_LIFETIME_MS;
     this.sweepIntervalMs = options.sweepIntervalMs ?? MCP_GRANT_SWEEP_INTERVAL_MS;
     this.denialSilenceThreshold = options.denialSilenceThreshold ?? MCP_DENIAL_SILENCE_THRESHOLD;
     this.emit = options.emit;
@@ -131,7 +142,22 @@ export class GrantCache {
     const k = key(sessionId, toolId);
     const entry = this.grants.get(k);
     if (!entry) return { granted: false };
-    if (this.now() > entry.expiresAt) {
+    const now = this.now();
+    // The hard ceiling is a stricter constraint than the sliding TTL, so it
+    // must be evaluated first: a grant refreshed moments ago can still have a
+    // future `expiresAt` while having crossed `issuedAt + maxLifetimeMs`.
+    if (now > entry.issuedAt + this.maxLifetimeMs) {
+      this.grants.delete(k);
+      this.emitSafely(sessionId, {
+        type: "grant.revoked",
+        sessionId,
+        toolId,
+        ttlMs: entry.ttlMs,
+        revokedReason: "grant-ceiling",
+      });
+      return { granted: false };
+    }
+    if (now > entry.expiresAt) {
       this.grants.delete(k);
       this.emitSafely(sessionId, {
         type: "grant.expired",
@@ -157,7 +183,22 @@ export class GrantCache {
     const entry = this.grants.get(k);
     if (!entry) return false;
     if (entry.issuedAt !== issuedAt) return false;
-    entry.expiresAt = this.now() + entry.ttlMs;
+    const now = this.now();
+    // Hard wall-clock ceiling: once the grant's total lifetime is exhausted
+    // no amount of recent use can extend it. Revoke and force re-approval
+    // rather than sliding the window forward again (#9161).
+    if (now > entry.issuedAt + this.maxLifetimeMs) {
+      this.grants.delete(k);
+      this.emitSafely(sessionId, {
+        type: "grant.revoked",
+        sessionId,
+        toolId,
+        ttlMs: entry.ttlMs,
+        revokedReason: "grant-ceiling",
+      });
+      return false;
+    }
+    entry.expiresAt = now + entry.ttlMs;
     return true;
   }
 
@@ -286,19 +327,34 @@ export class GrantCache {
     let evicted = 0;
     const now = this.now();
     for (const [k, entry] of [...this.grants]) {
-      if (now <= entry.expiresAt) continue;
+      // Ceiling-expired entries can still have a future `expiresAt` (they were
+      // refreshed recently), so they survive the TTL skip below — check the
+      // hard ceiling first and emit `grant.revoked` rather than `grant.expired`.
+      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      if (!pastCeiling && now <= entry.expiresAt) continue;
       this.grants.delete(k);
       evicted += 1;
       const colon = k.indexOf(":");
       if (colon < 0) continue;
       const sessionId = k.substring(0, colon);
       const toolId = k.substring(colon + 1);
-      this.emitSafely(sessionId, {
-        type: "grant.expired",
+      this.emitSafely(
         sessionId,
-        toolId,
-        ttlMs: entry.ttlMs,
-      });
+        pastCeiling
+          ? {
+              type: "grant.revoked",
+              sessionId,
+              toolId,
+              ttlMs: entry.ttlMs,
+              revokedReason: "grant-ceiling",
+            }
+          : {
+              type: "grant.expired",
+              sessionId,
+              toolId,
+              ttlMs: entry.ttlMs,
+            }
+      );
     }
     return evicted;
   }
