@@ -10,12 +10,31 @@ import { AppError } from "../../utils/errorTypes.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Cap the number of surviving clipboard images so a long session can't
+// accumulate temp PNGs without bound even when they're all under MAX_AGE_MS.
+const MAX_FILE_COUNT = 20;
+// Reject oversized clipboard writes before any native API call. Binary
+// (Uint8Array) payloads skip the IPC envelope budget check (see
+// electron/setup/security.ts), so these handler-level caps are the backstop.
+const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 
 function getClipboardDir(): string {
   return path.join(os.tmpdir(), CLIPBOARD_DIR_NAME);
 }
 
-async function cleanupOldClipboardImages(): Promise<void> {
+function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
+  for (const result of results) {
+    if (result.status === "rejected") {
+      const code = (result.reason as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn("[clipboard] Unexpected error during cleanup:", result.reason);
+      }
+    }
+  }
+}
+
+export async function cleanupOldClipboardImages(): Promise<void> {
   const dir = getClipboardDir();
   let entries: Dirent[];
   try {
@@ -26,29 +45,50 @@ async function cleanupOldClipboardImages(): Promise<void> {
     return;
   }
 
-  const now = Date.now();
-  const results = await Promise.allSettled(
-    entries
-      .filter(
-        (dirent) =>
-          dirent.isFile() && dirent.name.startsWith("clipboard-") && dirent.name.endsWith(".png")
-      )
-      .map(async (dirent) => {
-        const filePath = path.join(dir, dirent.name);
-        const stat = await fs.stat(filePath);
-        if (now - stat.mtimeMs > MAX_AGE_MS) {
-          await fs.unlink(filePath);
-        }
-      })
+  const clipboardFiles = entries.filter(
+    (dirent) =>
+      dirent.isFile() && dirent.name.startsWith("clipboard-") && dirent.name.endsWith(".png")
   );
 
-  for (const result of results) {
+  // Pass 1 — stat every clipboard file; tolerate races where a file vanishes.
+  const statResults = await Promise.allSettled(
+    clipboardFiles.map(async (dirent) => {
+      const filePath = path.join(dir, dirent.name);
+      const stat = await fs.stat(filePath);
+      return { filePath, mtimeMs: stat.mtimeMs };
+    })
+  );
+
+  const surviving: { filePath: string; mtimeMs: number }[] = [];
+  const now = Date.now();
+  const ageEvictions: Promise<void>[] = [];
+
+  // Pass 2 — age eviction: delete anything older than the 24h window.
+  for (const result of statResults) {
     if (result.status === "rejected") {
       const code = (result.reason as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
         console.warn("[clipboard] Unexpected error during cleanup:", result.reason);
       }
+      continue;
     }
+    const { filePath, mtimeMs } = result.value;
+    if (now - mtimeMs > MAX_AGE_MS) {
+      ageEvictions.push(fs.unlink(filePath));
+    } else {
+      surviving.push({ filePath, mtimeMs });
+    }
+  }
+
+  logCleanupRejections(await Promise.allSettled(ageEvictions));
+
+  // Pass 3 — count cap: if too many recent files survive, evict the oldest.
+  if (surviving.length > MAX_FILE_COUNT) {
+    surviving.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const toEvict = surviving.slice(0, surviving.length - MAX_FILE_COUNT);
+    logCleanupRejections(
+      await Promise.allSettled(toEvict.map((entry) => fs.unlink(entry.filePath)))
+    );
   }
 }
 
@@ -70,6 +110,12 @@ async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: 
   const filename = `clipboard-${Date.now()}-${id}.png`;
   const filePath = path.join(dir, filename);
   await fs.writeFile(filePath, pngBuffer);
+
+  // Fire-and-forget — bound temp-file accumulation after every save without
+  // blocking the save's return path. Mirrors the startup cleanup call.
+  void cleanupOldClipboardImages().catch((err) => {
+    console.warn("[clipboard] Cleanup failed unexpectedly:", err);
+  });
 
   const size = image.getSize();
   const thumbHeight = 40;
@@ -103,6 +149,13 @@ async function handleThumbnailFromPath(
 }
 
 async function handleWriteImage(pngData: Uint8Array): Promise<void> {
+  if (pngData.byteLength > MAX_IMAGE_BYTES) {
+    throw new AppError({
+      code: "PAYLOAD_TOO_LARGE",
+      message: `Image payload exceeds ${MAX_IMAGE_BYTES} byte limit`,
+      userMessage: "The image is too large to copy to the clipboard.",
+    });
+  }
   const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
   const image = nativeImage.createFromBuffer(buffer);
   if (image.isEmpty()) {
@@ -120,6 +173,13 @@ async function handleWriteText(text: string): Promise<void> {
     throw new AppError({
       code: "VALIDATION",
       message: "Text must be a string",
+    });
+  }
+  if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
+    throw new AppError({
+      code: "PAYLOAD_TOO_LARGE",
+      message: `Text payload exceeds ${MAX_TEXT_BYTES} byte limit`,
+      userMessage: "The text is too large to copy to the clipboard.",
     });
   }
   clipboard.writeText(text);
