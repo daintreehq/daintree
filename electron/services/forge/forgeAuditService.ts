@@ -4,6 +4,7 @@ import type {
   ForgeProviderMethodName,
 } from "../../../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { store } from "../../store.js";
 import { ForgeAuditService } from "./auditLog.js";
 
@@ -75,7 +76,7 @@ export async function auditForgeCall<T>(
       ...meta,
       durationMs: Date.now() - start,
       result: "error",
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: formatErrorMessage(err, "forge provider call failed"),
     });
     throw err;
   }
