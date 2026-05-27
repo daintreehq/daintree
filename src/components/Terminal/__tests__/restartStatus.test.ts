@@ -70,8 +70,57 @@ describe("getRestartBannerVariant", () => {
     expect(result).toEqual({ type: "none" });
   });
 
-  it("returns none when isRestarting is true", () => {
+  it("returns restarting when isRestarting is true and no errors", () => {
     const result = getRestartBannerVariant({ ...base, isRestarting: true });
+    expect(result).toEqual({ type: "restarting" });
+  });
+
+  it("returns auto-restarting over restarting when both isAutoRestarting and isRestarting are true", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isRestarting: true,
+      isAutoRestarting: true,
+    });
+    expect(result).toEqual({ type: "auto-restarting" });
+  });
+
+  it("returns none when isRestarting is true but restartError is present", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isRestarting: true,
+      restartError: {
+        message: "failed",
+        code: "RESTART_FAILED",
+        timestamp: Date.now(),
+        recoverable: false,
+      },
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("returns none when isRestarting is true but reconnectError is present", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isRestarting: true,
+      reconnectError: {
+        message: "lost connection",
+        code: "RECONNECT_FAILED",
+        timestamp: Date.now(),
+      } as never,
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("returns none when isRestarting is true but spawnError is present", () => {
+    const result = getRestartBannerVariant({
+      ...base,
+      isRestarting: true,
+      spawnError: {
+        message: "spawn failed",
+        code: "SPAWN_FAILED",
+        timestamp: Date.now(),
+      } as never,
+    });
     expect(result).toEqual({ type: "none" });
   });
 

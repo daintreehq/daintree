@@ -43,6 +43,19 @@ export function TerminalRestartStatusBanner({
         />
       );
 
+    case "restarting":
+      return (
+        <InlineStatusBanner
+          icon={SpinnerIcon}
+          title={RESTART_BANNER_COPY["restarting"].title}
+          severity="info"
+          animated={false}
+          role="status"
+          ariaLive="polite"
+          actions={[]}
+        />
+      );
+
     case "exit-error":
       return (
         <InlineStatusBanner
