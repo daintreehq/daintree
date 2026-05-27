@@ -199,6 +199,9 @@ jobs:
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
         run: |
           npm run build
+          # Hard security gate (#9148) — fail before packaging if any E2E
+          # backdoor survived the production strip.
+          npm run check:preload-backdoors
           # Windows binaries are published via the R2 upload in the publish
           # job (and the Microsoft Store step below), never by electron-builder
           # directly — so --publish is always "never" here.

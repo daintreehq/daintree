@@ -212,6 +212,9 @@ jobs:
           npm_config_build_from_source: "true"
         run: |
           npm run build
+          # Hard security gate (#9148) — fail before packaging if any E2E
+          # backdoor survived the production strip.
+          npm run check:preload-backdoors
           PUBLISH_FLAG="always"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "::warning::Dry run — skipping publish to electron-builder targets"
