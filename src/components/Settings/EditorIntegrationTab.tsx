@@ -49,6 +49,7 @@ export function EditorIntegrationTab() {
   const argsId = useId();
 
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
+  const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -122,13 +123,14 @@ export function EditorIntegrationTab() {
   };
 
   const handleTest = async () => {
-    if (!activeProjectId || isTesting) return;
+    if (!activeProjectId || !activeProjectPath || isTesting) return;
     setIsTesting(true);
     setTestResult(null);
     try {
-      // Open a safe, known-to-exist file to test the editor integration
-      const homeDir = await window.electron.system.getHomeDir();
-      await window.electron.system.openInEditor({ path: homeDir });
+      // Open the active project's root to test the editor integration. It is a
+      // known-to-exist path inside an allowed root, so it passes the main-process
+      // path-containment guard (homeDir would now be rejected as outside-root).
+      await window.electron.system.openInEditor({ path: activeProjectPath });
       if (!isMountedRef.current) return;
       setTestResult("ok");
     } catch {

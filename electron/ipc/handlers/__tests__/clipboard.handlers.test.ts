@@ -20,13 +20,18 @@ vi.mock("electron", () => ({
   nativeImage: nativeImageMock,
 }));
 
-vi.mock("node:fs/promises", () => ({
+const fsPromisesMock = vi.hoisted(() => ({
   mkdir: vi.fn(() => Promise.resolve()),
   readdir: vi.fn(() => Promise.resolve([])),
   stat: vi.fn(),
   unlink: vi.fn(),
   writeFile: vi.fn(() => Promise.resolve()),
+  realpath: vi.fn((p: string) => Promise.resolve(p)),
+  open: vi.fn(),
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0 },
 }));
+
+vi.mock("node:fs/promises", () => fsPromisesMock);
 
 vi.mock("node:crypto", () => ({
   randomBytes: vi.fn(() => ({ toString: () => "abc123" })),
@@ -34,7 +39,11 @@ vi.mock("node:crypto", () => ({
 
 import { ipcMain } from "electron";
 import * as fsPromises from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { registerClipboardHandlers } from "../clipboard.js";
+
+const CLIPBOARD_DIR = path.join(os.tmpdir(), "daintree-clipboard");
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -266,7 +275,7 @@ describe("clipboard:write-text size cap", () => {
 });
 
 describe("clipboard:write-image size cap", () => {
-  const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+  const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
   let cleanup: () => void;
 
   beforeEach(() => {
@@ -300,7 +309,7 @@ describe("clipboard:write-image size cap", () => {
     expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
   });
 
-  it("accepts image data exactly at the 50 MB limit", async () => {
+  it("accepts image data exactly at the 20 MB limit", async () => {
     const fakeImage = { isEmpty: () => false };
     nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
 
@@ -484,5 +493,110 @@ describe("clipboard:read-selection handler", () => {
 
     const handler = getHandler("clipboard:read-selection");
     await expect(handler(fakeEvent)).rejects.toThrow("focus required for primary read");
+  });
+});
+
+describe("clipboard:thumbnail-from-path handler", () => {
+  let cleanup: () => void;
+
+  const makeFakeImage = () => ({
+    isEmpty: () => false,
+    getSize: () => ({ width: 80, height: 40 }),
+    resize: () => ({ toPNG: () => Buffer.from([0x89, 0x50]) }),
+  });
+
+  const makeFileHandle = (readFile: () => Promise<Buffer>) => ({
+    readFile: vi.fn(readFile),
+    close: vi.fn(() => Promise.resolve()),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: realpath echoes its input so containment is path-prefix based.
+    fsPromisesMock.realpath.mockImplementation((p: string) => Promise.resolve(p));
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("reads an image contained in the clipboard dir via an O_NOFOLLOW fd", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-1.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50, 0x4e, 0x47])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue(makeFakeImage());
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    const result = (await handler(fakeEvent, filePath)) as {
+      filePath: string;
+      thumbnailDataUrl: string;
+    };
+
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, expect.any(Number));
+    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
+    expect(handle.close).toHaveBeenCalled();
+    expect(result.filePath).toBe(filePath);
+    expect(result.thumbnailDataUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("rejects a path outside the clipboard dir with OUTSIDE_ROOT", async () => {
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, "/etc/passwd")).rejects.toMatchObject({
+      name: "AppError",
+      code: "OUTSIDE_ROOT",
+    });
+
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a relative path with INVALID_PATH before touching the filesystem", async () => {
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, "relative/clipboard.png")).rejects.toMatchObject({
+      name: "AppError",
+      code: "INVALID_PATH",
+    });
+
+    expect(fsPromisesMock.realpath).not.toHaveBeenCalled();
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects a symlink escape where the fd resolves outside the root (ELOOP)", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "evil.png");
+    fsPromisesMock.open.mockRejectedValue(Object.assign(new Error("ELOOP"), { code: "ELOOP" }));
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "INVALID_PATH",
+    });
+
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("closes the file handle when readFile fails", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-2.png");
+    const handle = makeFileHandle(() => Promise.reject(new Error("read failed")));
+    fsPromisesMock.open.mockResolvedValue(handle);
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toThrow("read failed");
+
+    expect(handle.close).toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it("throws CLIPBOARD_INVALID when the decoded image is empty", async () => {
+    const filePath = path.join(CLIPBOARD_DIR, "clipboard-3.png");
+    const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x00])));
+    fsPromisesMock.open.mockResolvedValue(handle);
+    nativeImageMock.createFromBuffer.mockReturnValue({ isEmpty: () => true });
+
+    const handler = getHandler("clipboard:thumbnail-from-path");
+    await expect(handler(fakeEvent, filePath)).rejects.toMatchObject({
+      name: "AppError",
+      code: "CLIPBOARD_INVALID",
+    });
   });
 });

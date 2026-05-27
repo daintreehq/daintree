@@ -15,9 +15,12 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_FILE_COUNT = 20;
 // Reject oversized clipboard writes before any native API call. Binary
 // (Uint8Array) payloads skip the IPC envelope budget check (see
-// electron/setup/security.ts), so these handler-level caps are the backstop.
+// electron/setup/security.ts) because containsBinary() skips the JSON-size
+// check for typed arrays, so these handler-level caps are the backstop
+// against a hostile or runaway renderer exhausting the main-process heap
+// below Mojo's 128 MiB ceiling. 20 MiB comfortably covers a 6K-display PNG.
 const MAX_TEXT_BYTES = 8 * 1024 * 1024;
-const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 function getClipboardDir(): string {
   return path.join(os.tmpdir(), CLIPBOARD_DIR_NAME);
@@ -130,7 +133,77 @@ async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: 
 async function handleThumbnailFromPath(
   filePath: string
 ): Promise<{ filePath: string; thumbnailDataUrl: string }> {
-  const image = nativeImage.createFromPath(filePath);
+  // The renderer supplies this path, so it is untrusted. Constrain it to the
+  // clipboard temp dir (the only legitimate source) and read it through an
+  // O_NOFOLLOW file descriptor + createFromBuffer rather than the path-taking
+  // nativeImage.createFromPath — that API follows symlinks in C++, leaving a
+  // TOCTOU window an fs.realpath check alone can't close. Mirrors the safe
+  // read pattern in electron/ipc/handlers/files.ts.
+  if (!path.isAbsolute(filePath)) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Only absolute paths are allowed",
+      context: { filePath },
+    });
+  }
+
+  const clipboardDir = getClipboardDir();
+  let realRoot: string;
+  try {
+    realRoot = await fs.realpath(clipboardDir);
+  } catch (error) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Clipboard directory does not exist",
+      context: { clipboardDir },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  let realFile: string;
+  try {
+    realFile = await fs.realpath(filePath);
+  } catch (error) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Could not resolve image path",
+      context: { filePath },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  const contained = realFile === realRoot || realFile.startsWith(realRoot + path.sep);
+  if (!contained) {
+    throw new AppError({
+      code: "OUTSIDE_ROOT",
+      message: "Image is outside the clipboard directory",
+      context: { filePath },
+    });
+  }
+
+  // Open the user-supplied filePath (not realFile) with O_NOFOLLOW so a
+  // final-component symlink injected after the realpath check is rejected
+  // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
+  // remains the primary defense there.
+  let buffer: Buffer;
+  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    fileHandle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Could not open image file",
+      context: { filePath },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+  try {
+    buffer = await fileHandle.readFile();
+  } finally {
+    await fileHandle.close().catch(() => {});
+  }
+
+  const image = nativeImage.createFromBuffer(buffer);
   if (image.isEmpty()) {
     throw new AppError({
       code: "CLIPBOARD_INVALID",
@@ -159,8 +232,9 @@ async function handleWriteImage(pngData: Uint8Array): Promise<void> {
   if (pngData.byteLength > MAX_IMAGE_BYTES) {
     throw new AppError({
       code: "PAYLOAD_TOO_LARGE",
-      message: `Image payload exceeds ${MAX_IMAGE_BYTES} byte limit`,
-      userMessage: "The image is too large to copy to the clipboard.",
+      message: `Image exceeds ${MAX_IMAGE_BYTES} byte limit`,
+      userMessage: "That image is too large to copy to the clipboard.",
+      context: { byteLength: pngData.byteLength, limit: MAX_IMAGE_BYTES },
     });
   }
   const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
