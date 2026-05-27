@@ -3,11 +3,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { StrictMode } from "react";
 import { AccessibilityAnnouncer } from "../AccessibilityAnnouncer";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import {
+  useAnnouncerStore,
+  _resetAnnouncerDeliveryForTests,
+} from "@/store/accessibilityAnnouncerStore";
+
+interface DocumentWithAriaNotify extends Document {
+  ariaNotify?: (message: string, options?: { priority?: "normal" | "high" }) => void;
+}
 
 describe("AccessibilityAnnouncer", () => {
   beforeEach(() => {
     useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
     vi.useFakeTimers();
   });
 
@@ -192,6 +200,19 @@ describe("AccessibilityAnnouncer", () => {
     expect(assertiveRegion?.textContent).toBe("Assertive");
   });
 
+  it("does not replay a delivered entry when a second instance mounts later", () => {
+    useAnnouncerStore.setState({ polite: { msg: "Saved", id: 1 } });
+    const { container: first } = render(<AccessibilityAnnouncer />);
+    vi.advanceTimersByTime(100);
+    expect(first.querySelector('[aria-live="polite"]')?.textContent).toBe("Saved");
+
+    // Simulate a modal opening: a new AccessibilityAnnouncer mounts that
+    // subscribes to the same (already-delivered) store entry.
+    const { container: second } = render(<AccessibilityAnnouncer />);
+    vi.advanceTimersByTime(100);
+    expect(second.querySelector('[aria-live="polite"]')?.textContent).toBe("");
+  });
+
   it("does not leak timers under StrictMode double-mount", () => {
     useAnnouncerStore.setState({ polite: { msg: "Hello", id: 1 } });
     render(
@@ -204,5 +225,83 @@ describe("AccessibilityAnnouncer", () => {
     const state = useAnnouncerStore.getState();
     expect(state.polite?.msg).toBe("Hello");
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Workaround for Chromium 354736464: VoiceOver ignores `aria-live` updates
+// outside the focused `aria-modal` subtree. When the platform exposes
+// `document.ariaNotify`, the store calls it instead of mutating live-region
+// DOM, so announcements bypass the subtree filter entirely.
+describe("accessibilityAnnouncerStore — ariaNotify path", () => {
+  let ariaNotifyMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
+    ariaNotifyMock = vi.fn();
+    (document as DocumentWithAriaNotify).ariaNotify =
+      ariaNotifyMock as unknown as DocumentWithAriaNotify["ariaNotify"];
+  });
+
+  afterEach(() => {
+    delete (document as DocumentWithAriaNotify).ariaNotify;
+  });
+
+  it("calls document.ariaNotify with priority 'normal' for polite", () => {
+    useAnnouncerStore.getState().announce("Saved", "polite");
+    expect(ariaNotifyMock).toHaveBeenCalledTimes(1);
+    expect(ariaNotifyMock).toHaveBeenCalledWith("Saved", { priority: "normal" });
+  });
+
+  it("calls document.ariaNotify with priority 'high' for assertive", () => {
+    useAnnouncerStore.getState().announce("Failure", "assertive");
+    expect(ariaNotifyMock).toHaveBeenCalledTimes(1);
+    expect(ariaNotifyMock).toHaveBeenCalledWith("Failure", { priority: "high" });
+  });
+
+  it("defaults to 'normal' priority when no priority is specified", () => {
+    useAnnouncerStore.getState().announce("Saved");
+    expect(ariaNotifyMock).toHaveBeenCalledWith("Saved", { priority: "normal" });
+  });
+
+  it("does NOT mutate the store when ariaNotify is available", () => {
+    useAnnouncerStore.getState().announce("Saved", "polite");
+    useAnnouncerStore.getState().announce("Failed", "assertive");
+    const state = useAnnouncerStore.getState();
+    expect(state.polite).toBeNull();
+    expect(state.assertive).toBeNull();
+    expect(state.nextId).toBe(1);
+  });
+
+  it("falls back to DOM mutation when ariaNotify throws", () => {
+    ariaNotifyMock.mockImplementation(() => {
+      throw new Error("AT unavailable");
+    });
+    useAnnouncerStore.getState().announce("Saved", "polite");
+    expect(ariaNotifyMock).toHaveBeenCalledTimes(1);
+    const state = useAnnouncerStore.getState();
+    expect(state.polite?.msg).toBe("Saved");
+  });
+});
+
+describe("accessibilityAnnouncerStore — DOM-mutation fallback", () => {
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    _resetAnnouncerDeliveryForTests();
+    delete (document as DocumentWithAriaNotify).ariaNotify;
+  });
+
+  it("mutates the store when ariaNotify is unavailable", () => {
+    useAnnouncerStore.getState().announce("Saved", "polite");
+    const state = useAnnouncerStore.getState();
+    expect(state.polite?.msg).toBe("Saved");
+    expect(state.polite?.id).toBe(1);
+  });
+
+  it("routes assertive announcements to the assertive entry", () => {
+    useAnnouncerStore.getState().announce("Failure", "assertive");
+    const state = useAnnouncerStore.getState();
+    expect(state.assertive?.msg).toBe("Failure");
+    expect(state.polite).toBeNull();
   });
 });

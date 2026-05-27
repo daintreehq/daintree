@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useAnnouncerStore, isDelivered, markDelivered } from "@/store/accessibilityAnnouncerStore";
 
 const ANNOUNCEMENT_DELAY_MS = 100;
 
@@ -26,6 +26,15 @@ function announceToRegion(
 
   const entryId = entry!.id;
 
+  // Suppress stale-replay: when a modal mounts and its co-located announcer
+  // subscribes to an entry that's already been delivered by another instance
+  // (e.g., the root-level announcer), the entry is stale and the AT has
+  // already heard it. Skipping keeps the new modal subtree silent on mount.
+  if (isDelivered(channel, entryId)) {
+    el.textContent = "";
+    return;
+  }
+
   el.textContent = "";
   pendingRef.current = setTimeout(() => {
     pendingRef.current = null;
@@ -33,6 +42,7 @@ function announceToRegion(
     if (!current || current.id !== entryId) return;
     if (elRef.current) {
       elRef.current.textContent = msg;
+      markDelivered(channel, entryId);
     }
   }, ANNOUNCEMENT_DELAY_MS);
 }

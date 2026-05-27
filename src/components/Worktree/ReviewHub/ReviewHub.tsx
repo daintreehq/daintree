@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 import { useOverlayState } from "@/hooks";
 import { ReviewHubContent } from "./ReviewHubContent";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 
 interface ReviewHubProps {
   isOpen: boolean;
@@ -87,6 +88,12 @@ export function ReviewHub({
           initialCommitMessage={initialCommitMessage}
           autoStageOnOpen={autoStageOnOpen}
         />
+        {/* Co-located live region: ForcePushConfirmDialog and other nested
+            flows close their inner dialog before announcing, returning focus
+            to this modal. VoiceOver suppresses external `aria-live` updates
+            outside this `aria-modal` subtree when `document.ariaNotify` is
+            unavailable (Chromium 354736464). */}
+        <AccessibilityAnnouncer />
       </div>
     </div>,
     document.body

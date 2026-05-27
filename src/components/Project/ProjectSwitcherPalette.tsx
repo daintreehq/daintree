@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ContextMenu,
@@ -1062,6 +1063,12 @@ function ModalContent({
           onRemoveScratch={innerProps.onRemoveScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
         />
+        {/* Co-located live region: this palette manages its own
+            `aria-modal` and does not pass through `AppPaletteDialog`, so
+            VoiceOver would otherwise suppress external `aria-live`
+            updates when `document.ariaNotify` is unavailable
+            (Chromium 354736464). */}
+        <AccessibilityAnnouncer />
       </div>
     </div>,
     document.body

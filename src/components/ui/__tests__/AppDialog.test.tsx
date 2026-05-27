@@ -765,3 +765,27 @@ describe("AppDialog focus trapping", () => {
     document.body.removeChild(popoverInput);
   });
 });
+
+// VoiceOver suppresses `aria-live` updates outside the focused `aria-modal`
+// subtree (Chromium 354736464). Daintree co-locates a live-region inside
+// AppDialog so the DOM-mutation fallback path survives that bug.
+describe("AppDialog co-located live region", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  it("renders an aria-live region inside the aria-modal subtree", () => {
+    renderDialog();
+    const modal = screen.getByRole("dialog");
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    const liveRegions = modal.querySelectorAll("[aria-live]");
+    expect(liveRegions.length).toBeGreaterThan(0);
+  });
+});
