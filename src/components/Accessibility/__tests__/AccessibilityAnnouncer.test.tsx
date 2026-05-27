@@ -239,7 +239,8 @@ describe("accessibilityAnnouncerStore — ariaNotify path", () => {
     useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
     _resetAnnouncerDeliveryForTests();
     ariaNotifyMock = vi.fn();
-    (document as DocumentWithAriaNotify).ariaNotify = ariaNotifyMock;
+    (document as DocumentWithAriaNotify).ariaNotify =
+      ariaNotifyMock as unknown as DocumentWithAriaNotify["ariaNotify"];
   });
 
   afterEach(() => {
