@@ -69,7 +69,8 @@ describe("PlanFileViewer", () => {
     render(
       <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
     );
-    expect(screen.getByText(/Loading plan/)).toBeDefined();
+    expect(screen.getByRole("status", { name: /Loading plan/i })).toBeDefined();
+    expect(screen.queryByText(/Loading plan.../)).toBeNull();
   });
 
   it("renders file content in CodeViewer after successful read", async () => {
