@@ -2112,6 +2112,162 @@ describe("createHost (plugin activation API)", () => {
   });
 });
 
+type ShowToastOptions = {
+  message: string;
+  type?: "info" | "success" | "warning" | "error";
+  durationMs?: number;
+};
+type ToastHostShape = (pluginId: string) => {
+  host: { showToast: (options: ShowToastOptions) => Promise<void> };
+  revoke: () => void;
+};
+
+describe("createHost — showToast", () => {
+  it("broadcasts NOTIFICATION_SHOW_TOAST with the pluginId-namespaced message", async () => {
+    await writePlugin("toast-test", { name: "acme.toast-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced 12 issues", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "success",
+      message: "acme.toast-test: Synced 12 issues",
+      duration: undefined,
+    });
+  });
+
+  it("defaults type to info when omitted", async () => {
+    await writePlugin("toast-default", { name: "acme.toast-default", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-default"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Done" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "info",
+      message: "acme.toast-default: Done",
+      duration: undefined,
+    });
+  });
+
+  it("forwards durationMs as duration", async () => {
+    await writePlugin("toast-duration", { name: "acme.toast-duration", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-duration"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Saved", type: "success", durationMs: 3000 });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "success",
+      message: "acme.toast-duration: Saved",
+      duration: 3000,
+    });
+  });
+
+  it("rejects an empty/whitespace message and does not broadcast", async () => {
+    await writePlugin("toast-empty", { name: "acme.toast-empty", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-empty"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(host.showToast({ message: "   " })).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown type and does not broadcast", async () => {
+    await writePlugin("toast-badtype", { name: "acme.toast-badtype", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-badtype"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.showToast({ message: "Oops", type: "fatal" as ShowToastOptions["type"] })
+    ).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown fields (strict schema)", async () => {
+    await writePlugin("toast-strict", { name: "acme.toast-strict", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-strict"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.showToast({ message: "Hi", priority: "low" } as unknown as ShowToastOptions)
+    ).rejects.toThrow(/showToast: invalid options/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("is NOT revoke-guarded — still delivers after revoke() while the plugin is loaded", async () => {
+    await writePlugin("toast-revoke", { name: "acme.toast-revoke", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-revoke"
+    );
+
+    revoke();
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Still alive" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "info",
+      message: "acme.toast-revoke: Still alive",
+      duration: undefined,
+    });
+  });
+
+  it("is a silent no-op once the plugin is unloaded (liveness guard)", async () => {
+    await writePlugin("toast-unload", { name: "acme.toast-unload", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-unload"
+    );
+
+    service.unloadPlugin("acme.toast-unload");
+    broadcastToRendererMock.mockClear();
+    await expect(host.showToast({ message: "Gone" })).resolves.toBeUndefined();
+
+    // unloadPlugin emits its own registry-change broadcasts; assert specifically
+    // that no toast was delivered rather than "no broadcast at all".
+    const toastBroadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+    );
+    expect(toastBroadcasts).toHaveLength(0);
+  });
+});
+
 describe("createHost — registerForgeProvider", () => {
   function forgeManifest(
     name: string,

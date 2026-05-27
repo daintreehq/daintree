@@ -199,6 +199,12 @@ export interface MainProcessToastPayload {
   title?: string;
   message: string;
   /**
+   * Auto-dismiss delay in milliseconds, threaded through to `notify({ duration })`.
+   * Omit to use the app's per-type default. Used by plugin-issued toasts that
+   * pass `durationMs`.
+   */
+  duration?: number;
+  /**
    * Rate-limit bucket override threaded through to `notify({ rateLimitKey })`.
    * Without this, payloads share a bucket keyed only on `type` (e.g. all
    * `"error"` toasts), so an unrelated burst of errors can absorb a billing-

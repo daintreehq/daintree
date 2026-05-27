@@ -50,7 +50,7 @@ interface PluginHostApi {
   settings: SettingsApi;
 
   // UI helpers
-  showToast(options: ToastOptions): Promise<void>;
+  showToast(options: PluginToastOptions): Promise<void>;
 }
 ```
 
@@ -233,14 +233,15 @@ Secret-type settings are stored in the OS keychain via `keytar`. They're returne
 
 ```ts
 await host.showToast({
-  title: "Synced",
-  description: "Fetched 12 issues from Linear",
-  type: "success", // "info" | "success" | "warning" | "error"
-  durationMs: 4000,
+  message: "Fetched 12 issues from Linear",
+  type: "success", // "info" | "success" | "warning" | "error" — defaults to "info"
+  durationMs: 4000, // optional; defaults to the app's per-type duration
 });
 ```
 
-Toasts render in Daintree's standard toast container. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
+The host prefixes `message` with your plugin id (`{pluginId}: {message}`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only; `priority` and action buttons aren't exposed to plugins. An empty message or an unknown `type` rejects.
+
+Toasts route through Daintree's standard `notify()` path, so rate-limit, quiet-hours, and inbox-history semantics apply. Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
 
 ## React hooks — `@daintreehq/plugin-sdk/react`
 
