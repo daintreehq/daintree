@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
@@ -1154,6 +1155,188 @@ describe("Plugin IPC handler registration", () => {
       []
     );
     expect(result).toBe("sync-result");
+  });
+});
+
+describe("PluginService typed channel registerHandler + capability gate", () => {
+  let service: PluginService;
+
+  beforeEach(async () => {
+    await writePlugin("test-plugin", {
+      name: "acme.test-plugin",
+      version: "1.0.0",
+      permissions: ["network:fetch"],
+    });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+  });
+
+  it("validates the payload and wraps a successful result in an envelope", async () => {
+    const handler = vi.fn((_ctx, payload: { name: string }) => `hi ${payload.name}`);
+    service.registerHandler(
+      "acme.test-plugin",
+      "greet",
+      { args: z.object({ name: z.string() }) },
+      handler
+    );
+
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "greet",
+      makeCtx("acme.test-plugin"),
+      [{ name: "ada" }]
+    );
+
+    expect(result).toEqual({ ok: true, data: "hi ada" });
+    // Single-payload contract: handler receives the parsed payload, not variadic.
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "acme.test-plugin" }),
+      {
+        name: "ada",
+      }
+    );
+  });
+
+  it("returns VALIDATION_FAILED with serializable issues for a bad payload", async () => {
+    const handler = vi.fn();
+    service.registerHandler(
+      "acme.test-plugin",
+      "greet",
+      { args: z.object({ name: z.string() }) },
+      handler
+    );
+
+    const result = (await service.dispatchHandler(
+      "acme.test-plugin",
+      "greet",
+      makeCtx("acme.test-plugin"),
+      [{ name: 123 }]
+    )) as { ok: false; code: string; issues: Array<{ message: string }> };
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("VALIDATION_FAILED");
+    expect(Array.isArray(result.issues)).toBe(true);
+    expect(result.issues.length).toBeGreaterThan(0);
+    expect(handler).not.toHaveBeenCalled();
+    // Envelope must survive structured clone (no class instances).
+    expect(() => structuredClone(result)).not.toThrow();
+  });
+
+  it("fails closed with PERMISSION_REQUIRED when a required permission is not granted", async () => {
+    const handler = vi.fn();
+    service.registerHandler(
+      "acme.test-plugin",
+      "run",
+      { args: z.object({}), requires: ["shell:exec"] },
+      handler
+    );
+
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "run",
+      makeCtx("acme.test-plugin"),
+      [{}]
+    );
+
+    expect(result).toEqual({ ok: false, code: "PERMISSION_REQUIRED", missing: ["shell:exec"] });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("allows dispatch when all required permissions are granted by the manifest", async () => {
+    const handler = vi.fn(() => "ok");
+    service.registerHandler(
+      "acme.test-plugin",
+      "fetch-thing",
+      { args: z.object({}), requires: ["network:fetch"] },
+      handler
+    );
+
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "fetch-thing",
+      makeCtx("acme.test-plugin"),
+      [{}]
+    );
+
+    expect(result).toEqual({ ok: true, data: "ok" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks the permission gate before validating args", async () => {
+    const handler = vi.fn();
+    service.registerHandler(
+      "acme.test-plugin",
+      "run",
+      { args: z.object({ name: z.string() }), requires: ["shell:exec"] },
+      handler
+    );
+
+    const result = (await service.dispatchHandler(
+      "acme.test-plugin",
+      "run",
+      makeCtx("acme.test-plugin"),
+      [{ name: 123 }]
+    )) as { code: string };
+
+    expect(result.code).toBe("PERMISSION_REQUIRED");
+  });
+
+  it("returns VALIDATION_FAILED when the handler result violates the result schema", async () => {
+    const handler = vi.fn(() => ({ wrong: true }));
+    service.registerHandler(
+      "acme.test-plugin",
+      "typed-result",
+      { args: z.object({}), result: z.object({ value: z.number() }) },
+      handler
+    );
+
+    const result = (await service.dispatchHandler(
+      "acme.test-plugin",
+      "typed-result",
+      makeCtx("acme.test-plugin"),
+      [{}]
+    )) as { ok: false; code: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("throws a missing permission with no manifest permissions field", async () => {
+    await writePlugin("bare-plugin", { name: "acme.bare-plugin", version: "1.0.0" });
+    const bare = new PluginService(tmpDir);
+    await bare.initialize();
+    bare.registerHandler(
+      "acme.bare-plugin",
+      "run",
+      { args: z.object({}), requires: ["network:fetch"] },
+      vi.fn()
+    );
+
+    const result = await bare.dispatchHandler(
+      "acme.bare-plugin",
+      "run",
+      makeCtx("acme.bare-plugin"),
+      [{}]
+    );
+
+    expect(result).toEqual({ ok: false, code: "PERMISSION_REQUIRED", missing: ["network:fetch"] });
+  });
+
+  it("still throws for a missing handler (untyped action-dispatch contract preserved)", async () => {
+    await expect(
+      service.dispatchHandler("acme.test-plugin", "nope", makeCtx("acme.test-plugin"), [{}])
+    ).rejects.toThrow("No plugin handler registered for acme.test-plugin:nope");
+  });
+
+  it("rejects a typed registration whose handler is not a function", () => {
+    expect(() =>
+      service.registerHandler(
+        "acme.test-plugin",
+        "bad",
+        { args: z.object({}) },
+        "not-a-fn" as never
+      )
+    ).toThrow("Plugin handler must be a function, got string");
   });
 });
 

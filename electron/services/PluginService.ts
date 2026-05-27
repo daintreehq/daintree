@@ -5,6 +5,7 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import type { z } from "zod";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
@@ -14,6 +15,8 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginChannelSchema,
+  PluginInvokeResult,
   BuiltInPluginPermission,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -100,6 +103,27 @@ interface PluginLoadErrorRecord {
   at: number;
 }
 
+/**
+ * A registered channel handler plus its optional typed contract. Untyped
+ * registrations leave `argsSchema` undefined and dispatch raw (the legacy
+ * action-dispatch path); typed registrations carry the Zod schemas and the
+ * declared `requires` permissions enforced by the capability gate.
+ */
+interface HandlerEntry {
+  handler: PluginIpcHandler;
+  argsSchema?: z.ZodType;
+  resultSchema?: z.ZodType;
+  requires: BuiltInPluginPermission[];
+}
+
+function isChannelSchema(value: unknown): value is PluginChannelSchema {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { args?: { safeParse?: unknown } }).args?.safeParse === "function"
+  );
+}
+
 const ACTIVATE_TIMEOUT_MS = 5000;
 
 /**
@@ -147,7 +171,7 @@ type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktr
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
-  private handlerMap = new Map<string, PluginIpcHandler>();
+  private handlerMap = new Map<string, HandlerEntry>();
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
@@ -559,13 +583,17 @@ export class PluginService {
       get pluginId() {
         return pluginId;
       },
-      registerHandler: (channel, handler) => {
+      registerHandler: (
+        channel: string,
+        schemaOrHandler: PluginChannelSchema | PluginIpcHandler,
+        maybeHandler?: PluginIpcHandler
+      ) => {
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
           );
         }
-        this.registerHandler(pluginId, channel, handler);
+        this.registerHandler(pluginId, channel, schemaOrHandler, maybeHandler);
       },
       broadcastToRenderer: (channel, payload) => {
         if (revoked) {
@@ -918,18 +946,47 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
-  registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void {
+  registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void;
+  registerHandler(
+    pluginId: string,
+    channel: string,
+    schema: PluginChannelSchema,
+    handler: PluginIpcHandler
+  ): void;
+  registerHandler(
+    pluginId: string,
+    channel: string,
+    schemaOrHandler: PluginChannelSchema | PluginIpcHandler,
+    maybeHandler?: PluginIpcHandler
+  ): void {
     if (!this.plugins.has(pluginId)) {
       throw new Error(`Unknown plugin: ${pluginId}`);
     }
     if (channel.includes(":")) {
       throw new Error(`Plugin channel must not contain colons: ${channel}`);
     }
-    if (typeof handler !== "function") {
-      throw new Error(`Plugin handler must be a function, got ${typeof handler}`);
+
+    let entry: HandlerEntry;
+    if (typeof schemaOrHandler === "function") {
+      // Untyped registration — raw passthrough, no validation or gate.
+      entry = { handler: schemaOrHandler, requires: [] };
+    } else if (isChannelSchema(schemaOrHandler)) {
+      // Typed registration — store schemas + declared permission gate.
+      if (typeof maybeHandler !== "function") {
+        throw new Error(`Plugin handler must be a function, got ${typeof maybeHandler}`);
+      }
+      entry = {
+        handler: maybeHandler,
+        argsSchema: schemaOrHandler.args,
+        resultSchema: schemaOrHandler.result,
+        requires: schemaOrHandler.requires ?? [],
+      };
+    } else {
+      throw new Error(`Plugin handler must be a function, got ${typeof schemaOrHandler}`);
     }
+
     const key = `${pluginId}:${channel}`;
-    this.handlerMap.set(key, handler);
+    this.handlerMap.set(key, entry);
   }
 
   async dispatchHandler(
@@ -939,22 +996,75 @@ export class PluginService {
     args: unknown[]
   ): Promise<unknown> {
     const key = `${pluginId}:${channel}`;
-    const handler = this.handlerMap.get(key);
-    if (!handler) {
+    const entry = this.handlerMap.get(key);
+    if (!entry) {
+      // Untyped action-dispatch callers (e.g. usePluginActions) rely on a
+      // thrown rejection here; typed callers (useHostChannel) catch it and
+      // synthesize a HANDLER_NOT_FOUND envelope.
       throw new Error(`No plugin handler registered for ${key}`);
     }
-    try {
-      return await handler(ctx, ...args);
-    } catch (err) {
-      // Contain at the boundary so a throwing plugin handler can't propagate
-      // up through `ipcMain.handle` as an unhandled rejection in the main
-      // process. The error still surfaces to the renderer (we rethrow after
-      // logging) — the renderer-side wrapping in `usePluginActions` turns
-      // that rejection into a user-facing toast.
-      // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
-      console.error(`[PluginService] Handler "${key}" threw:`, err);
-      throw err;
+
+    // Untyped registrations keep the legacy raw passthrough — no envelope.
+    if (!entry.argsSchema) {
+      return await entry.handler(ctx, ...args);
     }
+
+    // Capability gate: deny dispatch (failing closed) when the channel declares
+    // permissions the plugin manifest doesn't grant.
+    const granted = this.plugins.get(pluginId)?.manifest.permissions ?? [];
+    const missing = entry.requires.filter((p) => !granted.includes(p));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        code: "PERMISSION_REQUIRED",
+        missing,
+      } satisfies PluginInvokeResult<never>;
+    }
+
+    // Single-payload contract: validate args[0] against the args schema.
+    const parsed = entry.argsSchema.safeParse(args[0]);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "VALIDATION_FAILED",
+        issues: parsed.error.issues.map((i) => ({
+          code: i.code,
+          message: i.message,
+          path: i.path.filter((p): p is string | number => typeof p !== "symbol"),
+        })),
+      } satisfies PluginInvokeResult<never>;
+    }
+
+    let result: unknown;
+    try {
+      result = await entry.handler(ctx, parsed.data);
+    } catch (err) {
+      return {
+        ok: false,
+        code: "HANDLER_ERROR",
+        message: err instanceof Error ? err.message : String(err),
+      } satisfies PluginInvokeResult<never>;
+    }
+
+    // Optional result validation — a handler returning an off-contract value is
+    // a plugin bug surfaced to the author, not a thrown crash.
+    if (entry.resultSchema) {
+      const parsedResult = entry.resultSchema.safeParse(result);
+      if (!parsedResult.success) {
+        return {
+          ok: false,
+          code: "VALIDATION_FAILED",
+          issues: parsedResult.error.issues.map((i) => ({
+            code: i.code,
+            message: i.message,
+            path: i.path.filter((p): p is string | number => typeof p !== "symbol"),
+          })),
+        } satisfies PluginInvokeResult<never>;
+      }
+      return { ok: true, data: parsedResult.data } satisfies PluginInvokeResult<unknown>;
+    }
+
+    return { ok: true, data: result } satisfies PluginInvokeResult<unknown>;
   }
 
   removeHandlers(pluginId: string): void {

@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type {
   FileDecorationContribution,
   FileDecorationProviderDescriptor,
@@ -134,6 +135,50 @@ export type PluginIpcHandler = (
 ) => unknown | Promise<unknown>;
 
 /**
+ * Typed-channel registration descriptor passed to the schema overload of
+ * {@link PluginHostApi.registerHandler}. The channel takes a single payload
+ * (issue #9230 settled single-payload over variadic), validated host-side by
+ * {@link args} before the handler runs. {@link result} optionally validates the
+ * handler's return. {@link requires} declares the manifest permissions the
+ * channel needs — the host capability gate denies dispatch (failing closed)
+ * when any are absent from the plugin manifest.
+ */
+export interface PluginChannelSchema<
+  TArgs extends z.ZodType = z.ZodType,
+  TResult extends z.ZodType = z.ZodType,
+> {
+  args: TArgs;
+  result?: TResult;
+  requires?: BuiltInPluginPermission[];
+}
+
+/**
+ * Serializable projection of a Zod issue. Real `ZodError` instances lose all
+ * data except `.message` when cloned across the contextBridge, so typed
+ * channels surface validation failures through this plain shape instead.
+ */
+export interface PluginInvokeIssue {
+  code: string;
+  message: string;
+  path: ReadonlyArray<string | number>;
+}
+
+/**
+ * Structured failure returned by a typed channel. Always returned, never
+ * thrown — throwing would strip the structured fields to a bare message across
+ * the contextBridge. `HANDLER_NOT_FOUND` is synthesized renderer-side by
+ * {@link useHostChannel} when an invoke rejects (the host still throws on a
+ * missing handler to preserve the untyped action-dispatch contract).
+ */
+export type PluginInvokeError =
+  | { ok: false; code: "VALIDATION_FAILED"; issues: PluginInvokeIssue[] }
+  | { ok: false; code: "PERMISSION_REQUIRED"; missing: BuiltInPluginPermission[] }
+  | { ok: false; code: "HANDLER_NOT_FOUND"; channel: string };
+
+/** Result envelope a typed channel resolves with: success data or a structured error. */
+export type PluginInvokeResult<T> = { ok: true; data: T } | PluginInvokeError;
+
+/**
  * Provider-agnostic projection of a worktree's linked forge resources (issue
  * and/or PR), exposed on {@link PluginWorktreeSnapshot.linked}. Replaces the
  * GitHub-shaped flat fields that previously leaked onto the snapshot —
@@ -191,7 +236,28 @@ export interface PluginWorktreeSnapshot {
 
 export interface PluginHostApi {
   readonly pluginId: string;
+  /**
+   * Register an untyped IPC handler for `channel`. Args pass through unchanged
+   * and the handler's return value is sent back raw. Prefer the typed overload
+   * for new channels — it gates dispatch on declared permissions and validates
+   * the payload host-side.
+   */
   registerHandler(channel: string, handler: PluginIpcHandler): void;
+  /**
+   * Register a typed IPC handler for `channel`. The host validates the single
+   * payload against `schema.args` and checks `schema.requires` against the
+   * plugin manifest before dispatch, failing closed with a structured
+   * {@link PluginInvokeError}. The handler receives the parsed payload and its
+   * result is wrapped in a {@link PluginInvokeResult} `{ ok: true, data }`.
+   */
+  registerHandler<TArgs extends z.ZodType, TResult extends z.ZodType = z.ZodType>(
+    channel: string,
+    schema: PluginChannelSchema<TArgs, TResult>,
+    handler: (
+      ctx: PluginIpcContext,
+      payload: z.output<TArgs>
+    ) => z.input<TResult> | Promise<z.input<TResult>>
+  ): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
   /**
    * Returns the currently-active worktree (`isCurrent === true`) across all
