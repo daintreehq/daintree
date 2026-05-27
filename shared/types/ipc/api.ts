@@ -1426,6 +1426,27 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
+  /**
+   * Main→renderer bridge for plugin `host.dispatch` (#9280). The renderer
+   * executes the requested action via ActionService as the `"plugin"` source
+   * and replies with the dispatch result.
+   */
+  pluginDispatchBridge: {
+    /** Listen for plugin-sourced action dispatch requests from the main process. */
+    onDispatchActionRequest(
+      callback: (payload: {
+        requestId: string;
+        pluginId: string;
+        actionId: string;
+        args?: unknown;
+      }) => void
+    ): () => void;
+    /** Send the action dispatch result back to the main process. */
+    sendDispatchActionResponse(payload: {
+      requestId: string;
+      result: import("../actions.js").ActionDispatchResult;
+    }): void;
+  };
   // list / toolbarButtons / menuItems / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
   // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC

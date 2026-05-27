@@ -8,6 +8,10 @@ import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.j
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
 }));
+const ipcMainMock = vi.hoisted(() => ({
+  on: vi.fn(),
+  removeListener: vi.fn(),
+}));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
@@ -20,6 +24,7 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   app: appMock,
+  ipcMain: ipcMainMock,
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -1620,6 +1625,10 @@ type CreateHostShape = (pluginId: string) => {
     registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
+    dispatch: (
+      actionId: string,
+      args?: unknown
+    ) => Promise<import("../../../shared/types/actions.js").ActionDispatchResult>;
   };
   revoke: () => void;
 };
@@ -1693,6 +1702,60 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
       /host revoked: registerForgeProvider/
     );
+  });
+});
+
+describe("createHost — host.dispatch (#9280)", () => {
+  it("resolves PLUGIN_UNLOADED when the plugin is not loaded", async () => {
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // createHost for a pluginId never added to the plugins map — mirrors the
+    // post-unload state where a stale timer still holds the host closure.
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.ghost"
+    );
+
+    const result = await host.dispatch("terminal.new");
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "PLUGIN_UNLOADED", message: expect.stringContaining("acme.ghost") },
+    });
+  });
+
+  it("stays callable after revoke (not revoke-guarded) but fails closed without a renderer", async () => {
+    await writePlugin("dispatch-live", { name: "acme.dispatch-live", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.dispatch-live"
+    );
+    revoke();
+
+    // Plugin is still loaded, so revoke does not gate dispatch; with no active
+    // renderer WebContents in this test the bridge fails closed.
+    const result = await host.dispatch("terminal.new");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+    }
+  });
+
+  it("rejects a non-string actionId with VALIDATION_ERROR", async () => {
+    await writePlugin("dispatch-validate", { name: "acme.dispatch-validate", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.dispatch-validate"
+    );
+
+    const result = await host.dispatch("");
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "VALIDATION_ERROR", message: expect.stringContaining("actionId") },
+    });
   });
 });
 

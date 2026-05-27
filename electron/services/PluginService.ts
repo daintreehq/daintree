@@ -3,7 +3,8 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app } from "electron";
+import { randomUUID } from "node:crypto";
+import { app, ipcMain } from "electron";
 import * as semver from "semver";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type {
@@ -16,7 +17,9 @@ import type {
   PluginActionDescriptor,
   BuiltInPluginPermission,
 } from "../../shared/types/plugin.js";
+import type { ActionDispatchResult } from "../../shared/types/actions.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import { getProjectViewManager, getWindowRegistry } from "../window/windowRef.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
@@ -145,7 +148,22 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   }
 }
 
+/**
+ * Upper bound on a single `host.dispatch` round-trip to the renderer. Mirrors
+ * the MCP bridge's dispatch timeout — a renderer that never answers (mid-reload,
+ * wedged) must not leave the plugin's promise pending forever.
+ */
+const PLUGIN_DISPATCH_TIMEOUT_MS = 30_000;
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
+
+/** Pending `host.dispatch` round-trip, keyed by requestId in {@link PluginService.pendingDispatches}. */
+interface PendingPluginDispatch {
+  resolve: (result: ActionDispatchResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+  webContentsId: number;
+  destroyedCleanup: () => void;
+}
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
@@ -217,6 +235,17 @@ export class PluginService {
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
 
+  /**
+   * In-flight `host.dispatch` round-trips keyed by requestId. Keying by
+   * requestId (not pluginId) is required so concurrent dispatches — from one
+   * plugin or several — never collide on a shared callback slot (#1557).
+   */
+  private pendingDispatches = new Map<string, PendingPluginDispatch>();
+  private readonly dispatchResponseHandler: (
+    event: Electron.IpcMainEvent,
+    payload: unknown
+  ) => void;
+
   constructor(
     pluginsRoot?: string,
     appVersion?: string,
@@ -232,6 +261,12 @@ export class PluginService {
       offRegister();
       offUnregister();
     };
+
+    // The dispatch-response listener must be live before any plugin activates,
+    // since host.dispatch can fire from a timer set up during activate(). Bound
+    // once here and torn down in dispose() so test instances don't leak it.
+    this.dispatchResponseHandler = (event, payload) => this.handleDispatchResponse(event, payload);
+    ipcMain.on(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, this.dispatchResponseHandler);
   }
 
   /**
@@ -244,6 +279,18 @@ export class PluginService {
   dispose(): void {
     this.disposed = true;
     this.disposeRegistrySubscriptions();
+    ipcMain.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, this.dispatchResponseHandler);
+    // Settle any in-flight dispatch so a test (or shutdown) doesn't leave a
+    // plugin promise pending forever.
+    for (const [, pending] of this.pendingDispatches) {
+      clearTimeout(pending.timer);
+      pending.destroyedCleanup();
+      pending.resolve({
+        ok: false,
+        error: { code: "PLUGIN_UNLOADED", message: "Plugin service disposed" },
+      });
+    }
+    this.pendingDispatches.clear();
   }
 
   /**
@@ -801,6 +848,32 @@ export class PluginService {
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
         });
       },
+      // NOT revoke-guarded — same rationale as invalidateFileDecorations: a
+      // plugin orchestrates the app from its own timers and subscription
+      // callbacks, which fire long after activate() resolves. The liveness
+      // guard is plugin membership; once unloaded this resolves to
+      // PLUGIN_UNLOADED rather than throwing into the plugin's closure.
+      dispatch: (actionId, args) => {
+        if (!this.plugins.has(pluginId)) {
+          return Promise.resolve({
+            ok: false,
+            error: {
+              code: "PLUGIN_UNLOADED",
+              message: `Plugin "${pluginId}" is no longer loaded`,
+            },
+          } satisfies ActionDispatchResult);
+        }
+        if (typeof actionId !== "string" || actionId.length === 0) {
+          return Promise.resolve({
+            ok: false,
+            error: {
+              code: "VALIDATION_ERROR",
+              message: `Plugin "${pluginId}" dispatch: actionId must be a non-empty string`,
+            },
+          } satisfies ActionDispatchResult);
+        }
+        return this.sendPluginDispatchRequest(pluginId, actionId, args);
+      },
     };
     return {
       host,
@@ -808,6 +881,149 @@ export class PluginService {
         revoked = true;
       },
     };
+  }
+
+  /**
+   * Resolve the renderer WebContents that should execute a plugin-sourced
+   * dispatch. Plugins have no per-window ownership, so this targets the active
+   * project view of the first live window — never a broadcast, which would race
+   * multiple renderers into duplicate executions and duplicate responses.
+   * Mirrors the MCP renderer bridge's `getActiveProjectWebContents`.
+   */
+  private resolveActiveWebContents(): Electron.WebContents {
+    const registry = getWindowRegistry();
+    if (registry) {
+      for (const ctx of registry.all()) {
+        if (ctx.browserWindow.isDestroyed()) continue;
+        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
+        if (webContents && !webContents.isDestroyed()) {
+          return webContents;
+        }
+      }
+    }
+
+    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
+    if (fallback && !fallback.isDestroyed()) {
+      return fallback;
+    }
+
+    throw new Error("Plugin dispatch renderer bridge unavailable");
+  }
+
+  /**
+   * Main→renderer dispatch round-trip for `host.dispatch`. Sends the action to
+   * a single live renderer, validates the response sender, and times out after
+   * {@link PLUGIN_DISPATCH_TIMEOUT_MS}. Resolves (never rejects) with an
+   * {@link ActionDispatchResult} envelope so the plugin always gets a typed
+   * outcome rather than a thrown error to catch.
+   */
+  private sendPluginDispatchRequest(
+    pluginId: string,
+    actionId: string,
+    args: unknown
+  ): Promise<ActionDispatchResult> {
+    return new Promise((resolve) => {
+      let webContents: Electron.WebContents;
+      try {
+        webContents = this.resolveActiveWebContents();
+      } catch (err) {
+        resolve({
+          ok: false,
+          error: {
+            code: "EXECUTION_ERROR",
+            message:
+              err instanceof Error ? err.message : "Plugin dispatch renderer bridge unavailable",
+          },
+        });
+        return;
+      }
+
+      const requestId = randomUUID();
+      const webContentsId = webContents.id;
+
+      const timer = setTimeout(() => {
+        const pending = this.pendingDispatches.get(requestId);
+        if (!pending) return;
+        pending.destroyedCleanup();
+        this.pendingDispatches.delete(requestId);
+        resolve({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: `Action dispatch timed out: ${actionId}` },
+        });
+      }, PLUGIN_DISPATCH_TIMEOUT_MS);
+
+      const onDestroyed = () => {
+        const pending = this.pendingDispatches.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this.pendingDispatches.delete(requestId);
+        resolve({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "Plugin dispatch renderer destroyed" },
+        });
+      };
+      webContents.once("destroyed", onDestroyed);
+      const destroyedCleanup = () => {
+        try {
+          webContents.removeListener("destroyed", onDestroyed);
+        } catch {
+          // best-effort; webContents may already be gone
+        }
+      };
+
+      this.pendingDispatches.set(requestId, {
+        resolve,
+        timer,
+        webContentsId,
+        destroyedCleanup,
+      });
+
+      try {
+        webContents.send(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, {
+          requestId,
+          pluginId,
+          actionId,
+          args,
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        destroyedCleanup();
+        this.pendingDispatches.delete(requestId);
+        resolve({
+          ok: false,
+          error: {
+            code: "EXECUTION_ERROR",
+            message: err instanceof Error ? err.message : `Failed to dispatch action: ${actionId}`,
+          },
+        });
+      }
+    });
+  }
+
+  /**
+   * Handles the renderer's reply to a `host.dispatch` request. Validates the
+   * sender against the WebContents the request was sent to so a stale or
+   * cross-window renderer can't resolve a pending dispatch it doesn't own.
+   */
+  private handleDispatchResponse(event: Electron.IpcMainEvent, payload: unknown): void {
+    if (!payload || typeof payload !== "object") return;
+    const { requestId, result } = payload as {
+      requestId?: unknown;
+      result?: unknown;
+    };
+    if (typeof requestId !== "string") return;
+    const pending = this.pendingDispatches.get(requestId);
+    if (!pending) return;
+    if (event.sender.id !== pending.webContentsId) {
+      console.warn(
+        `[PluginService] Ignoring dispatch response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${requestId})`
+      );
+      return;
+    }
+    clearTimeout(pending.timer);
+    pending.destroyedCleanup();
+    this.pendingDispatches.delete(requestId);
+    pending.resolve(result as ActionDispatchResult);
   }
 
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {

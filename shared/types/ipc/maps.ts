@@ -1612,6 +1612,21 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin `host.dispatch` action request (#9280). Main-process PluginService
+   * emits this on the active project WebContents and awaits a renderer
+   * `ipcRenderer.send` reply on `CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE`,
+   * correlated by `requestId`. `pluginId` is the originating plugin, threaded
+   * through to the `action:dispatched` audit. The response channel is a
+   * renderer→main fire-and-forget send tracked in `DEAD_CHANNEL_ALLOWLIST`.
+   */
+  "plugin:dispatch-action-request": {
+    requestId: string;
+    pluginId: string;
+    actionId: string;
+    args?: unknown;
+  };
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)

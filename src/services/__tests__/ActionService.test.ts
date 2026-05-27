@@ -1234,6 +1234,65 @@ describe("ActionService", () => {
         restore();
       }
     });
+
+    it("gates a confirm action dispatched from the plugin source without confirmed (#9280)", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        const run = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          id: "worktree.delete" as ActionId,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "worktree",
+          kind: "command",
+          danger: "confirm",
+          scope: "renderer",
+          run,
+        });
+        const result = await service.dispatch("worktree.delete" as ActionId, undefined, {
+          source: "plugin",
+          pluginId: "acme.tools",
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+        await Promise.resolve();
+        expect(run).not.toHaveBeenCalled();
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("threads pluginId into the action:dispatched payload for plugin-sourced dispatch (#9280)", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "preferences",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+        await service.dispatch("actions.list" as ActionId, undefined, {
+          source: "plugin",
+          pluginId: "acme.tools",
+        });
+        await Promise.resolve();
+        expect(emit).toHaveBeenCalledTimes(1);
+        const payload = emit.mock.calls[0]![1] as Record<string, unknown>;
+        expect(payload.source).toBe("plugin");
+        expect(payload.pluginId).toBe("acme.tools");
+      } finally {
+        restore();
+      }
+    });
   });
 
   describe("lastAction tracking", () => {

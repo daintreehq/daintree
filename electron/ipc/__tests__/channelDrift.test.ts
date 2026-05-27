@@ -58,6 +58,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "app-agent:dispatch-action-response",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply for the plugin
+  // host.dispatch bridge (PluginService.ts). Paired with the request event
+  // `plugin:dispatch-action-request` declared in IpcEventMap.
+  "plugin:dispatch-action-response",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

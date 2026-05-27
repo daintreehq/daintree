@@ -39,6 +39,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { usePluginDispatchBridge } from "./hooks/usePluginDispatchBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
@@ -383,6 +384,7 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  usePluginDispatchBridge();
   useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 

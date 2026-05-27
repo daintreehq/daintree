@@ -129,7 +129,8 @@ function normalizeActionDispatchedPayload(
     source !== "keybinding" &&
     source !== "menu" &&
     source !== "agent" &&
-    source !== "context-menu"
+    source !== "context-menu" &&
+    source !== "plugin"
   ) {
     return null;
   }
@@ -183,16 +184,22 @@ function normalizeActionDispatchedPayload(
 
   // Plugin-action audit fields. Both are renderer-controlled strings crossing
   // a trust boundary, so cap/shape them: `pluginId` to a sane length and
-  // `argsHash` to a strict 64-char lowercase-hex SHA-256 digest.
+  // `argsHash` to a strict 64-char lowercase-hex SHA-256 digest. Only carried
+  // for plugin-sourced dispatches (#9280) so the audit log records which
+  // plugin invoked a built-in action; ignored otherwise.
   const pluginIdRaw = payload.pluginId;
   const pluginId =
-    typeof pluginIdRaw === "string" && pluginIdRaw.trim().length > 0 && pluginIdRaw.length <= 100
+    source === "plugin" &&
+    typeof pluginIdRaw === "string" &&
+    pluginIdRaw.trim().length > 0 &&
+    pluginIdRaw.length <= 100
       ? pluginIdRaw
       : undefined;
 
   const argsHashRaw = payload.argsHash;
   const argsHash =
     typeof argsHashRaw === "string" && /^[0-9a-f]{64}$/.test(argsHashRaw) ? argsHashRaw : undefined;
+
 
   return {
     actionId,

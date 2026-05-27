@@ -2,7 +2,7 @@ import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 
-export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
 export type ActionKind = "command" | "query";
 
@@ -210,7 +210,8 @@ export type ActionErrorCode =
   | "USER_REJECTED"
   | "CONFIRMATION_TIMEOUT"
   | "ELICITATION_FAILED"
-  | "BINDING_STALE";
+  | "BINDING_STALE"
+  | "PLUGIN_UNLOADED";
 
 export interface ActionError {
   code: ActionErrorCode;
@@ -230,6 +231,12 @@ export interface ActionDispatchOptions {
    * Used by agent dispatch to bind context at dispatch time and prevent confused-deputy attacks.
    */
   contextOverride?: ActionContext;
+  /**
+   * Originating plugin ID for `source: "plugin"` dispatches. Threaded through to
+   * the `action:dispatched` audit event so a plugin-sourced invocation of a
+   * built-in action records which plugin initiated it (#9232).
+   */
+  pluginId?: string;
 }
 
 export interface ActionDispatchPayload {

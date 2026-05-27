@@ -638,7 +638,7 @@ export type DaintreeEventMap = {
      * redacted but not allowlisted.
      */
     safeArgs?: Record<string, unknown>;
-    source: "user" | "keybinding" | "menu" | "agent" | "context-menu";
+    source: "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
     context: {
       projectId?: string;
       activeWorktreeId?: string;
@@ -652,9 +652,10 @@ export type DaintreeEventMap = {
     confirmed?: boolean;
     /**
      * Contributing plugin id when this action was registered by a plugin
-     * (`ActionDefinition.pluginId`). Absent for built-in actions. Drives the
-     * plugin-action audit log — the main-side `PluginActionAuditService`
-     * appends a record only when this is present.
+     * (`ActionDefinition.pluginId`) or when `source === "plugin"` (host.dispatch
+     * from #9280). Absent for built-in actions invoked by user/keybinding/menu/
+     * agent/context-menu. Drives the plugin-action audit log — the main-side
+     * `PluginActionAuditService` appends a record only when this is present.
      */
     pluginId?: string;
     /**

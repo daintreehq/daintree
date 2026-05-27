@@ -1,3 +1,4 @@
+import type { ActionDispatchResult } from "./actions.js";
 import type {
   FileDecorationContribution,
   FileDecorationProviderDescriptor,
@@ -268,6 +269,24 @@ export interface PluginHostApi {
    * unloaded.
    */
   invalidateFileDecorations(scope: string, paths?: string[]): void;
+  /**
+   * Dispatch an action by ID through the renderer-side `ActionService`, as the
+   * `"plugin"` source. Works for both the plugin's own registered actions and
+   * built-in actions, enabling plugins to orchestrate the app from their own
+   * timers and subscription callbacks. The originating `pluginId` is recorded
+   * on the `action:dispatched` audit event.
+   *
+   * Like {@link invalidateFileDecorations} this is NOT revoke-guarded — it must
+   * remain callable for the plugin's whole lifetime, long after `activate()`
+   * resolves. Once the plugin is unloaded it resolves to
+   * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }`.
+   *
+   * Args are validated by `ActionService` against the action's `argsSchema`;
+   * `danger: "restricted"` actions are rejected with `RESTRICTED`, and
+   * `danger: "confirm"` actions require an explicit confirmation the plugin
+   * dispatch path does not supply, so they resolve to `CONFIRMATION_REQUIRED`.
+   */
+  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
 }
 
 export type PluginActivate = (

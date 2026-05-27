@@ -34,6 +34,7 @@ import { randomUUID } from "crypto";
 const storeState = new Map<string, unknown>();
 vi.mock("electron", () => ({
   app: { getVersion: vi.fn(() => "0.0.0") },
+  ipcMain: { on: vi.fn(), removeListener: vi.fn() },
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),

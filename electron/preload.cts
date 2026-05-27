@@ -2385,6 +2385,37 @@ const api: ElectronAPI = {
     },
   },
 
+  // Main→renderer bridge for plugin host.dispatch (#9280). The renderer
+  // executes the action via ActionService as the "plugin" source and replies
+  // with the dispatch result. Distinct channels from mcpBridge keep the plugin
+  // and MCP security boundaries traceable.
+  pluginDispatchBridge: {
+    onDispatchActionRequest: (
+      callback: (payload: {
+        requestId: string;
+        pluginId: string;
+        actionId: string;
+        args?: unknown;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          requestId: string;
+          pluginId: string;
+          actionId: string;
+          args?: unknown;
+        }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
+    },
+
+    sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
+      ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
+    },
+  },
+
   plugin: {
     ...buildPluginPreloadBindings(_unwrappingInvoke),
 
