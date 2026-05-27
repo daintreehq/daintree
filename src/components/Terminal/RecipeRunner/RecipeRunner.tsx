@@ -4,6 +4,7 @@ import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
 import { RecipeRunnerEmpty } from "./RecipeRunnerEmpty";
 import { InlineStatusBanner } from "../InlineStatusBanner";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface RecipeRunnerProps {
   activeWorktreeId: string | null | undefined;
@@ -116,6 +117,19 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onKeyDown={runner.handleKeyDown}
         />
       )}
+      <ConfirmDialog
+        isOpen={runner.pendingDeleteId !== null}
+        title={`Delete '${runner.recipes.find((r) => r.id === runner.pendingDeleteId)?.name ?? "recipe"}'?`}
+        description={
+          runner.deleteError
+            ? `Error: ${runner.deleteError}`
+            : "The recipe will be permanently removed. This cannot be undone."
+        }
+        confirmLabel={runner.deleteError ? "Retry delete" : "Delete recipe"}
+        variant="destructive"
+        onConfirm={runner.confirmDelete}
+        onClose={runner.cancelDelete}
+      />
     </div>
   );
 }
