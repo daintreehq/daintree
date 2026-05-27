@@ -1934,19 +1934,22 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
     expect(RATE_LIMIT_TOOL_MAP.has("git.snapshotGet")).toBe(false);
   });
 
-  it("dedups a post-completion duplicate of a newly-allowlisted mutation", async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const deps = fakeDeps({
-      sessionStore: fakeSessionStore("system"),
-      dispatchAction,
-    });
-    const server = createSessionServer("dedup-9156", deps);
+  it.each(NEW_MUTATIONS)(
+    "dedups a post-completion duplicate of newly-allowlisted %s",
+    async (tool) => {
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const deps = fakeDeps({
+        sessionStore: fakeSessionStore("system"),
+        dispatchAction,
+      });
+      const server = createSessionServer(`dedup-9156-${tool}`, deps);
 
-    const args = { worktreeId: "wt-test" };
-    const first = await callTool(server, { name: "worktree.delete", arguments: args });
-    const second = await callTool(server, { name: "worktree.delete", arguments: args });
+      const args = { target: "x" };
+      const first = await callTool(server, { name: tool, arguments: args });
+      const second = await callTool(server, { name: tool, arguments: args });
 
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-    expect(second).toEqual(first);
-  });
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    }
+  );
 });
