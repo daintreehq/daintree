@@ -10,7 +10,8 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { type Extension, StateEffect, StateField, EditorState } from "@codemirror/state";
-import { LanguageDescription, syntaxTree, type SyntaxNode } from "@codemirror/language";
+import { LanguageDescription, syntaxTree } from "@codemirror/language";
+import { type SyntaxNode } from "@lezer/common";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { daintreeTheme } from "./editorTheme";
 import { editorSearchHighlightTheme } from "./editorSearchTheme";
