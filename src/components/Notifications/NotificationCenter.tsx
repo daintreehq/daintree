@@ -30,6 +30,12 @@ import {
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
 import { getWorstSeverity, SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
+import {
+  computeEffectiveNotificationState,
+  heroLine,
+  selectKindOffKinds,
+  KIND_SHORT_LABEL,
+} from "@/lib/notificationEffectiveState";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
@@ -154,6 +160,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const archiveByCorrelationId = useNotificationHistoryStore((s) => s.archiveByCorrelationId);
 
   const {
+    notificationsEnabled,
+    completedEnabled,
+    waitingEnabled,
+    workingPulseEnabled,
+    uiFeedbackSoundEnabled,
     quietUntil,
     quietHoursEnabled,
     quietHoursStartMin,
@@ -163,6 +174,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     setGroupByContext,
   } = useNotificationSettingsStore(
     useShallow((s) => ({
+      notificationsEnabled: s.enabled,
+      completedEnabled: s.completedEnabled,
+      waitingEnabled: s.waitingEnabled,
+      workingPulseEnabled: s.workingPulseEnabled,
+      uiFeedbackSoundEnabled: s.uiFeedbackSoundEnabled,
       quietUntil: s.quietUntil,
       quietHoursEnabled: s.quietHoursEnabled,
       quietHoursStartMin: s.quietHoursStartMin,
@@ -562,6 +578,21 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const pillLabel = isSessionMuted
     ? `Muted until ${timeFormatter.format(new Date(quietUntil))}`
     : "Quiet hours";
+  // Effective-state summary: with the gates stacked, fold them into a single
+  // line that answers "what will fire right now" plus which kinds are switched
+  // off. Computed only when the pill is shown (a gate is active).
+  const effectiveState = computeEffectiveNotificationState({
+    enabled: notificationsEnabled,
+    isQuiet: showMutedPill,
+    completedEnabled,
+    waitingEnabled,
+    workingPulseEnabled,
+    uiFeedbackSoundEnabled,
+  });
+  const summaryHeroLine = heroLine(effectiveState);
+  const offKinds = selectKindOffKinds(effectiveState);
+  const offLabel =
+    offKinds.length > 0 ? `Off: ${offKinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "";
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
   const mutedEmptyDescription = (() => {
     if (isScheduledMuted) {
@@ -715,20 +746,26 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex items-center gap-1.5 px-3 py-1 bg-overlay-subtle text-[11px] font-medium uppercase tracking-wide text-daintree-text/70"
+          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-subtle text-[11px] text-daintree-text/70"
         >
-          <span className="truncate">{pillLabel}</span>
-          {isSessionMuted && (
-            <button
-              type="button"
-              onClick={handleResumeNotifications}
-              aria-label="Resume notifications"
-              title="Resume notifications"
-              className="ml-0.5 inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal text-daintree-text/70 hover:bg-overlay-emphasis hover:text-daintree-text transition-colors"
-            >
-              Resume
-            </button>
-          )}
+          <div className="flex items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate font-medium">{summaryHeroLine}</span>
+            {isSessionMuted && (
+              <button
+                type="button"
+                onClick={handleResumeNotifications}
+                aria-label="Resume notifications"
+                title="Resume notifications"
+                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[11px] font-medium text-daintree-text/70 hover:bg-overlay-emphasis hover:text-daintree-text transition-colors"
+              >
+                Resume
+              </button>
+            )}
+          </div>
+          <span className="truncate text-daintree-text/50">
+            {pillLabel}
+            {offLabel && <span> · {offLabel}</span>}
+          </span>
         </div>
       )}
       <div className="relative flex-1 min-h-0">

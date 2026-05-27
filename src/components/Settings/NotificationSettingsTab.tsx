@@ -153,12 +153,23 @@ export function NotificationSettingsTab() {
         setSettings(prev);
         const revert: Partial<{
           enabled: boolean;
+          completedEnabled: boolean;
+          waitingEnabled: boolean;
+          workingPulseEnabled: boolean;
+          uiFeedbackSoundEnabled: boolean;
           quietHoursEnabled: boolean;
           quietHoursStartMin: number;
           quietHoursEndMin: number;
           quietHoursWeekdays: number[];
         }> = {};
         if (patch.enabled !== undefined) revert.enabled = prevStore.enabled;
+        if (patch.completedEnabled !== undefined)
+          revert.completedEnabled = prevStore.completedEnabled;
+        if (patch.waitingEnabled !== undefined) revert.waitingEnabled = prevStore.waitingEnabled;
+        if (patch.workingPulseEnabled !== undefined)
+          revert.workingPulseEnabled = prevStore.workingPulseEnabled;
+        if (patch.uiFeedbackSoundEnabled !== undefined)
+          revert.uiFeedbackSoundEnabled = prevStore.uiFeedbackSoundEnabled;
         if (patch.quietHoursEnabled !== undefined)
           revert.quietHoursEnabled = prevStore.quietHoursEnabled;
         if (patch.quietHoursStartMin !== undefined)
@@ -175,12 +186,22 @@ export function NotificationSettingsTab() {
     });
     const storePatch: Partial<{
       enabled: boolean;
+      completedEnabled: boolean;
+      waitingEnabled: boolean;
+      workingPulseEnabled: boolean;
+      uiFeedbackSoundEnabled: boolean;
       quietHoursEnabled: boolean;
       quietHoursStartMin: number;
       quietHoursEndMin: number;
       quietHoursWeekdays: number[];
     }> = {};
     if (patch.enabled !== undefined) storePatch.enabled = patch.enabled;
+    if (patch.completedEnabled !== undefined) storePatch.completedEnabled = patch.completedEnabled;
+    if (patch.waitingEnabled !== undefined) storePatch.waitingEnabled = patch.waitingEnabled;
+    if (patch.workingPulseEnabled !== undefined)
+      storePatch.workingPulseEnabled = patch.workingPulseEnabled;
+    if (patch.uiFeedbackSoundEnabled !== undefined)
+      storePatch.uiFeedbackSoundEnabled = patch.uiFeedbackSoundEnabled;
     if (patch.quietHoursEnabled !== undefined)
       storePatch.quietHoursEnabled = patch.quietHoursEnabled;
     if (patch.quietHoursStartMin !== undefined)
