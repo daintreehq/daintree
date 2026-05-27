@@ -378,6 +378,7 @@ describe("isActiveVoiceSession helper", () => {
   it("returns true for active phases", () => {
     expect(isActiveVoiceSession("connecting")).toBe(true);
     expect(isActiveVoiceSession("recording")).toBe(true);
+    expect(isActiveVoiceSession("reconnecting")).toBe(true);
     expect(isActiveVoiceSession("finishing")).toBe(true);
   });
 

@@ -205,7 +205,13 @@ class VoiceRecordingService {
           isStoppingSession: this.isStoppingSession,
         });
         if (status !== "idle") {
+          const prevStatus = useVoiceRecordingStore.getState().status;
           useVoiceRecordingStore.getState().setStatus(status);
+          // Announce the reconnect once on entry — the backend re-emits
+          // "reconnecting" on every retry, so guard against repeat announcements.
+          if (status === "reconnecting" && prevStatus !== "reconnecting") {
+            useVoiceRecordingStore.getState().announce("Reconnecting dictation…");
+          }
         }
 
         if (this.isStoppingSession) {
@@ -270,7 +276,12 @@ class VoiceRecordingService {
     const handleEscapeKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const state = useVoiceRecordingStore.getState();
-      if (state.status !== "connecting" && state.status !== "recording") return;
+      if (
+        state.status !== "connecting" &&
+        state.status !== "recording" &&
+        state.status !== "reconnecting"
+      )
+        return;
       e.preventDefault();
       e.stopPropagation();
       void this.stop("Dictation cancelled.", { preserveLiveText: true });

@@ -44,8 +44,9 @@ export function VoiceInputButton({
 
   const isRecording = activePanelId === panelId && status === "recording";
   const isConnecting = activePanelId === panelId && status === "connecting";
+  const isReconnecting = activePanelId === panelId && status === "reconnecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
-  const isListening = isRecording || isConnecting;
+  const isListening = isRecording || isConnecting || isReconnecting;
   // Keep orbit visible through finishing for graceful exit
   const showOrbit = isListening || isFinishing;
   const isActive = isListening || isFinishing;
@@ -246,9 +247,11 @@ export function VoiceInputButton({
               ? (errorMessage ?? "Voice input error")
               : isFinishing
                 ? "Finishing transcription..."
-                : isListening
-                  ? "Stop recording"
-                  : "Start voice input"
+                : isReconnecting
+                  ? "Reconnecting... Click to stop"
+                  : isListening
+                    ? "Stop recording"
+                    : "Start voice input"
         }
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",

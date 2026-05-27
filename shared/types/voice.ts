@@ -11,10 +11,18 @@
  * - idle: No active session.
  * - connecting: WebSocket to OpenAI Realtime is being established.
  * - recording: Connected and receiving audio; live transcription in progress.
+ * - reconnecting: Connection dropped mid-session; retrying with backoff while
+ *   buffering captured audio. The session is still active from the user's view.
  * - finishing: Session stop requested; draining final transcription from OpenAI.
  * - error: Session terminated due to a connection or transcription error.
  */
-export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";
+export type VoiceInputStatus =
+  | "idle"
+  | "connecting"
+  | "recording"
+  | "reconnecting"
+  | "finishing"
+  | "error";
 
 /**
  * The lifecycle phase of the transcript within a single voice panel buffer.
@@ -33,5 +41,10 @@ export type VoiceTranscriptPhase = "idle" | "interim" | "utterance_final" | "sta
  * Use this instead of comparing against multiple status strings inline.
  */
 export function isActiveVoiceSession(status: VoiceInputStatus): boolean {
-  return status === "connecting" || status === "recording" || status === "finishing";
+  return (
+    status === "connecting" ||
+    status === "recording" ||
+    status === "reconnecting" ||
+    status === "finishing"
+  );
 }

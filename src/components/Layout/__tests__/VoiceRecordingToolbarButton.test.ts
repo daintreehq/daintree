@@ -98,7 +98,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // state would let the RAF loop run while the placeholder is rendered,
       // leaving the tick to no-op against null refs every frame.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(isRecording\s*\|\|\s*isFinishing\s*\|\|\s*showConnecting\)/
+        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(isRecording\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\s*\|\|\s*showConnecting\)/
       );
     });
 
