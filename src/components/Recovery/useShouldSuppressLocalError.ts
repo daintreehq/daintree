@@ -62,21 +62,26 @@ function isSuppressedByGlobalCause(
 export function useShouldSuppressLocalError(category: LocalErrorCategory): boolean {
   const cause = useActiveGlobalCause();
   const rawSuppressed = isSuppressedByGlobalCause(cause, category);
-  const [suppressed, setSuppressed] = useState(rawSuppressed);
+  // `held` tracks the delayed-off tail: once a cause has activated, `held`
+  // stays true until the settle window elapses with no cause active. The
+  // returned value is `rawSuppressed || held` so sticky-on is synchronous
+  // with render — passive effects run *after* paint, so relying on the
+  // effect to set state would leak one paint cycle of the local banner.
+  const [held, setHeld] = useState(rawSuppressed);
 
   useEffect(() => {
     if (rawSuppressed) {
-      setSuppressed(true);
+      setHeld(true);
       return;
     }
     const delay = getPerformanceModeFloor(LOCAL_ERROR_SETTLE_MS);
     if (delay <= 0) {
-      setSuppressed(false);
+      setHeld(false);
       return;
     }
-    const timer = setTimeout(() => setSuppressed(false), delay);
+    const timer = setTimeout(() => setHeld(false), delay);
     return () => clearTimeout(timer);
   }, [rawSuppressed]);
 
-  return suppressed;
+  return rawSuppressed || held;
 }

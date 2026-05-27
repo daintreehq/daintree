@@ -56,6 +56,28 @@ describe("useShouldSuppressLocalError", () => {
       expect(result.current).toBe(true);
     });
 
+    it("returns true on the first render after rawSuppressed flips true (sync sticky-on)", () => {
+      // Captures the value at every render. Sticky-on must be synchronous
+      // with render — if the hook depended on `useEffect` to flip state,
+      // the first re-render after the store update would still read `false`
+      // (effect runs after paint), and a local banner would briefly co-paint
+      // with the host-crash banner.
+      const renders: boolean[] = [];
+      renderHook(() => {
+        const v = useShouldSuppressLocalError("backend-dependent");
+        renders.push(v);
+        return v;
+      });
+      expect(renders).toEqual([false]);
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "recovering" });
+      });
+      // The Zustand selector triggers a synchronous re-render; that render
+      // must already return true (no effect cycle has run yet).
+      expect(renders[1]).toBe(true);
+    });
+
     it("stays suppressed for the full settle window after the cause clears", () => {
       const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
 
