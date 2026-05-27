@@ -449,6 +449,10 @@ export class PluginService {
           title: "Plugin uses a reserved namespace",
           message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
         });
+        this.pluginLoadErrors.set(String(inferredName ?? dirName), {
+          message: namespaceIssue.message,
+          at: Date.now(),
+        });
       }
       console.error(`[PluginService] Invalid manifest in ${dirName}:`, parseResult.error.issues);
       return null;
