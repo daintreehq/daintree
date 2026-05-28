@@ -15,8 +15,22 @@ import type {
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
-import { pluginService } from "./PluginService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+// PluginService is loaded lazily so importing this file (e.g. from
+// `WorkspaceHostProcess` in tests that mock electron's `app` without
+// `getVersion()`) doesn't trigger the PluginService singleton constructor
+// at module-load time. The first forge RPC dispatch performs the import.
+type PluginServiceShape = {
+  activatePluginForForgeProvider(namespacedId: string): Promise<void>;
+};
+let pluginServicePromise: Promise<PluginServiceShape> | null = null;
+function getPluginService(): Promise<PluginServiceShape> {
+  if (!pluginServicePromise) {
+    pluginServicePromise = import("./PluginService.js").then((mod) => mod.pluginService);
+  }
+  return pluginServicePromise;
+}
 
 // Deterministic stringify so two windows calling the same method with the same
 // arg shape coalesce regardless of property order. Mirrors the bridge-side
@@ -183,6 +197,7 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   // Implicit activation: force the owning plugin's `activate()` to run before
   // we try to resolve its impl, so a plugin that only binds during activate()
   // is reachable on first use without a startup activation gate.
+  const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(req.namespacedId);
   const impl = getForgeProviderImpl(req.namespacedId);
   if (!impl) {
@@ -233,6 +248,7 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
   const { pluginId, contribution } = resolved.entry;
   const namespacedId = makeForgeProviderId(pluginId, contribution.id);
   // Implicit activation before impl lookup — see `invoke` above for rationale.
+  const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(namespacedId);
   const impl = getForgeProviderImpl(namespacedId);
   if (!impl) return null;
