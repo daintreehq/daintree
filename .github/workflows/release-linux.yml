@@ -169,6 +169,42 @@ jobs:
           fi
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-linux.yml"
 
+      - name: Install Linux runtime dependencies (packaged smoke)
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
+      - name: Smoke test (packaged Linux)
+        shell: bash
+        timeout-minutes: 8
+        env:
+          PACKAGED_BINARY: ${{ github.workspace }}/squashfs-root/AppRun
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        run: |
+          APPIMAGE=$(ls release/*.AppImage | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage found in release/"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+          rm -rf squashfs-root
+          # FUSE is unavailable on GitHub runners, so extract rather than mount.
+          "$APPIMAGE" --appimage-extract
+          xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:

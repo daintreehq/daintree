@@ -278,6 +278,25 @@ jobs:
           echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and ${UPDATE_METADATA_PREFIX}-mac.yml"
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-mac.yml"
 
+      - name: Smoke test (packaged macOS)
+        shell: bash
+        timeout-minutes: 15
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        run: |
+          set -euo pipefail
+          # Smoke every published arch (matching the per-arch codesign/staple
+          # audits above). The macos-14 runner is arm64; the x64 bundle runs via
+          # the pre-installed Rosetta 2, and the universal bundle runs its arm64
+          # slice — together exercising the unpacked natives of all three.
+          for app in release/mac-arm64/Daintree.app release/mac/Daintree.app release/mac-universal/Daintree.app; do
+            echo "::group::Packaged smoke — $app"
+            PACKAGED_BINARY="$app/Contents/MacOS/Daintree" node scripts/run-packaged-smoke.mjs
+            echo "::endgroup::"
+          done
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
