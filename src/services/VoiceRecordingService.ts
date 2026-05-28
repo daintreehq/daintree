@@ -490,6 +490,17 @@ class VoiceRecordingService {
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
   }
 
+  /**
+   * Roll the store off the "arming" status when a `start()` call has set
+   * an error and is about to return. Without this, the store would stay
+   * `{ status: "arming", activeTarget: T }` indefinitely — the toolbar and
+   * panel border would keep showing the pre-recording cue with no mic to
+   * back it up.
+   */
+  private failArming(): void {
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
+  }
+
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
     const startRequestId = ++this.startRequestId;
@@ -511,14 +522,31 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
+        this.failArming();
       }
       return;
     }
 
     // Check and request OS-level microphone permission (macOS requires this
     // from the main process before getUserMedia will succeed in the renderer).
+    // The IPC call is wrapped so a rejection (main-process crash, channel
+    // teardown) doesn't leak past start() and leave the store armed forever.
     logDebug(`${LOG_PREFIX} Checking microphone permission`);
-    const micStatus = await window.electron.voiceInput.checkMicPermission();
+    let micStatus: Awaited<ReturnType<typeof window.electron.voiceInput.checkMicPermission>>;
+    try {
+      micStatus = await window.electron.voiceInput.checkMicPermission();
+    } catch (err) {
+      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, err);
+      if (!this.isStartRequestStale(startRequestId)) {
+        useVoiceRecordingStore.getState().setLastError({
+          severity: "fatal",
+          code: "mic_permission_check_failed",
+          message: "Could not check microphone permission. Try again.",
+        });
+        this.failArming();
+      }
+      return;
+    }
     if (this.isStartRequestStale(startRequestId)) {
       return;
     }
@@ -531,6 +559,7 @@ class VoiceRecordingService {
         .getState()
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
+      this.failArming();
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
       });
@@ -539,7 +568,21 @@ class VoiceRecordingService {
 
     if (micStatus === "not-determined") {
       logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
-      const granted = await window.electron.voiceInput.requestMicPermission();
+      let granted: boolean;
+      try {
+        granted = await window.electron.voiceInput.requestMicPermission();
+      } catch (err) {
+        logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
+        if (!this.isStartRequestStale(startRequestId)) {
+          useVoiceRecordingStore.getState().setLastError({
+            severity: "fatal",
+            code: "mic_permission_request_failed",
+            message: "Could not request microphone permission. Try again.",
+          });
+          this.failArming();
+        }
+        return;
+      }
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
@@ -550,6 +593,7 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
         return;
       }
     }
@@ -571,12 +615,17 @@ class VoiceRecordingService {
         name: error instanceof DOMException ? error.name : "unknown",
         message,
       });
-      const micCode =
-        error instanceof DOMException && error.name === "NotAllowedError"
-          ? "mic_permission_denied"
-          : "mic_access_failed";
-      useVoiceRecordingStore.getState().setLastError({ severity: "fatal", code: micCode, message });
-      useVoiceRecordingStore.getState().announce(message);
+      if (!this.isStartRequestStale(startRequestId)) {
+        const micCode =
+          error instanceof DOMException && error.name === "NotAllowedError"
+            ? "mic_permission_denied"
+            : "mic_access_failed";
+        useVoiceRecordingStore
+          .getState()
+          .setLastError({ severity: "fatal", code: micCode, message });
+        useVoiceRecordingStore.getState().announce(message);
+        this.failArming();
+      }
       return;
     }
 
@@ -626,12 +675,13 @@ class VoiceRecordingService {
       return;
     }
 
-    // Only an actually-started session (connecting/recording/etc.) needs to be
-    // torn down here. The arming state seeds activeTarget synchronously before
-    // start() runs so the UI can paint the cue — treating that as an existing
-    // session would call stop() on a session that never opened a mic.
-    const preStartState = useVoiceRecordingStore.getState();
-    if (preStartState.activeTarget && isActiveVoiceSession(preStartState.status)) {
+    // Only an actually-started session (open mic stream) needs to be torn
+    // down here. `this.stream` is the canonical "audio is open" flag and is
+    // independent of store status — using store.activeTarget here would
+    // false-positive during the arming window (we seeded it ourselves) and
+    // status alone would miss a cross-panel switch where the new "arming"
+    // status has already overwritten the prior session's "recording".
+    if (this.stream) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
       await this.stop(undefined, {
         preserveLiveText: true,

@@ -502,6 +502,67 @@ describe("VoiceRecordingService — arming state", () => {
     storeModule.__state.status = "idle";
   });
 
+  it("start() failure path clears arming so the store does not stay armed forever", async () => {
+    // Issue #9178 — every start() early-return after setArming() must roll
+    // the store off "arming", otherwise the toolbar/panel border keeps
+    // showing the pre-recording cue with no mic behind it. This test
+    // simulates the not-configured path.
+    const electronStub = buildElectronStub();
+    electronStub.voiceInput.getSettings.mockResolvedValue({
+      enabled: false,
+      openaiApiKey: "",
+      correctionEnabled: false,
+    });
+    setupGlobals(electronStub);
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => {
+          finishSession: ReturnType<typeof vi.fn>;
+          setError: ReturnType<typeof vi.fn>;
+        };
+      };
+    };
+    const fns = storeModule.useVoiceRecordingStore.getState();
+    const finishSessionMock = fns.finishSession;
+    const setErrorMock = fns.setError;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    await voiceRecordingService.start({ panelId: "panel-1" });
+
+    expect(setErrorMock).toHaveBeenCalled();
+    // failArming() routes through finishSession with nextStatus:"error"
+    expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "error" });
+  });
+
+  it("cross-panel switch while recording tears down the existing session", async () => {
+    // Regression guard. Before the fix, toggle() set arming on the new
+    // target which masked the existing recording status — start()'s
+    // teardown check skipped, leaving the old MediaStream open. The fix
+    // keys teardown on this.stream rather than store status.
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    // Simulate an open audio session by attaching a stream directly.
+    // We use `as unknown as` to reach a private field for test setup only.
+    const fakeStream = { getTracks: () => [{ stop: vi.fn() }] };
+    (voiceRecordingService as unknown as { stream: unknown }).stream = fakeStream;
+
+    await voiceRecordingService.start({ panelId: "panel-b" });
+
+    // start() must call stop() to tear down the prior session even though
+    // setArming() has by now overwritten store status from "recording" to
+    // "arming". Before the fix this assertion failed.
+    expect(stopSpy).toHaveBeenCalled();
+
+    (voiceRecordingService as unknown as { stream: unknown }).stream = null;
+  });
+
   it("Escape during arming routes through finishSession instead of stop()", async () => {
     const { windowListeners } = setupGlobals();
 
