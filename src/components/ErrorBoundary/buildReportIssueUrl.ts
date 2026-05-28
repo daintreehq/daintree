@@ -321,7 +321,7 @@ function buildNotificationStubBody(params: {
 }): string {
   const { title, message, correlationId, appVersion, electronVersion, chromiumVersion, os } =
     params;
-  const cappedMessage = capMessageForStub(message || "(none)");
+  const cappedMessage = capForBudget(message || "(none)", STUB_MESSAGE_BUDGET);
   return (
     `## Notification Report\n\n` +
     `The full notification details were copied to your clipboard — please paste them below.\n\n` +
