@@ -1794,6 +1794,8 @@ const api: ElectronAPI = {
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+    onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
     onNavigationBlocked: (
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
