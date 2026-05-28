@@ -13,7 +13,10 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
-import { sanitizeRecipeTerminals } from "../../shared/utils/recipeSanitizer.js";
+import {
+  sanitizeRecipeTerminals,
+  MAX_TERMINALS_PER_RECIPE,
+} from "../../shared/utils/recipeSanitizer.js";
 
 /**
  * Builds the exact UTF-8 byte string that `writeInRepoRecipe` lands on disk
@@ -380,14 +383,35 @@ export class ProjectIdentityFiles {
         // Content-validate every terminal at this trust boundary — dropping any
         // with a bad type or control-char-laden command/args/env — so an
         // in-repo recipe can't smuggle injected fields into the spawn path.
-        const sanitizedTerminals = sanitizeRecipeTerminals(result.data.terminals);
+        let sanitizedTerminals = sanitizeRecipeTerminals(result.data.terminals);
         if (sanitizedTerminals.length === 0) {
           console.warn(
             `[ProjectIdentityFiles] Skipping recipe with no valid terminals: ${entry.name}`
           );
           continue;
         }
-        const recipe: TerminalRecipe = { ...result.data, terminals: sanitizedTerminals };
+        if (sanitizedTerminals.length > MAX_TERMINALS_PER_RECIPE) {
+          console.warn(
+            `[ProjectIdentityFiles] Capping recipe ${entry.name} at ${MAX_TERMINALS_PER_RECIPE} terminals (had ${sanitizedTerminals.length})`
+          );
+          sanitizedTerminals = sanitizedTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
+        }
+        // Build the recipe with explicit known fields only — never spread the
+        // schema's passthrough output, or unknown top-level keys from a crafted
+        // recipe would round-trip into the store and back to disk.
+        const data = result.data;
+        const recipe: TerminalRecipe = {
+          id: data.id,
+          name: data.name,
+          projectId: data.projectId,
+          worktreeId: data.worktreeId,
+          terminals: sanitizedTerminals,
+          createdAt: data.createdAt,
+          showInEmptyState: data.showInEmptyState,
+          lastUsedAt: data.lastUsedAt,
+          usageHistory: data.usageHistory,
+          autoAssign: data.autoAssign,
+        };
         recipes.push(recipe);
         hashes.set(recipe.id, hashRecipePayload(content));
       } catch (error) {

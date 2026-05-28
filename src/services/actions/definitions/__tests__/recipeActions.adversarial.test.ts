@@ -114,12 +114,39 @@ describe("recipeActions adversarial", () => {
       { activeWorktreeId: "wt-ctx", projectPath: "/repo" }
     );
 
-    expect(runRecipe).toHaveBeenCalledWith("r1", "/repo/arg", "wt-arg", {
-      issueNumber: 1,
-      prNumber: undefined,
-      worktreePath: "/repo/arg",
-      branchName: "feat/a",
-    });
+    expect(runRecipe).toHaveBeenCalledWith(
+      "r1",
+      "/repo/arg",
+      "wt-arg",
+      {
+        issueNumber: 1,
+        prNumber: undefined,
+        worktreePath: "/repo/arg",
+        branchName: "feat/a",
+      },
+      { spawnedBy: undefined, focusPolicy: undefined, dispatchSource: undefined }
+    );
+  });
+
+  it("recipe.run threads ctx.dispatchSource into the run options", async () => {
+    const runRecipe = vi.fn().mockResolvedValue(undefined);
+    setRecipeState({ runRecipe });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt", branch: "feat/x" }]]));
+
+    const run = setupActions();
+    await run(
+      "recipe.run",
+      { recipeId: "r1", worktreeId: "wt-1" },
+      { dispatchSource: "agent", projectPath: "/repo" }
+    );
+
+    expect(runRecipe).toHaveBeenCalledWith(
+      "r1",
+      "/repo/wt",
+      "wt-1",
+      expect.any(Object),
+      expect.objectContaining({ dispatchSource: "agent" })
+    );
   });
 
   it("recipe.run falls back to ctx.projectPath when the target worktree is missing from the view store", async () => {
@@ -134,12 +161,18 @@ describe("recipeActions adversarial", () => {
       { activeWorktreeId: "wt-missing", projectPath: "/repo/main" }
     );
 
-    expect(runRecipe).toHaveBeenCalledWith("r1", "/repo/main", "wt-missing", {
-      issueNumber: undefined,
-      prNumber: undefined,
-      worktreePath: "/repo/main",
-      branchName: undefined,
-    });
+    expect(runRecipe).toHaveBeenCalledWith(
+      "r1",
+      "/repo/main",
+      "wt-missing",
+      {
+        issueNumber: undefined,
+        prNumber: undefined,
+        worktreePath: "/repo/main",
+        branchName: undefined,
+      },
+      { spawnedBy: undefined, focusPolicy: undefined, dispatchSource: undefined }
+    );
   });
 
   it("recipe.run throws when no path source exists", async () => {

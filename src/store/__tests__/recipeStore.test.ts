@@ -865,6 +865,40 @@ describe("recipeStore", () => {
       }
     });
 
+    it("spawns all terminals for an agent run at exactly the cap", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Three Terminals",
+            projectId: "project-1",
+            terminals: Array.from({ length: 3 }, (_, i) => ({
+              type: "terminal" as const,
+              title: `Shell ${i}`,
+              command: "echo",
+              env: {},
+            })),
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "agent",
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(3);
+      expect(results.spawned).toHaveLength(3);
+      expect(results.failed).toHaveLength(0);
+    });
+
     it("does not cap a user-dispatched run", async () => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));

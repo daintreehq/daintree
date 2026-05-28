@@ -14,7 +14,7 @@ import { projectClient, agentSettingsClient, systemClient, globalRecipesClient }
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
-import { sanitizeRecipeTerminals } from "@shared/utils/recipeSanitizer";
+import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
@@ -185,7 +185,10 @@ interface RecipeState {
   reset: () => void;
 }
 
-export const MAX_TERMINALS_PER_RECIPE = 10;
+// Re-exported from the shared module so existing renderer imports
+// (`import { MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore"`) keep working
+// while the in-repo load path (Electron main) shares the same constant.
+export { MAX_TERMINALS_PER_RECIPE };
 
 /**
  * Per-run terminal cap for agent-dispatched recipe runs. A single MCP-approved

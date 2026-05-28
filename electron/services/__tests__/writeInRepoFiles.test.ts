@@ -901,6 +901,27 @@ describe("readInRepoRecipes", () => {
     expect(terminal.command).toBe("npm test");
   });
 
+  it("caps an in-repo recipe at MAX_TERMINALS_PER_RECIPE valid terminals", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "huge.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Huge",
+        terminals: Array.from({ length: 25 }, (_, i) => ({
+          type: "terminal",
+          command: `echo ${i}`,
+        })),
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.terminals).toHaveLength(10);
+  });
+
   it("keeps an initialPrompt that contains newlines", async () => {
     const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     await fs.mkdir(recipesDir, { recursive: true });

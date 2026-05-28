@@ -14,6 +14,13 @@ import { BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
 import type { RecipeTerminal, RecipeTerminalType } from "../types/project.js";
 
 /**
+ * Maximum number of terminals a single recipe may spawn. Enforced at every
+ * recipe trust boundary (user import and in-repo load) so no recipe can open an
+ * unbounded burst of panels.
+ */
+export const MAX_TERMINALS_PER_RECIPE = 10;
+
+/**
  * Control characters forbidden in command-like fields (`command`, `args`,
  * `devCommand`, and `env` keys/values). Rejects CR, LF, and all C0 control
  * chars — any of which could break out of an argument or drive the terminal

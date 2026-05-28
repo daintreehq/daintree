@@ -84,23 +84,16 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
-        if (
-          spawnedBy !== undefined ||
-          focusPolicy !== undefined ||
-          ctx.dispatchSource !== undefined
-        ) {
-          await useRecipeStore
-            .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
-              spawnedBy,
-              focusPolicy,
-              dispatchSource: ctx.dispatchSource,
-            });
-        } else {
-          await useRecipeStore
-            .getState()
-            .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext);
-        }
+        // Always forward dispatchSource so runRecipeWithResults can apply the
+        // agent-source terminal cap. ActionService sets ctx.dispatchSource on
+        // every dispatch, so this is the live path for all real invocations.
+        await useRecipeStore
+          .getState()
+          .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
+            spawnedBy,
+            focusPolicy,
+            dispatchSource: ctx.dispatchSource,
+          });
       },
     })
   );
