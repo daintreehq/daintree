@@ -499,6 +499,40 @@ jobs:
           path: test-results/.last-run.json
           key: e2e-last-run-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite || 'core' }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+      - name: Collect crash dumps (fallback from platform default paths)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          FALLBACK_DIR="daintree-e2e-artifacts/fallback-crash-dumps"
+          mkdir -p "$FALLBACK_DIR"
+
+          case "$RUNNER_OS" in
+            macOS)
+              CRASHPAD_DIR="$HOME/Library/Application Support/Daintree/Crashpad"
+              ;;
+            Linux)
+              CRASHPAD_DIR="$HOME/.config/Daintree/Crashpad"
+              ;;
+            Windows)
+              CRASHPAD_DIR="$APPDATA/Daintree/Crashpad"
+              ;;
+            *)
+              echo "[e2e] Unknown OS, skipping fallback crash dump collection"
+              exit 0
+              ;;
+          esac
+
+          for subdir in new pending completed; do
+            if [ -d "$CRASHPAD_DIR/$subdir" ]; then
+              cp -r "$CRASHPAD_DIR/$subdir" "$FALLBACK_DIR/$subdir" 2>/dev/null || true
+            fi
+          done
+
+          # Count what we collected
+          COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
+          echo "[e2e] Fallback crash dump collection: $COLLECTED files"
+
       - name: Upload test results
         if: always()
         continue-on-error: true
@@ -508,5 +542,6 @@ jobs:
           path: |
             test-results/
             playwright-report/
+            daintree-e2e-artifacts/
           retention-days: 7
           if-no-files-found: ignore

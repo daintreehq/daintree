@@ -50,6 +50,17 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
   );
 }
 
+// E2E: redirect crash dumps to workspace-relative path so CI artifact upload
+// captures them. Runs before crashReporter.start() (main.ts:158) because
+// environment.ts is imported synchronously at the top of main.ts.
+if (
+  process.env.DAINTREE_E2E_MODE === "1" &&
+  process.env.DAINTREE_E2E_CRASH_DUMPS_DIR &&
+  path.isAbsolute(process.env.DAINTREE_E2E_CRASH_DUMPS_DIR)
+) {
+  app.setPath("crashDumps", process.env.DAINTREE_E2E_CRASH_DUMPS_DIR);
+}
+
 // Handle --reset-data: wipe userData before Chromium acquires file locks
 // AND before reading any flag files below — otherwise a reset-while-disabled
 // launch would carry the stale GPU flag forward by one cycle.
