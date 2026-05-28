@@ -649,6 +649,57 @@ if (isSmokeTest) {
     console.error("[SMOKE] FAILED — better-sqlite3 native module:", (err as Error).message);
     app.exit(1);
   }
+
+  // Verify win-job-object on Windows: the .node binding loaded AND the
+  // critical assignProcessToHelpJob() call path works. Adding the current
+  // process to a Job Object is safe on CI runners — they're ordinary Windows
+  // processes — and proves the kernel object can be created and assigned.
+  if (process.platform === "win32") {
+    try {
+      const mod = (await import("win-job-object")) as {
+        isAvailable: () => boolean;
+        assignProcessToHelpJob: (pid: number) => boolean;
+        getLoadError?: () => unknown;
+      };
+      if (!mod.isAvailable()) {
+        const loadErr = mod.getLoadError?.();
+        throw new Error(
+          `win-job-object binding not loaded${loadErr ? `: ${String(loadErr)}` : ""}`
+        );
+      }
+      if (!mod.assignProcessToHelpJob(process.pid)) {
+        throw new Error("assignProcessToHelpJob returned false");
+      }
+      console.error("[SMOKE] CHECK: win-job-object native module — OK");
+    } catch (err) {
+      console.error("[SMOKE] FAILED — win-job-object native module:", (err as Error).message);
+      app.exit(1);
+    }
+  }
+
+  // Verify posix-pty-reaper on macOS / Linux: isAvailable() resolves the
+  // supervisor path and confirms the compiled binary is present and
+  // executable (uses fs.accessSync with X_OK internally).
+  if (process.platform === "darwin" || process.platform === "linux") {
+    try {
+      const mod = (await import("posix-pty-reaper")) as {
+        getSupervisorPath: () => string | null;
+        isAvailable: () => boolean;
+      };
+      if (!mod.isAvailable()) {
+        const supervisorPath = mod.getSupervisorPath();
+        throw new Error(
+          `supervisor binary missing or not executable${
+            supervisorPath ? ` at ${supervisorPath}` : ""
+          }`
+        );
+      }
+      console.error("[SMOKE] CHECK: posix-pty-reaper native module — OK");
+    } catch (err) {
+      console.error("[SMOKE] FAILED — posix-pty-reaper native module:", (err as Error).message);
+      app.exit(1);
+    }
+  }
 }
 
 app.enableSandbox();

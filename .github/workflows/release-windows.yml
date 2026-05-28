@@ -298,9 +298,92 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged-artifact smoke (#9246) — runs the freshly-built NSIS installer
+  # silently, locates the installed Daintree.exe via the per-user uninstall
+  # registry entry (with a fixed-path fallback), and launches it in
+  # --smoke-test mode. Validates the four native modules including
+  # win-job-object (asar.unpacked native that doesn't ship a prebuilt and so
+  # is uniquely at risk if cross-compile for arm64 fails silently). Gates
+  # publish.
+  smoke-packaged:
+    needs: [build-daintree]
+    name: Smoke (packaged NSIS)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: ./.github/actions/checkout-shallow
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-latest
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Install NSIS package
+        id: extract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse -Filter '*.exe' |
+            Select-Object -First 1
+          if (-not $installer) {
+            Write-Host "::error::No NSIS .exe found in downloaded artifact"
+            Get-ChildItem -Path "$env:RUNNER_TEMP\release-artifact" -Recurse | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          Write-Host "Selected installer: $($installer.FullName)"
+          # /S — silent NSIS install. perMachine=false in electron-builder
+          # config means the installer lands under %LOCALAPPDATA%\Programs.
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::Silent NSIS install failed with exit code $($proc.ExitCode)"
+            exit $proc.ExitCode
+          }
+          # Locate the install via the per-user uninstall registry entry; fall
+          # back to the default path electron-builder uses when the user
+          # doesn't change it.
+          $entry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
+            Where-Object { $_.DisplayName -eq 'Daintree' } |
+            Select-Object -First 1
+          $installDir = $null
+          if ($entry -and $entry.InstallLocation) {
+            $installDir = $entry.InstallLocation
+          }
+          if (-not $installDir -or -not (Test-Path $installDir)) {
+            $fallback = Join-Path $env:LOCALAPPDATA 'Programs\Daintree'
+            if (Test-Path $fallback) {
+              $installDir = $fallback
+            }
+          }
+          if (-not $installDir) {
+            Write-Host "::error::Could not locate Daintree install directory after silent NSIS install"
+            exit 1
+          }
+          $bin = Join-Path $installDir 'Daintree.exe'
+          if (-not (Test-Path $bin)) {
+            Write-Host "::error::Expected Daintree.exe missing at $bin"
+            Get-ChildItem $installDir -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          Write-Host "Resolved packaged binary: $bin"
+          "packaged_binary=$bin" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Run packaged smoke
+        env:
+          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+        run: node scripts/run-packaged-smoke.mjs
+
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree]
+    needs: [build-daintree, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 

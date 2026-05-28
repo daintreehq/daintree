@@ -258,9 +258,83 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged-artifact smoke (#9246) — mounts the freshly-built DMG, copies the
+  # .app out, removes the quarantine xattr (required even for notarized apps
+  # on a headless CI runner that can't dismiss a Gatekeeper prompt), and runs
+  # the binary in --smoke-test mode. Validates node-pty, better-sqlite3, and
+  # posix-pty-reaper markers from the asar.unpacked tree. Gates publish.
+  smoke-packaged:
+    needs: [build-daintree]
+    name: Smoke (packaged .app)
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: ./.github/actions/checkout-shallow
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-macos-14
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Mount DMG and install app
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          # macos-14 runners are arm64 — prefer the native-arch DMG; fall back
+          # to universal, then to anything *.dmg the artifact contains.
+          DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*-arm64.dmg' | head -n 1)
+          if [ -z "$DMG" ]; then
+            DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*-universal.dmg' | head -n 1)
+          fi
+          if [ -z "$DMG" ]; then
+            DMG=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*.dmg' | head -n 1)
+          fi
+          if [ -z "$DMG" ]; then
+            echo "::error::No .dmg found in downloaded artifact"
+            find "$RUNNER_TEMP/release-artifact" -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          echo "Selected DMG: $DMG"
+          MOUNT="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$MOUNT"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
+          APP_SRC=$(find "$MOUNT" -maxdepth 2 -name '*.app' | head -n 1)
+          if [ -z "$APP_SRC" ]; then
+            echo "::error::No .app bundle found inside DMG"
+            ls -la "$MOUNT" || true
+            hdiutil detach "$MOUNT" || true
+            exit 1
+          fi
+          APP_DST="$RUNNER_TEMP/Daintree.app"
+          cp -R "$APP_SRC" "$APP_DST"
+          hdiutil detach "$MOUNT"
+          # Headless CI can't dismiss a Gatekeeper prompt; clearing quarantine
+          # is required even when the app is notarized.
+          xattr -rd com.apple.quarantine "$APP_DST" || true
+          BIN="$APP_DST/Contents/MacOS/Daintree"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Expected executable missing at $BIN"
+            ls -la "$APP_DST/Contents/MacOS" || true
+            exit 1
+          fi
+          echo "packaged_binary=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: Run packaged smoke
+        env:
+          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+        run: node scripts/run-packaged-smoke.mjs
+
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree]
+    needs: [build-daintree, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
