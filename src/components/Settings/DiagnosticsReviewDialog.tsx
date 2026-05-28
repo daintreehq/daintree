@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -76,12 +76,13 @@ export function DiagnosticsReviewDialog({
   const [timeWindow, setTimeWindow] = useState<TimeWindowId>(DEFAULT_TIME_WINDOW);
   const [showPreview, setShowPreview] = useState(false);
   // Reference "now" captured at open so the relative windows resolve to a
-  // stable cutoff shared by the preview and the save call.
-  const openedAtRef = useRef(Date.now());
+  // stable cutoff shared by the preview and the save call. Held as state (not a
+  // ref) so the render-time reads below don't trip the React Compiler.
+  const [openedAt, setOpenedAt] = useState(() => Date.now());
 
   useEffect(() => {
     if (isOpen && reviewPayload) {
-      openedAtRef.current = Date.now();
+      setOpenedAt(Date.now());
       const initial: Record<string, boolean> = {};
       for (const key of reviewPayload.sectionKeys) {
         initial[key] = true;
@@ -105,17 +106,13 @@ export function DiagnosticsReviewDialog({
 
   const previewJson = useMemo(() => {
     if (!reviewPayload) return "";
-    const startMs = computeTimeWindowStart(
-      timeWindow,
-      reviewPayload.appLaunchTimestamp,
-      openedAtRef.current
-    );
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
     const filtered = filterLogEntriesByTime(
       filterSections(reviewPayload.payload, enabledSections),
       startMs
     );
     return applyReplacements(safeStringify(filtered, 2), effectiveReplacements);
-  }, [reviewPayload, enabledSections, effectiveReplacements, timeWindow]);
+  }, [reviewPayload, enabledSections, effectiveReplacements, timeWindow, openedAt]);
 
   const toggleSection = (key: string) => {
     setEnabledSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -147,11 +144,7 @@ export function DiagnosticsReviewDialog({
 
   const handleSave = () => {
     if (!reviewPayload) return;
-    const startMs = computeTimeWindowStart(
-      timeWindow,
-      reviewPayload.appLaunchTimestamp,
-      openedAtRef.current
-    );
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload.appLaunchTimestamp, openedAt);
     onSave(enabledSections, effectiveReplacements, startMs);
   };
 
