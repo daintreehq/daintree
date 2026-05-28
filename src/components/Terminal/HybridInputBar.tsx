@@ -187,8 +187,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
+    const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
     const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
-    const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
+    const isVoiceActiveForPanel =
+      isVoiceRecording || isVoiceConnecting || isVoiceReconnecting || isVoiceFinishing;
     const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };
@@ -278,6 +280,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const placeholder = (() => {
+      if (isVoiceActiveForPanel) {
+        return "Enter to send · Shift+Enter for newline";
+      }
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -738,6 +743,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ],
               disabled && "opacity-60"
             )}
+            data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
