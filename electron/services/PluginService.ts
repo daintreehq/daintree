@@ -2310,4 +2310,10 @@ export class PluginService {
   }
 }
 
-export const pluginService = new PluginService();
+// E2E backdoor: the host-contract harness (#9286) points the user-plugin root
+// at the compiled sample plugin under `dist-electron/plugins/sample`. The
+// constant-folded define in `scripts/build-main.mjs` rewrites this to `""` in
+// production builds, so the OR-fallback keeps the normal `~/.daintree/plugins`
+// path in any non-test shipped binary.
+const e2eSideloadDir = process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR || undefined;
+export const pluginService = new PluginService(e2eSideloadDir);
