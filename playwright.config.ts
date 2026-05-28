@@ -94,7 +94,7 @@ export default defineConfig({
       name: "online",
       testDir: "./e2e/online",
       timeout: onlineTimeout,
-      retries: isCI ? 2 : 0,
+      retries: isCI ? 1 : 0,
     },
     {
       name: "nightly",

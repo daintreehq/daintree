@@ -15,6 +15,7 @@ export async function configureClaudeAuthEnv(page: Page): Promise<void> {
     await window.electron.globalEnv.set({
       ...currentGlobalEnv,
       ANTHROPIC_API_KEY: anthropicApiKey,
+      ANTHROPIC_MODEL: "claude-haiku-4-5-20251001",
       // CLAUDE_CODE_SIMPLE=1 is the env-var equivalent of `claude --bare`:
       // it skips marketplace OAuth, plugin sync, auto-memory, CLAUDE.md
       // discovery, and keychain reads. Anthropic auth becomes strictly
@@ -31,6 +32,7 @@ export async function configureClaudeAuthEnv(page: Page): Promise<void> {
       globalEnv: {
         ...currentEnv,
         ANTHROPIC_API_KEY: anthropicApiKey,
+        ANTHROPIC_MODEL: "claude-haiku-4-5-20251001",
         CLAUDE_CODE_SIMPLE: "1",
       },
     });
