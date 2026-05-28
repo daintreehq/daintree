@@ -160,6 +160,27 @@ describe("fetchRemoteMetadata", () => {
       fetchRemoteMetadata("https://updates.daintree.org/releases/latest-mac.yml", fetchFn)
     ).rejects.toThrow(/network error/);
   });
+
+  it("throws on body read failure", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      status: 200,
+      text: () => Promise.reject(new Error("stream closed")),
+    });
+    await expect(
+      fetchRemoteMetadata("https://updates.daintree.org/releases/latest-mac.yml", fetchFn)
+    ).rejects.toThrow(/failed to read body/);
+  });
+
+  it("passes AbortController signal to fetch", async () => {
+    const body =
+      "version: 1.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\n";
+    const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 200, body }));
+    await fetchRemoteMetadata("https://updates.daintree.org/releases/latest-mac.yml", fetchFn);
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://updates.daintree.org/releases/latest-mac.yml",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
 });
 
 describe("compareMetadata", () => {
@@ -230,6 +251,35 @@ describe("compareMetadata", () => {
     const remote = structuredClone(baseLocal);
     remote.files[0].sha512 = "wrong-hash";
     expect(compareMetadata(baseLocal, remote)).toContain("files[0].sha512 mismatch");
+  });
+
+  it("handles null remote file entry", () => {
+    const remote = structuredClone(baseLocal);
+    remote.files[1] = null;
+    expect(compareMetadata(baseLocal, remote)).toContain("files[1]: remote entry is not an object");
+  });
+
+  it("handles non-object remote file entry", () => {
+    const remote = structuredClone(baseLocal);
+    remote.files[0] = "not-an-object";
+    expect(compareMetadata(baseLocal, remote)).toContain("files[0]: remote entry is not an object");
+  });
+
+  it("handles Date objects in releaseDate (js-yaml timestamp schema)", () => {
+    const local = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
+    const remote = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
+    expect(compareMetadata(local, remote)).toBeNull();
+  });
+
+  it("handles mixed Date/string releaseDate comparison", () => {
+    const local = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
+    const remote = { ...baseLocal, releaseDate: "2024-01-01T00:00:00.000Z" };
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(compareMetadata(local, remote)).toBeNull();
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 });
 
@@ -437,6 +487,82 @@ describe("verifyMetadataWithRetries", () => {
       expect(sleepFn).toHaveBeenNthCalledWith(1, 100);
       expect(sleepFn).toHaveBeenNthCalledWith(2, 200);
       expect(sleepFn).toHaveBeenNthCalledWith(3, 400);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns error when maxAttempts is 0", async () => {
+    const error = await verifyMetadataWithRetries({
+      filename: "latest-mac.yml",
+      publishUrl: "https://x.example/r/",
+      releaseDir: "/nonexistent",
+      fetch: vi.fn(),
+      sleep: vi.fn(),
+      maxAttempts: 0,
+      log: vi.fn(),
+    });
+    expect(error).toContain("maxAttempts must be >= 1");
+  });
+
+  it("returns error when maxAttempts is negative", async () => {
+    const error = await verifyMetadataWithRetries({
+      filename: "latest-mac.yml",
+      publishUrl: "https://x.example/r/",
+      releaseDir: "/nonexistent",
+      fetch: vi.fn(),
+      sleep: vi.fn(),
+      maxAttempts: -1,
+      log: vi.fn(),
+    });
+    expect(error).toContain("maxAttempts must be >= 1");
+  });
+
+  it("does not retry permanent (local file) errors", async () => {
+    const fetchFn = vi.fn();
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const log = vi.fn();
+
+    const error = await verifyMetadataWithRetries({
+      filename: "latest-mac.yml",
+      publishUrl: "https://x.example/r/",
+      releaseDir: "/nonexistent",
+      fetch: fetchFn,
+      sleep: sleepFn,
+      log,
+    });
+
+    expect(error).toBeTruthy();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(sleepFn).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
+  it("does not retry content mismatch errors", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-metadata-test-"));
+    try {
+      const localContent =
+        "version: 1.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n";
+      const remoteContent =
+        "version: 2.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n";
+      await writeFile(path.join(dir, "latest-mac.yml"), localContent);
+      const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 200, body: remoteContent }));
+      const sleepFn = vi.fn().mockResolvedValue(undefined);
+      const log = vi.fn();
+
+      const error = await verifyMetadataWithRetries({
+        filename: "latest-mac.yml",
+        publishUrl: "https://x.example/r/",
+        releaseDir: dir,
+        fetch: fetchFn,
+        sleep: sleepFn,
+        log,
+      });
+
+      expect(error).toContain("version mismatch");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(sleepFn).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -18,6 +18,7 @@ import { load } from "js-yaml";
 import { buildPublishedUrl } from "./verify-r2-uploads.mjs";
 
 const VALID_SUFFIXES = new Set(["-mac", "-linux", ""]);
+const FETCH_TIMEOUT_MS = 15_000;
 
 export function metadataFilename(prefix, suffix) {
   return `${prefix}${suffix}.yml`;
@@ -66,32 +67,45 @@ export function loadLocalMetadata(releaseDir, filename) {
   return parsed;
 }
 
-export async function fetchRemoteMetadata(url, fetchImpl = fetch) {
-  let response;
+export async function fetchRemoteMetadata(url, fetchImpl = fetch, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetchImpl(url);
-  } catch (err) {
-    throw new Error(`network error fetching ${url}: ${err?.message ?? err}`);
+    let response;
+    try {
+      response = await fetchImpl(url, { signal: controller.signal });
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : String(err);
+      const error = new Error(`network error fetching ${url}: ${cause}`);
+      error.transient = true;
+      throw error;
+    }
+    if (response.status !== 200) {
+      const error = new Error(`expected HTTP 200 for ${url}, got ${response.status}`);
+      error.transient = true;
+      throw error;
+    }
+    let body;
+    try {
+      body = await response.text();
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : String(err);
+      throw new Error(`failed to read body from ${url}: ${cause}`);
+    }
+    let parsed;
+    try {
+      parsed = load(body);
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : String(err);
+      throw new Error(`failed to parse YAML from ${url}: ${cause}`);
+    }
+    if (parsed === null || typeof parsed !== "object") {
+      throw new Error(`${url}: expected a YAML mapping`);
+    }
+    return parsed;
+  } finally {
+    clearTimeout(timer);
   }
-  if (response.status !== 200) {
-    throw new Error(`expected HTTP 200 for ${url}, got ${response.status}`);
-  }
-  let body;
-  try {
-    body = await response.text();
-  } catch (err) {
-    throw new Error(`failed to read body from ${url}: ${err?.message ?? err}`);
-  }
-  let parsed;
-  try {
-    parsed = load(body);
-  } catch (err) {
-    throw new Error(`failed to parse YAML from ${url}: ${err?.message ?? err}`);
-  }
-  if (parsed === null || typeof parsed !== "object") {
-    throw new Error(`${url}: expected a YAML mapping`);
-  }
-  return parsed;
 }
 
 export function compareMetadata(local, remote) {
@@ -113,6 +127,9 @@ export function compareMetadata(local, remote) {
   for (let i = 0; i < local.files.length; i++) {
     const localFile = local.files[i];
     const remoteFile = remote.files[i];
+    if (remoteFile === null || typeof remoteFile !== "object") {
+      return `files[${i}]: remote entry is not an object`;
+    }
     if (localFile.url !== remoteFile.url) {
       return `files[${i}].url mismatch: local=${localFile.url}, remote=${remoteFile.url}`;
     }
@@ -120,9 +137,13 @@ export function compareMetadata(local, remote) {
       return `files[${i}].sha512 mismatch for ${localFile.url}`;
     }
   }
-  if (local.releaseDate !== remote.releaseDate) {
+  const localDate =
+    typeof local.releaseDate === "string" ? local.releaseDate : String(local.releaseDate);
+  const remoteDate =
+    typeof remote.releaseDate === "string" ? remote.releaseDate : String(remote.releaseDate);
+  if (localDate !== remoteDate) {
     console.warn(
-      `[verify-metadata] releaseDate differs (info only): local=${local.releaseDate}, remote=${remote.releaseDate}`
+      `[verify-metadata] releaseDate differs (info only): local=${localDate}, remote=${remoteDate}`
     );
   }
   return null;
@@ -133,18 +154,18 @@ export async function verifyMetadataOnce(filename, publishUrl, releaseDir, fetch
   try {
     local = loadLocalMetadata(releaseDir, filename);
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, transient: false };
   }
   const url = buildPublishedUrl(publishUrl, filename);
   let remote;
   try {
     remote = await fetchRemoteMetadata(url, fetchImpl);
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, transient: err.transient === true };
   }
   const cmpErr = compareMetadata(local, remote);
   if (cmpErr) {
-    return { ok: false, error: `content mismatch for ${url}: ${cmpErr}` };
+    return { ok: false, error: `content mismatch for ${url}: ${cmpErr}`, transient: false };
   }
   return { ok: true };
 }
@@ -159,6 +180,9 @@ export async function verifyMetadataWithRetries({
   baseDelayMs = 5000,
   log = console.log,
 }) {
+  if (!Number.isFinite(maxAttempts) || maxAttempts < 1) {
+    return `maxAttempts must be >= 1, got ${maxAttempts}`;
+  }
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await verifyMetadataOnce(filename, publishUrl, releaseDir, fetchFn);
@@ -169,13 +193,17 @@ export async function verifyMetadataWithRetries({
       return null;
     }
     lastError = result.error;
-    if (attempt < maxAttempts) {
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
-      log(
-        `[verify-metadata] attempt ${attempt}/${maxAttempts} failed: ${result.error} — retrying in ${delay}ms`
-      );
-      await sleepFn(delay);
+    if (!result.transient || attempt >= maxAttempts) {
+      if (!result.transient) {
+        log(`[verify-metadata] permanent error, not retrying: ${result.error}`);
+      }
+      break;
     }
+    const delay = baseDelayMs * Math.pow(2, attempt - 1);
+    log(
+      `[verify-metadata] attempt ${attempt}/${maxAttempts} failed: ${result.error} — retrying in ${delay}ms`
+    );
+    await sleepFn(delay);
   }
   return lastError;
 }
