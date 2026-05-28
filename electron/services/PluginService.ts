@@ -23,7 +23,7 @@ interface ValidateFn {
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
-import { PluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -434,8 +434,26 @@ export class PluginService {
       return null;
     }
 
-    const parseResult = PluginManifestSchema.safeParse(json);
+    const parseResult = getPluginManifestSchema(opts.isBuiltin).safeParse(json);
     if (!parseResult.success) {
+      const namespaceIssue = parseResult.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+            "namespace_reserved"
+      );
+      if (namespaceIssue) {
+        const inferredName = (json as Record<string, unknown>)?.name;
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "error",
+          title: "Plugin uses a reserved namespace",
+          message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
+        });
+        this.pluginLoadErrors.set(String(inferredName ?? dirName), {
+          message: namespaceIssue.message,
+          at: Date.now(),
+        });
+      }
       console.error(`[PluginService] Invalid manifest in ${dirName}:`, parseResult.error.issues);
       return null;
     }

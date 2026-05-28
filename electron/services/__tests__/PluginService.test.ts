@@ -66,7 +66,7 @@ vi.mock("../fileDecorationRegistry.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { PluginManifestSchema } from "../../schemas/plugin.js";
+import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type PluginIpcContext,
@@ -135,7 +135,7 @@ describe("PluginManifestSchema name validation", () => {
     "acme.good-1",
     sixtyFourCharName,
   ])("accepts scoped name %j", (name) => {
-    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
     expect(result.success).toBe(true);
   });
 
@@ -161,7 +161,7 @@ describe("PluginManifestSchema name validation", () => {
     sixtyFiveCharName,
     "",
   ])("rejects unscoped or malformed name %j", (name) => {
-    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name, ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((i) => i.path[0] === "name")).toBe(true);
@@ -169,7 +169,7 @@ describe("PluginManifestSchema name validation", () => {
   });
 
   it("rejection includes an explanatory error message", () => {
-    const result = PluginManifestSchema.safeParse({ name: "bare-plugin", ...validBase });
+    const result = getPluginManifestSchema(false).safeParse({ name: "bare-plugin", ...validBase });
     expect(result.success).toBe(false);
     if (!result.success) {
       const nameIssue = result.error.issues.find((i) => i.path[0] === "name");
@@ -178,11 +178,74 @@ describe("PluginManifestSchema name validation", () => {
   });
 });
 
+describe("getPluginManifestSchema namespace lock", () => {
+  const validBase = { name: "acme.test", version: "1.0.0" };
+
+  it("rejects user plugin with daintree.* name", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintree.github-evil",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nsIssue = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+            "namespace_reserved"
+      );
+      expect(nsIssue).toBeDefined();
+      expect(nsIssue!.path).toEqual(["name"]);
+    }
+  });
+
+  it("accepts builtin plugin with daintree.* name", () => {
+    const result = getPluginManifestSchema(true).safeParse({
+      ...validBase,
+      name: "daintree.github",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts user plugin with non-daintree.* scoped name", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "acme.daintree",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts user plugin with daintreehq.* name (not the daintree. prefix)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintreehq.dev-tools",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects user plugin with bare daintree.foo name at schema level", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      name: "daintree.foo",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nsIssue = result.error.issues.find(
+        (i) =>
+          i.code === "custom" &&
+          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
+            "namespace_reserved"
+      );
+      expect(nsIssue).toBeDefined();
+    }
+  });
+});
+
 describe("PluginManifestSchema capabilities field", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("defaults to empty array when omitted", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.capabilities).toEqual([]);
@@ -190,7 +253,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("accepts an empty capabilities array", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, capabilities: [] });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, capabilities: [] });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.capabilities).toEqual([]);
@@ -198,7 +261,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("accepts built-in capability strings", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["fs:project-read", "network:fetch", "agent:invoke"],
     });
@@ -213,7 +276,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects custom (non-built-in) capability strings", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["custom:my-perm", "org.specific:do-thing"],
     });
@@ -224,7 +287,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects empty string in capabilities array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["fs:project-read", ""],
     });
@@ -235,7 +298,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects whitespace-padded capability strings (no implicit trim)", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["  fs:project-read  "],
     });
@@ -246,7 +309,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects whitespace-only capability strings", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["   "],
     });
@@ -254,7 +317,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects capability strings containing newline characters", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: ["fs:project-read\n"],
     });
@@ -262,7 +325,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it('rejects stale "permissions" key because schema is strict', () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       permissions: ["fs:project-read"],
     });
@@ -293,7 +356,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects null capabilities value", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: null,
     });
@@ -301,7 +364,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects scalar (non-array) capabilities value", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: "git:read",
     });
@@ -309,7 +372,7 @@ describe("PluginManifestSchema capabilities field", () => {
   });
 
   it("rejects non-string elements in capabilities array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       capabilities: [1, "git:read"],
     });
@@ -321,7 +384,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   const validBase = { name: "acme.forge", version: "1.0.0" };
 
   it("defaults contributes.forgeProviders to [] when contributes is absent", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -329,7 +392,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("defaults contributes.forgeProviders to [] when contributes is an empty object", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.forgeProviders).toEqual([]);
@@ -337,7 +400,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a fully specified forgeProviders entry", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [
@@ -368,7 +431,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("accepts a forgeProviders entry with only required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"] }],
@@ -378,7 +441,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry with an empty matches array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: [] }],
@@ -388,7 +451,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("rejects a forgeProviders entry missing required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh" }],
@@ -398,7 +461,7 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
   });
 
   it("strips unknown keys on a forgeProviders entry (matches sibling contribution schemas)", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         forgeProviders: [{ id: "gh", name: "GitHub", matches: ["github.com"], unknownKey: true }],
@@ -415,7 +478,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   const validBase = { name: "acme.decor", version: "1.0.0" };
 
   it("defaults contributes.fileDecorationProviders to [] when contributes is absent", () => {
-    const result = PluginManifestSchema.safeParse(validBase);
+    const result = getPluginManifestSchema(false).safeParse(validBase);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -423,7 +486,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("defaults to [] when contributes is an empty object", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.fileDecorationProviders).toEqual([]);
@@ -431,7 +494,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("accepts a valid fileDecorationProviders entry", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "worktree-diff-review", scopes: ["worktree-diff:*"] }],
@@ -446,7 +509,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry with an empty scopes array", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d", scopes: [] }] },
     });
@@ -454,7 +517,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects an entry missing required fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { fileDecorationProviders: [{ id: "d" }] },
     });
@@ -462,7 +525,7 @@ describe("PluginManifestSchema fileDecorationProviders contribution", () => {
   });
 
   it("rejects unknown keys on the entry (strict schema)", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         fileDecorationProviders: [{ id: "d", scopes: ["s:*"], extra: true }],
@@ -476,17 +539,21 @@ describe("PluginManifestSchema contributes strict validation", () => {
   const validBase = { name: "acme.test", version: "1.0.0" };
 
   it("rejects unknown keys inside contributes (typo'd contribution-point names)", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
         commands: [{ name: "foo", title: "Foo", description: "bar", category: "test" }],
       },
     });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      const unrecognizedIssue = result.error.issues.find((i) => i.code === "unrecognized_keys");
+      expect(unrecognizedIssue).toBeDefined();
+    }
   });
 
   it("rejects old unprefixed views key inside contributes", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
     });
@@ -494,7 +561,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("rejects old unprefixed mcpServers key inside contributes", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
     });
@@ -502,7 +569,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("rejects an arbitrary unknown key inside contributes", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { unknownKey: true },
     });
@@ -510,12 +577,23 @@ describe("PluginManifestSchema contributes strict validation", () => {
   });
 
   it("accepts empty contributes object (no unknown keys, defaults populate)", () => {
-    const result = PluginManifestSchema.safeParse({ ...validBase, contributes: {} });
+    const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributes.experimental_views).toEqual([]);
       expect(result.data.contributes.experimental_mcpServers).toEqual([]);
     }
+  });
+
+  it("accepts known contributes keys without extra keys", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [],
+        toolbarButtons: [],
+      },
+    });
+    expect(result.success).toBe(true);
   });
 });
 
@@ -989,7 +1067,8 @@ describe("PluginService built-in plugin loading", () => {
       expect(plugins[0].manifest.description).toBe("builtin");
       expect(plugins[0].isBuiltin).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Duplicate plugin name "daintree.dupe"`)
+        expect.stringContaining(`Invalid manifest in collision-user`),
+        expect.anything()
       );
     } finally {
       errorSpy.mockRestore();
@@ -1166,6 +1245,36 @@ describe("PluginService built-in plugin loading", () => {
       // Not running this session, but the desired state is now on.
       expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
     });
+  });
+
+  it("emits toast when a user plugin uses the daintree.* namespace", async () => {
+    const { broadcastToRenderer } = await import("../../ipc/utils.js");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writePlugin("daintree.pirate", {
+        name: "daintree.pirate",
+        version: "1.0.0",
+      });
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins()).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Invalid manifest in daintree.pirate"),
+        expect.anything()
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          type: "error",
+          title: "Plugin uses a reserved namespace",
+          message: expect.stringContaining("daintree.pirate"),
+        })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -3573,7 +3682,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
@@ -3586,7 +3695,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects a views entry missing componentPath", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
@@ -3597,7 +3706,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects an mcpServers entry missing command", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
@@ -3608,7 +3717,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects an mcpServers entry with non-string env values", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
@@ -3619,7 +3728,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("accepts an mcpServers entry without optional args/env fields", () => {
-    const result = PluginManifestSchema.safeParse({
+    const result = getPluginManifestSchema(false).safeParse({
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
@@ -4017,12 +4126,12 @@ describe("hello-daintree sample fixture", () => {
     JSON.parse(await fs.readFile(fixturePath, "utf8"));
 
   it("validates against the manifest schema", async () => {
-    const result = PluginManifestSchema.safeParse(await readManifest());
+    const result = getPluginManifestSchema(true).safeParse(await readManifest());
     expect(result.success).toBe(true);
   });
 
   it("declares the first-party name and the wired contribution points", async () => {
-    const manifest = PluginManifestSchema.parse(await readManifest());
+    const manifest = getPluginManifestSchema(true).parse(await readManifest());
     expect(manifest.name).toBe("daintree.hello");
     expect(manifest.engines?.daintree).toBe(">=0.11.0");
     expect(manifest.contributes.toolbarButtons).toHaveLength(1);
