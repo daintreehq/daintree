@@ -1,4 +1,12 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent,
+} from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -65,28 +73,31 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     };
   }
 
-  function PluginViewHost(props: PanelComponentProps) {
-    const [retryCount, setRetryCount] = useState(0);
+  const createLazyView = (): LazyExoticComponent<ComponentType<PanelViewProps>> =>
+    lazy<ComponentType<PanelViewProps>>(async () => {
+      const mod: unknown = await import(/* @vite-ignore */ componentPath!);
+      if (!isPluginViewModule(mod)) {
+        throw new Error(
+          `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
+        );
+      }
+      return { default: mod.default };
+    });
 
-    const LazyView = useMemo(
-      () =>
-        lazy<ComponentType<PanelViewProps>>(async () => {
-          const mod: unknown = await import(/* @vite-ignore */ componentPath!);
-          if (!isPluginViewModule(mod)) {
-            throw new Error(
-              `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
-            );
-          }
-          return { default: mod.default };
-        }),
-      // retryCount is the reload key: incrementing it produces a fresh lazy()
-      // ref so React re-calls the factory instead of returning the cached
-      // (failed) promise. componentPath and pluginId are stable closure
-      // captures of the kind config and never change for a given host
-      // instance, so listing them keeps `exhaustive-deps` honest without
-      // breaking the retry semantics.
-      [retryCount, componentPath, pluginId]
+  function PluginViewHost(props: PanelComponentProps) {
+    // Store the lazy component in state so retries can swap in a fresh ref
+    // without a useMemo dependency array — `lazy()` memoizes the import
+    // promise by factory-function identity, so retrying after a chunk-load
+    // failure requires a genuinely new factory reference. Using a state
+    // initializer (and `setLazyView(() => createLazyView())` on reset) keeps
+    // exhaustive-deps happy and lets the React Compiler optimize the host.
+    const [LazyView, setLazyView] = useState<LazyExoticComponent<ComponentType<PanelViewProps>>>(
+      () => createLazyView()
     );
+    // Drive the ErrorBoundary's `resetKeys` independently — the reset
+    // counter is observable to the boundary even though the lazy ref lives
+    // in its own slot.
+    const [retryCount, setRetryCount] = useState(0);
 
     const controllerRef = useRef<AbortController | null>(null);
     if (controllerRef.current === null) {
@@ -122,6 +133,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       // Create a fresh AbortController for the retry so the new lazy import
       // sees an unaborted signal — the prior controller stays aborted.
       controllerRef.current = new AbortController();
+      setLazyView(() => createLazyView());
       setRetryCount((c) => c + 1);
     };
 
