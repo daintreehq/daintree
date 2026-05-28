@@ -68,8 +68,8 @@ describe("PluginMcpConsentService", () => {
   });
 
   it("approves and writes a TOFU pin on approved-and-pin", async () => {
-    const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-and-pin");
-    service.setConsentBridge(bridge);
+    const bridge = vi.fn().mockResolvedValue("approved-and-pin");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     const result = await service.authorizeToolCall(baseInput);
     expect(result.kind).toBe("approved");
@@ -80,8 +80,8 @@ describe("PluginMcpConsentService", () => {
   });
 
   it("approves without pinning on approved-once", async () => {
-    const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-once");
-    service.setConsentBridge(bridge);
+    const bridge = vi.fn().mockResolvedValue("approved-once");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     const result = await service.authorizeToolCall(baseInput);
     expect(result.kind).toBe("approved");
@@ -117,46 +117,47 @@ describe("PluginMcpConsentService", () => {
   });
 
   it("re-prompts when the raw description bytes change — invisible Unicode rug-pull", async () => {
-    const bridge: PluginMcpConsentBridge = vi
+    const bridge = vi
       .fn()
       .mockResolvedValueOnce("approved-and-pin") // first-use
       .mockResolvedValueOnce("approved-and-pin"); // raw-changed re-prompt
-    service.setConsentBridge(bridge);
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     await service.authorizeToolCall(baseInput);
     expect(bridge).toHaveBeenCalledTimes(1);
-    expect(bridge.mock.calls[0]![0].reason).toBe("first-use");
+    expect((bridge as any).mock.calls[0]![0].reason).toBe("first-use");
 
     // Identical-looking description, with an appended zero-width space — must re-prompt.
     await service.authorizeToolCall({
       ...baseInput,
+      // eslint-disable-next-line no-irregular-whitespace
       descriptionRaw: `${baseInput.descriptionRaw}​`,
     });
     expect(bridge).toHaveBeenCalledTimes(2);
-    expect(bridge.mock.calls[1]![0].reason).toBe("raw-changed");
+    expect((bridge as any).mock.calls[1]![0].reason).toBe("raw-changed");
   });
 
   it("re-prompts when the inputSchema changes", async () => {
-    const bridge: PluginMcpConsentBridge = vi
+    const bridge = vi
       .fn()
       .mockResolvedValueOnce("approved-and-pin")
       .mockResolvedValueOnce("approved-and-pin");
-    service.setConsentBridge(bridge);
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     await service.authorizeToolCall(baseInput);
     await service.authorizeToolCall({
       ...baseInput,
       inputSchema: { type: "object", properties: { x: { type: "string" }, y: { type: "number" } } },
     });
-    expect(bridge.mock.calls[1]![0].reason).toBe("schema-changed");
+    expect((bridge as any).mock.calls[1]![0].reason).toBe("schema-changed");
   });
 
   it("does not prompt when a matching pin already exists", async () => {
-    const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-and-pin");
-    service.setConsentBridge(bridge);
+    const bridge = vi.fn().mockResolvedValue("approved-and-pin");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     await service.authorizeToolCall(baseInput);
-    bridge.mockClear();
+    (bridge as any).mockClear();
 
     const second = await service.authorizeToolCall(baseInput);
     expect(second.kind).toBe("approved");
@@ -164,15 +165,15 @@ describe("PluginMcpConsentService", () => {
   });
 
   it("does not pass raw args to the bridge — only the redacted argsSummary", async () => {
-    const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-once");
-    service.setConsentBridge(bridge);
+    const bridge = vi.fn().mockResolvedValue("approved-once");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     await service.authorizeToolCall({
       ...baseInput,
       rawArgs: { secretToken: "VERY_SECRET_VALUE" },
     });
 
-    const request = bridge.mock.calls[0]![0];
+    const request = (bridge as any).mock.calls[0]![0];
     const requestJson = JSON.stringify(request);
     expect(requestJson).not.toContain("VERY_SECRET_VALUE");
     // Sensitive key with token-like content collapses to <redacted> via summarizeMcpArgs.
@@ -192,13 +193,13 @@ describe("PluginMcpConsentService", () => {
   });
 
   it("strips ANSI/OSC escapes from the descriptionDisplay handed to the bridge", async () => {
-    const bridge: PluginMcpConsentBridge = vi.fn().mockResolvedValue("approved-once");
-    service.setConsentBridge(bridge);
+    const bridge = vi.fn().mockResolvedValue("approved-once");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
 
     const rawWithAnsi = "\x1b[31mDanger:\x1b[0m do the thing";
     await service.authorizeToolCall({ ...baseInput, descriptionRaw: rawWithAnsi });
 
-    const request = bridge.mock.calls[0]![0];
+    const request = (bridge as any).mock.calls[0]![0];
     expect(request.descriptionDisplay).toBe("Danger: do the thing");
   });
 });

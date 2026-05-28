@@ -15,6 +15,7 @@ describe("sha256Hex", () => {
     // Defends against OWASP MCP03 rug-pull: invisible chars must flip the hash
     // even when the rendered string looks identical.
     const clean = "Fetch the user profile.";
+    // eslint-disable-next-line no-irregular-whitespace
     const tainted = `${clean}​`; // appended zero-width space
     expect(sha256Hex(clean)).not.toEqual(sha256Hex(tainted));
   });

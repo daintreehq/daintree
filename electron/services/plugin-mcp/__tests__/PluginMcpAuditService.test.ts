@@ -141,6 +141,7 @@ describe("PluginMcpAuditService", () => {
       serverId: "s",
       toolName: "t",
       dangerTier: "D0",
+      // eslint-disable-next-line no-irregular-whitespace
       descriptionRaw: `Read the file.​`, // appended zero-width space
       inputSchema: null,
       rawArgs: undefined,
