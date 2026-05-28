@@ -785,6 +785,16 @@ export const CHANNELS = {
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
 
+  // Forge audit log channels — separate prefix from `forge:*` so the codegen
+  // produces a dedicated `forgeAudit` namespace in the renderer rather than
+  // appending into the hand-written `forge` namespace.
+  FORGE_AUDIT_GET_RECORDS: "forge-audit:get-records",
+  FORGE_AUDIT_GET_CONFIG: "forge-audit:get-config",
+  FORGE_AUDIT_GET_STATS: "forge-audit:get-stats",
+  FORGE_AUDIT_CLEAR_LOG: "forge-audit:clear-log",
+  FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
+  FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_SET_ENABLED: "plugin:set-enabled",
