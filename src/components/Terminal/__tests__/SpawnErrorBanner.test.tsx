@@ -32,6 +32,25 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { SpawnErrorBanner } from "../SpawnErrorBanner";
+import { SPAWN_ERROR_BANNER_COPY } from "../spawnErrorBannerCopy";
+
+// Listing every variant explicitly (rather than `Object.keys() as SpawnErrorCode[]`)
+// keeps the array's element type sound and forces the test to be updated when a
+// new SpawnErrorCode is added.
+const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
+  "ENOENT",
+  "EACCES",
+  "ENOTDIR",
+  "EIO",
+  "EMFILE",
+  "EAGAIN",
+  "ENOMEM",
+  "ENXIO",
+  "EBUSY",
+  "DISCONNECTED",
+  "PENDING_SPAWNS_CAPPED",
+  "UNKNOWN",
+] as const;
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -55,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function renderBanner(
@@ -64,16 +84,24 @@ function renderBanner(
     onRetry: (id: string) => void;
     onTrash: (id: string) => void;
     onUpdateCwd: (id: string) => void;
+    errno: number;
+    syscall: string;
+    path: string;
+    cwd: string;
   }> = {}
 ) {
   const error: SpawnError = {
     code,
     message: `simulated ${code} error`,
+    errno: overrides.errno,
+    syscall: overrides.syscall,
+    path: overrides.path,
   };
   return render(
     <SpawnErrorBanner
       terminalId="t-1"
       error={error}
+      cwd={overrides.cwd}
       onUpdateCwd={overrides.onUpdateCwd ?? vi.fn()}
       onRetry={overrides.onRetry ?? vi.fn()}
       onTrash={overrides.onTrash ?? vi.fn()}
@@ -85,6 +113,31 @@ function renderBanner(
 const overflow = () => screen.getByTestId("overflow-content");
 
 describe("SpawnErrorBanner", () => {
+  it.each(ALL_SPAWN_ERROR_CODES)("renders a non-empty title for %s", (code) => {
+    renderBanner(code);
+    const title = SPAWN_ERROR_BANNER_COPY[code].title;
+    expect(title.length).toBeGreaterThan(0);
+    expect(screen.getByText(title)).toBeTruthy();
+  });
+
+  // Hardcoded oracles — guard against a copy-table transposition that the
+  // table-driven test above would silently accept.
+  it.each([
+    ["ENOENT", "Couldn't find shell or command"],
+    ["EACCES", "Couldn't execute shell"],
+    ["ENOTDIR", "Invalid working directory"],
+    ["PENDING_SPAWNS_CAPPED", "Too many pending restarts"],
+    ["UNKNOWN", "Couldn't start terminal"],
+  ] as const)("renders the expected title for %s", (code, expected) => {
+    renderBanner(code);
+    expect(screen.getByText(expected)).toBeTruthy();
+  });
+
+  it("renders the UNKNOWN code with the message as description", () => {
+    renderBanner("UNKNOWN");
+    expect(screen.getByText(/simulated UNKNOWN error/i)).toBeTruthy();
+  });
+
   it("keeps a single inline action and moves Remove terminal into the overflow menu", () => {
     renderBanner("ENOENT");
     // Generic error → Retry is the sole inline action (outside the overflow).
@@ -178,5 +231,50 @@ describe("SpawnErrorBanner", () => {
     expect(retry.hasAttribute("disabled")).toBe(true);
     fireEvent.click(retry);
     expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  describe("diagnostic fields", () => {
+    it("renders no diagnostics section when errno/syscall/path are all absent", () => {
+      renderBanner("ENOENT");
+      expect(screen.queryByRole("button", { name: /copy diagnostics/i })).toBeNull();
+      expect(screen.queryByTestId("diagnostic-payload")).toBeNull();
+    });
+
+    it("renders all three diagnostic fields when present", () => {
+      renderBanner("ENOENT", { errno: -2, syscall: "spawn", path: "/usr/bin/zsh" });
+      const payload = screen.getByTestId("diagnostic-payload");
+      expect(payload.textContent).toBe("errno=-2 syscall=spawn path=/usr/bin/zsh");
+    });
+
+    it("omits absent fields from the payload (errno only)", () => {
+      renderBanner("EACCES", { errno: 13 });
+      expect(screen.getByTestId("diagnostic-payload").textContent).toBe("errno=13");
+    });
+
+    it("omits absent fields from the payload (path only)", () => {
+      renderBanner("ENOENT", { path: "/bin/missing" });
+      expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bin/missing");
+    });
+
+    it("still renders the copy button when clipboard is unavailable, but clicking is a no-op", () => {
+      const original = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: undefined,
+      });
+      try {
+        renderBanner("ENOENT", { errno: -2, syscall: "spawn", path: "/bin/x" });
+        const button = screen.getByRole("button", { name: /copy diagnostics/i });
+        expect(button).toBeTruthy();
+        expect(() => fireEvent.click(button)).not.toThrow();
+        // Label stays at "Copy diagnostics" (never flips to "Diagnostics copied").
+        expect(screen.queryByRole("button", { name: /diagnostics copied/i })).toBeNull();
+      } finally {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: original,
+        });
+      }
+    });
   });
 });
