@@ -1362,6 +1362,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       stderr: string;
     }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
   };
+  // forgeAudit comes from GeneratedElectronAPI
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;

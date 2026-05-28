@@ -143,6 +143,26 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["event-inspector:get-filtered"]["args"]
     ): Promise<IpcInvokeMap["event-inspector:get-filtered"]["result"]>;
   };
+  forgeAudit: {
+    clearLog(
+      ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:clear-log"]["result"]>;
+    exportLog(
+      ...args: IpcInvokeMap["forge-audit:export-log"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:export-log"]["result"]>;
+    getConfig(
+      ...args: IpcInvokeMap["forge-audit:get-config"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-config"]["result"]>;
+    getRecords(
+      ...args: IpcInvokeMap["forge-audit:get-records"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-records"]["result"]>;
+    getStats(
+      ...args: IpcInvokeMap["forge-audit:get-stats"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:get-stats"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["forge-audit:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["forge-audit:set-enabled"]["result"]>;
+  };
   gemini: {
     enableAlternateBuffer(
       ...args: IpcInvokeMap["gemini:enable-alternate-buffer"]["args"]

@@ -4,6 +4,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
+import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 
@@ -13,6 +14,7 @@ export function PluginActionsSettingsTab() {
   const [records, setRecords] = useState<PluginActionAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
   const [maxRecords, setMaxRecords] = useState(PLUGIN_AUDIT_DEFAULT_MAX_RECORDS);
+  const [developerMode, setDeveloperMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copiedFlash, setCopiedFlash] = useState(false);
   const [exportedFlash, setExportedFlash] = useState(false);
@@ -35,8 +37,9 @@ export function PluginActionsSettingsTab() {
     Promise.allSettled([
       window.electron.plugin.getAuditConfig(),
       window.electron.plugin.getAuditRecords(),
+      appClient.getState(),
     ])
-      .then(([cfgResult, recordsResult]) => {
+      .then(([cfgResult, recordsResult, stateResult]) => {
         if (cancelled) return;
         if (cfgResult.status === "fulfilled") {
           setAuditEnabled(cfgResult.value.enabled);
@@ -48,6 +51,9 @@ export function PluginActionsSettingsTab() {
           setRecords(recordsResult.value);
         } else {
           logError("Failed to load plugin audit log", recordsResult.reason);
+        }
+        if (stateResult.status === "fulfilled" && stateResult.value?.developerMode) {
+          setDeveloperMode(stateResult.value.developerMode.enabled === true);
         }
         setLoading(false);
       })
@@ -139,6 +145,7 @@ export function PluginActionsSettingsTab() {
             onClear={() => setShowClearConfirm(true)}
             copyFlashActive={copiedFlash}
             exportFlashActive={exportedFlash}
+            developerMode={developerMode}
           />
         </div>
       </SettingsSection>

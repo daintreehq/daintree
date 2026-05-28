@@ -60,6 +60,21 @@ function installForgeMocks(opts: ForgeMockOptions) {
       getCredentialStatus,
       clearCredential,
     },
+    forgeAudit: {
+      getRecords: vi.fn(async () => []),
+      getConfig: vi.fn(async () => ({ enabled: true, maxRecords: 500 })),
+      getStats: vi.fn(async () => ({
+        anomalySignals: [],
+        anomalySuppressed: true,
+        anomalyRecordFloor: 10,
+      })),
+      clearLog: vi.fn(async () => {}),
+      exportLog: vi.fn(async () => false),
+      setEnabled: vi.fn(async () => ({ enabled: true, maxRecords: 500 })),
+    },
+    app: {
+      getState: vi.fn(async () => ({ developerMode: { enabled: false } })),
+    },
   } as unknown as typeof window.electron;
   return { setCredential, getCredentialStatus, clearCredential };
 }
