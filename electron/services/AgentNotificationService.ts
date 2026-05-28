@@ -5,6 +5,7 @@ import { projectStore } from "./ProjectStore.js";
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
+import { getOsDndService } from "./OsDndService.js";
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -541,9 +542,12 @@ class AgentNotificationService {
         this.clearWorkingPulse(terminalId);
         return;
       }
-      // During scheduled quiet hours or an active session mute, skip this tick's
-      // sound but keep the loop alive so pulses resume automatically after.
-      if (isScheduledQuietNow(currentSettings) || this.isSessionMuted()) {
+      // During scheduled quiet hours, an active session mute, or OS-level
+      // Do-Not-Disturb / Focus, skip this tick's sound but keep the loop alive
+      // so pulses resume automatically after. Treat an `undefined` OS state
+      // (unsupported platform / detection failed) as "do not gate".
+      const osDndActive = getOsDndService().getState() === true;
+      if (isScheduledQuietNow(currentSettings) || this.isSessionMuted() || osDndActive) {
         const jitter =
           WORKING_PULSE_MIN_INTERVAL_MS +
           Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);

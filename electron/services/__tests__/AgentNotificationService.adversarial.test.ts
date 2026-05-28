@@ -44,6 +44,10 @@ vi.mock("../SoundService.js", () => ({
   soundService: soundServiceMock,
 }));
 
+vi.mock("../OsDndService.js", () => ({
+  getOsDndService: () => ({ getState: () => undefined }),
+}));
+
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
 

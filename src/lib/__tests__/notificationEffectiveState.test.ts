@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeEffectiveNotificationState,
   heroLine,
+  osDndDisplayNote,
   selectInterruptingKinds,
   selectKindOffKinds,
   KIND_SHORT_LABEL,
@@ -140,5 +141,27 @@ describe("heroLine", () => {
   it("states plainly when nothing will interrupt", () => {
     const states = computeEffectiveNotificationState({ ...ALL_ON, enabled: false });
     expect(heroLine(states)).toBe("Nothing will interrupt you right now");
+  });
+});
+
+describe("osDndDisplayNote", () => {
+  it("returns the display string when OS DND is active", () => {
+    expect(osDndDisplayNote(true)).toBe("OS Do Not Disturb is active");
+  });
+
+  it("returns null when OS DND is explicitly off", () => {
+    expect(osDndDisplayNote(false)).toBeNull();
+  });
+
+  it("returns null when the OS DND state is unknown (unsupported platform)", () => {
+    expect(osDndDisplayNote(undefined)).toBeNull();
+  });
+});
+
+describe("EffectiveStateInput — osDndActive does NOT gate classification", () => {
+  it("OS DND active does not flip any kind to quiet-gated (hard constraint: no in-app suppression)", () => {
+    const baseline = computeEffectiveNotificationState(ALL_ON);
+    const withOsDnd = computeEffectiveNotificationState({ ...ALL_ON, osDndActive: true });
+    expect(withOsDnd).toEqual(baseline);
   });
 });

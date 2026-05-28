@@ -304,6 +304,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;
   };
+  osDnd: {
+    getState(
+      ...args: IpcInvokeMap["os-dnd:get-state"]["args"]
+    ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
+  };
   plugin: {
     clearAuditLog(
       ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]

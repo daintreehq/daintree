@@ -981,6 +981,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Subscribe to wake events with sleep duration */
     onWake(callback: (sleepDurationMs: number) => void): () => void;
   };
+  /**
+   * OS Do-Not-Disturb / Focus state.
+   *
+   * `osDndActive` is `true` when the OS reports DND/Focus active, `false`
+   * when off, and `undefined` on unsupported platforms (Windows/Linux) or
+   * when detection fails — fail-soft semantics. Consumers must treat
+   * `undefined` as "unknown / do not gate". Used by the working-pulse audio
+   * gate and the read-only toolbar tooltip; never for in-app toast
+   * suppression. Invoke method comes from GeneratedElectronAPI;
+   * onStateChanged is a renderer-only subscription.
+   */
+  osDnd: GeneratedElectronAPI["osDnd"] & {
+    /** Subscribe to DND state transitions. Returns an unsubscribe function. */
+    onStateChanged(callback: (payload: { osDndActive: boolean | undefined }) => void): () => void;
+  };
   keybinding: {
     /** Get current keybinding overrides */
     getOverrides(): Promise<Record<KeyAction, string[]>>;

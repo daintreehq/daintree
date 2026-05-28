@@ -386,6 +386,12 @@ export const CHANNELS = {
   SYSTEM_SLEEP_ON_SUSPEND: "system-sleep:on-suspend",
   SYSTEM_SLEEP_ON_WAKE: "system-sleep:on-wake",
 
+  // OS Do-Not-Disturb / Focus state. Read-only push channel for the renderer;
+  // never used to suppress in-app toasts (the OS already silences its native
+  // banners — double-gating would hide signals the user cannot observe).
+  OS_DND_GET_STATE: "os-dnd:get-state",
+  OS_DND_STATE_CHANGED: "os-dnd:state-changed",
+
   KEYBINDING_GET_OVERRIDES: "keybinding:get-overrides",
   KEYBINDING_SET_OVERRIDE: "keybinding:set-override",
   KEYBINDING_REMOVE_OVERRIDE: "keybinding:remove-override",

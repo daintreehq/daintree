@@ -27,6 +27,7 @@ import {
   SESSION_EVICTION_MAX_BYTES,
 } from "../services/pty/terminalSessionPersistence.js";
 import { initializeSystemSleepService } from "../services/SystemSleepService.js";
+import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import {
@@ -343,6 +344,13 @@ export async function initGlobalServices(
     name: "system-sleep-service",
     run: () => {
       initializeSystemSleepService();
+    },
+  });
+
+  registerDeferredTask({
+    name: "os-dnd-service",
+    run: () => {
+      initializeOsDndService();
     },
   });
 

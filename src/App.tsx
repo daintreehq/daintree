@@ -505,6 +505,13 @@ function AppInner() {
   }, [crashState.status]);
   useEffect(() => {
     void useNotificationSettingsStore.getState().hydrate();
+    // Subscribe to OS DND transitions before hydrate resolves so a transition
+    // mid-hydration cannot be missed. Push events from main are tolerant of
+    // an `undefined` namespace at preload (renderer harness in tests).
+    const unsubscribe = window.electron?.osDnd?.onStateChanged?.((payload) => {
+      useNotificationSettingsStore.getState().setOsDndActive(payload.osDndActive);
+    });
+    return () => unsubscribe?.();
   }, []);
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
