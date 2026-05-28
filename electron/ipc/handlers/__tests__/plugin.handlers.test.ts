@@ -42,6 +42,11 @@ vi.mock("../../../services/pluginMenuRegistry.js", () => ({
   getPluginMenuItems: (...args: unknown[]) => mockGetPluginMenuItems(...args),
 }));
 
+const mockGetPluginContextMenuItems = vi.fn();
+vi.mock("../../../services/pluginContextMenuRegistry.js", () => ({
+  getPluginContextMenuItems: (...args: unknown[]) => mockGetPluginContextMenuItems(...args),
+}));
+
 const mockGetRegisteredForgeProviders = vi.fn();
 vi.mock("../../../services/forgeProviderRegistry.js", () => ({
   getRegisteredForgeProviders: (...args: unknown[]) => mockGetRegisteredForgeProviders(...args),
@@ -74,6 +79,7 @@ beforeEach(() => {
   mockGetPluginToolbarButtonIds.mockReturnValue([]);
   mockGetToolbarButtonConfig.mockReturnValue(undefined);
   mockGetPluginMenuItems.mockReturnValue([]);
+  mockGetPluginContextMenuItems.mockReturnValue([]);
   mockListPluginActions.mockReturnValue([]);
   mockGetRegisteredForgeProviders.mockReturnValue([]);
   mockGetFileDecorationImpls.mockReturnValue([]);
@@ -760,6 +766,25 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     releaseGate();
     await inFlight;
     expect(resolved).toBe(true);
+  });
+
+  it("PLUGIN_CONTEXT_MENU_ITEMS reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const handler = getHandler("plugin:context-menu-items");
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockGetPluginContextMenuItems).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockGetPluginContextMenuItems).toHaveBeenCalledTimes(1);
   });
 });
 

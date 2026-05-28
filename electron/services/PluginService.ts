@@ -78,6 +78,7 @@ import {
 import {
   registerPluginContextMenuItem,
   unregisterPluginContextMenuItems,
+  getPluginContextMenuItems,
 } from "./pluginContextMenuRegistry.js";
 import {
   trackPluginExpression,
@@ -559,6 +560,14 @@ export class PluginService {
   private menuItemsBroadcastComplete = false;
   private keybindingsBroadcastPending = false;
   private keybindingsBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as {@link menuItemsBroadcastPending}. Context-menu
+   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
+   * call sites invoke {@link scheduleContextMenuItemsBroadcast} directly.
+   */
+  private contextMenuItemsBroadcastPending = false;
+  /** Mirrors {@link menuItemsBroadcastComplete} for context-menu items. */
+  private contextMenuItemsBroadcastComplete = false;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -1066,6 +1075,9 @@ export class PluginService {
     for (const ctxMenu of manifest.contributes.contextMenus) {
       trackPluginExpression(manifest.name, ctxMenu.when);
       registerPluginContextMenuItem(manifest.name, ctxMenu);
+    }
+    if (manifest.contributes.contextMenus.length > 0) {
+      this.scheduleContextMenuItemsBroadcast(false);
     }
 
     if (manifest.contributes.experimental_mcpServers.length > 0) {
@@ -2572,6 +2584,9 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginContextMenuItems", () =>
       unregisterPluginContextMenuItems(pluginId)
     );
+    runUnloadStep(pluginId, "scheduleContextMenuItemsBroadcast", () =>
+      this.scheduleContextMenuItemsBroadcast(true)
+    );
     runUnloadStep(pluginId, "unregisterWhenClausePlugin", () =>
       unregisterWhenClausePlugin(pluginId)
     );
@@ -3073,6 +3088,31 @@ export class PluginService {
   }
 
   /**
+   * Same shape as {@link scheduleMenuItemsBroadcast}; see that method for the
+   * coalescing and `complete`-OR-accumulation rationale.
+   */
+  private scheduleContextMenuItemsBroadcast(complete: boolean): void {
+    if (this.disposed) return;
+    if (complete) this.contextMenuItemsBroadcastComplete = true;
+    if (this.contextMenuItemsBroadcastPending) return;
+    this.contextMenuItemsBroadcastPending = true;
+    queueMicrotask(() => {
+      this.contextMenuItemsBroadcastPending = false;
+      const drained = this.contextMenuItemsBroadcastComplete;
+      this.contextMenuItemsBroadcastComplete = false;
+      if (this.disposed) return;
+      this.broadcastPluginContextMenuItems(drained);
+    });
+  }
+
+  private broadcastPluginContextMenuItems(complete: boolean): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:context-menu-items-changed",
+      payload: { items: getPluginContextMenuItems(), complete },
+    });
+  }
+
+  /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
@@ -3110,6 +3150,10 @@ export class PluginService {
       {
         name: "plugin:keybindings-changed",
         payload: { keybindings: getPluginKeybindings(), complete: true },
+      },
+      {
+        name: "plugin:context-menu-items-changed",
+        payload: { items: getPluginContextMenuItems(), complete: false },
       },
     ];
     for (const event of events) {

@@ -1525,6 +1525,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         complete: boolean;
       }) => void
     ): () => void;
+    /** Subscribe to plugin context-menu item registry changes. Returns a cleanup. */
+    onContextMenuItemsChanged(
+      callback: (payload: {
+        items: Array<{
+          pluginId: string;
+          item: import("../plugin.js").ContextMenuContribution;
+        }>;
+        complete: boolean;
+      }) => void
+    ): () => void;
   };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
