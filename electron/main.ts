@@ -339,6 +339,20 @@ if (!gotTheLock) {
             }
           }
         }
+
+        // Replay the plugin contributions snapshot to a freshly-loaded view
+        // (cold start, LRU restore, crash reload, DevTools refresh) so its
+        // renderer registry is current even if every push was emitted while
+        // the previous V8 context was alive. The renderer's pull-on-mount is
+        // a separate path; this is the push path that lets the existing
+        // persistent listeners overtake a slow IPC pull. Dynamically imported
+        // to avoid pulling PluginService into main.ts's static graph (#9285).
+        const wcId = wc.id;
+        import("./services/PluginService.js")
+          .then(({ pluginService }) => pluginService.pushSnapshotTo(wc))
+          .catch((err) => {
+            console.warn(`[main] pushSnapshotTo failed for wc ${wcId}:`, err);
+          });
       },
     });
     setProjectViewManager(pvm);

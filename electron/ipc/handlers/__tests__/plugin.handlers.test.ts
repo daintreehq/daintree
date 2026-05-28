@@ -22,6 +22,11 @@ vi.mock("../../../services/PluginService.js", () => ({
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
+    // The three pull handlers (getActions / getPanelKinds / toolbarButtons)
+    // await waitForInit() so a renderer that mounts before startup activation
+    // settles still gets a populated snapshot — resolved-immediately in tests
+    // since we don't exercise the gate here.
+    waitForInit: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -551,6 +556,80 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
       "acme.my-plugin",
       "acme.my-plugin.doThing"
     );
+  });
+});
+
+describe("pull handlers wait for PluginService init (#9285)", () => {
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("PLUGIN_ACTIONS_GET reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const handler = getHandler("plugin:actions-get");
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockListPluginActions).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockListPluginActions).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const handler = getHandler("plugin:toolbar-buttons");
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockGetPluginToolbarButtonIds).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const handler = getHandler("plugin:panel-kinds-get");
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    // `handlePanelKindsGet` reads from the panelKindRegistry, which is mocked
+    // separately at module load; the call we can observe through `pluginService`
+    // here is the gate itself. Assert the inFlight promise has not resolved yet.
+    let resolved = false;
+    void inFlight.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    releaseGate();
+    await inFlight;
+    expect(resolved).toBe(true);
   });
 });
 

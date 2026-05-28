@@ -482,7 +482,7 @@ function RowOptionsMenu({
       // title/message) and JSON.stringify can surface TypeError (circular
       // refs / BigInt in context). Without this catch the rejection escapes
       // the `void handleReportOnGitHub()` site as an unhandled promise.
-      // eslint-disable-next-line no-console -- logger was loaded lazily; falls back to console
+
       console.warn("Failed to build notification report", reportError);
     } finally {
       setReportInFlight(false);

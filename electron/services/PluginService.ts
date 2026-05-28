@@ -340,6 +340,16 @@ export class PluginService {
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
+   * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
+   * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
+   * handlers await this so a fresh `getActions` / `getPanelKinds` /
+   * `toolbarButtons` call can't return `[]` while plugins are still being
+   * loaded and activated. Settled in `finally` so a plugin activation failure
+   * never permanently deadlocks the renderer (#9285).
+   */
+  private readonly initPromise: Promise<void>;
+  private resolveInit: (() => void) | null = null;
+  /**
    * In-flight `host.dispatch()` round-trips keyed by `requestId`. Each entry is
    * resolved by the {@link CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE} listener,
    * the timeout, the renderer's `destroyed` event, or {@link dispose}.
@@ -362,12 +372,28 @@ export class PluginService {
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
     this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
 
+    this.initPromise = new Promise<void>((resolve) => {
+      this.resolveInit = resolve;
+    });
+
     const offRegister = onPanelKindRegistered(() => this.schedulePanelKindsBroadcast());
     const offUnregister = onPanelKindUnregistered(() => this.schedulePanelKindsBroadcast());
     this.disposeRegistrySubscriptions = () => {
       offRegister();
       offUnregister();
     };
+  }
+
+  /**
+   * Resolves once startup load + activation has settled. The three pull-on-mount
+   * IPC handlers (`getActions`, `getPanelKinds`, `toolbarButtons`) await this
+   * so a renderer that mounts before plugins activate doesn't observe an empty
+   * registry. Safe to await repeatedly; resolves immediately after the first
+   * settle. {@link dispose} also resolves it to prevent test hangs when a
+   * service is torn down without calling {@link activateStartupFinishedPlugins}.
+   */
+  waitForInit(): Promise<void> {
+    return this.initPromise;
   }
 
   /**
@@ -382,6 +408,11 @@ export class PluginService {
     this.disposeRegistrySubscriptions();
     this.pluginDispatchListenerCleanup?.();
     this.pluginDispatchListenerCleanup = null;
+    // Settle the init gate so unit tests that tear down the service without
+    // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
+    // waitForInit().
+    this.resolveInit?.();
+    this.resolveInit = null;
     for (const pending of this.pendingPluginDispatches.values()) {
       clearTimeout(pending.timer);
       pending.destroyedCleanup?.();
@@ -928,14 +959,25 @@ export class PluginService {
    * keeps progressing while plugins warm up in the background.
    */
   async activateStartupFinishedPlugins(): Promise<void> {
-    const targets: string[] = [];
-    for (const plugin of this.plugins.values()) {
-      if (!plugin.resolvedMain) continue;
-      if (!this.shouldActivateOnStartup(plugin.manifest)) continue;
-      targets.push(plugin.manifest.name);
+    try {
+      const targets: string[] = [];
+      for (const plugin of this.plugins.values()) {
+        if (!plugin.resolvedMain) continue;
+        if (!this.shouldActivateOnStartup(plugin.manifest)) continue;
+        targets.push(plugin.manifest.name);
+      }
+      if (targets.length === 0) return;
+      await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
+    } finally {
+      // Open the init gate even if every plugin's activate() rejected — a
+      // crashed plugin must not strand renderer IPC callers awaiting
+      // waitForInit() forever. `Promise.allSettled` already swallows
+      // individual rejections, but `targets.length === 0` short-circuits
+      // before the awaited line, so the finally is what guarantees release
+      // in the no-plugins case.
+      this.resolveInit?.();
+      this.resolveInit = null;
     }
-    if (targets.length === 0) return;
-    await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
   }
 
   /**
@@ -2325,6 +2367,47 @@ export class PluginService {
       name: "plugin:toolbar-buttons-changed",
       payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
     });
+  }
+
+  /**
+   * Replay the current actions / panel-kinds / toolbar-button snapshots to a
+   * single target webContents. Used by the cold-start view-ready hook so a
+   * freshly-restored WebContentsView (post-LRU eviction or first cold load on
+   * project switch) gets a complete plugin state on the same channels its
+   * persistent push listeners already consume — no renderer-side changes
+   * needed. Awaits {@link waitForInit} so the snapshot is post-activation, not
+   * the empty pre-init view (#9285).
+   *
+   * Toolbar buttons use `complete: false` so the renderer does not stale-prune
+   * against this snapshot — replay is authoritative for the target view but
+   * conceptually identical to a coalesced "load tick" broadcast, not an
+   * unload sweep.
+   */
+  async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
+    await this.initPromise;
+    if (this.disposed) return;
+    if (webContents.isDestroyed()) return;
+    // Mirror `broadcastToRenderer`'s defensive send pattern (electron/ipc/utils.ts:337-352):
+    // the wc may be destroyed between the isDestroyed() check above and any
+    // individual send (TOCTOU), and a throw on the first send would otherwise
+    // leave the next two channels un-sent — silently degrading the
+    // cold-restored renderer to its pull-on-mount path for those two channels
+    // only. Each send is independently guarded.
+    const events: Array<{ name: string; payload: unknown }> = [
+      { name: "plugin:actions-changed", payload: { actions: this.listPluginActions() } },
+      { name: "plugin:panel-kinds-changed", payload: { kinds: getPluginPanelKinds() } },
+      {
+        name: "plugin:toolbar-buttons-changed",
+        payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
+      },
+    ];
+    for (const event of events) {
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, event);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 
