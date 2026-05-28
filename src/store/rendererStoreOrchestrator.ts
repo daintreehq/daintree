@@ -180,6 +180,9 @@ export function initStoreOrchestrator(): () => void {
             useTerminalInputStore.getState().clearTerminalState(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            // Drop the dictation lock if it was pinned to this panel — panelIds
+            // are ephemeral and a stale lock would silently break routing.
+            useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
 
@@ -211,6 +214,32 @@ export function initStoreOrchestrator(): () => void {
           const prevIdSet = new Set(prevPanelIds);
           if (panelIds.length !== prevIdSet.size || panelIds.some((id) => !prevIdSet.has(id))) {
             useLayoutUndoStore.getState().clearHistory();
+          }
+        }
+      )
+    )
+  );
+
+  // 3b. Voice-dictation lock auto-clear: a trashed panel isn't a valid
+  //     dictation target, but trashPanel doesn't remove the id from
+  //     `panelIds` (it only flips `location` to "trash") — so section-3
+  //     above never fires. Watch the locked panel's `location` directly and
+  //     drop the lock when it transitions to trash. Selector returns a
+  //     primitive (panelId or null) so unrelated `panelsById` mutations don't
+  //     wake this subscription.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => {
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (!lockedId) return null;
+          return state.panelsById[lockedId]?.location ?? null;
+        },
+        (location) => {
+          if (location !== "trash") return;
+          const lockedId = useVoiceRecordingStore.getState().lockedTarget?.panelId;
+          if (lockedId) {
+            useVoiceRecordingStore.getState().clearLockedTarget(lockedId);
           }
         }
       )
