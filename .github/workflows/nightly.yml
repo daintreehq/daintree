@@ -450,6 +450,7 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
+      enable_blob_report: true
 
   e2e-online:
     needs: [check, test]
@@ -471,6 +472,50 @@ jobs:
       suite: nightly
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
+      enable_blob_report: true
+
+  # Merges Playwright blob reports from every nightly e2e shard into a single
+  # unified HTML report. Runs independently of publish — a broken merge must
+  # not block nightly binary publishing.
+  merge-playwright-reports:
+    needs: [e2e-full, e2e-nightly]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download blob reports
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-*-blob-*
+          path: ./blob-report
+          merge-multiple: true
+
+      - name: Merge blob reports
+        continue-on-error: true
+        run: npx playwright merge-reports ./blob-report --reporter=html
+
+      - name: Upload merged report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-merged-playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
 
   publish:
     if: inputs.platform == '' || inputs.platform == 'all'
