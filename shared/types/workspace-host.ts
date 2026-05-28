@@ -478,6 +478,7 @@ export type ForgeRpcMethod =
   | "getIssue"
   | "getCIStatus"
   | "getCIStatuses"
+  | "probeOpenPRList"
   | "getRateLimit"
   | "clearPullRequestCaches";
 

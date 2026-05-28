@@ -9,6 +9,8 @@ import type {
   ForgeProviderImpl,
   Issue,
   PR,
+  PRListProbeResult,
+  PRSnapshot,
   RateLimitInfo,
   RepoRef,
 } from "../../shared/types/forge.js";
@@ -219,6 +221,8 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
       return invokeGetCIStatus(impl, req.args);
     case "getCIStatuses":
       return invokeGetCIStatuses(impl, req.args);
+    case "probeOpenPRList":
+      return invokeProbeOpenPRList(impl, req.args);
     case "getRateLimit":
       return invokeGetRateLimit(impl);
     case "clearPullRequestCaches":
@@ -305,6 +309,15 @@ async function invokeGetCIStatuses(
   const [repo, prNumbers] = args as [RepoRef, number[]];
   if (!impl.batchLookups?.getCIStatuses) return null;
   return impl.batchLookups.getCIStatuses(repo, prNumbers);
+}
+
+async function invokeProbeOpenPRList(
+  impl: ForgeProviderImpl,
+  args: unknown[]
+): Promise<PRListProbeResult | null> {
+  const [repo, tracked] = args as [RepoRef, PRSnapshot[]];
+  if (!impl.batchLookups?.probeOpenPRList) return null;
+  return impl.batchLookups.probeOpenPRList(repo, tracked);
 }
 
 async function invokeGetRateLimit(impl: ForgeProviderImpl): Promise<RateLimitInfo | null> {

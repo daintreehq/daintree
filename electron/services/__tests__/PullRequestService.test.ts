@@ -6,6 +6,7 @@ import type {
   ForgeProviderImpl,
   RepoRef,
   PR as ForgePR,
+  PRSnapshot,
   CIStatus,
 } from "../../../shared/types/forge.js";
 import type { ForgeResolveProviderResult } from "../../../shared/types/workspace-host.js";
@@ -88,6 +89,10 @@ function makeMockBridge(impl: ForgeProviderImpl) {
     getCIStatuses: vi.fn(async (_id: string, repo: RepoRef, prNumbers: number[]) => {
       if (!impl.batchLookups?.getCIStatuses) return null;
       return impl.batchLookups.getCIStatuses(repo, prNumbers);
+    }),
+    probeOpenPRList: vi.fn(async (_id: string, repo: RepoRef, tracked: PRSnapshot[]) => {
+      if (!impl.batchLookups?.probeOpenPRList) return null;
+      return impl.batchLookups.probeOpenPRList(repo, tracked);
     }),
     getRateLimit: vi.fn(async (_id: string) => impl.getRateLimit?.() ?? null),
     clearPullRequestCaches: vi.fn(async (_id: string) => {
@@ -848,6 +853,242 @@ describe("PullRequestService", () => {
       expect.arrayContaining([1, 2])
     );
     expect(mockImpl.getPR).not.toHaveBeenCalled();
+
+    pullRequestService.destroy();
+  });
+
+  it("skips the findPRsByNumbers revalidation batch when probeOpenPRList reports unchanged", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    const probeOpenPRList = vi.fn(async () => ({ kind: "unchanged" as const }));
+    mockImpl.batchLookups = { findPRsByNumbers, probeOpenPRList };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+    findPRsByNumbers.mockClear();
+    probeOpenPRList.mockClear();
+
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+
+    // A 304-equivalent probe means nothing changed — the GraphQL re-fetch is skipped.
+    expect(probeOpenPRList).toHaveBeenCalledTimes(1);
+    expect(findPRsByNumbers).not.toHaveBeenCalled();
+
+    pullRequestService.destroy();
+  });
+
+  it("re-fetches only the changed PR when probeOpenPRList reports a subset changed", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(
+          branch,
+          makeMockForgePR({ number: branch === "feature/a" ? 1 : 2, headRef: branch })
+        );
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    const probeOpenPRList = vi.fn(async () => ({
+      kind: "changed" as const,
+      changed: [
+        {
+          number: 1,
+          headSha: "sha2",
+          updatedAt: "2024-02-02T00:00:00Z",
+          state: "open" as const,
+          title: "Add new feature",
+        },
+      ],
+    }));
+    mockImpl.batchLookups = { findPRsByNumbers, probeOpenPRList };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/b" })
+    );
+
+    await pullRequestService.refresh();
+    findPRsByNumbers.mockClear();
+
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+
+    // Only PR #1 changed — PR #2 is not re-fetched.
+    expect(findPRsByNumbers).toHaveBeenCalledTimes(1);
+    expect(findPRsByNumbers).toHaveBeenCalledWith(expect.anything(), [1]);
+
+    pullRequestService.destroy();
+  });
+
+  it("seeds headSha/updatedAt from a changed probe so the next tick's snapshot is in sync", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    const probeCalls: PRSnapshot[][] = [];
+    const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
+      probeCalls.push(tracked);
+      if (probeCalls.length === 1) {
+        return {
+          kind: "changed" as const,
+          changed: [
+            {
+              number: 1,
+              headSha: "sha2",
+              updatedAt: "2024-02-02T00:00:00Z",
+              state: "open" as const,
+              title: "Add new feature",
+            },
+          ],
+        };
+      }
+      return { kind: "unchanged" as const };
+    });
+    mockImpl.batchLookups = { findPRsByNumbers, probeOpenPRList };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+
+    const revalidate = (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs.bind(pullRequestService);
+
+    await revalidate();
+    await revalidate();
+
+    // First probe saw the un-seeded (null) markers; after consuming the changed
+    // probe, the second probe's tracked snapshot carries the seeded REST markers.
+    expect(probeCalls).toHaveLength(2);
+    expect(probeCalls[0][0]).toMatchObject({ number: 1, headSha: null, updatedAt: null });
+    expect(probeCalls[1][0]).toMatchObject({
+      number: 1,
+      headSha: "sha2",
+      updatedAt: "2024-02-02T00:00:00Z",
+    });
+
+    pullRequestService.destroy();
+  });
+
+  it("keeps polling CI for in-flight PRs even when probeOpenPRList reports unchanged", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches)
+        map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, CIStatus | null>();
+      for (const n of prNumbers) {
+        map.set(n, { state: "pending", total: 1, passed: 0, failed: 0, pending: 1, rawData: null });
+      }
+      return map;
+    });
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    const probeOpenPRList = vi.fn(async () => ({ kind: "unchanged" as const }));
+    mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    getCIStatuses.mockClear();
+    findPRsByNumbers.mockClear();
+
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+    await flushLoaders();
+
+    // PR metadata re-fetch is skipped (probe unchanged) but CI keeps polling,
+    // since a CI re-run doesn't bump the PR's updated_at.
+    expect(findPRsByNumbers).not.toHaveBeenCalled();
+    expect(getCIStatuses).toHaveBeenCalledTimes(1);
+    expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
 
     pullRequestService.destroy();
   });
