@@ -29,6 +29,7 @@ interface AjvInstance {
 }
 import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
+import { z } from "zod";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -37,6 +38,8 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginChannelSchema,
+  PluginTypedIpcHandler,
   ActionHandler,
   BuiltInPluginCapability,
   InstalledPluginRecord,
@@ -305,11 +308,52 @@ function assertSettingsKey(pluginId: string, method: string, key: unknown): asse
   }
 }
 
+/**
+ * Discriminate between the typed `registerHandler(channel, schema, handler)`
+ * overload and the legacy `registerHandler(channel, handler)` overload. A
+ * typed schema must expose `args` and `result` Zod-compatible types — we
+ * probe for a `safeParse` method on both rather than trusting structural
+ * shape alone, so a JS plugin author bypassing TypeScript can't slip a
+ * malformed `{ args: {}, result: ... }` past registration only to crash at
+ * dispatch with a raw `safeParse is not a function` TypeError outside the
+ * documented `SCHEMA_ERROR:` envelope.
+ */
+function isChannelSchema(value: unknown): value is PluginChannelSchema<unknown, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("args" in value) || !("result" in value)) return false;
+  const args = (value as { args: unknown }).args;
+  const result = (value as { result: unknown }).result;
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    typeof (args as { safeParse?: unknown }).safeParse === "function" &&
+    typeof result === "object" &&
+    result !== null &&
+    typeof (result as { safeParse?: unknown }).safeParse === "function"
+  );
+}
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   private handlerMap = new Map<string, PluginIpcHandler>();
+  /**
+   * Per-channel Zod schemas for typed `registerHandler` registrations, keyed
+   * by the same `pluginId:channel` key as {@link handlerMap}. Only populated
+   * for the typed overload — legacy untyped registrations omit the entry and
+   * skip schema validation at dispatch. Cleared per-plugin in
+   * {@link removeHandlers} alongside the handler entry.
+   */
+  private channelSchemas = new Map<string, PluginChannelSchema<unknown, unknown>>();
+  /**
+   * Per-channel capability gate for typed `registerHandler` registrations,
+   * keyed by the same `pluginId:channel` key as {@link handlerMap}.
+   * Authoritative check runs at registration (throws `PERMISSION_REQUIRED:`
+   * for missing capabilities); the dispatch-time re-check is defense-in-depth
+   * for future code paths that mutate manifests after load.
+   */
+  private channelRequires = new Map<string, readonly BuiltInPluginCapability[]>();
   private cleanupMap = new Map<string, () => void>();
   /**
    * Plugin ids whose `activate()` has resolved successfully this session.
@@ -1410,14 +1454,35 @@ export class PluginService {
 
         this.broadcastPluginActions();
       },
-      registerHandler: (channel, handler) => {
+      registerHandler: ((
+        channel: string,
+        schemaOrHandler:
+          | PluginChannelSchema<unknown, unknown>
+          | PluginIpcHandler
+          | PluginTypedIpcHandler<unknown, unknown>,
+        typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+      ) => {
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
           );
         }
-        this.registerHandler(pluginId, channel, handler);
-      },
+        if (typedHandler !== undefined) {
+          // A three-argument call is the typed overload by definition; if the
+          // second arg isn't a schema, reject loudly instead of silently
+          // dropping the typed handler and registering the second arg as a
+          // legacy handler — that mismatch would look like a phantom no-op
+          // at first dispatch.
+          if (!isChannelSchema(schemaOrHandler)) {
+            throw new Error(
+              `Plugin "${pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
+            );
+          }
+          this.registerHandler(pluginId, channel, schemaOrHandler, typedHandler);
+        } else {
+          this.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
+        }
+      }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         if (revoked) {
           throw new Error(
@@ -2150,18 +2215,75 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
-  registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void {
-    if (!this.plugins.has(pluginId)) {
+  registerHandler<TArgs, TResult>(
+    pluginId: string,
+    channel: string,
+    schema: PluginChannelSchema<TArgs, TResult>,
+    handler: PluginTypedIpcHandler<TArgs, TResult>
+  ): void;
+  registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void;
+  registerHandler(
+    pluginId: string,
+    channel: string,
+    schemaOrHandler:
+      | PluginChannelSchema<unknown, unknown>
+      | PluginIpcHandler
+      | PluginTypedIpcHandler<unknown, unknown>,
+    typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+  ): void {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
       throw new Error(`Unknown plugin: ${pluginId}`);
     }
     if (channel.includes(":")) {
       throw new Error(`Plugin channel must not contain colons: ${channel}`);
     }
-    if (typeof handler !== "function") {
-      throw new Error(`Plugin handler must be a function, got ${typeof handler}`);
-    }
+
     const key = `${pluginId}:${channel}`;
-    this.handlerMap.set(key, handler);
+    const isTypedOverload = isChannelSchema(schemaOrHandler);
+
+    if (isTypedOverload) {
+      const schema = schemaOrHandler;
+      if (typeof typedHandler !== "function") {
+        throw new Error(`Plugin handler must be a function, got ${typeof typedHandler}`);
+      }
+      // Fail-closed at registration: every capability listed in `requires`
+      // must already be declared in the plugin's manifest. Throwing here
+      // surfaces author misconfiguration loudly at load instead of at first
+      // dispatch (where it would look like a transient runtime error).
+      const requires = schema.requires ?? [];
+      const declared = new Set<BuiltInPluginCapability>(plugin.manifest.capabilities ?? []);
+      const missing = requires.filter((cap) => !declared.has(cap));
+      if (missing.length > 0) {
+        throw new Error(
+          `PERMISSION_REQUIRED: channel "${channel}" requires capability "${missing[0]}" which is not declared in plugin "${pluginId}" manifest.capabilities`
+        );
+      }
+
+      const boundHandler = typedHandler;
+      // Adapt the single-payload typed handler to the variadic
+      // PluginIpcHandler shape so the dispatch path stays uniform. The
+      // first variadic arg is the parsed payload; `dispatchHandler` only
+      // calls this after `schema.args.safeParse` succeeds, so the cast is
+      // safe at call time.
+      const adapter: PluginIpcHandler = (ctx, ...args) =>
+        boundHandler(ctx, args.length > 0 ? args[0] : undefined);
+
+      this.handlerMap.set(key, adapter);
+      this.channelSchemas.set(key, schema);
+      this.channelRequires.set(key, requires);
+      return;
+    }
+
+    if (typeof schemaOrHandler !== "function") {
+      throw new Error(`Plugin handler must be a function, got ${typeof schemaOrHandler}`);
+    }
+    // Re-registration drops any prior typed-channel metadata so a legacy
+    // re-bind doesn't strand a stale schema or capability gate keyed to the
+    // same channel.
+    this.channelSchemas.delete(key);
+    this.channelRequires.delete(key);
+    this.handlerMap.set(key, schemaOrHandler);
   }
 
   async dispatchHandler(
@@ -2251,8 +2373,41 @@ export class PluginService {
     if (!handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
+
+    // Typed-channel path (registered via the schema overload of
+    // `registerHandler`). The capability gate already fired at registration
+    // — this re-check is defense-in-depth against a future code path that
+    // mutates a loaded manifest after registration.
+    const channelSchema = this.channelSchemas.get(key);
+    const channelRequires = this.channelRequires.get(key);
+    if (channelRequires && channelRequires.length > 0) {
+      const declared = new Set<BuiltInPluginCapability>(
+        this.plugins.get(pluginId)?.manifest.capabilities ?? []
+      );
+      const missing = channelRequires.find((cap) => !declared.has(cap));
+      if (missing) {
+        throw new Error(
+          `PERMISSION_REQUIRED: channel "${channel}" requires capability "${missing}" which is not declared in plugin "${pluginId}" manifest.capabilities`
+        );
+      }
+    }
+
+    let dispatchArgs: unknown[] = args;
+    if (channelSchema) {
+      const argsInput = args.length > 0 ? args[0] : undefined;
+      const parsed = channelSchema.args.safeParse(argsInput);
+      if (!parsed.success) {
+        throw new Error(`SCHEMA_ERROR: ${z.prettifyError(parsed.error)}`);
+      }
+      // Replace the raw variadic with the parsed payload so the typed
+      // adapter (and any downstream code) sees Zod's coerced/defaulted
+      // output rather than the wire-shape input.
+      dispatchArgs = [parsed.data];
+    }
+
+    let result: unknown;
     try {
-      return await handler(ctx, ...args);
+      result = await handler(ctx, ...dispatchArgs);
     } catch (err) {
       // Contain at the boundary so a throwing plugin handler can't propagate
       // up through `ipcMain.handle` as an unhandled rejection in the main
@@ -2263,6 +2418,18 @@ export class PluginService {
       console.error(`[PluginService] Handler "${key}" threw:`, err);
       throw err;
     }
+
+    if (channelSchema) {
+      const parsedResult = channelSchema.result.safeParse(result);
+      if (!parsedResult.success) {
+        throw new Error(
+          `SCHEMA_ERROR: result for channel "${channel}" failed validation: ${z.prettifyError(parsedResult.error)}`
+        );
+      }
+      return parsedResult.data;
+    }
+
+    return result;
   }
 
   removeHandlers(pluginId: string): void {
@@ -2271,6 +2438,8 @@ export class PluginService {
       if (key.startsWith(prefix)) {
         this.handlerMap.delete(key);
         this.actionValidators.delete(key.slice(prefix.length));
+        this.channelSchemas.delete(key);
+        this.channelRequires.delete(key);
       }
     }
   }

@@ -20,10 +20,12 @@ import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
   PluginActionContribution,
+  PluginChannelSchema,
   PluginHostApi,
   PluginIpcHandler,
   PluginSettingsScope,
   PluginToastOptions,
+  PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   SettingsApi,
 } from "../types/plugin.js";
@@ -202,8 +204,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         registeredActions.push({ descriptor, handler });
       }
     },
-    registerHandler(channel, handler) {
-      registeredHandlers.push({ channel, handler });
+    registerHandler<TArgs = unknown, TResult = unknown>(
+      channel: string,
+      schemaOrHandler: PluginChannelSchema<TArgs, TResult> | PluginIpcHandler,
+      handler?: PluginTypedIpcHandler<TArgs, TResult>
+    ) {
+      // Handle both overloads:
+      // 1. registerHandler(channel, schema, handler) — typed
+      // 2. registerHandler(channel, handler) — untyped
+      if (handler !== undefined) {
+        // Typed overload: schemaOrHandler is a schema, handler is the typed handler
+        // The cast is necessary because PluginTypedIpcHandler is structurally compatible
+        // with PluginIpcHandler and we're storing it in a untyped recording array.
+        registeredHandlers.push({
+          channel,
+          handler: handler as unknown as PluginIpcHandler,
+        });
+      } else {
+        // Untyped overload: schemaOrHandler is the handler
+        registeredHandlers.push({
+          channel,
+          handler: schemaOrHandler as PluginIpcHandler,
+        });
+      }
     },
     broadcastToRenderer(channel, payload) {
       broadcastCalls.push({ channel, payload });

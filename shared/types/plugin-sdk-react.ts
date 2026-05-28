@@ -1,9 +1,21 @@
 /**
  * Reserved entry point for `@daintreehq/plugin-sdk/react`.
  *
- * No exports in v1. React hooks (`useWorktrees`, `useActiveWorktree`, etc.)
- * are planned for F15/F36. This module exists so the import path resolves and
- * TypeScript emits declarations for the subpath — plugin authors can reference
- * `@daintreehq/plugin-sdk/react` today and it will resolve to an empty module.
+ * Holds renderer-facing SDK types only; the runtime implementations live in
+ * `src/hooks/` and are wired into the eventual `@daintreehq/plugin-sdk/react`
+ * subpath when the SDK is extracted into its own package (F15/F36). Until
+ * then, plugin authors can reference these types through the host bundle.
  */
-export type {};
+
+/**
+ * Return shape of the `useHostChannel(pluginId, channel)` hook. `invoke`
+ * resolves with the validated channel result on success, or `undefined` if
+ * the host rejected the call (the rejection is surfaced via `error`). Only
+ * the latest `invoke()` updates `loading` / `error` — stale earlier calls are
+ * dropped to keep concurrent invocations coherent.
+ */
+export interface UseHostChannelResult<TArgs, TResult> {
+  invoke: (args: TArgs) => Promise<TResult | undefined>;
+  loading: boolean;
+  error: Error | null;
+}

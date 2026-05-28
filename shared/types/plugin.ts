@@ -13,6 +13,7 @@ import type {
 } from "./forge.js";
 import type { NotificationType } from "./notification.js";
 import type { ActionDispatchResult } from "./actions.js";
+import type { z } from "zod";
 
 export interface PanelContribution {
   id: string;
@@ -335,6 +336,35 @@ export type PluginIpcHandler = (
 ) => unknown | Promise<unknown>;
 
 /**
+ * Typed channel handler bound by the second overload of
+ * {@link PluginHostApi.registerHandler}. Receives the IPC context and the
+ * single parsed args payload (post-Zod-validation). The variadic
+ * {@link PluginIpcHandler} stays the canonical legacy shape; typed handlers
+ * are adapted to it at registration time so the dispatch path is unchanged.
+ */
+export type PluginTypedIpcHandler<TArgs, TResult> = (
+  ctx: PluginIpcContext,
+  args: TArgs
+) => TResult | Promise<TResult>;
+
+/**
+ * Per-channel schema bundle for typed `registerHandler` registrations. `args`
+ * validates the single-payload dispatch input (`window.electron.plugin.invoke(
+ * pluginId, channel, args)` — only the first argument is parsed). `result`
+ * validates the handler's return value before it crosses back to the renderer
+ * so a plugin's contract drift surfaces at the boundary instead of as a
+ * mysterious downstream TypeError. `requires` lists the
+ * {@link BuiltInPluginCapability} values the channel needs; the host rejects
+ * registration if any are missing from the plugin's declared
+ * `manifest.capabilities`, and re-checks at dispatch as defense-in-depth.
+ */
+export interface PluginChannelSchema<TArgs, TResult> {
+  args: z.ZodType<TArgs>;
+  result: z.ZodType<TResult>;
+  requires?: readonly BuiltInPluginCapability[];
+}
+
+/**
  * Provider-agnostic projection of a worktree's linked forge resources (issue
  * and/or PR), exposed on {@link PluginWorktreeSnapshot.linked}. Replaces the
  * GitHub-shaped flat fields that previously leaked onto the snapshot —
@@ -432,6 +462,27 @@ export interface PluginHostApi {
    * activation resolves or times out. Unregistered automatically on unload.
    */
   registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
+  /**
+   * Bind a typed IPC handler whose args and result are validated against the
+   * provided Zod schemas, gated on the listed plugin capabilities. The host
+   * rejects registration if any `schema.requires` capability is missing from
+   * `manifest.capabilities` (fail-closed at the registration boundary). At
+   * dispatch the args are `safeParse`d, the handler is invoked with the
+   * parsed payload, and the result is `safeParse`d before returning to the
+   * renderer. Schema failures throw with a `SCHEMA_ERROR:` prefix; missing
+   * capabilities throw with a `PERMISSION_REQUIRED:` prefix — the
+   * renderer-side `useHostChannel` hook discriminates on these prefixes.
+   */
+  registerHandler<TArgs, TResult>(
+    channel: string,
+    schema: PluginChannelSchema<TArgs, TResult>,
+    handler: PluginTypedIpcHandler<TArgs, TResult>
+  ): void;
+  /**
+   * Legacy untyped overload: a variadic handler with no host-side validation.
+   * Retained for plugins that haven't migrated to per-channel schemas. The
+   * typed overload above is preferred for new code.
+   */
   registerHandler(channel: string, handler: PluginIpcHandler): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
   /**
