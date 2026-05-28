@@ -666,7 +666,9 @@ if (isSmokeTest) {
   // disables crash-safe PTY tree reaping — so these are WARN-level, never a
   // fatal exit. require() (not await import) mirrors HelpSessionJobService's
   // load path exactly and avoids a missing-type-declaration error for these
-  // untyped vendored addons.
+  // untyped vendored addons. This is a runtime presence check (isAvailable);
+  // the deeper build-time exec/dlopen probe that catches a present-but-broken
+  // binary (missing DLL, wrong arch) lives in scripts/afterPack.cjs.
   if (process.platform === "win32") {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports

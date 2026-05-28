@@ -472,6 +472,25 @@ describe("afterPack", () => {
       );
     });
 
+    it("should dlopen the exact win_job_object.node path", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        dlopenCalls.push(filename);
+        if (filename.includes("win_job_object")) return;
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(dlopenCalls).toContain(
+        path.join(
+          "/build/win/resources/app.asar.unpacked",
+          "node_modules/win-job-object/build/Release/win_job_object.node"
+        )
+      );
+    });
+
     it("should throw when win_job_object.node fails to load (missing transitive DLL)", async () => {
       mockExistsSync.mockReturnValue(true);
       process.dlopen = ((_mod: unknown, filename: string) => {
@@ -516,6 +535,21 @@ describe("afterPack", () => {
         expect.objectContaining({ input: "", stdio: ["pipe", "pipe", "pipe"], timeout: 5000 })
       );
       expect(consoleSpy).toHaveBeenCalledWith("[afterPack] posix-pty-reaper exec check passed");
+    });
+
+    it("should exec the supervisor with the exact macOS supervisor path", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockSpawnSync).toHaveBeenCalledWith(
+        path.join(
+          "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked",
+          "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
+        ),
+        [],
+        expect.objectContaining({ input: "", stdio: ["pipe", "pipe", "pipe"], timeout: 5000 })
+      );
     });
 
     it("should throw when the supervisor fails to exec (spawn error)", async () => {
