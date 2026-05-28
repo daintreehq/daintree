@@ -635,6 +635,65 @@ describe("GridNotificationBar selection contract", () => {
     expect(queryByText("Low first")).toBeNull();
   });
 
+  it("locks the dwell window even when a higher-priority contender arrives in the same paint cycle", () => {
+    const lowId = addGridBar({ message: "Low priority", priority: "low" });
+    const { getByText, queryByText } = render(<GridNotificationBar />);
+
+    // No rAF tick yet — entry hasn't even animated in. Add a high-priority
+    // contender immediately, in the same paint cycle. The useLayoutEffect
+    // ensures lockedIdRef is set before any re-render runs the selector.
+    act(() => {
+      addGridBar({ message: "High priority", priority: "high" });
+    });
+
+    // Flush the entry rAF.
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(getByText("Low priority")).toBeTruthy();
+    expect(queryByText("High priority")).toBeNull();
+
+    // Cleanup: remove the low one to let the high one come up so afterEach
+    // doesn't time out on pending dwell.
+    act(() => {
+      useNotificationStore.getState().removeNotification(lowId);
+    });
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
+    });
+    expect(getByText("High priority")).toBeTruthy();
+  });
+
+  it("releases promptly when the locked notification is dismissed mid-dwell", () => {
+    const lowId = addGridBar({ message: "Low priority", priority: "low" });
+    const { getByText, queryByText } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(getByText("Low priority")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    // High priority queued behind the dwell lock.
+    act(() => {
+      addGridBar({ message: "High priority", priority: "high" });
+    });
+    expect(queryByText("High priority")).toBeNull();
+
+    // User dismisses the locked low one before its dwell expires.
+    act(() => {
+      useNotificationStore.getState().removeNotification(lowId);
+    });
+    act(() => {
+      vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);
+    });
+
+    expect(getByText("High priority")).toBeTruthy();
+    expect(queryByText("Low priority")).toBeNull();
+  });
+
   it("clears the dwell timer on unmount without firing setState afterwards", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

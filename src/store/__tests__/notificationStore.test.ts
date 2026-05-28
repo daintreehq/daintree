@@ -7,6 +7,7 @@ import {
   useNotificationStore,
   type Notification,
 } from "../notificationStore";
+import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
 
 const { getState } = useNotificationStore;
@@ -672,11 +673,12 @@ describe("selectGridBarNotification — selection contract", () => {
   });
 
   it("PRIORITY_WEIGHTS enforces a wide gap larger than any type bonus", () => {
-    // Sanity: the smallest priority gap (low → high = 10) must exceed the
-    // largest type bonus (error = 3). Guards against future tweaks that
-    // would let a low+error eclipse a high+success.
+    // Sanity: the smallest priority gap (low → high) must exceed the
+    // largest type bonus. Guards against future tweaks that would let a
+    // low+error eclipse a high+success.
     const minPriorityGap = PRIORITY_WEIGHTS.high - PRIORITY_WEIGHTS.low;
-    expect(minPriorityGap).toBeGreaterThan(3);
+    const maxTypeBonus = Math.max(...Object.values(SEVERITY_WEIGHTS));
+    expect(minPriorityGap).toBeGreaterThan(maxTypeBonus);
   });
 
   describe("dwell floor", () => {

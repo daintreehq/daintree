@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -181,9 +181,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   }, [notification?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh the dwell lock whenever the displayed notification changes.
-  // When dwell remains, schedule a timeout to re-evaluate the selector
-  // once the floor expires (a higher-severity contender may be waiting).
-  useEffect(() => {
+  // Uses a layout effect so the lock is set before paint — a contender
+  // arriving in the same render cycle as the first mount cannot preempt
+  // before the dwell guard is in place.
+  useLayoutEffect(() => {
     if (dwellTimeoutRef.current !== null) {
       clearTimeout(dwellTimeoutRef.current);
       dwellTimeoutRef.current = null;
