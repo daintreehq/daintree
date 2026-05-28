@@ -18,9 +18,19 @@ const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
 // outputs can be merged into a single unified HTML report. PR CI and local
 // runs keep the default reporters.
 const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
-const reporter: ReporterDescription[] | undefined = useBlobReporter
-  ? [["github"], ["blob", { outputDir: "blob-report" }]]
-  : undefined;
+const useJsonReporter = process.env.PLAYWRIGHT_JSON_REPORT === "1";
+const reporter: ReporterDescription[] | undefined =
+  useBlobReporter || useJsonReporter
+    ? [
+        ["github"],
+        ...(useBlobReporter
+          ? [["blob", { outputDir: "blob-report" }] as ReporterDescription[]]
+          : []),
+        ...(useJsonReporter
+          ? [["json", { outputFile: "playwright-results.json" }] as ReporterDescription[]]
+          : []),
+      ]
+    : undefined;
 
 export default defineConfig({
   workers: e2eWorkers,
