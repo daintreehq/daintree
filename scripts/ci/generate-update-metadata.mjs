@@ -85,13 +85,43 @@ function selectArtifacts(platform, fileNames) {
   }
 
   if (platform === "windows") {
-    // NSIS produces a single combined installer covering all selected archs;
-    // `.appx` artifacts are routed through the Store and must be excluded here.
-    const installers = fileNames.filter((fileName) => fileName.endsWith(".exe")).sort();
-    if (installers.length !== 1) {
-      throw new Error(
-        `Expected exactly 1 Windows NSIS .exe artifact, found ${installers.length}: ${installers.join(", ") || "(none)"}`
-      );
+    // Separate per-arch NSIS installers (#9244). `.appx` artifacts are routed
+    // through the Store and must be excluded here. electron-updater's
+    // Provider.findFile() selects the .exe whose URL contains process.arch,
+    // falling back to the first entry — so x64 must be first.
+    const archPattern = /-(x64|arm64)-setup\.exe$/;
+    const extractArch = (fileName) => {
+      const match = fileName.match(archPattern);
+      return match ? match[1] : null;
+    };
+
+    const installers = fileNames
+      .filter((fileName) => fileName.endsWith(".exe") && !fileName.endsWith(".exe.blockmap"))
+      .sort();
+    if (installers.length === 0) {
+      throw new Error(`Expected at least 1 Windows NSIS .exe artifact, found 0`);
+    }
+    for (const installer of installers) {
+      if (!extractArch(installer)) {
+        throw new Error(
+          `Windows NSIS .exe must include architecture token (-x64- or -arm64-): ${installer}`
+        );
+      }
+    }
+    // Sort x64 before arm64 so electron-updater's arch-agnostic fallback
+    // picks x64 (the larger install base).
+    const archOrder = { x64: 0, arm64: 1 };
+    installers.sort((a, b) => {
+      return archOrder[extractArch(a)] - archOrder[extractArch(b)];
+    });
+    // Fail on duplicate archs
+    const seen = new Set();
+    for (const installer of installers) {
+      const arch = extractArch(installer);
+      if (seen.has(arch)) {
+        throw new Error(`Duplicate ${arch} Windows NSIS .exe: ${installer}`);
+      }
+      seen.add(arch);
     }
     return installers;
   }

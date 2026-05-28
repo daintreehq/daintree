@@ -108,9 +108,9 @@ jobs:
       platform: windows
     secrets: inherit
 
-  build-daintree:
+  build-daintree-x64:
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
-    name: Build Daintree (Windows)
+    name: Build Daintree (Windows x64)
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -137,39 +137,18 @@ jobs:
           node_version: ${{ env.NODE_VERSION }}
           msvs_version: "2022"
 
-      # Cross-compile win-job-object (source-only N-API addon) for arm64 so the
-      # NSIS combined installer can ship both archs. node-pty and better-sqlite3
-      # have arm64 prebuilts; electron-builder pulls those via npmRebuild during
-      # packaging. The post-install copy of node-pty's conpty win10-arm64 DLLs
-      # is recovered by `scripts/afterPack.cjs` based on `context.arch`.
-      - name: Cross-compile arm64 native modules (Windows)
-        shell: bash
-        env:
-          npm_config_msvs_version: "2022"
-        run: npm run rebuild:win-arm64
-
-      - name: Build
+      - name: Build (x64)
         shell: bash
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
-          # Distinguishes pre-release AppX versions — parseInt() in electron-builder's
-          # getVersionInWeirdWindowsForm discards semver suffixes, so 0.14.1-rc.1 and
-          # 0.14.1 would both map to 0.14.1.0 in the manifest. BUILD_NUMBER fills the
-          # 4th slot so every build gets a unique A.B.C.D for Store update detection.
-          # github.run_number is per-workflow monotonic (~weekly releases → fits uint16).
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build
-          # Hard security gate (#9148) — fail before packaging if any E2E
-          # backdoor survived the production strip.
           npm run check:preload-backdoors
-          # Windows binaries are published via the R2 upload in the publish
-          # job (and the Microsoft Store step below), never by electron-builder
-          # directly — so --publish is always "never" here.
-          npx electron-builder --config electron-builder.config.cjs --publish never
+          npx electron-builder --config electron-builder.config.cjs --win appx nsis --x64 --publish never
 
-      - name: Verify Windows Store package was built
+      - name: Verify Windows Store package was built (x64)
         shell: pwsh
         run: |
           $packages = @(Get-ChildItem -Path 'release\*.appx', 'release\*.msix' -ErrorAction SilentlyContinue)
@@ -180,7 +159,7 @@ jobs:
           }
           Write-Host "Found $($packages.Count) Store package(s) in release/"
 
-      - name: Verify Windows NSIS installer was built
+      - name: Verify Windows NSIS installer was built (x64)
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue)
@@ -271,14 +250,115 @@ jobs:
           }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ":rocket: Microsoft Store submission published (product $env:STORE_PRODUCT_ID)"
 
-      - name: Validate update metadata (Windows NSIS)
+      - name: Upload build artifacts (x64)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-daintree-windows-x64
+          path: |
+            release/*.appx
+            release/*.msix
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          retention-days: 7
+          if-no-files-found: error
+
+  build-daintree-arm64:
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    name: Build Daintree (Windows arm64)
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: ./.github/actions/checkout-shallow
+
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          # electron-updater on Windows polls `<channel>.yml` (no platform
-          # suffix) — Provider.js getChannelFilePrefix() returns "" for win32.
-          # This is the canonical filename installed clients fetch, so we
-          # generate (and validate) it here even though electron-builder's
-          # packaging step already wrote a copy.
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          msvs_version: "2022"
+
+      - name: Build (arm64)
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+        run: |
+          npm run build
+          npm run check:preload-backdoors
+          # arm64 builds NSIS only (no AppX/Store target).
+          npx electron-builder --config electron-builder.config.cjs --win nsis --arm64 --publish never
+
+      - name: Verify Windows NSIS installer was built (arm64)
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path 'release\*.exe' -ErrorAction SilentlyContinue)
+          if ($installers.Count -ne 1) {
+            Write-Host "::error::Expected exactly 1 NSIS .exe in release/, found $($installers.Count). Confirm electron-builder.config.cjs lists the nsis target."
+            Get-ChildItem -Path release -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.Name }
+            exit 1
+          }
+          Write-Host "Found NSIS installer: $($installers[0].Name) ($([math]::Round($installers[0].Length / 1MB, 1)) MB)"
+
+      - name: Upload build artifacts (arm64)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-daintree-windows-arm64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          retention-days: 7
+          if-no-files-found: error
+
+  assemble-windows-release:
+    needs: [build-daintree-x64, build-daintree-arm64]
+    name: Assemble Windows release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: ./.github/actions/checkout-shallow
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve update metadata prefix
+        uses: ./.github/actions/resolve-update-metadata-prefix
+
+      - name: Download x64 artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-x64
+          path: release/
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-windows-arm64
+          path: release/
+
+      - name: Generate and validate update metadata
+        shell: bash
+        run: |
           node scripts/ci/generate-update-metadata.mjs windows "release/${UPDATE_METADATA_PREFIX}.yml"
           if [ ! -f "release/${UPDATE_METADATA_PREFIX}.yml" ]; then
             echo "::error::Missing release/${UPDATE_METADATA_PREFIX}.yml - Windows auto-update metadata was not generated"
@@ -286,7 +366,7 @@ jobs:
           fi
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}.yml"
 
-      - name: Upload build artifacts
+      - name: Upload combined build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: release-daintree-windows-latest
@@ -307,7 +387,7 @@ jobs:
   # is uniquely at risk if cross-compile for arm64 fails silently). Gates
   # publish.
   smoke-packaged:
-    needs: [build-daintree]
+    needs: [assemble-windows-release]
     name: Smoke (packaged NSIS)
     runs-on: windows-latest
     timeout-minutes: 20
@@ -384,7 +464,7 @@ jobs:
 
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree, smoke-packaged]
+    needs: [assemble-windows-release, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
