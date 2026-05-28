@@ -17,6 +17,7 @@ const external = [
   "node-pty", // Native module
   "better-sqlite3", // Native module
   "win-job-object", // Native module — Windows-only help-session Job Object (#7526)
+  "posix-pty-reaper", // Native module — macOS/Linux help-session PTY supervisor (#8769)
   "copytree", // Externalize to preserve file structure (config files)
 ];
 
