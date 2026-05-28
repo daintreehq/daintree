@@ -81,17 +81,17 @@ const onPanelKindsChangedMock = vi.fn();
 beforeEach(() => {
   onPanelKindsChangedMock.mockReset();
   onPanelKindsChangedMock.mockReturnValue(() => {});
-  (globalThis as unknown as { window: unknown }).window = Object.assign(globalThis.window ?? {}, {
-    electron: {
-      plugin: {
-        onPanelKindsChanged: onPanelKindsChangedMock,
-      },
-    },
+  vi.stubGlobal("electron", undefined);
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock } },
   });
 });
 
 afterEach(() => {
   vi.resetModules();
+  vi.unstubAllGlobals();
 });
 
 describe("makePluginViewHost", () => {

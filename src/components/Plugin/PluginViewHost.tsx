@@ -7,8 +7,15 @@ import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
-interface PluginViewModule {
-  default: ComponentType<PanelViewProps>;
+function isPluginViewModule(mod: unknown): mod is { default: ComponentType<PanelViewProps> } {
+  if (mod === null || typeof mod !== "object") return false;
+  const candidate = (mod as { default?: unknown }).default;
+  // Accept any React element type — function components, `memo(...)`,
+  // `forwardRef(...)`, and lazy/class wrappers are all valid defaults.
+  // `memo` and `forwardRef` return objects (typeof === "object"), not
+  // functions, so a `typeof === "function"`-only check would reject common
+  // optimization patterns.
+  return typeof candidate === "function" || (typeof candidate === "object" && candidate !== null);
 }
 
 /**
@@ -64,26 +71,21 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     const LazyView = useMemo(
       () =>
         lazy<ComponentType<PanelViewProps>>(async () => {
-          const mod = (await import(/* @vite-ignore */ componentPath!)) as PluginViewModule;
-          // Accept any React element type — function components, `memo(...)`,
-          // `forwardRef(...)`, and lazy/class wrappers are all valid defaults.
-          // `memo` and `forwardRef` return objects (typeof === "object"), not
-          // functions, so a `typeof === "function"`-only check would reject
-          // common optimization patterns.
-          const def = mod?.default as unknown;
-          const isComponentLike =
-            typeof def === "function" || (typeof def === "object" && def !== null);
-          if (!isComponentLike) {
+          const mod: unknown = await import(/* @vite-ignore */ componentPath!);
+          if (!isPluginViewModule(mod)) {
             throw new Error(
               `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
             );
           }
           return { default: mod.default };
         }),
-      // retryCount is the reload key: a new lazy() ref forces React to call
-      // the factory again instead of returning the cached (rejected) promise.
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- componentPath and pluginId are stable captures of the kind config
-      [retryCount]
+      // retryCount is the reload key: incrementing it produces a fresh lazy()
+      // ref so React re-calls the factory instead of returning the cached
+      // (failed) promise. componentPath and pluginId are stable closure
+      // captures of the kind config and never change for a given host
+      // instance, so listing them keeps `exhaustive-deps` honest without
+      // breaking the retry semantics.
+      [retryCount, componentPath, pluginId]
     );
 
     const controllerRef = useRef<AbortController | null>(null);
