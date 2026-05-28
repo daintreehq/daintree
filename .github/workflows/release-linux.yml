@@ -181,9 +181,81 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged-artifact smoke (#9246) — launches the freshly-built AppImage in
+  # --smoke-test mode and validates every stability marker including the
+  # node-pty, better-sqlite3, and posix-pty-reaper native module checks. Gates
+  # publish so a regression in the packaged tree (e.g. an asar.unpacked native
+  # missing for the build's arch) fails the release instead of shipping.
+  smoke-packaged:
+    needs: [build-daintree]
+    name: Smoke (packaged AppImage)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: ./.github/actions/checkout-shallow
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libdrm2
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: release-daintree-ubuntu-22.04
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Extract AppImage
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(find "$RUNNER_TEMP/release-artifact" -maxdepth 2 -name '*.AppImage' | head -n 1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No .AppImage found in downloaded artifact"
+            find "$RUNNER_TEMP/release-artifact" -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          echo "Found AppImage: $APPIMAGE"
+          chmod +x "$APPIMAGE"
+          mkdir -p "$RUNNER_TEMP/appimage-work"
+          cd "$RUNNER_TEMP/appimage-work"
+          # --appimage-extract avoids FUSE, which is unavailable on GitHub
+          # Actions hosted runners. Produces ./squashfs-root with an AppRun
+          # entry point that sets LD_LIBRARY_PATH and APPDIR before exec'ing
+          # the real binary.
+          "$APPIMAGE" --appimage-extract
+          BIN="$RUNNER_TEMP/appimage-work/squashfs-root/AppRun"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Extracted AppRun missing or not executable at $BIN"
+            ls -la "$RUNNER_TEMP/appimage-work/squashfs-root" || true
+            exit 1
+          fi
+          echo "packaged_binary=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: Run packaged smoke
+        env:
+          PACKAGED_BINARY: ${{ steps.extract.outputs.packaged_binary }}
+        run: xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
+
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
-    needs: [build-daintree]
+    needs: [build-daintree, smoke-packaged]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 

@@ -33,6 +33,7 @@ const BUILD_ARTIFACTS = [
 
 const REQUIRED_MARKERS = [
   "[SMOKE] CHECK: node-pty native module",
+  "[SMOKE] CHECK: better-sqlite3 native module",
   "[SMOKE] CHECK: Renderer did-finish-load",
   "[SMOKE] CHECK: Renderer + IPC bridge",
   "[SMOKE] CHECK: Terminal stress rounds",
