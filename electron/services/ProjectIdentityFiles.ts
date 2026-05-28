@@ -329,6 +329,7 @@ export class ProjectIdentityFiles {
 
     const recipes: TerminalRecipe[] = [];
     const hashes = new Map<string, string>();
+    const seenIds = new Set<string>();
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
@@ -362,6 +363,18 @@ export class ProjectIdentityFiles {
           );
           continue;
         }
+        if (seenIds.has(result.data.id)) {
+          // Two files now resolve to the same opaque id (e.g. a copied recipe
+          // file whose id wasn't changed, or a rename whose old-file delete
+          // failed). readdir order is non-deterministic across machines, so
+          // keep the first occurrence and warn loudly rather than letting the
+          // hash map and reconciliation silently collapse them.
+          console.warn(
+            `[ProjectIdentityFiles] Duplicate recipe id "${result.data.id}" in ${entry.name} — keeping first occurrence, change this file's id`
+          );
+          continue;
+        }
+        seenIds.add(result.data.id);
         recipes.push(result.data);
         hashes.set(result.data.id, hashRecipePayload(content));
       } catch (error) {

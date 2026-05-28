@@ -16,7 +16,7 @@ import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
-import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -516,10 +516,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const isGlobal = recipe.projectId === undefined;
     const { projectId: _, worktreeId: _w, shadowedBy: _s, ...rest } = recipe;
-    // Reuse the id of an existing in-repo recipe with the same name so a repeat
-    // promotion is an idempotent update (same on-disk filename) rather than a
-    // duplicate or an on-disk stale conflict. Otherwise mint a fresh opaque id.
-    const existingInRepoId = get().inRepoRecipes.find((r) => r.name === recipe.name)?.id;
+    // Reuse the id of an existing in-repo recipe that maps to the same on-disk
+    // filename so a repeat promotion is an idempotent update rather than a
+    // duplicate or an on-disk stale conflict. Compare by filename slug, not the
+    // raw name, since "My Recipe"/"my recipe" share my-recipe.json. Otherwise
+    // mint a fresh opaque id.
+    const targetFilename = safeRecipeFilename(recipe.name);
+    const existingInRepoId = get().inRepoRecipes.find(
+      (r) => safeRecipeFilename(r.name) === targetFilename
+    )?.id;
     const promoted: TerminalRecipe = {
       ...rest,
       id: existingInRepoId ?? `recipe-${crypto.randomUUID()}`,

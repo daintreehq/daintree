@@ -2008,6 +2008,40 @@ describe("recipeStore", () => {
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes).toHaveLength(1);
     });
+
+    it("reuses an existing in-repo id when promoting a filename-slug variant of an existing name", async () => {
+      const existingInRepo = {
+        id: "recipe-existing-abc",
+        name: "My Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, env: {} }],
+        createdAt: 100,
+      };
+      const localVariant = {
+        id: "project-variant",
+        name: "my recipe", // slugs to the same my-recipe.json as "My Recipe"
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, env: {} }],
+        createdAt: 200,
+      };
+      useRecipeStore.setState({
+        globalRecipes: [],
+        projectRecipes: [localVariant],
+        inRepoRecipes: [existingInRepo],
+        recipes: [localVariant, existingInRepo],
+        currentProjectId: "project-1",
+      });
+
+      await expect(
+        useRecipeStore.getState().saveToRepo("project-variant", false)
+      ).resolves.toBeUndefined();
+
+      // Reuses the existing in-repo id (same on-disk filename) — an idempotent
+      // update, not a duplicate that would hit an on-disk stale conflict.
+      const promoted = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(promoted.id).toBe("recipe-existing-abc");
+      expect(useRecipeStore.getState().inRepoRecipes).toHaveLength(1);
+    });
   });
 
   describe("file export/import", () => {
