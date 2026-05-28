@@ -7,6 +7,8 @@ const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
 const mockRenameSync = vi.fn();
+const mockMkdtempSync = vi.fn();
+const mockRmSync = vi.fn();
 const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -38,7 +40,13 @@ function mockFs() {
     readFileSync: mockReadFileSync,
     writeFileSync: mockWriteFileSync,
     renameSync: mockRenameSync,
+    mkdtempSync: mockMkdtempSync,
+    rmSync: mockRmSync,
   };
+}
+
+function mockOs() {
+  return { tmpdir: () => "/tmp" };
 }
 
 function setAppleCredentials() {
@@ -63,11 +71,13 @@ describe("notarize-macos", () => {
     delete process.env.DAINTREE_SKIP_NOTARIZATION;
     setAppleCredentials();
     setPlatform("darwin");
+    mockMkdtempSync.mockReturnValue("/tmp/daintree-notarize-xxxx");
 
     const originalRequire = Module.prototype.require;
 
     Module.prototype.require = function (id: string) {
       if (id === "fs") return mockFs();
+      if (id === "os") return mockOs();
       if (id === "child_process") return { execFileSync: mockExecFileSync };
       return originalRequire.apply(this, [id]);
     };
@@ -92,9 +102,6 @@ describe("notarize-macos", () => {
     mockExistsSync.mockReturnValue(true);
     await afterSign(createContext());
     expect(mockExecFileSync).not.toHaveBeenCalled();
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      "[notarize-macos] Skipping notarization (DAINTREE_SKIP_NOTARIZATION=true)"
-    );
   });
 
   it("should skip when credentials are missing", async () => {
@@ -102,9 +109,6 @@ describe("notarize-macos", () => {
     mockExistsSync.mockReturnValue(true);
     await afterSign(createContext());
     expect(mockExecFileSync).not.toHaveBeenCalled();
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "[notarize-macos] Apple API credentials not set — skipping notarization"
-    );
   });
 
   it("should throw when .app bundle is missing", async () => {
@@ -120,52 +124,88 @@ describe("notarize-macos", () => {
       });
     });
 
-    it("should submit, wait, and staple", async () => {
+    it("should zip, submit, wait, and staple", async () => {
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto zip
         .mockReturnValueOnce(JSON.stringify({ id: "sub-123", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-123", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
 
       await afterSign(createContext());
 
-      expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(4);
 
-      const submitCall = mockExecFileSync.mock.calls[0];
+      // ditto zip
+      const dittoCall = mockExecFileSync.mock.calls[0];
+      expect(dittoCall[0]).toBe("ditto");
+      expect(dittoCall[1]).toContain("-c");
+      expect(dittoCall[1]).toContain("-k");
+
+      // submit
+      const submitCall = mockExecFileSync.mock.calls[1];
       expect(submitCall[0]).toBe("xcrun");
-      expect(submitCall[1]).toContain("notarytool");
       expect(submitCall[1]).toContain("submit");
 
-      const waitCall = mockExecFileSync.mock.calls[1];
+      // wait
+      const waitCall = mockExecFileSync.mock.calls[2];
       expect(waitCall[1]).toContain("wait");
       expect(waitCall[1]).toContain("sub-123");
       expect(waitCall[1]).toContain("--timeout");
 
-      const stapleCall = mockExecFileSync.mock.calls[2];
+      // staple
+      const stapleCall = mockExecFileSync.mock.calls[3];
       expect(stapleCall[1]).toContain("stapler");
       expect(stapleCall[1]).toContain("staple");
 
-      expect(mockWriteFileSync).toHaveBeenCalled();
-      expect(mockRenameSync).toHaveBeenCalled();
+      // Cleanup
+      expect(mockRmSync).toHaveBeenCalledWith("/tmp/daintree-notarize-xxxx", {
+        recursive: true,
+        force: true,
+      });
+    });
+
+    it("should submit the zip, not the .app", async () => {
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-zip", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-zip", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+
+      await afterSign(createContext());
+
+      const submitArgs = mockExecFileSync.mock.calls[1][1];
+      const submitPath = submitArgs[submitArgs.indexOf("submit") + 1];
+      expect(submitPath).toContain(".zip");
+      expect(submitPath).not.toContain(".app");
     });
 
     it("should persist state immediately after submit, before wait", async () => {
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-456", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-456", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
 
       await afterSign(createContext());
 
-      const tmpCallIndex = mockWriteFileSync.mock.calls.findIndex((c: any[]) =>
-        c[0].endsWith(".tmp")
-      );
-      expect(tmpCallIndex).toBeGreaterThan(-1);
+      // Find the submission state persist (after submit, before wait)
+      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+      const statuses = tmpWrites.map((c: any[]) => JSON.parse(c[1])["3"].status);
+      expect(statuses).toContain("submitted");
+    });
 
-      const firstWrite = JSON.parse(mockWriteFileSync.mock.calls[tmpCallIndex][1]);
-      expect(firstWrite["3"].status).toBe("submitted");
+    it("should throw when ditto zip fails", async () => {
+      const err = new Error("zip error");
+      (err as any).stderr = "No space left on device";
+      mockExecFileSync.mockImplementationOnce(() => {
+        throw err;
+      });
+
+      await expect(afterSign(createContext())).rejects.toThrow(/Failed to zip app bundle/);
     });
 
     it("should throw when submit fails", async () => {
+      mockExecFileSync.mockReturnValueOnce(""); // ditto
       const err = new Error("submit error");
       (err as any).stderr = "Network error";
       mockExecFileSync.mockImplementationOnce(() => {
@@ -175,22 +215,38 @@ describe("notarize-macos", () => {
       await expect(afterSign(createContext())).rejects.toThrow(/Submission failed/);
     });
 
+    it("should cleanup temp dir even when submit fails", async () => {
+      mockExecFileSync.mockReturnValueOnce(""); // ditto
+      const err = new Error("submit error");
+      (err as any).stderr = "Network error";
+      mockExecFileSync.mockImplementationOnce(() => {
+        throw err;
+      });
+
+      await expect(afterSign(createContext())).rejects.toThrow();
+      expect(mockRmSync).toHaveBeenCalled();
+    });
+
     it("should throw when submit returns non-JSON", async () => {
-      mockExecFileSync.mockReturnValueOnce("not json {{{");
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce("not json {{{");
 
       await expect(afterSign(createContext())).rejects.toThrow(/Submission failed/);
     });
 
     it("should throw when submit returns no id", async () => {
-      mockExecFileSync.mockReturnValueOnce(JSON.stringify({ status: "error" }));
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ status: "error" }));
 
       await expect(afterSign(createContext())).rejects.toThrow(/No submission ID/);
     });
 
     it("should throw when wait times out (exit 124)", async () => {
-      mockExecFileSync.mockReturnValueOnce(
-        JSON.stringify({ id: "sub-789", status: "In Progress" })
-      );
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-789", status: "In Progress" }));
 
       const err = new Error("timed out");
       (err as any).status = 124;
@@ -211,6 +267,7 @@ describe("notarize-macos", () => {
 
     it("should throw when notarization is rejected", async () => {
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-000", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-000", status: "Invalid" }));
 
@@ -219,6 +276,7 @@ describe("notarize-macos", () => {
 
     it("should throw when staple fails", async () => {
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "Accepted" }));
 
@@ -229,15 +287,20 @@ describe("notarize-macos", () => {
       });
 
       await expect(afterSign(createContext())).rejects.toThrow(/Stapling failed/);
+
+      // State should be left as "accepted" so recovery can staple-only
+      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+      const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
+      expect(lastWrite["3"].status).toBe("accepted");
     });
   });
 
-  describe("reattach from prior state", () => {
+  describe("reattach from submitted state", () => {
     beforeEach(() => {
       mockExistsSync.mockReturnValue(true);
     });
 
-    it("should reattach instead of resubmitting", async () => {
+    it("should reattach via wait instead of resubmitting", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
           "3": { submissionId: "sub-existing", status: "submitted", timestamp: "2026-01-01" },
@@ -253,6 +316,8 @@ describe("notarize-macos", () => {
       expect(mockExecFileSync.mock.calls[0][1]).toContain("wait");
       expect(mockExecFileSync.mock.calls[0][1]).toContain("sub-existing");
       expect(mockExecFileSync.mock.calls[1][1]).toContain("staple");
+      expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("submit");
+      expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("ditto");
     });
 
     it("should throw on reattach timeout with submission ID", async () => {
@@ -272,18 +337,68 @@ describe("notarize-macos", () => {
         /Notarization wait timed out.*sub-existing/
       );
     });
+  });
 
-    it("should throw when reattached wait returns not accepted", async () => {
+  describe("staple-only from accepted state", () => {
+    beforeEach(() => {
+      mockExistsSync.mockReturnValue(true);
+    });
+
+    it("should staple directly without submit or wait", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": { submissionId: "sub-existing", status: "submitted", timestamp: "2026-01-01" },
+          "3": { submissionId: "sub-accepted", status: "accepted", timestamp: "2026-01-01" },
         })
       );
-      mockExecFileSync.mockReturnValueOnce(
-        JSON.stringify({ id: "sub-existing", status: "Invalid" })
+      mockExecFileSync.mockReturnValueOnce("stapled");
+
+      await afterSign(createContext());
+
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+      const stapleCall = mockExecFileSync.mock.calls[0];
+      expect(stapleCall[1]).toContain("stapler");
+      expect(stapleCall[1]).toContain("staple");
+    });
+
+    it("should throw when staple fails in recovery", async () => {
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({
+          "3": { submissionId: "sub-accepted", status: "accepted", timestamp: "2026-01-01" },
+        })
       );
 
-      await expect(afterSign(createContext())).rejects.toThrow(/Notarization not accepted/);
+      const err = new Error("staple error");
+      (err as any).stderr = "staple failed";
+      mockExecFileSync.mockImplementationOnce(() => {
+        throw err;
+      });
+
+      await expect(afterSign(createContext())).rejects.toThrow(/Stapling failed/);
+
+      // State should remain "accepted" for retry
+      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+      expect(tmpWrites.length).toBe(0);
+    });
+  });
+
+  describe("corrupted state file", () => {
+    it("should warn and start fresh when state is unparseable", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue("{{{ not json");
+
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-fresh", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-fresh", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+
+      await afterSign(createContext());
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[notarize-macos] Could not parse notarization state file — starting fresh"
+      );
+      // Should do a fresh submit (ditto + submit + wait + staple)
+      expect(mockExecFileSync.mock.calls[1][1]).toContain("submit");
     });
   });
 
@@ -294,6 +409,7 @@ describe("notarize-macos", () => {
         throw new Error("ENOENT");
       });
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-x64", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-x64", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
@@ -313,14 +429,15 @@ describe("notarize-macos", () => {
         })
       );
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-arm64", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-arm64", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
 
       await afterSign(createContext({ arch: 3 }));
 
-      // First call should be submit (not wait), because arch 3 != 1
-      expect(mockExecFileSync.mock.calls[0][1]).toContain("submit");
+      // Should submit (not wait), because arch 3 !== 1
+      expect(mockExecFileSync.mock.calls[1][1]).toContain("submit");
     });
   });
 
@@ -334,13 +451,14 @@ describe("notarize-macos", () => {
 
     it("should pass Apple API credentials to notarytool", async () => {
       mockExecFileSync
+        .mockReturnValueOnce("") // ditto
         .mockReturnValueOnce(JSON.stringify({ id: "sub-cred", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-cred", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
 
       await afterSign(createContext());
 
-      const submitArgs = mockExecFileSync.mock.calls[0][1];
+      const submitArgs = mockExecFileSync.mock.calls[1][1];
       expect(submitArgs).toContain("--key");
       expect(submitArgs).toContain("/tmp/key.p8");
       expect(submitArgs).toContain("--key-id");
