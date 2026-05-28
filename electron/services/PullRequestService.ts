@@ -1014,6 +1014,21 @@ class PullRequestService {
       return;
     }
 
+    // Per-project poll lease (#9055): only the elected window revalidates per
+    // cycle; siblings receive the resulting sys:pr:detected / sys:pr:cleared
+    // updates through main → renderer fan-out, exactly as checkForPRs relies on.
+    // Gating here is also what makes the open-PR-list ETag baseline single-owner:
+    // the cache is a main-process singleton keyed by owner/repo, so if every
+    // window committed it against its own tracked subset, one window's clean diff
+    // could advance the baseline past a change another window hasn't consumed and
+    // mask it behind a later 304. One revalidating window removes that race (and
+    // the redundant cross-window conditional GETs). Fails open on IPC timeout.
+    const leaseAcquired = await getForgeBridge().acquirePollLease();
+    if (!leaseAcquired) {
+      logDebug("Skipping PR revalidation — sibling window holds poll lease");
+      return;
+    }
+
     // Collect resolved worktrees that need revalidation, plus a per-PR snapshot
     // (state + REST change markers) for the cheap open-PR-list probe below.
     const lookupBranchByWorktreeId = new Map<string, string | undefined>();
@@ -1098,6 +1113,24 @@ class PullRequestService {
                 )
               )
             );
+
+      // Stale-in-flight guard: if `setForgeSettings`/`refresh()` swapped the
+      // provider while the probe or the GraphQL re-fetch was in flight, the
+      // results (and the snapshots we'd seed) belong to the OLD provider.
+      // Abandon the cycle quietly — the next poll picks up the new provider's
+      // PRs. Mirrors the same guard in checkForPRs.
+      if (
+        this.providerNamespacedId !== providerId ||
+        this.repoRef?.host !== repo.host ||
+        this.repoRef?.owner !== repo.owner ||
+        this.repoRef?.repo !== repo.repo
+      ) {
+        logDebug("Discarding stale PR revalidation results — provider changed mid-cycle", {
+          fromProviderId: providerId,
+          toProviderId: this.providerNamespacedId,
+        });
+        return;
+      }
 
       const enrichedPRNumbers = new Set<number>();
 

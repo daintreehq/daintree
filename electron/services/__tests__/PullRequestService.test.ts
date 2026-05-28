@@ -969,6 +969,75 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("seeds headSha/updatedAt from a changed probe so the next tick's snapshot is in sync", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+    const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+      const map = new Map<string, ForgePR | null>();
+      for (const branch of branches) {
+        map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+      }
+      return map;
+    });
+    const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+      return map;
+    });
+    const probeCalls: PRSnapshot[][] = [];
+    const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
+      probeCalls.push(tracked);
+      if (probeCalls.length === 1) {
+        return {
+          kind: "changed" as const,
+          changed: [
+            {
+              number: 1,
+              headSha: "sha2",
+              updatedAt: "2024-02-02T00:00:00Z",
+              state: "open" as const,
+              title: "Add new feature",
+            },
+          ],
+        };
+      }
+      return { kind: "unchanged" as const };
+    });
+    mockImpl.batchLookups = { findPRsByNumbers, probeOpenPRList };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+
+    const revalidate = (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs.bind(pullRequestService);
+
+    await revalidate();
+    await revalidate();
+
+    // First probe saw the un-seeded (null) markers; after consuming the changed
+    // probe, the second probe's tracked snapshot carries the seeded REST markers.
+    expect(probeCalls).toHaveLength(2);
+    expect(probeCalls[0][0]).toMatchObject({ number: 1, headSha: null, updatedAt: null });
+    expect(probeCalls[1][0]).toMatchObject({
+      number: 1,
+      headSha: "sha2",
+      updatedAt: "2024-02-02T00:00:00Z",
+    });
+
+    pullRequestService.destroy();
+  });
+
   it("keeps polling CI for in-flight PRs even when probeOpenPRList reports unchanged", async () => {
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
 

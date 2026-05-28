@@ -387,6 +387,61 @@ describe("probeOpenPRList", () => {
       kind: "fallback",
     });
   });
+
+  it("reports changed on the cold-start (null-marker) snapshot every detection goes through", async () => {
+    setFetch(
+      () =>
+        new Response(openPRBody([{ number: 1, sha: "sha1", updatedAt: "2024-01-01T00:00:00Z" }]), {
+          status: 200,
+          headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"x"' },
+        })
+    );
+
+    // A freshly-detected PR has null head.sha/updated_at markers — they can
+    // never match a real REST field, so the first revalidation must re-fetch.
+    const result = await probeOpenPRList("o", "r", "ghp_token", [
+      tracked(1, { headSha: null, updatedAt: null }),
+    ]);
+
+    expect(result.kind).toBe("changed");
+    // The ETag is NOT committed while the caller is out of sync.
+    expect(openPRListETagCache.get("o/r")).toBeUndefined();
+  });
+
+  it("self-heals across cycles: changed (no commit) → synced (commit) → 304", async () => {
+    openPRListETagCache.set("o/r", 'W/"E0"');
+    // Header-aware mock: a request already holding the post-change ETag gets a
+    // 304; otherwise a 200 reporting PR #1 at the new sha + the new ETag.
+    setFetch((...args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      const inm = (init?.headers as Record<string, string> | undefined)?.["If-None-Match"];
+      if (inm === 'W/"E1"') {
+        return new Response(null, { status: 304, headers: RATE_LIMIT_HEADERS });
+      }
+      return new Response(
+        openPRBody([{ number: 1, sha: "sha2", updatedAt: "2024-02-02T00:00:00Z" }]),
+        { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"E1"' } }
+      );
+    });
+
+    // Cycle 1: caller still on the old sha → changed, old ETag preserved.
+    const c1 = await probeOpenPRList("o", "r", "ghp_token", [tracked(1, { headSha: "sha1" })]);
+    expect(c1.kind).toBe("changed");
+    expect(openPRListETagCache.get("o/r")).toBe('W/"E0"');
+
+    // Cycle 2: caller consumed the change (sha2) → clean diff commits the ETag.
+    const c2 = await probeOpenPRList("o", "r", "ghp_token", [
+      tracked(1, { headSha: "sha2", updatedAt: "2024-02-02T00:00:00Z" }),
+    ]);
+    expect(c2).toEqual({ kind: "unchanged" });
+    expect(openPRListETagCache.get("o/r")).toBe('W/"E1"');
+
+    // Cycle 3: the committed ETag now drives a zero-cost 304.
+    const c3 = await probeOpenPRList("o", "r", "ghp_token", [
+      tracked(1, { headSha: "sha2", updatedAt: "2024-02-02T00:00:00Z" }),
+    ]);
+    expect(c3).toEqual({ kind: "unchanged" });
+  });
 });
 
 describe("batchCheckLinkedPRs repo-level probe gate", () => {
