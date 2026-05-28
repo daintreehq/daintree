@@ -782,42 +782,46 @@ export class DevPreviewSessionService {
 
   async restartByWorktree(worktreeId: string): Promise<DevPreviewSessionState> {
     const key = this.worktreeToSession.get(worktreeId);
-    if (!key) {
-      return {
-        panelId: "",
-        projectId: "",
-        worktreeId: undefined,
-        status: "stopped",
-        url: null,
-        predictedUrl: null,
-        error: null,
-        terminalId: null,
-        isRestarting: false,
-        generation: 0,
-        updatedAt: Date.now(),
-        forceKilled: undefined,
-        phaseLabel: undefined,
-      };
+    const session = key ? this.sessions.get(key) : undefined;
+    if (session) {
+      return this.restart({ panelId: session.panelId, projectId: session.projectId });
     }
-    const session = this.sessions.get(key);
-    if (!session) {
-      return {
-        panelId: "",
-        projectId: "",
-        worktreeId: undefined,
-        status: "stopped",
-        url: null,
-        predictedUrl: null,
-        error: null,
-        terminalId: null,
-        isRestarting: false,
-        generation: 0,
-        updatedAt: Date.now(),
-        forceKilled: undefined,
-        phaseLabel: undefined,
-      };
+
+    // No live session — fall back to a restore placeholder so the dashboard's
+    // restart offer for a server that was running when Daintree last closed
+    // actually spawns it. This is an explicit user action, so (unlike a launch)
+    // spawning IS the intended behavior here (#9094); ensure() drops the
+    // manifest entry and starts the PTY. Mirrors getByWorktree's restore
+    // fallback so the dashboard restart isn't a silent no-op.
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) {
+        return this.ensure({
+          panelId: entry.panelId,
+          projectId: entry.projectId,
+          cwd: entry.cwd,
+          devCommand: entry.devCommand,
+          worktreeId: entry.worktreeId,
+          env: entry.env,
+          turbopackEnabled: entry.turbopackEnabled,
+        });
+      }
     }
-    return this.restart({ panelId: session.panelId, projectId: session.projectId });
+
+    return {
+      panelId: "",
+      projectId: "",
+      worktreeId: undefined,
+      status: "stopped",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      generation: 0,
+      updatedAt: Date.now(),
+      forceKilled: undefined,
+      phaseLabel: undefined,
+    };
   }
 
   // Called from the renderer's worktree delete path BEFORE `git worktree
@@ -869,6 +873,12 @@ export class DevPreviewSessionService {
       }
     }
     this.persistManifest();
+    // Live sessions broadcast via updateSession above, but a restore-only
+    // placeholder removal has no such trigger — push a fresh snapshot so the
+    // dashboard drops the now-gone row instead of showing it until a remount.
+    if (!this.disposed) {
+      this.onAllSessionsChanged(this.getAllSessions());
+    }
 
     if (errors.length > 0) {
       throw errors[0];
@@ -978,11 +988,13 @@ export class DevPreviewSessionService {
    * activity hint. Only the buffer tail is scanned, ANSI/VT control sequences
    * are stripped (Node 22 native `stripVTControlCharacters`), and the result is
    * length-capped so one runaway line can't bloat the all-sessions snapshot.
+   * Splits on bare CR as well as LF so a carriage-return progress line
+   * (`Compiling 90%\rDone!`) reports the final segment, not the overwritten one.
    */
   private getLastOutputLine(buffer: string): string | undefined {
     if (!buffer) return undefined;
     const stripped = stripVTControlCharacters(buffer.slice(-LAST_OUTPUT_SCAN_BYTES));
-    const lines = stripped.split("\n");
+    const lines = stripped.split(/\r\n|\r|\n/);
     for (let i = lines.length - 1; i >= 0; i--) {
       const trimmed = lines[i]!.trim();
       if (trimmed) {

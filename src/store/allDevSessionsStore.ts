@@ -40,6 +40,10 @@ function startSubscription(): void {
     });
 
   unsubscribe = window.electron.devPreview.onAllSessionsChanged((payload) => {
+    // A push reflects a state transition newer than the initial hydrate
+    // snapshot. Advance the token so a still-in-flight getAllSessions() that
+    // resolves later can't overwrite this fresher state with stale data.
+    hydrateToken++;
     useAllDevSessionsStore.setState({ sessions: payload.sessions, hydrated: true });
   });
 }

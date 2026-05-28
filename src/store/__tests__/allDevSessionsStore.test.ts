@@ -87,6 +87,20 @@ describe("allDevSessionsStore", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let a late hydrate overwrite a fresher push", async () => {
+    acquireAllDevSessions();
+    // A push arrives before the in-flight hydrate resolves.
+    pushCallback?.({ sessions: [makeSession({ panelId: "live", status: "running" })] });
+    expect(useAllDevSessionsStore.getState().sessions[0]?.panelId).toBe("live");
+
+    // The stale hydrate resolves afterwards and must be dropped.
+    resolveGetAll([makeSession({ panelId: "stale", status: "starting" })]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useAllDevSessionsStore.getState().sessions[0]?.panelId).toBe("live");
+  });
+
   it("ignores a hydrate that resolves after teardown", async () => {
     const release = acquireAllDevSessions();
     release();

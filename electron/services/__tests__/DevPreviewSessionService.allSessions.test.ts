@@ -226,6 +226,59 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
     expect(service.getAllSessions()[0]?.lastOutput).toBe("second line");
   });
 
+  it("reports the final carriage-return progress segment for lastOutput", async () => {
+    const state = await service.ensure(baseRequest);
+    const terminalId = state.terminalId!;
+
+    ptyClient.emitData(terminalId, "Compiling 10%\rCompiling 90%\rDone!\n");
+    expect(service.getAllSessions()[0]?.lastOutput).toBe("Done!");
+  });
+
+  it("restartByWorktree spawns a restore placeholder via ensure", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-1", worktreeId: "wt-1" })],
+      () => {},
+      onAllSessionsChanged
+    );
+
+    const state = await service.restartByWorktree("wt-1");
+
+    expect(state.status).toBe("starting");
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const sessions = service.getAllSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.status).toBe("starting");
+  });
+
+  it("restartByWorktree returns a stopped placeholder for an unknown worktree", async () => {
+    const state = await service.restartByWorktree("does-not-exist");
+    expect(state.status).toBe("stopped");
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("stopByWorktree broadcasts after removing a restore-only placeholder", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-r", worktreeId: "wt-r" })],
+      () => {},
+      onAllSessionsChanged
+    );
+    onAllSessionsChanged.mockClear();
+
+    await service.stopByWorktree("wt-r");
+
+    expect(onAllSessionsChanged).toHaveBeenCalled();
+    const last = onAllSessionsChanged.mock.calls.at(-1)?.[0] as DevPreviewSessionState[];
+    expect(last).toHaveLength(0);
+  });
+
   it("omits lastOutput once a session is stopped", async () => {
     vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValue(true);
     const state = await service.ensure(baseRequest);

@@ -79,6 +79,20 @@ describe("DevServerDashboard", () => {
     expect(screen.getByText("ready in 200ms")).toBeTruthy();
   });
 
+  it("uses predictedUrl for the port when url is null", () => {
+    useAllDevSessions.mockReturnValue([
+      session({ url: null, predictedUrl: "http://localhost:5050" }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText(":5050")).toBeTruthy();
+  });
+
+  it("omits the port when neither url has one", () => {
+    useAllDevSessions.mockReturnValue([session({ url: "http://localhost", predictedUrl: null })]);
+    const { container } = render(<DevServerDashboard />);
+    expect(container.textContent).not.toContain(":");
+  });
+
   it("falls back to the worktreeId when no name is known", () => {
     useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
       selector({ worktrees: new Map() })
