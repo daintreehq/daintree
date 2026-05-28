@@ -963,6 +963,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Open Dev Preview",
   },
   {
+    "category": "diagnostics",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Collect a diagnostics snapshot and open the review dialog for export. Optional scope hint (timeWindowMs, sections) pre-selects which sections to include.",
+    "examples": undefined,
+    "id": "diagnostics.openReview",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Send diagnostics",
+  },
+  {
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,

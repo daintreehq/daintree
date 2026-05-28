@@ -252,6 +252,9 @@ export const BUILT_IN_ACTION_IDS = [
   "logs.clearLevelOverrides",
   "logs.getRegistry",
 
+  // -- diagnosticsActions --
+  "diagnostics.openReview",
+
   // -- errorActions --
   "errors.clearAll",
   "errors.openLogs",

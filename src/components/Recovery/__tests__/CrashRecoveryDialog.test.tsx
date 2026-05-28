@@ -89,18 +89,39 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
     title,
     description,
     severity,
+    action,
   }: {
     title: ReactNode;
     description?: ReactNode;
     severity?: string;
+    action?: { id: string; label: string; onClick: () => void };
   }) => (
     <div data-testid="inline-status-banner" data-severity={severity ?? "error"}>
       <span data-testid="inline-status-banner-title">{title}</span>
       {description ? (
         <span data-testid="inline-status-banner-description">{description}</span>
       ) : null}
+      {action ? (
+        <button
+          type="button"
+          data-testid={`inline-status-banner-action-${action.id}`}
+          onClick={action.onClick}
+        >
+          {action.label}
+        </button>
+      ) : null}
     </div>
   ),
+}));
+
+const actionServiceDispatchMock = vi.fn<
+  (actionId: string, args?: unknown, opts?: unknown) => Promise<{ ok: true; result: undefined }>
+>(async () => ({ ok: true, result: undefined }));
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: (actionId: string, args?: unknown, opts?: unknown) =>
+      actionServiceDispatchMock(actionId, args, opts),
+  },
 }));
 
 const mockPanels = [
@@ -184,6 +205,7 @@ function setup(overrides?: {
 
 beforeEach(() => {
   notifyMock.mockReset();
+  actionServiceDispatchMock.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -940,6 +962,66 @@ describe("CrashRecoveryDialog", () => {
       const rows = within(list).getAllByTestId(/^action-row-/);
       expect(rows[0]!.getAttribute("data-testid")).toBe("action-row-act-2");
       expect(rows[1]!.getAttribute("data-testid")).toBe("action-row-act-1");
+    });
+  });
+
+  describe("recovery-failed inline banner", () => {
+    it("does not render the banner during the happy path", () => {
+      setup();
+      expect(screen.queryByTestId("recovery-error")).toBeNull();
+    });
+
+    it("shows an inline error with Send diagnostics when onResolve rejects", async () => {
+      const failingResolve = vi.fn(async () => {
+        throw new Error("backup unreadable");
+      });
+      setup({ onResolve: failingResolve });
+
+      // Select-all is already selected by default for non-suspect panels; click
+      // "Restore selected" to fire onResolve.
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("recovery-error")).toBeTruthy();
+      });
+      const banner = within(screen.getByTestId("recovery-error")).getByTestId(
+        "inline-status-banner"
+      );
+      expect(banner.getAttribute("data-severity")).toBe("error");
+      const desc = within(screen.getByTestId("recovery-error")).getByTestId(
+        "inline-status-banner-description"
+      );
+      expect(desc.textContent).toContain("backup unreadable");
+
+      // notify() is NOT called for the recovery-failed path — the inline banner
+      // replaces it because the Toaster isn't mounted while the crash dialog
+      // is blocking the app.
+      expect(notifyMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Recovery failed" })
+      );
+    });
+
+    it("Send diagnostics button dispatches the diagnostics.openReview action", async () => {
+      const failingResolve = vi.fn(async () => {
+        throw new Error("boom");
+      });
+      setup({ onResolve: failingResolve });
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("recovery-error")).toBeTruthy();
+      });
+      fireEvent.click(
+        within(screen.getByTestId("recovery-error")).getByTestId(
+          "inline-status-banner-action-send-diagnostics"
+        )
+      );
+
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "diagnostics.openReview",
+        { scope: { source: "recovery.crashRecoveryFailed" } },
+        { source: "user" }
+      );
     });
   });
 });
