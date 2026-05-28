@@ -334,6 +334,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "keybinding.resetAll",
   "project.remove",
   "recipe.delete",
+  "recipe.run",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
 ];

@@ -14,7 +14,8 @@ import { projectClient, agentSettingsClient, systemClient, globalRecipesClient }
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import type { ActionSource } from "@shared/types/actions";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -42,6 +43,13 @@ export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
   focusPolicy?: AddPanelFocusPolicy;
   terminalIndices?: number[];
+  /**
+   * The action dispatch source that triggered this run. When `"agent"`, a
+   * lower per-run terminal cap ({@link MAX_AGENT_RECIPE_TERMINALS}) is applied
+   * to bound the blast radius of MCP-driven recipe runs. Forwarded from
+   * `recipe.run`'s `ActionContext.dispatchSource`.
+   */
+  dispatchSource?: ActionSource;
 }
 
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
@@ -177,7 +185,18 @@ interface RecipeState {
   reset: () => void;
 }
 
-export const MAX_TERMINALS_PER_RECIPE = 10;
+// Re-exported from the shared module so existing renderer imports
+// (`import { MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore"`) keep working
+// while the in-repo load path (Electron main) shares the same constant.
+export { MAX_TERMINALS_PER_RECIPE };
+
+/**
+ * Per-run terminal cap for agent-dispatched recipe runs. A single MCP-approved
+ * `recipe.run` shouldn't authorize a full {@link MAX_TERMINALS_PER_RECIPE}-wide
+ * spawn — an agent context needs at most a handful of panels. Bounds the blast
+ * radius without blocking legitimate agent use.
+ */
+export const MAX_AGENT_RECIPE_TERMINALS = 3;
 
 let loadRecipesRequestId = 0;
 
@@ -674,6 +693,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
+    // Defense-in-depth blast-radius cap for agent-dispatched runs. recipe.run's
+    // danger:"confirm" gate already requires user approval for agent sources,
+    // but one approval shouldn't authorize a full 10-terminal recipe. Apply the
+    // cap BEFORE preflightSpawnBatchLimit so a capped agent run can never reach
+    // the confirmation-dialog path (which would hang a headless MCP dispatch).
+    if (options?.dispatchSource === "agent" && validIndices.length > MAX_AGENT_RECIPE_TERMINALS) {
+      const dropped = validIndices.splice(MAX_AGENT_RECIPE_TERMINALS);
+      for (const index of dropped) {
+        results.failed.push({ index, error: "Agent recipe terminal cap reached" });
+      }
+    }
+
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
     let clipboardDirectory: string | undefined;
@@ -865,82 +896,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
-    const ALLOWED_TYPES = ["terminal", ...BUILT_IN_AGENT_IDS, "dev-preview"];
-    const ALLOWED_EXIT_BEHAVIORS = ["keep", "trash", "remove"];
-    const sanitizedTerminals = recipe.terminals
-      .filter((terminal) => {
-        if (!ALLOWED_TYPES.includes(terminal.type)) return false;
-        if (terminal.command !== undefined) {
-          if (typeof terminal.command !== "string") return false;
-          // eslint-disable-next-line no-control-regex
-          if (/[\r\n\x00-\x1F]/.test(terminal.command)) return false;
-        }
-        if (terminal.initialPrompt !== undefined) {
-          if (typeof terminal.initialPrompt !== "string") return false;
-          // Allow newlines (\r\n) but reject other control chars
-          // eslint-disable-next-line no-control-regex
-          if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(terminal.initialPrompt)) return false;
-        }
-        if (terminal.args !== undefined) {
-          if (typeof terminal.args !== "string") return false;
-          // eslint-disable-next-line no-control-regex
-          if (/[\r\n\x00-\x1F]/.test(terminal.args)) return false;
-        }
-        if (terminal.devCommand !== undefined) {
-          if (typeof terminal.devCommand !== "string") return false;
-          // eslint-disable-next-line no-control-regex
-          if (/[\r\n\x00-\x1F]/.test(terminal.devCommand)) return false;
-        }
-        if (terminal.env !== undefined) {
-          if (
-            typeof terminal.env !== "object" ||
-            terminal.env === null ||
-            Array.isArray(terminal.env)
-          )
-            return false;
-          for (const value of Object.values(terminal.env)) {
-            if (typeof value !== "string") return false;
-          }
-        }
-        // Validate exitBehavior if present (allow undefined/empty string from UI)
-        if (terminal.exitBehavior !== undefined && typeof terminal.exitBehavior === "string") {
-          const behavior = terminal.exitBehavior as string;
-          // Empty string from UI means "use default" - allow it
-          if (behavior !== "" && !ALLOWED_EXIT_BEHAVIORS.includes(behavior)) {
-            return false;
-          }
-        }
-        return true;
-      })
-      .map((terminal) => ({
-        type: terminal.type,
-        title: typeof terminal.title === "string" ? terminal.title : undefined,
-        command:
-          terminal.type === "terminal" && typeof terminal.command === "string"
-            ? terminal.command.trim() || undefined
-            : undefined,
-        env: terminal.env,
-        initialPrompt:
-          terminal.type !== "terminal" &&
-          terminal.type !== "dev-preview" &&
-          typeof terminal.initialPrompt === "string"
-            ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
-            : undefined,
-        devCommand:
-          terminal.type === "dev-preview" && typeof terminal.devCommand === "string"
-            ? terminal.devCommand.trim() || undefined
-            : undefined,
-        args:
-          terminal.type !== "terminal" &&
-          terminal.type !== "dev-preview" &&
-          typeof terminal.args === "string"
-            ? terminal.args.trim() || undefined
-            : undefined,
-        exitBehavior:
-          terminal.exitBehavior && ALLOWED_EXIT_BEHAVIORS.includes(terminal.exitBehavior as string)
-            ? (terminal.exitBehavior as "keep" | "trash" | "remove")
-            : undefined,
-      }));
+    // Content-validate at the import trust boundary. Shared with the in-repo
+    // load path (ProjectIdentityFiles.readInRepoRecipesWithHashes) so both
+    // entry points apply the same type allowlist, control-char filtering, and
+    // explicit field mapping before a terminal can reach the spawn path.
+    const sanitizedTerminals = sanitizeRecipeTerminals(recipe.terminals);
 
     if (sanitizedTerminals.length === 0) {
       throw new Error("No valid terminals found in recipe");
