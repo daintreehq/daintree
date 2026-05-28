@@ -902,6 +902,34 @@ describe("toolbarPreferencesStore", () => {
           terminal: false,
         });
       });
+
+      it("renames `plugin.{pluginId}.{btn}` entries in leftButtons/rightButtons", async () => {
+        // Users who drag-and-dropped plugin toolbar buttons into a fixed
+        // slot had the old-form id stored in the position arrays. Without
+        // renaming, those become dangling references after the namespace
+        // change.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "plugin.acme.foo.btn", "browser"],
+                rightButtons: ["plugin.daintreehq.tool.opener", "settings"],
+                pinnedButtons: {},
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 8,
+          })
+        );
+
+        const store = await loadStore();
+        const { leftButtons, rightButtons } = store.getState().layout;
+        expect(leftButtons).toContain("acme.foo.btn");
+        expect(leftButtons).not.toContain("plugin.acme.foo.btn");
+        expect(rightButtons).toContain("daintreehq.tool.opener");
+        expect(rightButtons).not.toContain("plugin.daintreehq.tool.opener");
+      });
     });
   });
 });

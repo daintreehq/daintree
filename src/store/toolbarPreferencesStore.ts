@@ -300,21 +300,35 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         }
         if (version < 9) {
           // Plugin toolbar buttons migrated from `plugin.{pluginId}.{btn}` to
-          // canonical `{pluginId}.{btn}` (#9281). Rename persisted pin keys so
-          // user hide preferences survive the rename — otherwise next-launch
-          // sweep would drop them silently since they no longer match any
-          // registered button id. Built-in keys (no `plugin.` prefix) are
-          // untouched.
+          // canonical `{pluginId}.{btn}` (#9281). Rename persisted pin keys
+          // AND the position arrays (`leftButtons`/`rightButtons`, populated
+          // by `moveButton` when a user drags a plugin button into a fixed
+          // slot) so user state survives the rename. Without the array
+          // rename, those entries would become dangling references that
+          // match no registered button config — producing phantom slots.
+          // Built-in ids never start with `plugin.`, so non-prefixed keys
+          // pass through unchanged.
+          const stripPluginPrefix = (id: string): string =>
+            id.startsWith("plugin.") ? id.slice("plugin.".length) : id;
           const layout = state.layout as
-            | { pinnedButtons?: Record<string, boolean> }
+            | {
+                pinnedButtons?: Record<string, boolean>;
+                leftButtons?: string[];
+                rightButtons?: string[];
+              }
             | undefined;
           if (layout?.pinnedButtons) {
             const renamed: Record<string, boolean> = {};
             for (const [key, value] of Object.entries(layout.pinnedButtons)) {
-              const target = key.startsWith("plugin.") ? key.slice("plugin.".length) : key;
-              renamed[target] = value;
+              renamed[stripPluginPrefix(key)] = value;
             }
             layout.pinnedButtons = renamed;
+          }
+          if (Array.isArray(layout?.leftButtons)) {
+            layout.leftButtons = layout.leftButtons.map(stripPluginPrefix);
+          }
+          if (Array.isArray(layout?.rightButtons)) {
+            layout.rightButtons = layout.rightButtons.map(stripPluginPrefix);
           }
         }
         return state as unknown as ToolbarPreferencesState;

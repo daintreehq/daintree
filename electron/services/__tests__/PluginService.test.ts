@@ -1305,6 +1305,64 @@ describe("PluginService manifest command contributions (#9281)", () => {
       })
     );
   });
+
+  it("preserves a collision loadError across a successful main activation", async () => {
+    // A plugin with both `main` AND a colliding manifest command writes a
+    // loadError at load time; `_doActivate()` success previously cleared it
+    // unconditionally, erasing the diagnostic. The collision is a manifest-
+    // level fact that doesn't go away when `main` activates cleanly.
+    const { BUILT_IN_ACTION_IDS } = await import("../../../shared/config/actionIds.js");
+    const pluginNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+    const threeSegment = BUILT_IN_ACTION_IDS.find((id) => {
+      const parts = id.split(".");
+      if (parts.length < 3) return false;
+      return pluginNamePattern.test(`${parts[0]}.${parts[1]}`);
+    });
+    if (!threeSegment) return;
+    const parts = threeSegment.split(".");
+    const pluginName = `${parts[0]}.${parts[1]}`;
+    const cmdId = parts.slice(2).join(".");
+
+    const pluginDir = path.join(tmpDir, pluginName);
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: pluginName,
+        version: "1.0.0",
+        main: "main.js",
+        contributes: {
+          commands: [
+            {
+              id: cmdId,
+              title: "Bad",
+              description: "",
+              category: "X",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.js"),
+      `export async function activate() { /* no-op */ }`
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      await service.activatePlugin(pluginName);
+
+      const installed = (storeMock._state.get("plugins") as { installed?: Record<string, unknown> })
+        ?.installed as Record<string, { loadError?: { message: string } | null }> | undefined;
+      expect(installed?.[pluginName]?.loadError?.message).toContain("collides with a built-in");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe("PluginService built-in plugin loading", () => {

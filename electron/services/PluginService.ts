@@ -288,6 +288,15 @@ export class PluginService {
    * Cleared per-plugin in {@link unregisterPluginActions}.
    */
   private manifestCommandIds = new Set<string>();
+  /**
+   * Plugin ids whose provenance record carries a load-time `loadError` that
+   * is independent of the plugin's `main` activation outcome — e.g. a
+   * manifest command id colliding with a built-in action id (#9281). When
+   * `_doActivate()` finishes successfully it normally clears `loadError` to
+   * `null`; entries here are exempted from that clear so the diagnostic
+   * survives. Cleared on unload alongside the rest of the per-plugin state.
+   */
+  private pluginsWithLoadTimeErrors = new Set<string>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
@@ -911,6 +920,10 @@ export class PluginService {
           this.upsertInstalledRecord(pluginId, {
             loadError: { message, at: Date.now() },
           });
+          // Mark so a later `_doActivate()` success doesn't clear this
+          // load-time diagnostic. Collisions are manifest-level facts that
+          // don't go away when `main` activates cleanly.
+          this.pluginsWithLoadTimeErrors.add(pluginId);
         }
         continue;
       }
@@ -928,6 +941,7 @@ export class PluginService {
         );
         if (!isBuiltin) {
           this.upsertInstalledRecord(pluginId, { loadError });
+          this.pluginsWithLoadTimeErrors.add(pluginId);
         }
         continue;
       }
@@ -1070,8 +1084,11 @@ export class PluginService {
       }
       // Successful activation (or a main with no activate fn) clears any
       // diagnostic record left over from a prior failed attempt — persisted
-      // to the provenance record so it survives a host restart.
-      if (!plugin.isBuiltin) {
+      // to the provenance record so it survives a host restart. Plugins with
+      // a load-time error that is independent of `main` activation (e.g. a
+      // manifest command id collision, #9281) are exempted: their diagnostic
+      // is a manifest-level fact that doesn't go away when `main` activates.
+      if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
         this.upsertInstalledRecord(pluginId, { loadError: null });
       }
     } catch (err) {
@@ -2221,6 +2238,10 @@ export class PluginService {
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.clearPluginSettingsState(pluginId)
     );
+
+    // Drop the load-time-error marker (#9281) so a reload with a fixed
+    // manifest can successfully clear `loadError` on next activation.
+    this.pluginsWithLoadTimeErrors.delete(pluginId);
 
     this.plugins.delete(pluginId);
 
