@@ -957,6 +957,39 @@ describe("AgentNotificationService", () => {
     });
   });
 
+  describe("OS DND hard constraint — never suppresses in-app toasts", () => {
+    // The issue explicitly forbids `osDndActive` from suppressing in-app
+    // notifications. The OS already silences its own native banners; double-
+    // gating would hide signals the user cannot observe.
+
+    it("completion notifications still fire when OS DND is active", () => {
+      mockStore({ completedEnabled: true, soundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      events.emit("agent:state-changed", makePayload("completed", "working"));
+      vi.advanceTimersByTime(2001); // past completion debounce + flush
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("waiting notifications still fire when OS DND is active", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      events.emit("agent:state-changed", makePayload("waiting", "working"));
+      vi.advanceTimersByTime(200); // past the burst window
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("agent:spawned UI feedback sound", () => {
     it("plays agent-spawned sound when uiFeedbackSoundEnabled is true", () => {
       mockStore({ uiFeedbackSoundEnabled: true });

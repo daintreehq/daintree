@@ -182,6 +182,21 @@ describe("OsDndService — macOS", () => {
     systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("dispose followed by initialize re-probes and re-subscribes", () => {
+    execFileSyncMock.mockReturnValueOnce("");
+    const svc = getOsDndService();
+    svc.initialize();
+    const firstSubCount = systemPreferencesMock.subscribeNotification.mock.calls.length;
+
+    svc.dispose();
+    expect(svc.getState()).toBeUndefined();
+
+    execFileSyncMock.mockReturnValueOnce("com.apple.focus.work\n");
+    svc.initialize();
+    expect(svc.getState()).toBe(true);
+    expect(systemPreferencesMock.subscribeNotification.mock.calls.length).toBe(firstSubCount * 2);
+  });
 });
 
 describe("OsDndService — non-macOS platforms", () => {

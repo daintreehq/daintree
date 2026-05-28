@@ -1,12 +1,16 @@
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
-import { getOsDndService } from "../../services/OsDndService.js";
+import { initializeOsDndService } from "../../services/OsDndService.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { OS_DND_METHOD_CHANNELS } from "./osDnd.preload.js";
 
 export function registerOsDndHandlers(_deps: HandlerDependencies): () => void {
-  const osDndService = getOsDndService();
+  // Initialize eagerly during handler registration so the first renderer
+  // hydrate IPC call always lands on a probed service. The matching deferred
+  // task (electron/window/globalServicesInit.ts) is idempotent and remains in
+  // place for symmetry with sibling services.
+  const osDndService = initializeOsDndService();
 
   const namespace = defineIpcNamespace({
     name: "osDnd",
