@@ -42,7 +42,7 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
 
   it("contributes the React externals through the config hook", () => {
     const plugin = daintreePlugin();
-    const configFn = plugin.config as () => {
+    const configFn = plugin.config as unknown as () => {
       build: { rollupOptions: { external: ReadonlyArray<string | RegExp> } };
     };
     const result = configFn();
@@ -54,7 +54,7 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
 
   it("merges caller-supplied externals after the React preset", () => {
     const plugin = daintreePlugin({ externals: ["@host/shared-ui", /^@daintree\//] });
-    const configFn = plugin.config as () => {
+    const configFn = plugin.config as unknown as () => {
       build: { rollupOptions: { external: ReadonlyArray<string | RegExp> } };
     };
     const externals = configFn().build.rollupOptions.external;
