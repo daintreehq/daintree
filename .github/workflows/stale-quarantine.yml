@@ -23,8 +23,8 @@ jobs:
 
       - name: Bootstrap test-quarantine label
         run: |
-          if ! gh label list --color never --search test-quarantine --limit 1 | grep -q test-quarantine; then
-            gh label create test-quarantine --color "FF0000" --description "Test quarantine tracking for stale annotations"
+          if ! gh label list --search test-quarantine --limit 1 | grep -q test-quarantine; then
+            gh label create test-quarantine --force --color "FF0000" --description "Test quarantine tracking for stale annotations"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
