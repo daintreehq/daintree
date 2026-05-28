@@ -97,9 +97,7 @@ export function TerminalContextMenu({
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
-  const isVoiceLockedHere = useVoiceRecordingStore(
-    (s) => s.lockedTarget?.panelId === terminalId
-  );
+  const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
   const panelsById = usePanelStore((s) => s.panelsById);
   // Pull the panel directly here (rather than indexing through the shallow
@@ -331,11 +329,9 @@ export function TerminalContextMenu({
           );
           break;
         case "voice-unlock-target":
-          void actionService.dispatch(
-            "voiceInput.unlockTarget",
-            undefined,
-            { source: sourceRef.current }
-          );
+          void actionService.dispatch("voiceInput.unlockTarget", undefined, {
+            source: sourceRef.current,
+          });
           break;
         case "toggle-watch":
           void actionService.dispatch(

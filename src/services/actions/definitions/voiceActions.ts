@@ -7,6 +7,9 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
+const lockTargetArgsSchema = z.object({ panelId: z.string().optional() });
+const recallRecentTargetArgsSchema = z.object({ panelId: z.string() });
+
 function resolveTargetForPanel(panelId: string): {
   panelId: string;
   panelTitle?: string;
@@ -88,10 +91,11 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "lock", "pin", "fix"],
-    argsSchema: z.object({ panelId: z.string().optional() }),
-    run: async (args) => {
+    argsSchema: lockTargetArgsSchema,
+    run: async (args: unknown) => {
+      const parsed = lockTargetArgsSchema.safeParse(args ?? {});
       const requestedId =
-        (args as { panelId?: string } | undefined)?.panelId ??
+        (parsed.success ? parsed.data.panelId : undefined) ??
         usePanelStore.getState().focusedId ??
         undefined;
       if (!requestedId) {
@@ -148,10 +152,11 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "recent", "history"],
-    argsSchema: z.object({ panelId: z.string() }),
-    run: async (args) => {
-      const panelId = (args as { panelId: string }).panelId;
-      const target = resolveTargetForPanel(panelId);
+    argsSchema: recallRecentTargetArgsSchema,
+    run: async (args: unknown) => {
+      const parsed = recallRecentTargetArgsSchema.safeParse(args);
+      if (!parsed.success) return;
+      const target = resolveTargetForPanel(parsed.data.panelId);
       if (!target) {
         useVoiceRecordingStore.getState().setLastError({
           severity: "transient",

@@ -245,9 +245,7 @@ describe("voiceRecordingStore — recentTargets", () => {
 
   it("recordRecentTarget dedups a live entry against a rehydrated (no panelId) entry with same worktree+title", () => {
     useVoiceRecordingStore.setState({
-      recentTargets: [
-        { panelTitle: "Editor", worktreeId: "wt-1", lastUsedAt: 1 },
-      ],
+      recentTargets: [{ panelTitle: "Editor", worktreeId: "wt-1", lastUsedAt: 1 }],
     });
     useVoiceRecordingStore.getState().recordRecentTarget({
       panelId: "p1",
@@ -261,9 +259,7 @@ describe("voiceRecordingStore — recentTargets", () => {
 
   it("recordRecentTarget keeps rehydrated entry with different worktreeId", () => {
     useVoiceRecordingStore.setState({
-      recentTargets: [
-        { panelTitle: "Editor", worktreeId: "wt-other", lastUsedAt: 1 },
-      ],
+      recentTargets: [{ panelTitle: "Editor", worktreeId: "wt-other", lastUsedAt: 1 }],
     });
     useVoiceRecordingStore.getState().recordRecentTarget({
       panelId: "p1",

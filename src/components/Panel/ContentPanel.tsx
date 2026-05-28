@@ -266,9 +266,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // target. Selector returns a boolean for stable equality across unrelated
   // store updates (transcript deltas, audio levels). Renders independently of
   // panel-state-* so a locked working/waiting panel shows both signals.
-  const isVoiceDictationLocked = useVoiceRecordingStore(
-    (s) => s.lockedTarget?.panelId === id
-  );
+  const isVoiceDictationLocked = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === id);
 
   // Per-worktree color identity
   const worktreeColorMap = useWorktreeColorMap();
