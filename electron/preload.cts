@@ -50,6 +50,7 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
+import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -1143,7 +1144,7 @@ const api: ElectronAPI = {
 
     getVersion: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION),
 
-    getVersionInfo: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION_INFO),
+    ...buildAppVersionInfoPreloadBindings(_unwrappingInvoke),
 
     hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
 

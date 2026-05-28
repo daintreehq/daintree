@@ -44,6 +44,10 @@ export interface GeneratedIpcInvokeMap {
     args: [panelId: string];
     result: { cleared: boolean };
   };
+  "app:get-version-info": {
+    args: [];
+    result: import("./app.js").AppVersionInfo;
+  };
   "artifact:apply-patch": {
     args: [options: import("./agent.js").ApplyPatchOptions];
     result: import("./agent.js").ApplyPatchResult;
