@@ -569,7 +569,7 @@ describe("terminal/syntax validation", () => {
     const warnings = getThemeContrastWarnings(scheme);
     const commentFailure = warnings.find((w) => w.message.includes("syntax-comment on"));
     expect(commentFailure).toBeDefined();
-    expect(commentFailure!.message).toContain("floor is 0.22");
+    expect(commentFailure!.message).toContain("floor is 0.18");
   });
 
   it("uses softer floor for syntax-quote", () => {
@@ -580,7 +580,7 @@ describe("terminal/syntax validation", () => {
     const warnings = getThemeContrastWarnings(scheme);
     const quoteFailure = warnings.find((w) => w.message.includes("syntax-quote on"));
     expect(quoteFailure).toBeDefined();
-    expect(quoteFailure!.message).toContain("floor is 0.22");
+    expect(quoteFailure!.message).toContain("floor is 0.18");
   });
 
   it("uses primary floor for terminal-foreground", () => {
