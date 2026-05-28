@@ -299,6 +299,25 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("enforces the pre-connect byte cap independently of chunk count", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+
+    // Five 40KB chunks = 200KB, over the 150KB ceiling. Only the chunks that
+    // fit under 150KB are retained.
+    for (let i = 0; i < 5; i++) {
+      provider.sendAudioChunk(new Uint8Array(40_000).buffer);
+    }
+    socket.simulateOpen();
+    await startPromise;
+
+    // 3 × 40KB = 120KB fits; a 4th would push to 160KB > 150KB, so it's dropped.
+    expect(socket.binaryFrames()).toHaveLength(3);
+    provider.stop();
+  });
+
   it("drops audio chunks while draining", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const { socket } = await bringSessionReady(provider);
@@ -374,6 +393,33 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(() => socket.simulateRawMessage("not json {")).not.toThrow();
     socket.simulateMessage(resultsMessage("still works", { is_final: true }));
     expect(completes).toEqual(["still works"]);
+    provider.stop();
+  });
+
+  it("handles malformed Results payloads without throwing or emitting", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const completes: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    // No channel field.
+    expect(() => socket.simulateMessage({ type: "Results", is_final: true })).not.toThrow();
+    // Empty alternatives array.
+    expect(() =>
+      socket.simulateMessage({ type: "Results", is_final: true, channel: { alternatives: [] } })
+    ).not.toThrow();
+    // is_final as a string, not a strict boolean — treated as interim, not emitted.
+    expect(() =>
+      socket.simulateMessage({
+        type: "Results",
+        is_final: "true",
+        channel: { alternatives: [{ transcript: "stringy" }] },
+      })
+    ).not.toThrow();
+
+    expect(completes).toEqual([]);
     provider.stop();
   });
 
