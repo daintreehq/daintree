@@ -35,7 +35,7 @@ export function computeDevServerUrl(
     } catch {
       return false;
     }
-    let current: URL | null = null;
+    let current: URL | null;
     try {
       current = currentUrl ? new URL(currentUrl) : null;
     } catch {
@@ -48,7 +48,7 @@ export function computeDevServerUrl(
     // First navigation onto the proxy origin (or migrating off a stale localhost
     // URL). Choose the route: honor a non-root path the dev server advertises
     // (Vite `base`), else preserve the pane's current route, else land on root.
-    let detected: URL | null = null;
+    let detected: URL | null;
     try {
       detected = new URL(detectedUrl);
     } catch {
