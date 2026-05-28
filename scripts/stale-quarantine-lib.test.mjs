@@ -76,6 +76,24 @@ describe("extractQuarantineAnnotations", () => {
     );
   });
 
+  it("does not corrupt a description containing a bare //", () => {
+    const source = `
+      test.info().annotations.push({
+        type: "quarantine",
+        description: "2026-05-27 flaky // only on CI runners",
+      });
+    `;
+    const result = extractQuarantineAnnotations(source);
+    expect(result).toEqual([
+      { date: "2026-05-27", description: "2026-05-27 flaky // only on CI runners" },
+    ]);
+  });
+
+  it("skips annotations with keys in reverse order (type must precede description)", () => {
+    const source = `annotations.push({ description: "2026-05-27 reversed", type: "quarantine" });`;
+    expect(extractQuarantineAnnotations(source)).toEqual([]);
+  });
+
   it("returns an empty array when there are no annotations", () => {
     expect(extractQuarantineAnnotations("const x = 1;")).toEqual([]);
   });
@@ -130,6 +148,15 @@ describe("isStale", () => {
     expect(isStale("yesterday", now)).toBe(true);
   });
 
+  it("treats a calendar-overflow date as stale", () => {
+    // 2026-02-31 would silently roll to March 3 — reject it instead.
+    expect(isStale("2026-02-31", now)).toBe(true);
+  });
+
+  it("treats a future date as stale (likely a typo)", () => {
+    expect(isStale("3026-01-01", now)).toBe(true);
+  });
+
   it("respects a custom threshold", () => {
     expect(isStale("2026-06-20", now, 5)).toBe(true);
     expect(isStale("2026-06-20", now, 10)).toBe(false);
@@ -162,6 +189,28 @@ describe("collectStaleQuarantines", () => {
     ];
     const result = collectStaleQuarantines(files, now);
     expect(result[0].stale[0]).toMatchObject({ date: null, ageDays: null });
+  });
+
+  it("returns every stale annotation from a single spec", () => {
+    const source = `
+      annotations.push({ type: "quarantine", description: "2026-01-01 first" });
+      annotations.push({ type: "quarantine", description: "2026-02-01 second" });
+      annotations.push({ type: "quarantine", description: "2026-03-01 third" });
+    `;
+    const result = collectStaleQuarantines([{ path: "e2e/e.spec.ts", source }], now);
+    expect(result).toHaveLength(1);
+    expect(result[0].stale).toHaveLength(3);
+  });
+
+  it("reports a calendar-overflow date as stale with a null ageDays", () => {
+    const files = [
+      {
+        path: "e2e/f.spec.ts",
+        source: `annotations.push({ type: "quarantine", description: "2026-02-31 impossible" });`,
+      },
+    ];
+    const result = collectStaleQuarantines(files, now);
+    expect(result[0].stale[0]).toMatchObject({ date: "2026-02-31", ageDays: null });
   });
 
   it("returns an empty array when nothing is stale", () => {
@@ -208,6 +257,13 @@ describe("buildIssueBody", () => {
     ]);
     expect(body).toContain("undated");
     expect(body).toContain("no parseable date");
+  });
+
+  it("labels a future-dated entry", () => {
+    const body = buildIssueBody("e2e/x.spec.ts", [
+      { date: "3026-01-01", ageDays: -365, description: "3026-01-01 future typo" },
+    ]);
+    expect(body).toContain("dated in the future");
   });
 });
 

@@ -10,13 +10,12 @@ export const STALE_THRESHOLD_DAYS = 30;
 
 const MS_PER_DAY = 86_400_000;
 
-// Remove block comments and line comments so commented-out annotations are
-// ignored. The line-comment pass keeps a non-`:` lookahead so `://` inside a URL
-// in a description is never mistaken for a comment.
+// Remove block comments and fully-commented lines so commented-out annotations
+// are ignored. Line comments are only stripped when `//` is the first
+// non-whitespace on the line — a trailing or in-string `//` (including `://` in
+// a URL) is left untouched, so description literals are never corrupted.
 function stripComments(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/[^\n]*/gm, "$1");
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/[^\n]*$/gm, "");
 }
 
 // Matches `type: "quarantine"` immediately followed by `description: "<value>"`.
@@ -39,19 +38,40 @@ export function extractQuarantineAnnotations(source) {
   return annotations;
 }
 
+// Parses a strict YYYY-MM-DD date to epoch ms, or null if it is malformed or a
+// calendar overflow (e.g. 2026-02-31, which Date would silently roll to March).
+function parseQuarantineDate(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const ms = Date.parse(`${dateStr}T00:00:00.000Z`);
+  if (Number.isNaN(ms)) return null;
+  // The round-tripped date must equal the input — rejects overflowed days.
+  if (new Date(ms).toISOString().slice(0, 10) !== dateStr) return null;
+  return ms;
+}
+
 // Whole-day age of a YYYY-MM-DD date relative to `now`. Returns Infinity for an
-// unparseable date so callers treat it as stale rather than silently skipping it.
+// unparseable date so callers treat it as stale rather than silently skipping
+// it; a future date yields a negative age.
 export function daysSince(dateStr, now = new Date()) {
-  const then = Date.parse(`${dateStr}T00:00:00Z`);
-  if (Number.isNaN(then)) return Infinity;
-  return Math.floor((now.getTime() - then) / MS_PER_DAY);
+  const ms = parseQuarantineDate(dateStr);
+  if (ms === null) return Infinity;
+  return Math.floor((now.getTime() - ms) / MS_PER_DAY);
 }
 
 export function isStale(dateStr, now = new Date(), threshold = STALE_THRESHOLD_DAYS) {
   // A missing or malformed date is surfaced, not hidden: an undated quarantine
   // is exactly the kind of rot this cron exists to catch.
   if (!dateStr) return true;
-  return daysSince(dateStr, now) > threshold;
+  const age = daysSince(dateStr, now);
+  // Past the threshold is stale; a future date (negative age) is almost
+  // certainly a typo, so surface it too.
+  return age < 0 || age > threshold;
+}
+
+// Whole-day age, or null when the date is missing or unparseable.
+function ageInDays(dateStr, now) {
+  const days = daysSince(dateStr, now);
+  return Number.isFinite(days) ? days : null;
 }
 
 // Groups stale annotations by spec. `files` is `{ path, source }[]` so the pure
@@ -64,7 +84,7 @@ export function collectStaleQuarantines(files, now = new Date(), threshold = STA
       .map((annotation) => ({
         date: annotation.date,
         description: annotation.description,
-        ageDays: annotation.date ? daysSince(annotation.date, now) : null,
+        ageDays: ageInDays(annotation.date, now),
       }));
     if (stale.length > 0) {
       results.push({ path, stale });
@@ -77,6 +97,12 @@ export function buildIssueTitle(specPath) {
   return `Stale quarantined test in ${specPath}`;
 }
 
+function formatAge(ageDays) {
+  if (ageDays === null) return "no parseable date";
+  if (ageDays < 0) return "dated in the future";
+  return `${ageDays} days old`;
+}
+
 export function buildIssueBody(specPath, staleEntries, runUrl) {
   const lines = [
     `\`${specPath}\` has quarantined annotations older than ${STALE_THRESHOLD_DAYS} days.`,
@@ -86,10 +112,9 @@ export function buildIssueBody(specPath, staleEntries, runUrl) {
   ];
 
   for (const entry of staleEntries) {
-    const age =
-      entry.ageDays === null ? "no parseable date" : `${entry.ageDays} days old`;
-    const date = entry.date ?? "undated";
-    lines.push(`- **${date}** (${age}) — ${entry.description}`);
+    lines.push(
+      `- **${entry.date ?? "undated"}** (${formatAge(entry.ageDays)}) — ${entry.description}`
+    );
   }
 
   if (runUrl) {
