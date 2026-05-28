@@ -155,6 +155,13 @@ jobs:
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
 
+      - name: Download notarization state
+        uses: actions/download-artifact@v7
+        with:
+          name: macos-notarization-state
+          path: release/
+        continue-on-error: true
+
       - name: Build (macOS)
         shell: bash
         env:
@@ -164,6 +171,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DAINTREE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization && 'true' || '' }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
           npm_config_build_from_source: "true"
@@ -177,12 +185,7 @@ jobs:
             echo "::warning::Dry run — skipping publish to electron-builder targets"
             PUBLISH_FLAG="never"
           fi
-          EXTRA_ARGS=""
-          if [ "${{ inputs.skip_notarization }}" = "true" ]; then
-            echo "::warning::Skipping macOS notarization (manually disabled)"
-            EXTRA_ARGS="-c.mac.notarize=false"
-          fi
-          npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG" -c.buildDependenciesFromSource=true $EXTRA_ARGS
+          npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG" -c.buildDependenciesFromSource=true
 
       - name: Verify macOS notarization staple
         if: inputs.skip_notarization != true
@@ -227,6 +230,15 @@ jobs:
           for app in "${apps[@]}"; do
             scripts/ci/verify-team-identifier.sh "$app" "$EXPECTED_TEAM_ID"
           done
+
+      - name: Upload notarization state
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-notarization-state
+          path: release/.notarization-state.json
+          retention-days: 1
+          if-no-files-found: ignore
 
       - name: Validate update metadata (macOS)
         shell: bash
