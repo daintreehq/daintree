@@ -1,3 +1,5 @@
+import { scrubReportText } from "@shared/utils/reportScrubbers";
+
 const REPO_ISSUE_URL = "https://github.com/daintreehq/daintree/issues/new";
 
 // GitHub's Nginx fronts the issue form at an 8 KiB URL hard cap. Reserve
@@ -128,14 +130,19 @@ function makeUrl(title: string, body: string): string {
  * write `fullBody` to the clipboard and use the short stub URL.
  */
 export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult {
+  // Redact user paths/secrets before the stack enters either the URL body or
+  // the clipboard payload — both surfaces end up pasted into a public issue.
+  const stack = scrubReportText(input.stack);
+  const componentStack = scrubReportText(input.componentStack);
+
   const title = `Component Error: ${input.message || "Unknown"}`;
   const fullBody = formatBody({
     componentName: input.componentName,
     incidentId: input.incidentId,
     message: input.message,
     context: input.context,
-    stack: input.stack,
-    componentStack: input.componentStack,
+    stack,
+    componentStack,
   });
 
   if (encodeURIComponent(fullBody).length <= URL_BODY_BUDGET) {
@@ -147,7 +154,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     incidentId: input.incidentId,
     message: input.message,
     context: input.context,
-    stack: input.stack,
+    stack,
     componentStack: COMPONENT_STACK_PLACEHOLDER,
   });
 
@@ -159,7 +166,7 @@ export function buildReportIssueUrl(input: ReportIssueInput): ReportIssueResult 
     };
   }
 
-  const truncatedStack = truncateStackMiddle(input.stack);
+  const truncatedStack = truncateStackMiddle(stack);
   const withTruncatedStack = formatBody({
     componentName: input.componentName,
     incidentId: input.incidentId,

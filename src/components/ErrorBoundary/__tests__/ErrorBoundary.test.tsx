@@ -326,14 +326,14 @@ describe("ErrorBoundary", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Error details too long",
+        title: "Report not copied",
         inboxMessage: expect.any(String),
       })
     );
     // Failure branch must NOT be transient — the user needs the inbox entry.
     expect(notify).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Error details too long",
+        title: "Report not copied",
         transient: true,
       })
     );
@@ -369,7 +369,7 @@ describe("ErrorBoundary", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Error details too long",
+        title: "Report not copied",
       })
     );
   });
@@ -528,7 +528,7 @@ describe("ErrorBoundary", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("hides technical details in production mode", () => {
+  it("surfaces technical details in production mode so crashes reach reporters", () => {
     vi.stubEnv("DEV", false);
 
     render(
@@ -537,7 +537,7 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.queryByText("Technical details")).toBeNull();
+    expect(screen.getByText("Technical details")).toBeTruthy();
   });
 
   it("calls onError callback when provided", () => {
