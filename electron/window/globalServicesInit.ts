@@ -18,6 +18,10 @@ import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js"
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
 import {
+  getPluginMcpAuditService,
+  getPluginMcpConsentService,
+} from "../services/plugin-mcp/instances.js";
+import {
   initializeHibernationService,
   getHibernationService,
 } from "../services/HibernationService.js";
@@ -235,6 +239,14 @@ export async function initGlobalServices(
   getPluginActionAuditService().initialize({
     isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
   });
+
+  // Plugin-MCP inbound audit + TOFU consent stores (#9234). Hydrate eagerly so
+  // the first plugin-MCP tool call from the supervisor (#9233, TODO) does not
+  // race the lazy store read. The consent service has no subscribers itself —
+  // it's invoked synchronously from the supervisor's tools/call interception
+  // path once that lands.
+  getPluginMcpAuditService().hydrate();
+  getPluginMcpConsentService();
 
   registerDeferredTask({
     name: "agent-notification-service",

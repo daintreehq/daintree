@@ -218,6 +218,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/forge/forgeAuditService.js")
             .then(({ forgeAuditService }) => forgeAuditService.flushNow())
             .catch(() => {}),
+          // Mirror for the plugin-MCP inbound audit ring (#9234). Same unref'd
+          // 2s debounce, same loss-on-quit if not drained explicitly.
+          import("../services/plugin-mcp/instances.js")
+            .then(({ getPluginMcpAuditService }) => getPluginMcpAuditService().flushNow())
+            .catch(() => {}),
           // Revoke and remove any in-flight help-session dirs. Same lazy-import
           // guard as MCP — the module only loads if a help session was provisioned.
           import("../services/HelpSessionService.js")
