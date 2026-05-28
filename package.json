@@ -128,6 +128,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "archiver": "^8.0.0",
+    "avr-vad": "^1.0.10",
     "better-sqlite3": "^12.10.0",
     "copytree": "^0.14.2",
     "httpxy": "^0.5.3",

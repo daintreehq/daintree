@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import WebSocket from "ws";
 import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -9,8 +12,24 @@ import {
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
+import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
 
 const P = "[VoiceTranscription:openai]";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Resolves the compiled VAD worker on disk. esbuild emits this provider into a
+ * shared chunk under `dist-electron/electron/chunks/`, so `__dirname` may point
+ * at that chunks dir — step up to the electron root, then to the worker's own
+ * output path. Mirrors the host-process path resolution in
+ * `WorkspaceHostProcess.ts`.
+ */
+function resolveVadWorkerPath(): string {
+  const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
+  // From `dist-electron/electron/` down to the worker's bundled location.
+  return path.join(electronDir, "services", "voice", "openaiVadWorker.js");
+}
 
 // `gpt-realtime-whisper` is a transcription model — it must be passed as
 // `transcription.model`, NOT as the realtime session `model` query param.
@@ -44,10 +63,21 @@ const RECONNECT_MULTIPLIER = 1.5;
 const RECONNECT_CAP_MS = 3_000;
 // `gpt-realtime-whisper` does not support server VAD (`turn_detection` must be
 // null), so the server never auto-commits the input buffer. We drive
-// segmentation ourselves: commit the buffer on a fixed cadence so the model
-// transcribes each segment and streams delta/completed events back while the
-// user is still speaking. Without this, no transcription arrives until stop.
-const COMMIT_INTERVAL_MS = 2_000;
+// segmentation ourselves with a client-side VAD side-chain (Silero v5, on a
+// worker thread): commit at actual end-of-speech after a short holdover, and
+// clear the server buffer on speech onset so accumulated silence between
+// utterances isn't transcribed. This replaces the old blind 2s interval, which
+// cut words mid-pause and added up to ~2s of latency at end-of-speech.
+//
+// Backstop: while speech runs continuously past this window with no detected
+// pause, force a commit so the segment streams back and the server-side buffer
+// stays bounded. Also the sole commit cadence in degraded mode (VAD init/worker
+// failure), where we can't detect speech boundaries at all.
+const VAD_MAX_SEGMENT_MS = 8_000;
+// Recent audio retained to replay after an `input_audio_buffer.clear` on speech
+// onset, so clearing the stale (silent) buffer doesn't also clip the start of
+// the utterance the VAD just detected. ~300ms at 24kHz mono PCM16 (48 B/ms).
+const VAD_PRE_ROLL_BYTES = 14_400;
 // OpenAI rejects an `input_audio_buffer.commit` carrying under ~100ms of audio
 // (24kHz mono PCM16 → 4800 bytes) with a fatal error event. Skip a commit
 // below this threshold.
@@ -152,7 +182,25 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
 
-  private commitTimer: ReturnType<typeof setInterval> | null = null;
+  // VAD side-chain. The worker runs Silero v5 on a worker thread and reports
+  // speech-start/speech-end events that drive commits. `vadWorkerSessionId`
+  // tags the spawning session so a message arriving after teardown (or after a
+  // new session started) is ignored — the stale-callback guard from #4850/#4851.
+  private vadWorker: Worker | null = null;
+  private vadWorkerSessionId = 0;
+  private isSpeaking = false;
+  // Set when the worker fails to initialize or crashes. In this mode the VAD
+  // can't segment, so we fall back to a periodic backstop commit (no speech
+  // gating) — dictation still works, just without speech-aware boundaries.
+  private vadDegraded = false;
+  // Backstop commit timer. While speaking (or always, in degraded mode) it
+  // forces a commit every VAD_MAX_SEGMENT_MS so long utterances stream back and
+  // the server buffer stays bounded.
+  private maxSegmentTimer: ReturnType<typeof setInterval> | null = null;
+  // Sliding window of the most recent audio chunks, replayed after a
+  // speech-onset `input_audio_buffer.clear` so the utterance's onset survives.
+  private preRollChunks: ArrayBuffer[] = [];
+  private preRollBytes = 0;
   private bytesSinceCommit = 0;
   // Commits sent (interval, paragraph-boundary, or final) whose
   // `conversation.item.done` we haven't seen yet. Each commit yields exactly
@@ -637,7 +685,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.isReconnecting = false;
         this.lastReconnectError = null;
         this.isReady = true;
-        this.startCommitTimer();
+        this.startVadWorker(mySessionId);
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
         return;
@@ -845,7 +893,42 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         bytesSinceCommit: this.bytesSinceCommit + chunk.byteLength,
       });
     }
+    // Feed the VAD side-chain so it can detect speech boundaries, and keep a
+    // short pre-roll for onset replay after a speech-start clear. Audio streams
+    // to OpenAI continuously regardless of speech state — the VAD only governs
+    // when we commit and when we clear, so a VAD that under-detects can never
+    // strand audio: the backstop and final commit still flush it.
+    this.feedVad(chunk);
+    this.pushPreRoll(chunk);
     this.sendAudioJson(chunk);
+  }
+
+  /**
+   * Posts a chunk to the VAD worker. The chunk is copied (not transferred) so
+   * the original ArrayBuffer stays usable for the OpenAI send on this thread.
+   */
+  private feedVad(chunk: ArrayBuffer): void {
+    if (!this.vadWorker || this.vadDegraded) return;
+    // Copy (not transfer) the original chunk — it's still needed for the OpenAI
+    // send on this thread. The copy is transferred so the worker owns it.
+    const copy = chunk.slice(0);
+    try {
+      this.vadWorker.postMessage({ type: "audio", pcm: copy } satisfies VadWorkerInbound, [copy]);
+    } catch (err) {
+      logWarn(`${P} Failed to post audio to VAD worker`, {
+        message: formatErrorMessage(err, "vad post failed"),
+      });
+    }
+  }
+
+  /** Maintains the sliding pre-roll window, evicting oldest chunks by byte cap. */
+  private pushPreRoll(chunk: ArrayBuffer): void {
+    this.preRollChunks.push(chunk);
+    this.preRollBytes += chunk.byteLength;
+    while (this.preRollBytes > VAD_PRE_ROLL_BYTES && this.preRollChunks.length > 1) {
+      const evicted = this.preRollChunks.shift();
+      if (evicted) this.preRollBytes -= evicted.byteLength;
+    }
   }
 
   /**
@@ -881,7 +964,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * reconnect. Use `cleanupPreviousSession()` for a full session reset.
    */
   private cleanupConnection(): void {
-    this.clearCommitTimer();
+    // Terminate the VAD worker with the connection — a reconnect re-spawns it
+    // fresh on the next `session.updated`, so VAD state never straddles two
+    // physical sockets.
+    this.stopVadWorker();
     this.clearHeartbeat();
     this.connection = null;
     this.isReady = false;
@@ -909,7 +995,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
     this.clearDrainTimeout();
-    this.clearCommitTimer();
+    this.stopVadWorker();
+    this.vadDegraded = false;
     this.clearHeartbeat();
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
@@ -944,18 +1031,156 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  private startCommitTimer(): void {
-    this.clearCommitTimer();
-    logDebug(`${P} Starting interval commit timer`, { intervalMs: COMMIT_INTERVAL_MS });
-    this.commitTimer = setInterval(() => {
-      this.maybeCommitSegment("interval");
-    }, COMMIT_INTERVAL_MS);
+  /**
+   * Spawns the VAD side-chain worker for the current session. Speech-boundary
+   * events it reports drive `input_audio_buffer.commit`/`clear`. Every message
+   * is guarded by `mySessionId` so a message arriving after this session was
+   * torn down (or superseded by a new `start()`) is ignored (#4850/#4851). If
+   * the worker can't be spawned or its model fails to load, we fall back to a
+   * periodic backstop commit (degraded mode) so dictation still works.
+   */
+  private startVadWorker(mySessionId: number): void {
+    this.stopVadWorker();
+    this.isSpeaking = false;
+    this.vadDegraded = false;
+    this.preRollChunks = [];
+    this.preRollBytes = 0;
+
+    let worker: Worker;
+    try {
+      worker = new Worker(resolveVadWorkerPath());
+    } catch (err) {
+      logError(`${P} Failed to spawn VAD worker — degraded mode`, {
+        message: formatErrorMessage(err, "worker spawn failed"),
+      });
+      this.enterDegradedMode(mySessionId);
+      return;
+    }
+    this.vadWorker = worker;
+    this.vadWorkerSessionId = mySessionId;
+    logDebug(`${P} VAD worker spawned`, { sessionId: mySessionId });
+
+    worker.on("message", (message: VadWorkerOutbound) => {
+      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
+      switch (message.type) {
+        case "ready":
+          logInfo(`${P} VAD worker ready`);
+          return;
+        case "speech-start":
+          this.handleVadSpeechStart();
+          return;
+        case "speech-end":
+          this.handleVadSpeechEnd();
+          return;
+        case "error":
+          logError(`${P} VAD worker error — degraded mode`, { message: message.message });
+          this.enterDegradedMode(mySessionId);
+          return;
+      }
+    });
+
+    worker.on("error", (err) => {
+      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
+      logError(`${P} VAD worker thread error — degraded mode`, {
+        message: formatErrorMessage(err, "worker error"),
+      });
+      this.enterDegradedMode(mySessionId);
+    });
+
+    worker.on("exit", (code) => {
+      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
+      if (code !== 0) {
+        logError(`${P} VAD worker exited unexpectedly — degraded mode`, { code });
+        this.enterDegradedMode(mySessionId);
+      }
+    });
   }
 
-  private clearCommitTimer(): void {
-    if (this.commitTimer !== null) {
-      clearInterval(this.commitTimer);
-      this.commitTimer = null;
+  /**
+   * Terminates the VAD worker and clears all VAD-derived state. Safe to call
+   * when no worker is running. Does not touch `vadDegraded` so a degraded
+   * session that's being torn down doesn't briefly re-arm speech gating.
+   */
+  private stopVadWorker(): void {
+    this.clearBackstopTimer();
+    this.isSpeaking = false;
+    this.preRollChunks = [];
+    this.preRollBytes = 0;
+    const worker = this.vadWorker;
+    this.vadWorker = null;
+    if (worker) {
+      worker.removeAllListeners();
+      try {
+        worker.postMessage({ type: "destroy" } satisfies VadWorkerInbound);
+      } catch {
+        // Worker may already be dead — terminate regardless.
+      }
+      void worker.terminate();
+    }
+  }
+
+  /**
+   * Falls back to a periodic backstop commit when the VAD is unavailable. We
+   * can't detect speech boundaries, so we commit on a fixed cadence — the same
+   * shape as the old behavior, but at the longer backstop interval rather than
+   * the 2s blind timer.
+   */
+  private enterDegradedMode(mySessionId: number): void {
+    if (this.sessionId !== mySessionId || this.vadDegraded) return;
+    this.vadDegraded = true;
+    this.isSpeaking = false;
+    const worker = this.vadWorker;
+    this.vadWorker = null;
+    if (worker) {
+      worker.removeAllListeners();
+      void worker.terminate();
+    }
+    logWarn(`${P} VAD degraded — committing on ${VAD_MAX_SEGMENT_MS}ms backstop only`);
+    this.startBackstopTimer("vad-degraded-backstop");
+  }
+
+  private handleVadSpeechStart(): void {
+    if (this.isSpeaking) return;
+    this.isSpeaking = true;
+    logDebug(`${P} VAD speech-start`, { preRollBytes: this.preRollBytes });
+    // Barge-in: drop whatever silence accumulated in the server buffer since the
+    // last commit so it isn't transcribed, then replay our short pre-roll so the
+    // onset of this utterance — already streamed before the clear — survives.
+    if (this.connection && this.isReady && !this.isDraining) {
+      try {
+        this.connection.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+        this.bytesSinceCommit = 0;
+      } catch (err) {
+        logWarn(`${P} Failed to clear buffer on speech-start`, {
+          message: formatErrorMessage(err, "clear failed"),
+        });
+      }
+      for (const chunk of this.preRollChunks) {
+        this.sendAudioJson(chunk);
+      }
+    }
+    this.startBackstopTimer("vad-speech");
+  }
+
+  private handleVadSpeechEnd(): void {
+    if (!this.isSpeaking) return;
+    this.isSpeaking = false;
+    this.clearBackstopTimer();
+    logDebug(`${P} VAD speech-end — committing segment`);
+    this.maybeCommitSegment("vad-end-of-speech");
+  }
+
+  private startBackstopTimer(reason: string): void {
+    this.clearBackstopTimer();
+    this.maxSegmentTimer = setInterval(() => {
+      this.maybeCommitSegment(reason);
+    }, VAD_MAX_SEGMENT_MS);
+  }
+
+  private clearBackstopTimer(): void {
+    if (this.maxSegmentTimer !== null) {
+      clearInterval(this.maxSegmentTimer);
+      this.maxSegmentTimer = null;
     }
   }
 
@@ -1040,7 +1265,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
 
     this.isDraining = true;
-    this.clearCommitTimer();
+    this.stopVadWorker();
     this.emit({ type: "status", status: "finishing" });
 
     // Flush whatever audio accumulated since the last interval commit so its

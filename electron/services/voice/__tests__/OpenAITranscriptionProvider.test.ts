@@ -129,6 +129,99 @@ vi.mock("ws", () => {
   return { default: ctor };
 });
 
+// ── Mock the VAD worker (`node:worker_threads`) ──────────────────────────────
+//
+// The provider spawns `new Worker(...)` running Silero VAD. We replace the
+// Worker with a controllable stub so tests can drive speech-start/speech-end
+// events synchronously and assert the resulting commit/clear behavior without
+// loading ONNX. The constructor can be forced to throw to exercise the degraded
+// fallback path.
+
+type VadListener = (...args: unknown[]) => void;
+
+class MockVadWorker {
+  posted: Array<Record<string, unknown>> = [];
+  terminateCalls = 0;
+  private listeners: Map<string, Set<VadListener>> = new Map();
+
+  constructor(_path: string | URL) {
+    vadWorkers.push(this);
+  }
+
+  on(event: string, listener: VadListener): this {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(listener);
+    return this;
+  }
+
+  removeAllListeners(event?: string): this {
+    if (event) this.listeners.delete(event);
+    else this.listeners.clear();
+    return this;
+  }
+
+  postMessage(message: Record<string, unknown>): void {
+    this.posted.push(message);
+  }
+
+  terminate(): Promise<number> {
+    this.terminateCalls++;
+    return Promise.resolve(0);
+  }
+
+  private fire(event: string, ...args: unknown[]): void {
+    const set = this.listeners.get(event);
+    if (!set) return;
+    for (const listener of set) listener(...args);
+  }
+
+  // Test helpers — simulate the messages openaiVadWorker posts back.
+  emitReady(): void {
+    this.fire("message", { type: "ready" });
+  }
+  emitSpeechStart(): void {
+    this.fire("message", { type: "speech-start" });
+  }
+  emitSpeechEnd(): void {
+    this.fire("message", { type: "speech-end" });
+  }
+  emitWorkerError(message = "vad failed"): void {
+    this.fire("message", { type: "error", message });
+  }
+  emitThreadError(err: Error = new Error("worker crashed")): void {
+    this.fire("error", err);
+  }
+  emitExit(code: number): void {
+    this.fire("exit", code);
+  }
+}
+
+const vadWorkers: MockVadWorker[] = [];
+let throwOnVadConstruct = false;
+
+vi.mock("node:worker_threads", () => ({
+  Worker: function (this: unknown, scriptPath: string | URL) {
+    if (throwOnVadConstruct) throw new Error("worker spawn failed");
+    return new MockVadWorker(scriptPath);
+  } as unknown as new (scriptPath: string | URL) => MockVadWorker,
+}));
+
+function latestVadWorker(): MockVadWorker {
+  const worker = vadWorkers.at(-1);
+  if (!worker) throw new Error("No MockVadWorker instance created");
+  return worker;
+}
+
+/** Produce exactly one VAD-driven commit: feed audio, then speech start→end. */
+function vadCommitSegment(
+  service: OpenAITranscriptionProviderInstance,
+  worker: MockVadWorker
+): void {
+  feedCommittableAudio(service);
+  worker.emitSpeechStart();
+  worker.emitSpeechEnd();
+}
+
 // Import the service AFTER vi.mock so the mocked `ws` is used.
 const { OpenAITranscriptionProvider } = await import("../OpenAITranscriptionProvider.js");
 type OpenAITranscriptionProviderInstance = InstanceType<typeof OpenAITranscriptionProvider>;
@@ -189,6 +282,8 @@ describe("OpenAITranscriptionProvider", () => {
     instances.length = 0;
     throwOnConstruct = false;
     constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
     vi.useFakeTimers();
   });
 
@@ -511,35 +606,161 @@ describe("OpenAITranscriptionProvider", () => {
     await drainPromise;
   });
 
-  // ── Interval commit ──────────────────────────────────────────────────────
-  // gpt-realtime-whisper has no server VAD, so the service commits the input
-  // buffer on a timer to drive segmentation; without commits no transcription
-  // events ever arrive.
+  // ── VAD-driven commit ─────────────────────────────────────────────────────
+  // gpt-realtime-whisper has no server VAD, so a client-side VAD side-chain
+  // (Silero v5, on a worker thread) drives segmentation: commit at end-of-speech
+  // and clear the server buffer on speech onset. Without commits no
+  // transcription events ever arrive.
 
-  it("commits the audio buffer on the interval timer once enough audio has streamed", async () => {
+  it("spawns the VAD worker once the session is ready", async () => {
+    const service = new OpenAITranscriptionProvider();
+    await bringSessionReady(service);
+    expect(vadWorkers).toHaveLength(1);
+    service.stop();
+  });
+
+  it("commits the audio buffer on VAD speech-end once enough audio has streamed", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
 
     feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    // Speech is ongoing — no commit yet.
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
 
-    vi.advanceTimersByTime(2_000);
+    worker.emitSpeechEnd();
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
 
     service.stop();
   });
 
-  it("skips the interval commit when too little audio has streamed since the last commit", async () => {
+  it("clears the server buffer on VAD speech-start and replays the pre-roll", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    const chunk = new Uint8Array(5_000).fill(7).buffer;
+    service.sendAudioChunk(chunk);
+    const sentBefore = socket.sent.length;
+
+    worker.emitSpeechStart();
+
+    const newPayloads = socket.sentJson().slice(sentBefore);
+    // Barge-in: a clear is sent, then the pre-roll chunk is replayed.
+    expect(newPayloads[0]).toEqual({ type: "input_audio_buffer.clear" });
+    const replayed = newPayloads.filter((p) => p.type === "input_audio_buffer.append");
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0].audio).toBe(Buffer.from(chunk).toString("base64"));
+
+    service.stop();
+  });
+
+  it("skips the commit when too little audio has streamed since the last commit", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
 
     // A tiny chunk, well under MIN_COMMIT_BYTES — committing it would draw a
-    // fatal "undersized buffer" error from OpenAI, so the timer must skip it.
+    // fatal "undersized buffer" error from OpenAI, so speech-end must skip it.
     service.sendAudioChunk(new Uint8Array(10).buffer);
-    vi.advanceTimersByTime(2_000);
+    worker.emitSpeechStart();
+    worker.emitSpeechEnd();
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
 
     service.stop();
+  });
+
+  it("ignores a VAD speech-end with no preceding speech-start", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    feedCommittableAudio(service);
+    // No speech-start fired — a stray speech-end must not commit.
+    worker.emitSpeechEnd();
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
+
+    service.stop();
+  });
+
+  it("forces a backstop commit when speech runs past the max-segment window", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    feedCommittableAudio(service);
+    worker.emitSpeechStart(); // backstop timer starts
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
+
+    // Continuous speech with no detected pause — the 8s backstop fires a commit.
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
+
+    service.stop();
+  });
+
+  it("falls back to a periodic backstop commit when the VAD worker errors", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+
+    worker.emitWorkerError("model load failed");
+    // Degraded mode: no speech events, audio still streams, backstop commits.
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
+
+    service.stop();
+  });
+
+  it("falls back to degraded mode when the VAD worker cannot be spawned", async () => {
+    throwOnVadConstruct = true;
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
+
+    service.stop();
+  });
+
+  it("ignores VAD messages from a stale worker after the session is replaced", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket: firstSocket } = await bringSessionReady(service);
+    const staleWorker = latestVadWorker();
+
+    // Replace the session — the first worker is now stale.
+    const secondPromise = service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const secondSocket = latestInstance();
+    secondSocket.simulateOpen();
+    secondSocket.simulateMessage("session.updated");
+    await secondPromise;
+
+    // The stale worker fires speech events — they must be ignored (the first
+    // socket was torn down; no commit should land on either socket from it).
+    feedCommittableAudio(service);
+    staleWorker.emitSpeechStart();
+    staleWorker.emitSpeechEnd();
+    expect(
+      firstSocket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")
+    ).toHaveLength(0);
+    expect(
+      secondSocket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")
+    ).toHaveLength(0);
+
+    service.stop();
+  });
+
+  it("terminates the VAD worker on stop", async () => {
+    const service = new OpenAITranscriptionProvider();
+    await bringSessionReady(service);
+    const worker = latestVadWorker();
+    expect(worker.terminateCalls).toBe(0);
+    service.stop();
+    expect(worker.terminateCalls).toBe(1);
   });
 
   it("commitParagraphBoundary flushes the current segment when enough audio has streamed", async () => {
@@ -585,10 +806,10 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     const { socket } = await bringSessionReady(service);
-    // An interval commit goes out (segment A), then more audio accumulates and
-    // stop sends a final commit (segment B) — two transcripts now outstanding.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
+    const worker = latestVadWorker();
+    // A VAD segment commits (segment A), then more audio accumulates and stop
+    // sends a final commit (segment B) — two transcripts now outstanding.
+    vadCommitSegment(service, worker);
     feedCommittableAudio(service);
     const drainPromise = service.stopGracefully();
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
@@ -634,7 +855,7 @@ describe("OpenAITranscriptionProvider", () => {
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
   });
 
-  it("stop with a sub-threshold buffer still drains for an in-flight interval commit", async () => {
+  it("stop with a sub-threshold buffer still drains for an in-flight VAD commit", async () => {
     const service = new OpenAITranscriptionProvider();
     const completes: string[] = [];
     service.onEvent((e) => {
@@ -642,13 +863,13 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     const { socket } = await bringSessionReady(service);
-    // An interval commit went out; its transcript hasn't come back yet.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
+    const worker = latestVadWorker();
+    // A VAD commit went out; its transcript hasn't come back yet.
+    vadCommitSegment(service, worker);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
 
     // Stop with nothing new buffered — no final commit, but the drain must
-    // still wait for the outstanding interval commit's transcript.
+    // still wait for the outstanding VAD commit's transcript.
     const drainPromise = service.stopGracefully();
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
 
@@ -674,9 +895,9 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     const { socket } = await bringSessionReady(service);
-    // Two outstanding commits: an interval commit, then a final commit on stop.
-    feedCommittableAudio(service);
-    vi.advanceTimersByTime(2_000);
+    const worker = latestVadWorker();
+    // Two outstanding commits: a VAD commit, then a final commit on stop.
+    vadCommitSegment(service, worker);
     feedCommittableAudio(service);
     const drainPromise = service.stopGracefully();
 

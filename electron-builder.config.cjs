@@ -68,6 +68,13 @@ module.exports = async function () {
       "node_modules/better-sqlite3/**/*",
       "node_modules/win-job-object/**/*",
       "node_modules/posix-pty-reaper/**/*",
+      // onnxruntime-node ships per-platform native binaries (.node/.dll/.dylib/
+      // .so) for the Silero VAD side-chain (#9177) — they require real
+      // filesystem access for the N-API load and cannot live inside the ASAR.
+      "node_modules/onnxruntime-node/**/*",
+      // avr-vad reads its bundled silero_vad_v5.onnx via `fs` relative to its
+      // own dist dir; unpack so that path resolves outside the ASAR too.
+      "node_modules/avr-vad/**/*",
     ],
     electronFuses: {
       runAsNode: false,
@@ -84,7 +91,7 @@ module.exports = async function () {
     mac: {
       extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
       x64ArchFiles:
-        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
+        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
       notarize: false,
       binaries: [

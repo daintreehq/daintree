@@ -19,6 +19,8 @@ const external = [
   "win-job-object", // Native module — Windows-only help-session Job Object (#7526)
   "posix-pty-reaper", // Native module — macOS/Linux help-session PTY supervisor (#8769)
   "copytree", // Externalize to preserve file structure (config files)
+  "onnxruntime-node", // Native module — ONNX runtime for Silero VAD (#9177)
+  "avr-vad", // Silero VAD wrapper; loads its bundled .onnx via fs from its own dir (#9177)
 ];
 
 const common = {
@@ -181,6 +183,10 @@ async function run() {
       "electron/workspace-host-bootstrap.ts",
       "electron/watchdog-host.ts",
       "electron/watchdog-host-bootstrap.ts",
+      // VAD side-chain worker for OpenAI transcription (#9177). Loaded via
+      // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
+      // esbuild emits a standalone bundle at the resolved worker path.
+      "electron/services/voice/openaiVadWorker.ts",
       "plugins/builtin/github/main/index.ts",
       // Sample plugin compiled for the host-contract e2e harness (#9286).
       // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod

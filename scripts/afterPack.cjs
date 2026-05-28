@@ -111,6 +111,58 @@ function validatePosixReaperExec(binaryPath) {
 }
 
 /**
+ * Validate that onnxruntime-node's native binding is present and loadable for
+ * the packaged platform (Silero VAD side-chain, #9177). Like win-job-object,
+ * onnxruntime-node is an N-API addon (ABI-stable), so the polarity matches
+ * validateWinJobObjectAbi: a successful dlopen under Node means the binary and
+ * all its sibling shared libraries (e.g. onnxruntime.dll on Windows,
+ * libonnxruntime.dylib on macOS) resolved. A missing binding is a hard failure
+ * — VAD-driven segmentation would silently fall back to the backstop timer for
+ * every user. A dlopen failure is downgraded to a warning: the loader can fail
+ * on a CI machine for reasons (e.g. a delay-loaded GPU EP library) that don't
+ * affect the CPU execution provider the VAD actually uses.
+ */
+function validateOnnxRuntime(unpackedPath) {
+  const onnxRoot = path.join(unpackedPath, "node_modules/onnxruntime-node");
+  if (!fs.existsSync(onnxRoot)) {
+    throw new Error(
+      `[afterPack] CRITICAL: onnxruntime-node not found at ${onnxRoot}. ` +
+        "Voice VAD segmentation (#9177) will be disabled. Check asarUnpack configuration."
+    );
+  }
+
+  // Locate the platform/arch binding under bin/napi-v*/<platform>/<arch>/.
+  const binRoot = path.join(onnxRoot, "bin");
+  const bindings = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "onnxruntime_binding.node") bindings.push(full);
+    }
+  };
+  if (fs.existsSync(binRoot)) walk(binRoot);
+
+  const binding = bindings.find((p) => p.includes(`${path.sep}${process.platform}${path.sep}`));
+  if (!binding) {
+    throw new Error(
+      `[afterPack] CRITICAL: onnxruntime-node native binding for ${process.platform} not found under ${binRoot}. ` +
+        "Voice VAD segmentation (#9177) will be disabled."
+    );
+  }
+  console.log(`[afterPack] onnxruntime-node binding found: ${binding}`);
+
+  const testModule = { exports: {} };
+  try {
+    process.dlopen(testModule, binding);
+    console.log("[afterPack] onnxruntime-node load check passed");
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.warn(`[afterPack] Warning: onnxruntime-node load probe inconclusive: ${msg}`);
+  }
+}
+
+/**
  * Get the path to unpacked resources for the platform
  */
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
@@ -304,6 +356,8 @@ exports.default = async function afterPack(context) {
   validateBetterSqliteAbi(betterSqliteNative);
 
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
+
+  validateOnnxRuntime(unpackedPath);
 
   console.log("[afterPack] Complete - native modules validated");
 };
