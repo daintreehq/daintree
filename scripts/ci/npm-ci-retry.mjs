@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const attempts = Number.parseInt(process.env.NPM_CI_RETRY_ATTEMPTS ?? "3", 10);
+const attempts = Number.parseInt(process.env.NPM_CI_RETRY_ATTEMPTS ?? "3", 10) || 3;
 const baseDelayMs = Number.parseInt(process.env.NPM_CI_RETRY_DELAY_MS ?? "15000", 10);
 const npmBin = "npm";
 const npmArgs = ["ci", ...process.argv.slice(2)];
@@ -12,6 +12,7 @@ const useShell = process.platform === "win32";
 export const DETERMINISTIC_PATTERNS = [
   /gyp (err!|error)/i,
   /node-gyp/i,
+  /xcrun.*error|xcode-select.*error|error.*xcrun/i,
   /msbuild|\.vcxproj\b/i,
   /\bnpm (error|err!).*code\s+eacces/i,
   /permission denied/i,
@@ -102,7 +103,7 @@ function runNpmCi(attempt) {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   let lastCode = 1;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const result = await runNpmCi(attempt);

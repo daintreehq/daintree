@@ -18,6 +18,11 @@ describe("npm-ci-retry", () => {
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
 
+    it("matches xcrun / xcode-select errors (macOS missing toolchain)", () => {
+      const stderr = "xcrun: error: unable to find utility 'make'\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
     it("matches MSBuild errors (Windows native compilation)", () => {
       const stderr = "MSBuild : error MSB3428: Could not load the Visual C++ component\n";
       expect(classifyFailure(stderr)).toBe("deterministic");
@@ -145,7 +150,7 @@ describe("npm-ci-retry", () => {
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
 
     it("covers every deterministic pattern", () => {
-      expect(DETERMINISTIC_PATTERNS).toHaveLength(9);
+      expect(DETERMINISTIC_PATTERNS).toHaveLength(10);
     });
 
     it("covers every transient pattern", () => {
