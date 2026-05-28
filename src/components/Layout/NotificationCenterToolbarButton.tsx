@@ -14,6 +14,7 @@ import { useNotificationHistoryStore } from "@/store/slices/notificationHistoryS
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useUIStore } from "@/store/uiStore";
+import { actionService } from "@/services/ActionService";
 import { useShallow } from "zustand/react/shallow";
 import { isScheduledQuietNow } from "@shared/utils/quietHours";
 import { DURATION_200, DURATION_250 } from "@/lib/animationUtils";
@@ -30,10 +31,9 @@ export function NotificationCenterToolbarButton({
 }: {
   "data-toolbar-item"?: string;
 }) {
-  const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
+  const { notificationCenterOpen, closeNotificationCenter } = useUIStore(
     useShallow((s) => ({
       notificationCenterOpen: s.notificationCenterOpen,
-      toggleNotificationCenter: s.toggleNotificationCenter,
       closeNotificationCenter: s.closeNotificationCenter,
     }))
   );
@@ -227,7 +227,11 @@ export function NotificationCenterToolbarButton({
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
                 data-dnd-active={isDndActive ? "true" : undefined}
-                onClick={toggleNotificationCenter}
+                onClick={() =>
+                  void actionService.dispatch("notifications.toggle", undefined, {
+                    source: "user",
+                  })
+                }
                 className={toolbarIconButtonClass}
                 aria-label={label}
                 aria-expanded={notificationCenterOpen}

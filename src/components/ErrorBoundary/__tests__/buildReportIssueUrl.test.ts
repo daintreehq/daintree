@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReportIssueUrl,
+  buildReportIssueUrlForNotification,
   URL_BODY_BUDGET,
+  type NotificationReportInput,
   type ReportIssueInput,
 } from "../buildReportIssueUrl";
 
@@ -186,5 +188,107 @@ describe("buildReportIssueUrl", () => {
     const title = new URL(result.url).searchParams.get("title") ?? "";
     expect(title.length).toBeLessThan(longMessage.length);
     expect(title.endsWith("…")).toBe(true);
+  });
+});
+
+function makeNotificationInput(
+  overrides: Partial<NotificationReportInput> = {}
+): NotificationReportInput {
+  return {
+    title: "Build failed",
+    message: "Webpack compilation error",
+    correlationId: "corr-42",
+    context: { projectId: "proj-1", panelId: "panel-7" },
+    appVersion: "0.42.0",
+    electronVersion: "41.0.1",
+    chromiumVersion: "146.0.7339.16",
+    os: "MacIntel",
+    ...overrides,
+  };
+}
+
+describe("buildReportIssueUrlForNotification", () => {
+  it("uses 'Notification:' prefix in the title and prefers entry title over message", () => {
+    const result = buildReportIssueUrlForNotification(makeNotificationInput());
+    const title = new URL(result.url).searchParams.get("title") ?? "";
+    expect(title).toBe("Notification: Build failed");
+  });
+
+  it("falls back to the message when title is missing", () => {
+    const result = buildReportIssueUrlForNotification(
+      makeNotificationInput({ title: undefined, message: "Reconnection failed" })
+    );
+    const title = new URL(result.url).searchParams.get("title") ?? "";
+    expect(title).toBe("Notification: Reconnection failed");
+  });
+
+  it("includes correlation id, context, and environment fields in the body", () => {
+    const result = buildReportIssueUrlForNotification(makeNotificationInput());
+    expect(result.fullBody).toContain("**Title:** Build failed");
+    expect(result.fullBody).toContain("**Message:** Webpack compilation error");
+    expect(result.fullBody).toContain("**Correlation ID:** corr-42");
+    expect(result.fullBody).toContain('"projectId": "proj-1"');
+    expect(result.fullBody).toContain("App version: 0.42.0");
+    expect(result.fullBody).toContain("Electron: 41.0.1");
+    expect(result.fullBody).toContain("Chromium: 146.0.7339.16");
+    expect(result.fullBody).toContain("OS: MacIntel");
+    expect(result.usedClipboardFallback).toBe(false);
+  });
+
+  it("renders placeholders when optional fields are missing", () => {
+    const result = buildReportIssueUrlForNotification(
+      makeNotificationInput({
+        title: undefined,
+        correlationId: undefined,
+        context: undefined,
+        appVersion: "",
+        electronVersion: "",
+        chromiumVersion: "",
+        os: "",
+      })
+    );
+    expect(result.fullBody).toContain("**Title:** (none)");
+    expect(result.fullBody).toContain("**Correlation ID:** unknown");
+    expect(result.fullBody).toContain("App version: unknown");
+    expect(result.fullBody).toContain("Electron: unknown");
+    expect(result.fullBody).toContain("Chromium: unknown");
+    expect(result.fullBody).toContain("OS: unknown");
+  });
+
+  it("falls back to clipboard stub when message exceeds the URL budget", () => {
+    const longMessage = "x".repeat(URL_BODY_BUDGET + 2000);
+    const result = buildReportIssueUrlForNotification(
+      makeNotificationInput({ message: longMessage })
+    );
+    expect(result.usedClipboardFallback).toBe(true);
+    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+    const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+    expect(body).toContain("copied to your clipboard");
+    expect(body).toContain("**Correlation ID:** corr-42");
+    expect(body).not.toContain(longMessage);
+    expect(result.fullBody).toContain(longMessage);
+  });
+
+  it("URL is parseable and points at the right repo", () => {
+    const result = buildReportIssueUrlForNotification(makeNotificationInput());
+    const url = new URL(result.url);
+    expect(url.host).toBe("github.com");
+    expect(url.pathname).toBe("/daintreehq/daintree/issues/new");
+    expect(url.searchParams.has("title")).toBe(true);
+    expect(url.searchParams.has("body")).toBe(true);
+  });
+
+  it("encoded body stays within the URL budget", () => {
+    const result = buildReportIssueUrlForNotification(makeNotificationInput());
+    expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
+  });
+
+  it("caps the title for huge messages without truncating the body", () => {
+    const result = buildReportIssueUrlForNotification(
+      makeNotificationInput({ title: undefined, message: "A".repeat(5000) })
+    );
+    const title = new URL(result.url).searchParams.get("title") ?? "";
+    expect(title.endsWith("…")).toBe(true);
+    expect(result.url.length).toBeLessThanOrEqual(8192);
   });
 });

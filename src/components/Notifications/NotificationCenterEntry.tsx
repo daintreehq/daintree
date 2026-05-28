@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type Ref } from "react";
-import { CheckCircle2, XCircle, Info, AlertTriangle, Clock, MoreHorizontal, X } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  Info,
+  AlertTriangle,
+  Clock,
+  MoreHorizontal,
+  X,
+  Copy,
+  ExternalLink,
+  CornerUpRight,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -7,6 +18,9 @@ import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_250 } from "@/lib/animationUtils";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { appClient } from "@/clients/appClient";
+import { buildReportIssueUrlForNotification } from "@/components/ErrorBoundary/buildReportIssueUrl";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -334,8 +348,16 @@ function RowOptionsMenu({
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
   const supportsSnooze = !!entry.correlationId && !!onSnooze;
-  const hasActions = hasContextActions || supportsSnooze;
+  const sourcePanelId = entry.context?.panelId;
+  const canCopyCorrelation = !!entry.correlationId;
+  const canReport = !!entry.correlationId;
+  const canGoToSource = !!sourcePanelId;
+  const hasDiagnosticItems = canCopyCorrelation || canReport || canGoToSource;
+  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticItems;
   const [open, setOpen] = useState(false);
+  const { copy: copyCorrelationId } = useCopyWithFeedback({
+    announcement: "Correlation ID copied",
+  });
 
   // Programmatic open from the parent's `h` keybinding. Open exactly once
   // per pending request and consume the flag in the same effect so the menu
@@ -429,7 +451,85 @@ function RowOptionsMenu({
             Mute project notifications
           </DropdownMenuItem>
         )}
+        {hasDiagnosticItems && (hasContextActions || supportsSnooze) && <DropdownMenuSeparator />}
+        {canCopyCorrelation && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const correlationId = entry.correlationId;
+              if (!correlationId) return;
+              void copyCorrelationId(correlationId);
+            }}
+          >
+            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
+            Copy correlation ID
+          </DropdownMenuItem>
+        )}
+        {canReport && (
+          <DropdownMenuItem
+            onSelect={() => {
+              void reportNotificationOnGitHub(entry);
+            }}
+          >
+            <ExternalLink className="mr-2 h-3 w-3" aria-hidden="true" />
+            Report on GitHub
+          </DropdownMenuItem>
+        )}
+        {canGoToSource && (
+          <DropdownMenuItem
+            onSelect={() => {
+              const panelId = entry.context?.panelId;
+              if (!panelId) return;
+              void actionService.dispatch("panel.focus", { panelId }, { source: "user" });
+            }}
+          >
+            <CornerUpRight className="mr-2 h-3 w-3" aria-hidden="true" />
+            Go to source pane
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function extractElectronVersion(userAgent: string): string {
+  const match = userAgent.match(/Electron\/([\d.]+)/);
+  return match?.[1] ?? "";
+}
+
+function extractChromiumVersion(userAgent: string): string {
+  const match = userAgent.match(/Chrome\/([\d.]+)/);
+  return match?.[1] ?? "";
+}
+
+async function reportNotificationOnGitHub(entry: NotificationHistoryEntry): Promise<void> {
+  let appVersion = "unknown";
+  try {
+    appVersion = await appClient.getVersion();
+  } catch {
+    appVersion = "unknown";
+  }
+  const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const platform = typeof navigator !== "undefined" ? navigator.platform : "";
+
+  const { url, fullBody, usedClipboardFallback } = buildReportIssueUrlForNotification({
+    title: entry.title,
+    message: entry.message,
+    correlationId: entry.correlationId,
+    context: entry.context as Record<string, unknown> | undefined,
+    appVersion,
+    electronVersion: extractElectronVersion(userAgent),
+    chromiumVersion: extractChromiumVersion(userAgent),
+    os: platform,
+  });
+
+  if (usedClipboardFallback) {
+    try {
+      await navigator.clipboard.writeText(fullBody);
+    } catch {
+      // Fall through to opening the URL — the stub still names the
+      // correlation ID and environment, so the report is filable.
+    }
+  }
+
+  await actionService.dispatch("system.openExternal", { url }, { source: "user" });
 }
