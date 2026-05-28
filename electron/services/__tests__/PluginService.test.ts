@@ -35,6 +35,9 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const projectStoreMock = vi.hoisted(() => ({
+  getCurrentProject: vi.fn((): { path: string } | null => null),
+}));
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
   return {
@@ -61,6 +64,9 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
+}));
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
@@ -5358,5 +5364,193 @@ describe("Deferred activation — activatePlugin", () => {
       []
     );
     expect(result).toBe("pong");
+  });
+});
+
+type SettingsScope = "user" | "project";
+type SettingsHostShape = (pluginId: string) => {
+  host: {
+    settings: {
+      get: <T = unknown>(key: string, scope?: SettingsScope) => Promise<T | undefined>;
+      set: <T = unknown>(key: string, value: T, scope?: SettingsScope) => Promise<void>;
+      onDidChange: <T = unknown>(
+        key: string,
+        cb: (value: T | undefined) => void,
+        scope?: SettingsScope
+      ) => () => void;
+    };
+  };
+  revoke: () => void;
+};
+
+async function setupSettingsService(
+  pluginId: string
+): Promise<{ service: PluginService; settingsRoot: string }> {
+  const pluginsRoot = path.join(tmpDir, "plugins");
+  const dir = path.join(pluginsRoot, pluginId);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "plugin.json"),
+    JSON.stringify({ name: pluginId, version: "1.0.0" })
+  );
+  const service = new PluginService(pluginsRoot);
+  await service.initialize();
+  // User-scope settings live as a sibling of the plugins dir.
+  return { service, settingsRoot: path.join(tmpDir, "plugin-settings") };
+}
+
+function createSettingsHost(service: PluginService, pluginId: string) {
+  return (service as unknown as { createHost: SettingsHostShape }).createHost(pluginId);
+}
+
+describe("createHost — settings", () => {
+  beforeEach(() => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+  });
+
+  it("get returns undefined for an unset key", async () => {
+    const { service } = await setupSettingsService("acme.settings-get");
+    const { host } = createSettingsHost(service, "acme.settings-get");
+    expect(await host.settings.get("token")).toBeUndefined();
+  });
+
+  it("round-trips a value in user scope and persists it as JSON", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-rt");
+    const { host } = createSettingsHost(service, "acme.settings-rt");
+    await host.settings.set("token", "sk-test");
+    expect(await host.settings.get<string>("token")).toBe("sk-test");
+    const raw = await fs.readFile(path.join(settingsRoot, "acme.settings-rt.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual({ token: "sk-test" });
+  });
+
+  const chmodIt = process.platform === "win32" ? it.skip : it;
+  chmodIt("writes the user-scope file with mode 0o600", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-mode");
+    const { host } = createSettingsHost(service, "acme.settings-mode");
+    await host.settings.set("token", "secret");
+    const stat = await fs.stat(path.join(settingsRoot, "acme.settings-mode.json"));
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("project scope get returns undefined when no project is active", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service } = await setupSettingsService("acme.settings-noproj");
+    const { host } = createSettingsHost(service, "acme.settings-noproj");
+    expect(await host.settings.get("token", "project")).toBeUndefined();
+  });
+
+  it("project scope set throws when no project is active", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service } = await setupSettingsService("acme.settings-noproj2");
+    const { host } = createSettingsHost(service, "acme.settings-noproj2");
+    await expect(host.settings.set("token", "x", "project")).rejects.toThrow(/no active project/);
+  });
+
+  it("project scope writes under the active project root", async () => {
+    const projectDir = path.join(tmpDir, "proj");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-proj");
+    const { host } = createSettingsHost(service, "acme.settings-proj");
+    await host.settings.set("token", "in-project", "project");
+    expect(await host.settings.get<string>("token", "project")).toBe("in-project");
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-proj.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ token: "in-project" });
+  });
+
+  it("resolves the active project at call time, tracking project switches", async () => {
+    const projA = path.join(tmpDir, "projA");
+    const projB = path.join(tmpDir, "projB");
+    const { service } = await setupSettingsService("acme.settings-switch");
+    const { host } = createSettingsHost(service, "acme.settings-switch");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    await host.settings.set("k", "a-value", "project");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projB });
+    expect(await host.settings.get("k", "project")).toBeUndefined();
+    await host.settings.set("k", "b-value", "project");
+    expect(await host.settings.get<string>("k", "project")).toBe("b-value");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    expect(await host.settings.get<string>("k", "project")).toBe("a-value");
+  });
+
+  it("set rejects undefined and non-serializable values", async () => {
+    const { service } = await setupSettingsService("acme.settings-bad");
+    const { host } = createSettingsHost(service, "acme.settings-bad");
+    await expect(host.settings.set("k", undefined as unknown as string)).rejects.toThrow(
+      /undefined/
+    );
+    await expect(host.settings.set("k", (() => {}) as unknown as string)).rejects.toThrow(
+      /not JSON-serializable/
+    );
+  });
+
+  it("set rejects an empty key", async () => {
+    const { service } = await setupSettingsService("acme.settings-emptykey");
+    const { host } = createSettingsHost(service, "acme.settings-emptykey");
+    await expect(host.settings.set("", "x")).rejects.toThrow(/non-empty string/);
+  });
+
+  it("onDidChange fires with the new value after a changing set", async () => {
+    const { service } = await setupSettingsService("acme.settings-watch");
+    const { host } = createSettingsHost(service, "acme.settings-watch");
+    const cb = vi.fn();
+    host.settings.onDidChange<string>("token", cb);
+    await host.settings.set("token", "v1");
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith("v1");
+  });
+
+  it("onDidChange does not fire for a no-op write", async () => {
+    const { service } = await setupSettingsService("acme.settings-noop");
+    const { host } = createSettingsHost(service, "acme.settings-noop");
+    const cb = vi.fn();
+    host.settings.onDidChange("token", cb);
+    await host.settings.set("token", "same");
+    await host.settings.set("token", "same");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDidChange only fires for its subscribed scope", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "proj-scope") });
+    const { service } = await setupSettingsService("acme.settings-scope");
+    const { host } = createSettingsHost(service, "acme.settings-scope");
+    const userCb = vi.fn();
+    host.settings.onDidChange("token", userCb, "user");
+    await host.settings.set("token", "proj-value", "project");
+    expect(userCb).not.toHaveBeenCalled();
+  });
+
+  it("onDidChange disposer stops further callbacks", async () => {
+    const { service } = await setupSettingsService("acme.settings-dispose");
+    const { host } = createSettingsHost(service, "acme.settings-dispose");
+    const cb = vi.fn();
+    const dispose = host.settings.onDidChange("token", cb);
+    dispose();
+    await host.settings.set("token", "v1");
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin disposes settings subscriptions", async () => {
+    const { service } = await setupSettingsService("acme.settings-unload");
+    const { host } = createSettingsHost(service, "acme.settings-unload");
+    const cb = vi.fn();
+    host.settings.onDidChange("token", cb);
+    service.unloadPlugin("acme.settings-unload");
+    await host.settings.set("token", "after-unload");
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("revoked host rejects settings.onDidChange but still allows get/set", async () => {
+    const { service } = await setupSettingsService("acme.settings-revoke");
+    const { host, revoke } = createSettingsHost(service, "acme.settings-revoke");
+    revoke();
+    expect(() => host.settings.onDidChange("token", () => {})).toThrow(/host revoked/);
+    await expect(host.settings.set("token", "still-works")).resolves.toBeUndefined();
+    expect(await host.settings.get<string>("token")).toBe("still-works");
   });
 });

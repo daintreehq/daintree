@@ -41,7 +41,10 @@ import type {
   InstalledPluginRecord,
   PluginLoadError,
   PluginInstallSource,
+  PluginSettingsScope,
 } from "../../shared/types/plugin.js";
+import { PluginSettingsStore } from "./PluginSettingsStore.js";
+import { projectStore } from "./ProjectStore.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -201,6 +204,12 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
   }
 }
 
+function assertSettingsKey(pluginId: string, method: string, key: unknown): asserts key is string {
+  if (typeof key !== "string" || key.length === 0) {
+    throw new Error(`Plugin "${pluginId}" settings.${method}: key must be a non-empty string`);
+  }
+}
+
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
 export class PluginService {
@@ -237,6 +246,23 @@ export class PluginService {
   private pluginActionHandlers = new Map<string, ActionHandler>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
+  /**
+   * Persisted-settings stores keyed by `{pluginId} {scope} {filePath}` (plugin
+   * ids never contain spaces — see the manifest name pattern). Keyed on the
+   * resolved path (not just scope) so a project switch — which changes the
+   * `project`-scope path — creates a fresh store without evicting the old
+   * project's cache. Entries for a plugin are dropped on unload.
+   */
+  private settingsStores = new Map<string, PluginSettingsStore>();
+  /**
+   * Active `host.settings.onDidChange` subscriptions per plugin. Held here (not
+   * on the store) so they survive project-root switches and are flushed in one
+   * place on unload. Each disposer is also tracked in {@link pluginEventCleanups}.
+   */
+  private settingsSubscribers = new Map<
+    string,
+    Set<{ key: string; scope: PluginSettingsScope; cb: (value: unknown) => void }>
+  >();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -1281,6 +1307,103 @@ export class PluginService {
         }
         return this.sendDispatchToRenderer(actionId, args);
       },
+      // NOT revoke-guarded: plugins read/write settings throughout their
+      // lifetime (IPC handlers, timers), long after activate() resolves. The
+      // store is the source of truth, so a late call is harmless.
+      settings: {
+        get: async <T = unknown>(
+          key: string,
+          scope: PluginSettingsScope = "user"
+        ): Promise<T | undefined> => {
+          assertSettingsKey(pluginId, "get", key);
+          const filePath = this.resolveSettingsFilePath(pluginId, scope);
+          // Project scope with no active project: read resolves to undefined
+          // rather than throwing, matching the "unset key" return.
+          if (!filePath) return undefined;
+          return this.getOrCreateSettingsStore(pluginId, scope, filePath).get<T>(key);
+        },
+        set: async <T = unknown>(
+          key: string,
+          value: T,
+          scope: PluginSettingsScope = "user"
+        ): Promise<void> => {
+          assertSettingsKey(pluginId, "set", key);
+          if (value === undefined) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: value for "${key}" is undefined — settings cannot store undefined`
+            );
+          }
+          let serialized: string | undefined;
+          try {
+            serialized = JSON.stringify(value);
+          } catch {
+            serialized = undefined;
+          }
+          if (serialized === undefined) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: value for "${key}" is not JSON-serializable`
+            );
+          }
+          this.assertSettingDeclared(pluginId, key);
+          const filePath = this.resolveSettingsFilePath(pluginId, scope);
+          if (!filePath) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
+            );
+          }
+          const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+          const changed = await store.set(key, value);
+          if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+        },
+        onDidChange: <T = unknown>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          scope: PluginSettingsScope = "user"
+        ): (() => void) => {
+          if (revoked) {
+            throw new Error(
+              `Plugin "${pluginId}" host revoked: settings.onDidChange called after activate() returned or timed out`
+            );
+          }
+          assertSettingsKey(pluginId, "onDidChange", key);
+          if (typeof callback !== "function") {
+            throw new Error(
+              `Plugin "${pluginId}" settings.onDidChange: callback must be a function`
+            );
+          }
+          const sub = { key, scope, cb: callback as (value: unknown) => void };
+          let subs = this.settingsSubscribers.get(pluginId);
+          if (!subs) {
+            subs = new Set();
+            this.settingsSubscribers.set(pluginId, subs);
+          }
+          subs.add(sub);
+
+          let disposed = false;
+          const dispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            const set = this.settingsSubscribers.get(pluginId);
+            if (set) {
+              set.delete(sub);
+              if (set.size === 0) this.settingsSubscribers.delete(pluginId);
+            }
+            const list = this.pluginEventCleanups.get(pluginId);
+            if (!list) return;
+            const idx = list.indexOf(dispose);
+            if (idx >= 0) list.splice(idx, 1);
+            if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+          };
+
+          let list = this.pluginEventCleanups.get(pluginId);
+          if (!list) {
+            list = [];
+            this.pluginEventCleanups.set(pluginId, list);
+          }
+          list.push(dispose);
+          return dispose;
+        },
+      },
     };
     return {
       host,
@@ -1440,6 +1563,92 @@ export class PluginService {
         });
       }
     });
+  }
+
+  /**
+   * Root directory for user-scope plugin settings: a sibling of the plugins
+   * dir. Production: `~/.daintree/plugin-settings`. Derived from
+   * {@link pluginsRoot} so tests that pass a custom root stay isolated.
+   */
+  private settingsRoot(): string {
+    return path.join(path.dirname(this.pluginsRoot), "plugin-settings");
+  }
+
+  /**
+   * Resolve the JSON file backing a plugin's settings for a scope. User scope is
+   * fixed; project scope resolves the active project at call time and returns
+   * `undefined` when none is active.
+   */
+  private resolveSettingsFilePath(
+    pluginId: string,
+    scope: PluginSettingsScope
+  ): string | undefined {
+    if (scope === "project") {
+      const root = projectStore.getCurrentProject()?.path;
+      if (!root) return undefined;
+      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
+    }
+    return path.join(this.settingsRoot(), `${pluginId}.json`);
+  }
+
+  private getOrCreateSettingsStore(
+    pluginId: string,
+    scope: PluginSettingsScope,
+    filePath: string
+  ): PluginSettingsStore {
+    const cacheKey = `${pluginId} ${scope} ${filePath}`;
+    let store = this.settingsStores.get(cacheKey);
+    if (!store) {
+      store = new PluginSettingsStore(filePath);
+      this.settingsStores.set(cacheKey, store);
+    }
+    return store;
+  }
+
+  /**
+   * Enforce `contributes.settings` key declarations on `set`. F29 has not landed
+   * yet, so manifests never declare settings today and any key is accepted; once
+   * a plugin declares them, undeclared keys are rejected.
+   */
+  private assertSettingDeclared(pluginId: string, key: string): void {
+    const declared = this.plugins.get(pluginId)?.manifest.contributes.settings;
+    if (!declared || declared.length === 0) return;
+    if (!declared.some((s) => s.id === key)) {
+      throw new Error(
+        `Plugin "${pluginId}" settings.set: key "${key}" is not declared in contributes.settings`
+      );
+    }
+  }
+
+  private notifySettingsSubscribers(
+    pluginId: string,
+    scope: PluginSettingsScope,
+    key: string,
+    value: unknown
+  ): void {
+    const subs = this.settingsSubscribers.get(pluginId);
+    if (!subs) return;
+    // Snapshot so a callback that disposes itself doesn't mutate the live set
+    // mid-iteration.
+    for (const sub of [...subs]) {
+      if (sub.key !== key || sub.scope !== scope) continue;
+      try {
+        sub.cb(value);
+      } catch (err) {
+        console.error(
+          `[PluginService] settings.onDidChange callback for "${pluginId}" key "${key}" failed:`,
+          err
+        );
+      }
+    }
+  }
+
+  private clearPluginSettingsState(pluginId: string): void {
+    this.settingsSubscribers.delete(pluginId);
+    const prefix = `${pluginId} `;
+    for (const cacheKey of [...this.settingsStores.keys()]) {
+      if (cacheKey.startsWith(prefix)) this.settingsStores.delete(cacheKey);
+    }
   }
 
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
@@ -1733,6 +1942,12 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
+    );
+    // Subscriber disposers already fired in flushPluginEventCleanups() above;
+    // this drops any leftover subscriber-set entry and the in-memory settings
+    // store caches so a reload starts from disk.
+    runUnloadStep(pluginId, "clearPluginSettingsState", () =>
+      this.clearPluginSettingsState(pluginId)
     );
 
     this.plugins.delete(pluginId);

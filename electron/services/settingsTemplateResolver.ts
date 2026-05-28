@@ -1,6 +1,9 @@
 /**
- * Minimal settings read surface consumed by the template resolver. #9279 will
- * replace this with the full `host.settings` API.
+ * Minimal settings read surface consumed by the template resolver. This is a
+ * structural subset of the full `host.settings` `SettingsApi` (shared/types/
+ * plugin.ts, #9279) — a real `SettingsApi` satisfies it, since its `get` widens
+ * to an optional `scope` argument and a generic return. Kept narrow here so the
+ * resolver only depends on the read it actually performs.
  */
 export interface PluginSettingsApi {
   get(key: string): Promise<string | undefined>;

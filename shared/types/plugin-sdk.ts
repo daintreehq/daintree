@@ -43,6 +43,10 @@ export type { PluginManifest } from "./plugin.js";
 
 export type { PluginActivate, PluginHostApi, ActionHandler } from "./plugin.js";
 
+// ── Settings (host.settings) ────────────────────────────────────────
+
+export type { SettingsApi, PluginSettingsScope, SettingDefinition } from "./plugin.js";
+
 // ── IPC (registerHandler, broadcastToRenderer) — ships in v1 ────────
 
 export type { PluginIpcContext, PluginIpcHandler } from "./plugin.js";
