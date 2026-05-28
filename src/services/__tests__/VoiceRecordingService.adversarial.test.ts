@@ -20,7 +20,7 @@ interface MockPanelBuffer {
   completedSegments: string[];
   projectId?: string;
   sessionDraftStart: number;
-  draftLengthAtSegmentStart: number;
+  insertPoint: number;
   activeParagraphStart: number;
   transcriptPhase: string;
 }
@@ -46,7 +46,7 @@ function createPanelBuffer(overrides: Partial<MockPanelBuffer> = {}): MockPanelB
     liveText: "",
     completedSegments: [],
     sessionDraftStart: -1,
-    draftLengthAtSegmentStart: -1,
+    insertPoint: -1,
     activeParagraphStart: -1,
     transcriptPhase: "idle",
     ...overrides,
@@ -102,7 +102,7 @@ const runtime = vi.hoisted(() => ({
     setElapsedSeconds: vi.fn<(seconds: number) => void>(),
     appendDelta: vi.fn<(delta: string) => void>(),
     completeSegment: vi.fn<(text: string) => void>(),
-    setDraftLengthAtSegmentStart: vi.fn<(panelId: string, length: number) => void>(),
+    setInsertPoint: vi.fn<(panelId: string, length: number) => void>(),
     setSessionDraftStart: vi.fn<(panelId: string, length: number) => void>(),
     setActiveParagraphStart: vi.fn<(panelId: string, length: number) => void>(),
     resetParagraphState: vi.fn<(panelId: string) => void>(),
@@ -111,7 +111,6 @@ const runtime = vi.hoisted(() => ({
   terminalInputFns: {
     getDraftInput: vi.fn<(panelId: string, projectId?: string) => string>(),
     setDraftInput: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
-    appendVoiceText: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
     bumpVoiceDraftRevision: vi.fn<() => void>(),
   },
   statusListeners: new Set<VoiceStatusCallback>(),
@@ -214,11 +213,11 @@ function resetRuntime(): void {
   runtime.voiceFns.setElapsedSeconds.mockImplementation(() => undefined);
   runtime.voiceFns.appendDelta.mockImplementation(() => undefined);
   runtime.voiceFns.completeSegment.mockImplementation(() => undefined);
-  runtime.voiceFns.setDraftLengthAtSegmentStart.mockImplementation((panelId, length) => {
+  runtime.voiceFns.setInsertPoint.mockImplementation((panelId, length) => {
     runtime.voiceState.panelBuffers[panelId] = createPanelBuffer(
       runtime.voiceState.panelBuffers[panelId]
     );
-    runtime.voiceState.panelBuffers[panelId].draftLengthAtSegmentStart = length;
+    runtime.voiceState.panelBuffers[panelId].insertPoint = length;
   });
   runtime.voiceFns.setSessionDraftStart.mockImplementation((panelId, length) => {
     runtime.voiceState.panelBuffers[panelId] = createPanelBuffer(
@@ -247,9 +246,6 @@ function resetRuntime(): void {
   );
   runtime.terminalInputFns.setDraftInput.mockImplementation((panelId, value) => {
     runtime.drafts[panelId] = value;
-  });
-  runtime.terminalInputFns.appendVoiceText.mockImplementation((panelId, value) => {
-    runtime.drafts[panelId] = `${runtime.drafts[panelId] ?? ""}${value}`;
   });
   runtime.terminalInputFns.bumpVoiceDraftRevision.mockImplementation(() => undefined);
 

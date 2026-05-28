@@ -81,24 +81,16 @@ class VoiceRecordingService {
               .getDraftInput(target.panelId, target.projectId);
             const { insertStart } = getVoiceInsertMetadata(draft);
             useVoiceRecordingStore.getState().setSessionDraftStart(target.panelId, insertStart);
-            // Snapshot where dictated text actually begins, including any separator
-            // inserted between existing draft text and the first dictated token.
-            useVoiceRecordingStore
-              .getState()
-              .setDraftLengthAtSegmentStart(target.panelId, insertStart);
+            // Snapshot where dictated text will begin once the final commit runs,
+            // including any leading separator inserted between existing draft and
+            // the first dictated token. Stable for the lifetime of the utterance.
+            useVoiceRecordingStore.getState().setInsertPoint(target.panelId, insertStart);
             // Track paragraph start for the first utterance in a new paragraph.
             useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
-            // First delta of a new utterance — use appendVoiceText for separator logic.
-            useTerminalInputStore
-              .getState()
-              .appendVoiceText(target.panelId, delta, target.projectId);
-          } else {
-            // Subsequent deltas — append raw to keep length in sync with liveText.
-            const store = useTerminalInputStore.getState();
-            const existing = store.getDraftInput(target.panelId, target.projectId);
-            store.setDraftInput(target.panelId, existing + delta, target.projectId);
-            store.bumpVoiceDraftRevision();
           }
+          // Interim deltas accumulate in liveText only — the ghost-widget
+          // decoration renders them outside the doc model so the editor's
+          // history records a single transaction per utterance (#9172).
         }
         useVoiceRecordingStore.getState().appendDelta(delta);
       })
@@ -112,11 +104,13 @@ class VoiceRecordingService {
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
-          const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
+          const segmentStart = buffer?.insertPoint ?? -1;
           if (segmentStart >= 0 || text.trim()) {
             const inputStore = useTerminalInputStore.getState();
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
+            // In the new flow the doc carries no interim text, so the slice is a no-op
+            // when nothing has been written — the separator still re-fixes spacing.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const { separator, insertStart } = getVoiceInsertMetadata(base);
             if ((buffer?.activeParagraphStart ?? -1) < 0 && text.trim()) {
@@ -721,17 +715,24 @@ class VoiceRecordingService {
       }
 
       if (hasSession) {
-        // Flush any remaining delta text (liveText) to the draft store before
-        // finishSession clears it — this handles the case where recording stops
-        // mid-utterance with un-committed delta text in the editor.
+        // Flush any remaining interim text (liveText) into the draft as a final
+        // commit before finishSession clears it. In the ghost-widget flow the
+        // doc carries no interim text, so without this flush a mid-utterance
+        // stop would silently drop the partial transcription.
         if (preserveLiveText) {
           const currentTarget = useVoiceRecordingStore.getState().activeTarget;
           if (currentTarget) {
-            const { panelId } = currentTarget;
+            const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
+            const segmentStart = buffer?.insertPoint ?? -1;
             if (remaining) {
-              useTerminalInputStore.getState().bumpVoiceDraftRevision();
+              const inputStore = useTerminalInputStore.getState();
+              const draft = inputStore.getDraftInput(panelId, projectId);
+              const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
+              const { separator } = getVoiceInsertMetadata(base);
+              inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
+              inputStore.bumpVoiceDraftRevision();
             }
           }
         }

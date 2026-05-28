@@ -23,7 +23,7 @@ import {
   createTerminalChipTooltip,
   selectionChipField,
   createSelectionChipTooltip,
-  interimMarkField,
+  interimWidgetField,
   pendingAIField,
   createAutoSize,
   createCustomKeymap,
@@ -148,7 +148,7 @@ export function useEditorFactory({
         selectionChipTooltipCompartmentRef.current.of(
           !disabled ? createSelectionChipTooltip() : []
         ),
-        interimMarkField,
+        interimWidgetField,
         pendingAIField,
         EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
         keymapCompartmentRef.current.of(

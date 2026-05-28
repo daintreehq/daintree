@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { EditorView } from "@codemirror/view";
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, Transaction } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
 import { logError } from "@/utils/logger";
@@ -438,15 +439,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setValue(draft);
         lastEmittedValueRef.current = draft;
         isApplyingExternalValueRef.current = true;
+        // `isolateHistory.of("before")` keeps the dictation/correction commit
+        // from merging into the user's prior keystroke history group, so a
+        // single Cmd-Z undoes just the dictated text (#9172).
         view.dispatch({
           changes: { from: 0, to: current.length, insert: draft },
           selection: { anchor: draft.length },
+          annotations: [Transaction.userEvent.of("input.dictate"), isolateHistory.of("before")],
           scrollIntoView: true,
         });
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    useVoiceDecorations({ terminalId, editorViewRef, voiceDraftRevision });
+    useVoiceDecorations({ terminalId, editorViewRef });
 
     const resetEditorDoc = () => {
       applyEditorValue("", {

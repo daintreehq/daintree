@@ -103,7 +103,6 @@ export interface TerminalInputState {
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
   setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
-  appendVoiceText: (terminalId: string, text: string, projectId?: string) => void;
   bumpVoiceDraftRevision: () => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
@@ -199,16 +198,6 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
     }),
-  appendVoiceText: (terminalId, text, projectId) =>
-    set((state) => {
-      const key = makeDraftKey(terminalId, projectId);
-      const newDraftInputs = new Map(state.draftInputs);
-      const existing = newDraftInputs.get(key) ?? "";
-      const separator = existing && !existing.endsWith(" ") ? " " : "";
-      newDraftInputs.set(key, existing + separator + text);
-      return { draftInputs: newDraftInputs, voiceDraftRevision: state.voiceDraftRevision + 1 };
-    }),
-
   bumpVoiceDraftRevision: () =>
     set((state) => ({ voiceDraftRevision: state.voiceDraftRevision + 1 })),
 

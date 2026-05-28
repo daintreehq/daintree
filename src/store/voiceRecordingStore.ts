@@ -16,8 +16,8 @@ interface VoiceTranscriptBuffer {
   projectId?: string;
   /** Draft length snapshot taken before the first delta of the session. */
   sessionDraftStart: number;
-  /** Draft length snapshot taken before the first delta of a segment. */
-  draftLengthAtSegmentStart: number;
+  /** CodeMirror position where the next utterance's final text will be inserted. */
+  insertPoint: number;
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
@@ -59,7 +59,7 @@ interface VoiceRecordingState {
   setElapsedSeconds: (seconds: number) => void;
   appendDelta: (delta: string) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
-  setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
+  setInsertPoint: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
   setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
@@ -80,7 +80,7 @@ function getBuffer(
       liveText: "",
       completedSegments: [],
       sessionDraftStart: -1,
-      draftLengthAtSegmentStart: -1,
+      insertPoint: -1,
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
       correctionRange: null,
@@ -119,7 +119,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           completedSegments: [],
           projectId: target.projectId,
           sessionDraftStart: -1,
-          draftLengthAtSegmentStart: -1,
+          insertPoint: -1,
           activeParagraphStart: -1,
           transcriptPhase: "idle" as VoiceTranscriptPhase,
           correctionRange: null,
@@ -162,14 +162,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
       };
     }),
 
-  setDraftLengthAtSegmentStart: (panelId, length) =>
+  setInsertPoint: (panelId, length) =>
     set((state) => {
       const buffer = getBuffer(state.panelBuffers, panelId);
-      if (buffer.draftLengthAtSegmentStart >= 0) return state;
+      if (buffer.insertPoint >= 0) return state;
       return {
         panelBuffers: {
           ...state.panelBuffers,
-          [panelId]: { ...buffer, draftLengthAtSegmentStart: length },
+          [panelId]: { ...buffer, insertPoint: length },
         },
       };
     }),
@@ -188,7 +188,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             [panelId]: {
               ...buffer,
               liveText: "",
-              draftLengthAtSegmentStart: -1,
+              insertPoint: -1,
               transcriptPhase: "idle" as VoiceTranscriptPhase,
             },
           },
@@ -201,7 +201,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           [panelId]: {
             ...buffer,
             liveText: "",
-            draftLengthAtSegmentStart: -1,
+            insertPoint: -1,
             completedSegments: [...buffer.completedSegments, normalized],
             transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
           },
@@ -243,7 +243,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             ...buffer,
             liveText: "",
             completedSegments: [],
-            draftLengthAtSegmentStart: -1,
+            insertPoint: -1,
             activeParagraphStart: -1,
             transcriptPhase: "idle" as VoiceTranscriptPhase,
           },

@@ -24,7 +24,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
-    setDraftLengthAtSegmentStart: vi.fn(),
+    setInsertPoint: vi.fn(),
+    setSessionDraftStart: vi.fn(),
+    setActiveParagraphStart: vi.fn(),
     clearPanelBuffer: vi.fn(),
   };
   const getState = () => ({ ...state, ...fns });
@@ -50,7 +52,6 @@ vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
     setDraftInput: vi.fn(),
-    appendVoiceText: vi.fn(),
     bumpVoiceDraftRevision: vi.fn(),
   };
   const getState = () => fns;
@@ -705,5 +706,111 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(useVoiceRecordingStore.getState().setError).toHaveBeenCalledWith(
       expect.stringContaining("Start the Daintree Assistant")
     );
+  });
+});
+
+describe("VoiceRecordingService — interim delta handling (#9172)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("does not write to the draft store or bump the voice revision on interim deltas", async () => {
+    const { electronStub } = setupGlobals();
+    let deltaCallback: ((delta: string) => void) | null = null;
+    // Cast through unknown because the stub's vi.fn is initialised with a
+    // zero-arg shape; the real handler takes a (delta:string)=>void.
+    (
+      electronStub.voiceInput.onTranscriptionDelta as unknown as {
+        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      deltaCallback = cb;
+      return () => {};
+    });
+
+    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null };
+    };
+    __state.activeTarget = { panelId: "panel-1" };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    expect(deltaCallback).not.toBeNull();
+    deltaCallback!("hello");
+    deltaCallback!(" world");
+    deltaCallback!(" again");
+
+    // The interim path must not mutate the draft store — that's the entire fix.
+    expect(inputStore.setDraftInput).not.toHaveBeenCalled();
+    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+
+    __state.activeTarget = null;
+  });
+
+  it("commits exactly one draft write per onTranscriptionComplete (one undo step)", async () => {
+    const { electronStub } = setupGlobals();
+    let deltaCallback: ((delta: string) => void) | null = null;
+    let completeCallback: ((payload: { text: string }) => void) | null = null;
+    (
+      electronStub.voiceInput.onTranscriptionDelta as unknown as {
+        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      deltaCallback = cb;
+      return () => {};
+    });
+    (
+      electronStub.voiceInput.onTranscriptionComplete as unknown as {
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
+      }
+    ).mockImplementation((cb) => {
+      completeCallback = cb;
+      return () => {};
+    });
+
+    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: {
+        activeTarget: { panelId: string } | null;
+        panelBuffers: Record<string, { insertPoint: number }>;
+      };
+    };
+    voiceModule.__state.activeTarget = { panelId: "panel-1" };
+
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const inputStore = useTerminalInputStore.getState();
+    (inputStore.getDraftInput as ReturnType<typeof vi.fn>).mockReturnValue("existing");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+
+    // Five interim deltas — none should commit to the draft.
+    deltaCallback!("hel");
+    deltaCallback!("lo");
+    deltaCallback!(" wor");
+    deltaCallback!("ld");
+    deltaCallback!("!");
+
+    // Simulate insertPoint being captured by the first delta. The test stub
+    // for setInsertPoint is a no-op, so seed the buffer manually.
+    voiceModule.__state.panelBuffers["panel-1"] = { insertPoint: 8 };
+
+    // Single completion event — exactly one write, one revision bump.
+    completeCallback!({ text: "hello world!" });
+
+    expect(inputStore.setDraftInput).toHaveBeenCalledTimes(1);
+    expect(inputStore.bumpVoiceDraftRevision).toHaveBeenCalledTimes(1);
+
+    voiceModule.__state.activeTarget = null;
+    voiceModule.__state.panelBuffers = {};
   });
 });
