@@ -145,7 +145,7 @@ export interface TerminalInfo extends TerminalPublicState {
 
 export interface PtyManagerEvents {
   data: (id: string, data: string | Uint8Array) => void;
-  exit: (id: string, exitCode: number) => void;
+  exit: (id: string, exitCode: number, signal?: number) => void;
   error: (id: string, error: string) => void;
 }
 

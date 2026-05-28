@@ -41,6 +41,8 @@ import type {
   DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
 import type { DevServerError } from "../../shared/utils/devServerErrors.js";
+import { detectDevServerError } from "../../shared/utils/devServerErrors.js";
+import { CRASH_SIGNALS, EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -136,7 +138,7 @@ export class DevPreviewSessionService {
   // Entries are dropped the moment a real session is created for that key.
   private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
-  private readonly onExitListener: (id: string, exitCode: number) => void;
+  private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
 
   constructor(
     private readonly ptyClient: PtyClient,
@@ -1560,7 +1562,52 @@ export class DevPreviewSessionService {
     });
   }
 
-  private handleExit(id: string, exitCode: number): void {
+  private classifyExit(
+    exitCode: number,
+    signal: number | undefined,
+    recentOutput: string
+  ): DevServerError | null {
+    // Signal-based tier first
+    if (signal !== undefined) {
+      // Check OOM output across all crash signals — Node.js heap OOM sends
+      // SIGABRT (6), not SIGKILL (9). Kernel OOM killer uses SIGKILL.
+      if (
+        CRASH_SIGNALS.has(signal) &&
+        /\b(FATAL ERROR|out of memory|heap out of memory|Cannot allocate memory)\b/i.test(
+          recentOutput
+        )
+      ) {
+        return {
+          type: "oom",
+          message: "Dev server was killed — out of memory.",
+        };
+      }
+      if (signal === 9) {
+        // SIGKILL without OOM output: fall through to output/exit-code tiers
+      } else if (CRASH_SIGNALS.has(signal)) {
+        return {
+          type: "process-crash",
+          message: `Dev server crashed (signal ${signal}).`,
+        };
+      }
+      if (EXPECTED_TERMINATION_SIGNALS.has(signal)) {
+        return null;
+      }
+    }
+
+    // Output-based tier
+    const outputError = detectDevServerError(recentOutput);
+    if (outputError) return outputError;
+
+    // Exit-code fallback
+    if (exitCode === 0) return null;
+    return {
+      type: "unknown",
+      message: `Dev server exited with code ${exitCode}`,
+    };
+  }
+
+  private handleExit(id: string, exitCode: number, signal?: number): void {
     if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
@@ -1575,6 +1622,7 @@ export class DevPreviewSessionService {
     this.clearCompiling(session);
 
     this.detachTerminal(session);
+    const recentOutput = session.buffer;
     session.buffer = "";
     session.lastErrorKey = null;
 
@@ -1606,8 +1654,25 @@ export class DevPreviewSessionService {
     }
     session.needsInstall = false;
 
-    if (session.status === "starting" || session.status === "installing") {
-      const error: DevServerError = {
+    if (
+      session.status === "starting" ||
+      session.status === "installing" ||
+      session.status === "error"
+    ) {
+      // Expected termination signals during startup/error = clean stop (user interrupted it)
+      if (signal !== undefined && EXPECTED_TERMINATION_SIGNALS.has(signal)) {
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          predictedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          phaseLabel: undefined,
+        });
+        return;
+      }
+      const error = this.classifyExit(exitCode, signal, recentOutput) ?? {
         type: "unknown",
         message: `Dev server exited with code ${exitCode}`,
       };
@@ -1623,11 +1688,16 @@ export class DevPreviewSessionService {
       return;
     }
 
+    const crashError =
+      signal !== undefined && CRASH_SIGNALS.has(signal)
+        ? this.classifyExit(exitCode, signal, recentOutput)
+        : null;
+
     this.updateSession(session, {
       status: "stopped",
       url: null,
       predictedUrl: null,
-      error: null,
+      error: crashError,
       terminalId: null,
       isRestarting: false,
       phaseLabel: undefined,

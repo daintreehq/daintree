@@ -107,7 +107,7 @@ type CursorBuffer = {
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
-  onExit: (id: string, exitCode: number) => void;
+  onExit: (id: string, exitCode: number, signal?: number) => void;
 }
 
 export interface TerminalProcessDependencies {
@@ -1696,7 +1696,7 @@ export class TerminalProcess {
         });
       }
 
-      this.callbacks.onExit(this.id, exitCode ?? 0);
+      this.callbacks.onExit(this.id, exitCode ?? 0, signal ?? undefined);
 
       this.emitTerminalExited({
         code: exitCode ?? 0,

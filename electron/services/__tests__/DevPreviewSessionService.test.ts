@@ -22,7 +22,7 @@ vi.mock("ws", () => {
 });
 
 type DataListener = (id: string, data: string | Uint8Array) => void;
-type ExitListener = (id: string, exitCode: number) => void;
+type ExitListener = (id: string, exitCode: number, signal?: number) => void;
 type MockIncomingMessage = {
   statusCode?: number;
   resume: () => void;
@@ -116,13 +116,13 @@ function createPtyClientMock(options?: { spawnError?: Error }) {
         spawnedAt: Date.now(),
       };
     }),
-    emitExit(id: string, exitCode: number) {
+    emitExit(id: string, exitCode: number, signal?: number) {
       const terminal = terminals.get(id);
       if (terminal) {
         terminal.hasPty = false;
       }
       for (const callback of exitListeners) {
-        callback(id, exitCode);
+        callback(id, exitCode, signal);
       }
     },
     emitData(id: string, data: string | Uint8Array) {
@@ -353,6 +353,217 @@ describe("DevPreviewSessionService", () => {
     expect(afterExit.status).toBe("error");
     expect(afterExit.error?.message).toContain("Dev server exited with code 9");
     expect(afterExit.terminalId).toBeNull();
+  });
+
+  it("classifies port-conflict exit from buffered output", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Emit port-conflict output — handleData detects it mid-stream and
+    // transitions to "error" before the exit fires.
+    ptyClient.emitData(
+      started.terminalId!,
+      "Error: listen EADDRINUSE: address already in use :::3000\n"
+    );
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("error");
+    expect(afterData.error?.type).toBe("port-conflict");
+
+    // Exit fires after mid-stream detection — handleExit reclassifies with
+    // full context (exit code + signal + buffer), preserving the classified error.
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("port-conflict");
+    expect(state.error?.port).toBe("3000");
+  });
+
+  it("handles exit after mid-stream missing-dependency detection triggers reinstall", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Mid-stream detection sets needsInstall + status: "installing"
+    ptyClient.emitData(started.terminalId!, "Error: Cannot find module 'vite'\n");
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("installing");
+    expect(afterData.error?.type).toBe("missing-dependencies");
+
+    // Exit during "installing" triggers a guarded reinstall (not an error stop)
+    ptyClient.emitExit(started.terminalId!, 1);
+  });
+
+  it("classifies compile-error exit from buffered output", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // Emit compile-error output — handleData detects it mid-stream
+    ptyClient.emitData(started.terminalId!, "Build failed with 3 errors:\n");
+
+    const afterData = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(afterData.status).toBe("error");
+    expect(afterData.error?.type).toBe("compile-error");
+
+    // Exit reclassifies with full context
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("compile-error");
+  });
+
+  it("classifies process-crash exit from SIGSEGV signal", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 11); // SIGSEGV
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("process-crash");
+    expect(state.error?.message).toContain("crashed");
+  });
+
+  it("treats SIGINT as clean stop (error: null)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 2); // SIGINT
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("stopped");
+    expect(state.error).toBeNull();
+  });
+
+  it("treats SIGTERM as clean stop (error: null)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 15); // SIGTERM
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("stopped");
+    expect(state.error).toBeNull();
+  });
+
+  it("classifies SIGKILL + OOM output as oom", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(
+      started.terminalId!,
+      "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n"
+    );
+    ptyClient.emitExit(started.terminalId!, 0, 9); // SIGKILL
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("oom");
+  });
+
+  it("classifies SIGABRT + OOM output as oom (Node.js heap OOM)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitData(
+      started.terminalId!,
+      "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory\n"
+    );
+    ptyClient.emitExit(started.terminalId!, 0, 6); // SIGABRT
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("oom");
+  });
+
+  it("classifies SIGKILL without OOM output as unknown", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0, 9); // SIGKILL, no OOM output
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("unknown");
+  });
+
+  it("classifies exit code 0 with no signal as unknown error (exited before ready)", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.emitExit(started.terminalId!, 0);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.status).toBe("error");
+    expect(state.error?.type).toBe("unknown");
+  });
+
+  it("classifies even when buffer is cleared after mid-stream detection", async () => {
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    // handleData detects port-conflict and transitions to "error"
+    ptyClient.emitData(
+      started.terminalId!,
+      "Error: listen EADDRINUSE: address already in use :::3000\n"
+    );
+    // handleExit captures buffer before clearing, reclassifies correctly
+    ptyClient.emitExit(started.terminalId!, 1);
+
+    const state = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(state.error?.type).toBe("port-conflict");
   });
 
   it("detects URLs and transitions to running after readiness poll succeeds", async () => {
