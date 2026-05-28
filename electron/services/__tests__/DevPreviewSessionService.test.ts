@@ -9,6 +9,18 @@ import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPrevie
 vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
+vi.mock("ws", () => {
+  class WebSocketMock {
+    once(event: "open" | "error" | "close", listener: () => void) {
+      if (event === "error") queueMicrotask(() => listener());
+      return this;
+    }
+    terminate() {}
+    constructor() {}
+  }
+  return { default: WebSocketMock };
+});
+
 type DataListener = (id: string, data: string | Uint8Array) => void;
 type ExitListener = (id: string, exitCode: number) => void;
 type MockIncomingMessage = {
@@ -402,7 +414,8 @@ describe("DevPreviewSessionService", () => {
     expect(after.status).toBe("error");
   });
 
-  it("treats HTTP 4xx responses as ready (server is reachable)", async () => {
+  it("does not treat HTTP 4xx as ready (waits for 2xx/3xx)", async () => {
+    vi.useFakeTimers();
     mockHttpResponse(404);
 
     const started = await service.ensure(baseRequest);
@@ -410,14 +423,13 @@ describe("DevPreviewSessionService", () => {
 
     ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
 
-    await vi.waitFor(() => {
-      const updated = service.getState({
-        panelId: baseRequest.panelId,
-        projectId: baseRequest.projectId,
-      });
-      expect(updated.status).toBe("running");
-      expect(updated.url).toMatch(/^http:\/\/localhost:4173\/?$/);
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
     });
+    expect(after.status).toBe("error");
   });
 
   it("stays in starting status while readiness poll is in progress", async () => {

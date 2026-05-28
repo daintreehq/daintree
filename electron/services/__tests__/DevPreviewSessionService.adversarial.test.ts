@@ -29,6 +29,18 @@ vi.mock("../UrlDetector.js", () => ({
 vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
+vi.mock("ws", () => {
+  class WebSocketMock {
+    once(event: "open" | "error" | "close", listener: () => void) {
+      if (event === "error") queueMicrotask(() => listener());
+      return this;
+    }
+    terminate() {}
+    constructor() {}
+  }
+  return { default: WebSocketMock };
+});
+
 type DataListener = (id: string, data: string | Uint8Array) => void;
 type ExitListener = (id: string, exitCode: number) => void;
 type TerminalRecord = {
