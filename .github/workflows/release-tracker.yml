@@ -130,6 +130,11 @@ jobs:
                 --commit "$COMMIT_SHA" \
                 --limit 100 \
                 --json databaseId,workflowName,status,conclusion,url 2>&1)
+              if ! echo "$recheck_json" | jq -e '. | type == "array"' > /dev/null 2>&1; then
+                echo "::warning::Re-check gh run list returned non-JSON — retrying next cycle"
+                sleep 60
+                continue
+              fi
               recheck_filtered=$(echo "$recheck_json" | jq --argjson names "$TARGET_WORKFLOWS" --arg ownId "$GITHUB_RUN_ID" '
                 [.[]
                   | select(.databaseId != ($ownId | tonumber))
@@ -158,7 +163,13 @@ jobs:
               echo "  ${line}"
             done < <(echo "$filtered" | jq -r '.[] | "\(.workflowName): status=\(.status) conclusion=\(.conclusion // "null")"')
 
-            sleep "$POLL_INTERVAL"
+            # Cap sleep to the remaining ceiling so the runner's 90-min timeout
+            # never kills the job before the amber check at loop top fires.
+            remaining=$(( MAX_ELAPSED - $(date +%s) + started_at ))
+            if (( remaining <= 0 )); then
+              continue  # loop-top amber check fires on next iteration
+            fi
+            sleep $(( POLL_INTERVAL < remaining ? POLL_INTERVAL : remaining ))
           done
 
       - name: Notify release status
