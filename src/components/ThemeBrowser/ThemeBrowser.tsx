@@ -17,6 +17,7 @@ import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useImageError } from "@/hooks";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 
 const PANEL_WIDTH = 380;
 const EMPTY_WARNINGS: AppThemeValidationWarning[] = [];
@@ -580,6 +581,8 @@ export function ThemeBrowser() {
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {previewAnnouncement}
       </div>
+
+      <AccessibilityAnnouncer />
     </div>
   );
 }

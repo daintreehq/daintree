@@ -28,6 +28,19 @@ describe("WebviewDialog accessibility", () => {
     expect(panel?.getAttribute("tabindex")).toBe("-1");
   });
 
+  it("co-locates the shared announcer inside the aria-modal dialog subtree", () => {
+    // VoiceOver drops aria-live mutations outside an open aria-modal subtree
+    // (Chromium bug 354736464), so the dialog must carry the shared announcer.
+    // The announcer renders both polite and assertive regions — assert both so
+    // the contract fails loudly if the co-located <AccessibilityAnnouncer/> is
+    // removed.
+    const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={vi.fn()} />);
+    const modal = container.querySelector('[aria-modal="true"]');
+    expect(modal).not.toBeNull();
+    expect(modal!.querySelector('[aria-live="polite"]')).not.toBeNull();
+    expect(modal!.querySelector('[aria-live="assertive"]')).not.toBeNull();
+  });
+
   it("aria-labelledby points at the message paragraph id", () => {
     const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={vi.fn()} />);
     const panel = container.querySelector('[role="dialog"]');

@@ -219,6 +219,17 @@ describe("ThemeBrowser", () => {
     expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
   });
 
+  it("co-locates the shared announcer inside the aria-modal subtree", () => {
+    // VoiceOver drops store-routed aria-live mutations that fire outside an
+    // open aria-modal subtree (Chromium bug 354736464). The theme-preview
+    // region is polite-only, so assert the assertive region — unique to the
+    // shared <AccessibilityAnnouncer/> — to prove it is co-located here.
+    render(<Harness />);
+    const modal = screen.getByRole("dialog");
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    expect(modal.querySelector('[aria-live="assertive"]')).not.toBeNull();
+  });
+
   it("portal toggle is a no-op while the browser is mounted", () => {
     render(<Harness />);
     expect(usePortalStore.getState().isOpen).toBe(false);

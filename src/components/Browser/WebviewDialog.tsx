@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useId } from "react";
+import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 
 const TABBABLE_SELECTOR =
   'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
@@ -160,6 +161,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             OK
           </button>
         </div>
+        <AccessibilityAnnouncer />
       </div>
     </div>
   );
