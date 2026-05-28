@@ -20,6 +20,9 @@
   },
   "main": "dist-electron/electron/bootstrap.js",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "node": ">=22.13.0"
   },

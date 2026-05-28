@@ -2,6 +2,7 @@ import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
 import fs from "fs/promises";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "url";
 import {
   resolveAppUrlToDistPath,
@@ -510,8 +511,47 @@ export function getDistPath(): string | null {
   return cachedDistPath;
 }
 
+// Read the production import-map hash sidecar emitted by the Vite build
+// (`hostImportMapPlugin` in vite.config.ts). The hash must reach the
+// `Content-Security-Policy` HTTP header layer so it stays aligned with the
+// `<meta http-equiv>` value inside the document — the browser intersects the
+// two policies, and a divergence silently drops the inline importmap. In dev,
+// the sidecar doesn't exist (Vite serves React from the module graph and the
+// dev CSP carries `'unsafe-inline'`), so this returns []. Failure to read or
+// parse the sidecar in production logs a warning and returns []; without the
+// hash the host page still loads, but plugins that externalize React will
+// fail to resolve `react` at runtime — visible enough to debug, but not worth
+// crashing app startup over a missing build artifact.
+function loadHostImportMapHashes(distPath: string | null): string[] {
+  if (process.env.NODE_ENV === "development") return [];
+  if (!distPath) return [];
+
+  try {
+    const sidecarPath = path.join(distPath, "importmap-meta.json");
+    const raw = readFileSync(sidecarPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "scriptSrcHashes" in parsed &&
+      Array.isArray((parsed as { scriptSrcHashes: unknown }).scriptSrcHashes)
+    ) {
+      const hashes = (parsed as { scriptSrcHashes: unknown[] }).scriptSrcHashes.filter(
+        (h): h is string => typeof h === "string"
+      );
+      return hashes;
+    }
+    console.warn("[MAIN] importmap-meta.json is malformed; missing scriptSrcHashes array.");
+    return [];
+  } catch (err) {
+    console.warn("[MAIN] Failed to load importmap-meta.json sidecar:", err);
+    return [];
+  }
+}
+
 export function setupWebviewCSP(): void {
   const configuredPartitions = new Set<string>();
+  const scriptSrcHashes = loadHostImportMapHashes(cachedDistPath);
 
   const applyCSP = (partition: string): void => {
     if (configuredPartitions.has(partition)) {
@@ -527,9 +567,12 @@ export function setupWebviewCSP(): void {
     }
 
     const ses = session.fromPartition(partition);
+    const isDev = process.env.NODE_ENV === "development";
     const cspPolicy =
       partitionType === "project"
-        ? getDaintreeAppCSP(process.env.NODE_ENV === "development")
+        ? scriptSrcHashes.length > 0
+          ? getDaintreeAppCSP(isDev, { scriptSrcHashes })
+          : getDaintreeAppCSP(isDev)
         : getLocalhostDevCSP();
 
     ses.webRequest.onHeadersReceived((details, callback) => {

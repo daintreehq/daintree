@@ -28,4 +28,39 @@ describe("Daintree app CSP", () => {
     expect(getDaintreeAppCSP(true)).toBe(getDaintreeAppDevCSP());
     expect(getDaintreeAppCSP(false)).toBe(getDaintreeAppProdCSP());
   });
+
+  describe("scriptSrcHashes option", () => {
+    it("appends a single hash to script-src in production", () => {
+      const csp = getDaintreeAppProdCSP({ scriptSrcHashes: ["'sha256-abc123'"] });
+      expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' 'sha256-abc123'");
+    });
+
+    it("appends multiple hashes space-separated in production", () => {
+      const csp = getDaintreeAppProdCSP({
+        scriptSrcHashes: ["'sha256-aaa'", "'sha256-bbb'"],
+      });
+      expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' 'sha256-aaa' 'sha256-bbb'");
+    });
+
+    it("omits the hash list when scriptSrcHashes is empty", () => {
+      const csp = getDaintreeAppProdCSP({ scriptSrcHashes: [] });
+      expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval';");
+      expect(csp).not.toMatch(/'sha256-/);
+    });
+
+    it("omits the hash list when options is undefined", () => {
+      expect(getDaintreeAppProdCSP()).toBe(getDaintreeAppProdCSP({ scriptSrcHashes: [] }));
+    });
+
+    it("does not modify the dev CSP even when hashes are provided", () => {
+      const csp = getDaintreeAppCSP(true, { scriptSrcHashes: ["'sha256-abc'"] });
+      expect(csp).toBe(getDaintreeAppDevCSP());
+      expect(csp).not.toMatch(/'sha256-/);
+    });
+
+    it("threads scriptSrcHashes through getDaintreeAppCSP to the prod variant", () => {
+      const csp = getDaintreeAppCSP(false, { scriptSrcHashes: ["'sha256-xyz'"] });
+      expect(csp).toContain("'sha256-xyz'");
+    });
+  });
 });
