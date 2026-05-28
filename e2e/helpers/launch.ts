@@ -1,6 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { createRequire } from "module";
-import { mkdtempSync, unlinkSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, unlinkSync, readdirSync, appendFileSync } from "fs";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import path from "path";
@@ -207,6 +207,25 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       delete launchEnv.ELECTRON_RUN_AS_NODE;
       delete launchEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
 
+      // Route crash dumps and Chromium logs into workspace-relative paths so
+      // CI artifact upload captures them. Per-launch uniqueness avoids
+      // collisions across parallel Playwright workers and retry attempts.
+      //
+      // crashDumps are redirected via app.setPath("crashDumps") in
+      // electron/setup/environment.ts (reads DAINTREE_E2E_CRASH_DUMPS_DIR).
+      // Chromium logging goes to a file via --enable-logging=file --log-file.
+      // Main-process stdout/stderr is teed to a separate file below.
+      const artifactRoot = path.join(ROOT, "daintree-e2e-artifacts");
+      const launchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const crashDumpsDir = path.join(artifactRoot, "crash-dumps", launchId);
+      const logsDir = path.join(artifactRoot, "logs");
+      const logFile = path.join(logsDir, `electron-main-${launchId}.log`);
+      const teeFile = path.join(logsDir, `electron-main-${launchId}-tee.log`);
+      mkdirSync(crashDumpsDir, { recursive: true });
+      mkdirSync(logsDir, { recursive: true });
+      launchEnv.DAINTREE_E2E_CRASH_DUMPS_DIR = crashDumpsDir;
+      args.push("--enable-logging=file", `--log-file=${logFile}`);
+
       app = await electron.launch({
         executablePath: electronPath,
         args,
@@ -220,10 +239,20 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         const proc = app.process();
         proc.stdout?.on("data", (chunk: Buffer) => {
           process.stderr.write(`[E2E_STDOUT] ${chunk.toString()}`);
+          try {
+            appendFileSync(teeFile, `[STDOUT] ${chunk.toString()}`);
+          } catch {
+            /* best-effort file tee */
+          }
         });
         proc.stderr?.on("data", (chunk: Buffer) => {
           observeStderrLine(chunk.toString());
           process.stderr.write(`[E2E_STDERR] ${chunk.toString()}`);
+          try {
+            appendFileSync(teeFile, `[STDERR] ${chunk.toString()}`);
+          } catch {
+            /* best-effort file tee */
+          }
         });
         proc.on("exit", (code: number | null, signal: string | null) => {
           observeMainProcessExit(code, signal);
