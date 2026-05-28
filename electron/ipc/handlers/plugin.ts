@@ -48,6 +48,11 @@ async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<voi
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
+  // Block the renderer's mount-time pull until startup activation has settled,
+  // otherwise a fast renderer can read an empty registry before any plugin's
+  // activate() runs — leaving plugin toolbar buttons missing until the next
+  // mutation pushes a fresh broadcast (#9285).
+  await pluginService.waitForInit();
   return getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
@@ -106,6 +111,7 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
 async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+  await pluginService.waitForInit();
   return pluginService.listPluginActions();
 }
 
@@ -121,6 +127,7 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
 }
 
 async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
+  await pluginService.waitForInit();
   return getPluginPanelKinds();
 }
 
