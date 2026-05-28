@@ -1900,6 +1900,13 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin context-menu item registry events (main → renderer). Same `complete`
+  // flag semantics as menu items.
+  "plugin:context-menu-items-changed": {
+    items: Array<{ pluginId: string; item: import("../plugin.js").ContextMenuContribution }>;
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -1991,6 +1998,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:menu-items-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
+  // Plugin context-menu item registry (global broadcast)
+  | "plugin:context-menu-items-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)

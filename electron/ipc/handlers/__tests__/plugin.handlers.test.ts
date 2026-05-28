@@ -786,6 +786,19 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     await inFlight;
     expect(mockGetPluginContextMenuItems).toHaveBeenCalledTimes(1);
   });
+
+  it("PLUGIN_CONTEXT_MENU_ITEMS resolves to the registry's items after init", async () => {
+    const items = [
+      {
+        pluginId: "acme.my-plugin",
+        item: { label: "Do Thing", actionId: "x.y", location: "worktree" },
+      },
+    ];
+    mockGetPluginContextMenuItems.mockReturnValue(items);
+    const handler = getHandler("plugin:context-menu-items");
+    const result = await (handler({}) as Promise<unknown>);
+    expect(result).toEqual(items);
+  });
 });
 
 describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {

@@ -207,6 +207,25 @@ describe("usePluginContextMenuItems", () => {
     });
   });
 
+  it("re-evaluates when clauses when ctx changes without a new push", async () => {
+    contextMenuItemsMock.mockResolvedValue([
+      entry("acme", "ForB", "worktree", { when: "worktreeId == 'b'" }),
+    ]);
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+
+    const { result, rerender } = renderHook(
+      ({ ctx }: { ctx: WhenClauseContext }) => usePluginContextMenuItems("worktree", ctx),
+      { initialProps: { ctx: { worktreeId: "a" } as WhenClauseContext } }
+    );
+
+    await waitFor(() => {
+      expect(result.current).toHaveLength(0);
+    });
+
+    rerender({ ctx: { worktreeId: "b" } });
+    expect(result.current.map((e) => e.item.label)).toEqual(["ForB"]);
+  });
+
   it("cleans up the push subscription on unmount", async () => {
     const cleanupMock = vi.fn();
     onContextMenuItemsChangedMock.mockReturnValue(cleanupMock);
