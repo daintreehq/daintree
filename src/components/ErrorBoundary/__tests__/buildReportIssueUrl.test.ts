@@ -36,6 +36,27 @@ describe("buildReportIssueUrl", () => {
     expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
   });
 
+  it("scrubs user paths from the stack in both URL body and clipboard payload", () => {
+    const result = buildReportIssueUrl(
+      makeInput({
+        stack: "Error: boom\n  at fn (/Users/alice/project/file.ts:10)",
+        componentStack: "  in Comp (/home/bob/app/Comp.tsx:3)",
+      })
+    );
+
+    const body = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
+    expect(body).toContain("/Users/USER/project/file.ts");
+    expect(body).not.toContain("/Users/alice/");
+    expect(body).toContain("/home/USER/app/Comp.tsx");
+    expect(body).not.toContain("/home/bob/");
+
+    // The clipboard payload is the same surface (pasted into a public issue).
+    expect(result.fullBody).toContain("/Users/USER/project/file.ts");
+    expect(result.fullBody).not.toContain("/Users/alice/");
+    expect(result.fullBody).toContain("/home/USER/app/Comp.tsx");
+    expect(result.fullBody).not.toContain("/home/bob/");
+  });
+
   it("encodes title and body so URL is safe to navigate", () => {
     const result = buildReportIssueUrl(
       makeInput({ message: "Cannot read property 'foo' of undefined & friends" })
