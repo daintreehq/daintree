@@ -816,6 +816,88 @@ describe("recipeStore", () => {
         usePanelLimitStore.setState({ hardLimit: previousHardLimit, warningsDisabled: false });
       }
     });
+
+    it("caps an agent-dispatched run at MAX_AGENT_RECIPE_TERMINALS and never prompts", async () => {
+      const requestConfirmationSpy = vi.fn().mockResolvedValue(true);
+      const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
+      usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
+      try {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+        useRecipeStore.setState({
+          recipes: [
+            {
+              id: "recipe-1",
+              name: "Ten Terminals",
+              projectId: "project-1",
+              terminals: Array.from({ length: 10 }, (_, i) => ({
+                type: "terminal" as const,
+                title: `Shell ${i}`,
+                command: "echo",
+                env: {},
+              })),
+              createdAt: Date.now(),
+            },
+          ],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+          });
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(3);
+        expect(results.spawned).toHaveLength(3);
+        expect(results.failed).toHaveLength(7);
+        expect(results.failed.map((f) => f.index)).toEqual([3, 4, 5, 6, 7, 8, 9]);
+        expect(results.failed.every((f) => f.error === "Agent recipe terminal cap reached")).toBe(
+          true
+        );
+        // Cap runs before preflightSpawnBatchLimit, so the projected count never
+        // crosses the confirm threshold — a headless agent dispatch can't hang.
+        expect(requestConfirmationSpy).not.toHaveBeenCalled();
+      } finally {
+        usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
+      }
+    });
+
+    it("does not cap a user-dispatched run", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Ten Terminals",
+            projectId: "project-1",
+            terminals: Array.from({ length: 10 }, (_, i) => ({
+              type: "terminal" as const,
+              title: `Shell ${i}`,
+              command: "echo",
+              env: {},
+            })),
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "user",
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(10);
+      expect(results.spawned).toHaveLength(10);
+      expect(results.failed).toHaveLength(0);
+    });
   });
 
   it("keeps importing valid terminals even when others are invalid", async () => {
@@ -904,6 +986,22 @@ describe("recipeStore", () => {
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals[0]?.args).toBeUndefined();
+  });
+
+  it("filters out terminals with control characters in env values on import", async () => {
+    const input = JSON.stringify({
+      name: "Env Injected",
+      terminals: [
+        { type: "terminal", command: "ok", env: { FOO: "bar\ninjected" } },
+        { type: "terminal", command: "ok", env: { FOO: "bar" } },
+      ],
+    });
+
+    await useRecipeStore.getState().importRecipe("project-1", input);
+
+    const recipe = useRecipeStore.getState().recipes[0];
+    expect(recipe?.terminals).toHaveLength(1);
+    expect(recipe?.terminals[0]?.env).toEqual({ FOO: "bar" });
   });
 
   it("sanitizes args on update — keeps for agent, drops for non-agent", async () => {

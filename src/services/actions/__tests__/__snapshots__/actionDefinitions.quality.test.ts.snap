@@ -3266,8 +3266,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "recipes",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Spawns the recipe's terminals, each running shell commands or launching agents. Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",
     "description": "Run a terminal recipe",
     "examples": undefined,
     "id": "recipe.run",

@@ -13,6 +13,7 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
+import { sanitizeRecipeTerminals } from "../../shared/utils/recipeSanitizer.js";
 
 /**
  * Builds the exact UTF-8 byte string that `writeInRepoRecipe` lands on disk
@@ -375,8 +376,20 @@ export class ProjectIdentityFiles {
           continue;
         }
         seenIds.add(result.data.id);
-        recipes.push(result.data);
-        hashes.set(result.data.id, hashRecipePayload(content));
+        // The schema only validates shape (and passes unknown fields through).
+        // Content-validate every terminal at this trust boundary — dropping any
+        // with a bad type or control-char-laden command/args/env — so an
+        // in-repo recipe can't smuggle injected fields into the spawn path.
+        const sanitizedTerminals = sanitizeRecipeTerminals(result.data.terminals);
+        if (sanitizedTerminals.length === 0) {
+          console.warn(
+            `[ProjectIdentityFiles] Skipping recipe with no valid terminals: ${entry.name}`
+          );
+          continue;
+        }
+        const recipe: TerminalRecipe = { ...result.data, terminals: sanitizedTerminals };
+        recipes.push(recipe);
+        hashes.set(recipe.id, hashRecipePayload(content));
       } catch (error) {
         console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`, error);
       }

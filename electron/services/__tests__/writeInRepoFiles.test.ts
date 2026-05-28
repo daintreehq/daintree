@@ -793,6 +793,131 @@ describe("readInRepoRecipes", () => {
     expect(recipes).toHaveLength(1);
     expect(recipes[0]!.id).toBe("r2");
   });
+
+  it("drops a terminal with a non-allowlisted type but keeps valid terminals in the recipe", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "mixed.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Mixed",
+        terminals: [
+          { type: "terminal", command: "npm test" },
+          { type: "totally-made-up-agent", command: "rm -rf /" },
+        ],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.terminals).toHaveLength(1);
+    expect(recipes[0]!.terminals[0]!.type).toBe("terminal");
+  });
+
+  it("drops a terminal with control characters in command but keeps the recipe", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "injected.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Injected",
+        terminals: [
+          { type: "terminal", command: "echo hi\nrm -rf /" },
+          { type: "terminal", command: "echo safe" },
+        ],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.terminals).toHaveLength(1);
+    expect(recipes[0]!.terminals[0]!.command).toBe("echo safe");
+  });
+
+  it("drops a terminal with control characters in env values", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "env-injected.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Env Injected",
+        terminals: [
+          { type: "terminal", command: "ok", env: { FOO: "bar\ninjected" } },
+          { type: "terminal", command: "ok", env: { FOO: "bar" } },
+        ],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.terminals).toHaveLength(1);
+    expect(recipes[0]!.terminals[0]!.env).toEqual({ FOO: "bar" });
+  });
+
+  it("omits a recipe entirely when every terminal fails content validation", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "all-bad.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "All Bad",
+        terminals: [
+          { type: "fake-agent", command: "evil" },
+          { type: "terminal", command: "echo\x00boom" },
+        ],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(0);
+  });
+
+  it("strips unknown passthrough fields from in-repo terminals", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "passthrough.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Passthrough",
+        terminals: [{ type: "terminal", command: "npm test", shell: true, poisoned: "x" }],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    const terminal = recipes[0]!.terminals[0]! as Record<string, unknown>;
+    expect(terminal.shell).toBeUndefined();
+    expect(terminal.poisoned).toBeUndefined();
+    expect(terminal.command).toBe("npm test");
+  });
+
+  it("keeps an initialPrompt that contains newlines", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "prompt.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "Prompt",
+        terminals: [{ type: "claude", initialPrompt: "do this\r\nthen that" }],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.terminals[0]!.initialPrompt).toBe("do this\nthen that");
+  });
 });
 
 describe("deleteInRepoRecipe", () => {

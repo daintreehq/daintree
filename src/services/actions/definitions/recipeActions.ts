@@ -56,8 +56,11 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       description: "Run a terminal recipe",
       category: "recipes",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
       scope: "renderer",
+      dangerRationale:
+        "Spawns the recipe's terminals, each running shell commands or launching agents. " +
+        "Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",
       argsSchema: z.object({
         recipeId: z.string(),
         worktreeId: z.string().optional(),
@@ -81,12 +84,17 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           worktreePath,
           branchName: worktree?.branch,
         };
-        if (spawnedBy !== undefined || focusPolicy !== undefined) {
+        if (
+          spawnedBy !== undefined ||
+          focusPolicy !== undefined ||
+          ctx.dispatchSource !== undefined
+        ) {
           await useRecipeStore
             .getState()
             .runRecipe(recipeId, worktreePath, targetWorktreeId, recipeContext, {
               spawnedBy,
               focusPolicy,
+              dispatchSource: ctx.dispatchSource,
             });
         } else {
           await useRecipeStore
