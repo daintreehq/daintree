@@ -278,14 +278,15 @@ describe("VoiceRecordingService — background recording", () => {
 
     voiceRecordingService.initialize();
 
-    // Fire every registered window "blur" listener — none should call stop().
+    // Fire every registered window "blur" listener. The push-to-talk blur
+    // listener (#9189) registers but is a no-op when no PTT press is active,
+    // so stop() must still not be called in toggle mode.
     const blurListeners = windowListeners["blur"] ?? [];
     for (const listener of blurListeners) {
       await listener(new Event("blur"));
     }
 
     expect(stopSpy).not.toHaveBeenCalled();
-    expect(blurListeners).toHaveLength(0);
   });
 
   it("does not stop recording when the window is hidden (visibilitychange event)", async () => {
