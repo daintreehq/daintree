@@ -16,29 +16,38 @@ const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
 
 // Blob reporter is opted into by the nightly multi-OS matrix only, so per-leg
 // outputs can be merged into a single unified HTML report. PR CI and local
-// runs keep the default reporters.
-const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
+// runs keep the default reporters. The JSON reporter is also enabled in the
+// nightly path so scripts/ci/classify-e2e-failures.mjs has structured data to
+// classify failures for the auto-issue body.
 // JSON reporter is opted into by two consumers:
 //   1. E2E workflow retry path — sets PLAYWRIGHT_JSON_OUTPUT_FILE to the
 //      target path; attempt 1 writes the JSON, the next step extracts failed
 //      spec paths into a --test-list artifact, and any retry attempt
-//      downloads that artifact and reruns only the failed specs.
+//      downloads that artifact and reruns only the failed specs. The flake
+//      classifier (scripts/ci/classify-e2e-failures.mjs) reads the same file
+//      to bucket failures into Infrastructure / Test-Logic / Product-Logic
+//      for the nightly auto-issue.
 //   2. Nightly dedup — sets PLAYWRIGHT_JSON_REPORT=1; extract-failures.mjs
 //      reads the JSON to build signature-keyed failure reports.
 // When both are set the explicit output file wins; otherwise the dedup path
 // falls back to the historical default `playwright-results.json`.
-// Note: blob reporter takes precedence over JSON reporter in the ternary below.
-// If both env vars are set (e.g. PLAYWRIGHT_BLOB_REPORT alongside one of the
-// JSON opt-ins), only the blob reporter is active and no JSON report is
-// produced. No current workflow sets both simultaneously.
+// Blob and JSON reporters can coexist: a single nightly run produces a blob
+// for the merged HTML report and a JSON for downstream dedup/classification.
 const jsonOutputFile =
   process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ||
   (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
 const useJsonReporter = jsonOutputFile.length > 0;
-const reporter: ReporterDescription[] | undefined = useBlobReporter
-  ? [["github"], ["blob", { outputDir: "blob-report" }]]
-  : useJsonReporter
-    ? [["github"], ["json", { outputFile: jsonOutputFile }]]
+const reporter: ReporterDescription[] | undefined =
+  useBlobReporter || useJsonReporter
+    ? [
+        ["github"] as ReporterDescription,
+        ...(useBlobReporter
+          ? [["blob", { outputDir: "blob-report" }] as ReporterDescription]
+          : []),
+        ...(useJsonReporter
+          ? [["json", { outputFile: jsonOutputFile }] as ReporterDescription]
+          : []),
+      ]
     : undefined;
 
 export default defineConfig({
