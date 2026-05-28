@@ -62,6 +62,28 @@ export const ContextMenuContributionSchema = z.object({
 });
 
 /**
+ * `contributes.commands` manifest entry. The bare command `id` is namespaced
+ * by `PluginService` at load time as `{pluginId}.{id}` so the descriptor key
+ * matches the {@link PluginActionDescriptor.id} format used by the imperative
+ * `host.registerAction` path. `danger: "restricted"` is rejected — plugins
+ * may only contribute `"safe"` or `"confirm"` commands. Strict so an
+ * unrecognised field surfaces as a manifest error instead of silently dropping
+ * (e.g. a typo on `keywords` would otherwise vanish on a permissive schema).
+ */
+export const CommandContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().min(1),
+    description: z.string(),
+    category: z.string().min(1),
+    kind: z.enum(["command", "query"]),
+    danger: z.enum(["safe", "confirm"]),
+    keywords: z.array(z.string().min(1)).optional(),
+    inputSchema: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+/**
  * Reserved contribution point. Shape is validated but the runtime does not
  * yet act on these entries — `PluginService` logs a warning and skips them.
  * The `experimental_` prefix signals that the shape may change before the
@@ -176,6 +198,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           menuItems: z.array(MenuItemContributionSchema).default([]),
           keybindings: z.array(KeybindingContributionSchema).default([]),
           contextMenus: z.array(ContextMenuContributionSchema).default([]),
+          commands: z.array(CommandContributionSchema).default([]),
           experimental_views: z.array(ViewContributionSchema).default([]),
           experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
           forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
@@ -187,6 +210,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           menuItems: [],
           keybindings: [],
           contextMenus: [],
+          commands: [],
           experimental_views: [],
           experimental_mcpServers: [],
           forgeProviders: [],

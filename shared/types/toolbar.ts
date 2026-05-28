@@ -1,7 +1,18 @@
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "../config/agentIds.js";
 
-/** Identifier for plugin-contributed toolbar buttons (namespaced as plugin.name.buttonId) */
-export type PluginToolbarButtonId = `plugin.${string}`;
+/**
+ * Identifier for plugin-contributed toolbar buttons. Canonical namespace is
+ * `{pluginId}.{buttonId}` (matches `PluginActionDescriptor.id`). The legacy
+ * `plugin.{pluginId}.{buttonId}` form was retired in #9281; persisted user
+ * pin preferences carrying the old prefix are renamed by the
+ * `toolbarPreferencesStore` v9 migration.
+ *
+ * The template literal `${string}.${string}` keeps the dotted-namespace
+ * shape in the type system without re-introducing a hard-coded prefix —
+ * the renderer distinguishes plugin from built-in buttons by membership in
+ * the broadcast `configs` map, not by string parsing.
+ */
+export type PluginToolbarButtonId = `${string}.${string}`;
 
 /** Identifier for any toolbar button (built-in or plugin-contributed) */
 export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;

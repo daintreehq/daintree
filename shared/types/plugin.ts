@@ -124,6 +124,14 @@ export interface PluginManifest {
     menuItems: MenuItemContribution[];
     keybindings: KeybindingContribution[];
     contextMenus: ContextMenuContribution[];
+    /**
+     * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
+     * at load time (so the command appears in the palette before the plugin
+     * activates) and is lazily bound to `src/{id}.{ts,tsx,js,mjs}` on first
+     * dispatch. `id` is the bare command id — the host namespaces it as
+     * `{pluginId}.{id}` to match the {@link PluginActionDescriptor.id} convention.
+     */
+    commands: PluginActionContribution[];
     experimental_views: ViewContribution[];
     experimental_mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];

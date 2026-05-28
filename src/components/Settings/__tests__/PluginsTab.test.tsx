@@ -24,6 +24,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         panels: [],
         toolbarButtons: [],
         menuItems: [],
+        commands: [],
         experimental_views: [],
         experimental_mcpServers: [],
         keybindings: [],

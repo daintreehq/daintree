@@ -294,10 +294,8 @@ describe("PluginService integration — panel contributions", () => {
     expect(getPanelKindConfig("acme.real-plugin.viewer")?.extensionId).toBe("acme.real-plugin");
     expect(getPanelKindConfig("alias-dir.viewer")).toBeUndefined();
 
-    expect(getToolbarButtonConfig("plugin.acme.real-plugin.btn")?.pluginId).toBe(
-      "acme.real-plugin"
-    );
-    expect(getToolbarButtonConfig("plugin.alias-dir.btn")).toBeUndefined();
+    expect(getToolbarButtonConfig("acme.real-plugin.btn")?.pluginId).toBe("acme.real-plugin");
+    expect(getToolbarButtonConfig("alias-dir.btn")).toBeUndefined();
 
     const items = getPluginMenuItems();
     expect(items).toHaveLength(1);
@@ -326,10 +324,10 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    const config = getToolbarButtonConfig("plugin.acme.toolbar-plugin.my-btn");
+    const config = getToolbarButtonConfig("acme.toolbar-plugin.my-btn");
     expect(config).toBeDefined();
     expect(config).toMatchObject({
-      id: "plugin.acme.toolbar-plugin.my-btn",
+      id: "acme.toolbar-plugin.my-btn",
       label: "My Button",
       iconId: "puzzle",
       actionId: "toolbar-plugin.doThing",
@@ -357,7 +355,7 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getToolbarButtonConfig("plugin.acme.default-prio.btn")?.priority).toBe(3);
+    expect(getToolbarButtonConfig("acme.default-prio.btn")?.priority).toBe(3);
   });
 });
 
@@ -749,7 +747,7 @@ describe("PluginService integration — main entry execution", () => {
         expect.anything()
       );
       expect(getPanelKindConfig("acme.bad-main.p")).toBeDefined();
-      expect(getToolbarButtonConfig("plugin.acme.bad-main.b")).toBeDefined();
+      expect(getToolbarButtonConfig("acme.bad-main.b")).toBeDefined();
       expect(getPluginMenuItems()).toHaveLength(1);
     } finally {
       errorSpy.mockRestore();
@@ -1109,7 +1107,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     await service.initialize();
 
     expect(getPanelKindConfig("acme.all-in-one.v")?.extensionId).toBe("acme.all-in-one");
-    expect(getToolbarButtonConfig("plugin.acme.all-in-one.b")?.priority).toBe(2);
+    expect(getToolbarButtonConfig("acme.all-in-one.b")?.priority).toBe(2);
     expect(getPluginMenuItems()).toEqual([
       {
         pluginId: "acme.all-in-one",
@@ -1251,7 +1249,7 @@ describe("PluginService integration — built-in plugin loading", () => {
 
     expect(readMarker(markerKey)).toBeUndefined();
     expect(getPanelKindConfig("acme.disabled-user.p")).toBeUndefined();
-    expect(getToolbarButtonConfig("plugin.acme.disabled-user.b")).toBeUndefined();
+    expect(getToolbarButtonConfig("acme.disabled-user.b")).toBeUndefined();
     const listed = service.listPlugins();
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ disabled: true, isBuiltin: false });

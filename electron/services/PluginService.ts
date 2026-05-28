@@ -95,12 +95,33 @@ import type { ActionDispatchResult } from "../../shared/types/actions.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { store } from "../store.js";
+import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
+
+/**
+ * Built-in action ids materialised as a Set for O(1) collision lookup at
+ * load time. Manifest commands whose namespaced `{pluginId}.{cmd.id}` shadows
+ * a built-in id are rejected via the provenance `loadError` instead of being
+ * silently registered — the renderer would otherwise see two definitions for
+ * the same id and resolve in registration order, leaking command behavior to
+ * whichever side won the race.
+ */
+const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ACTION_IDS);
+
+/**
+ * Filesystem-convention extensions probed for a manifest-declared command's
+ * handler module, in precedence order. `.ts`/`.tsx` resolve in Electron 41
+ * (Node 24's type-stripping covers `.ts`; `.tsx` needs the plugin author to
+ * pre-compile or it'll fail at first dispatch) so a dev-mode plugin can ship
+ * source directly. The probe is async file-access only — no module evaluation
+ * happens until dispatch time.
+ */
+const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
 
 /**
  * Capabilities whose presence in a plugin's manifest forces every action that
@@ -244,6 +265,29 @@ export class PluginService {
    * invokes them directly when a `plugin:invoke` lands on the action id.
    */
   private pluginActionHandlers = new Map<string, ActionHandler>();
+  /**
+   * Resolved on-disk paths for manifest-declared command handler modules,
+   * keyed by namespaced action id (`{pluginId}.{cmd.id}`). Populated at
+   * `loadPlugin()` time by probing `src/{cmd.id}.{ts,tsx,js,mjs}` — the
+   * module is NOT imported until first dispatch in {@link dispatchHandler}.
+   * Absence (no entry for a registered descriptor) means the file was not
+   * found at load time and dispatch will surface the documented
+   * `Command "{id}" has no handler` error. Entries are cleared on unload
+   * via {@link unregisterPluginActions} alongside the matching descriptor.
+   */
+  private commandModulePaths = new Map<string, string>();
+  /**
+   * Set of namespaced action ids whose descriptor was registered from
+   * `manifest.contributes.commands`. Distinguishes a manifest-declared
+   * command (whose handler is the lazy `src/{cmd.id}.{ext}` import) from
+   * an imperative `host.registerAction` descriptor (which always pairs
+   * with a closure in {@link pluginActionHandlers}). Drives the
+   * "Command \"{id}\" has no handler" toast text in {@link dispatchHandler}
+   * — without this set, a manifest command with a missing handler file
+   * would fall through to the generic "No plugin handler registered" path.
+   * Cleared per-plugin in {@link unregisterPluginActions}.
+   */
+  private manifestCommandIds = new Set<string>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   /**
@@ -757,7 +801,11 @@ export class PluginService {
     }
 
     for (const btn of manifest.contributes.toolbarButtons) {
-      const buttonId = `plugin.${manifest.name}.${btn.id}` as PluginToolbarButtonId;
+      // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
+      // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
+      // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
+      // v9 migration so existing user pins survive the rename.
+      const buttonId = `${manifest.name}.${btn.id}` as PluginToolbarButtonId;
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
@@ -817,12 +865,159 @@ export class PluginService {
     // Plugins without a `main` entry contribute no executable code — the
     // provenance record reflects a clean load immediately. Plugins with a
     // `main` entry defer the `loadError: null` write to `_doActivate()` so
-    // the record only clears once activation actually succeeds.
+    // the record only clears once activation actually succeeds. This must
+    // happen BEFORE manifest command registration: a colliding command
+    // writes its own `loadError` via `registerManifestCommands` (#9281), and
+    // clearing it back to `null` here would silently lose the diagnostic.
     if (!plugin.resolvedMain && !opts.isBuiltin) {
       this.upsertInstalledRecord(manifest.name, { loadError: null });
     }
 
+    // Manifest-declared commands (#9281): register descriptors at load time so
+    // the command appears in the action palette before activation; probe the
+    // filesystem-convention handler path but defer the actual `import()` to
+    // first dispatch (the 5s activation budget can't pay N import costs up
+    // front). Probes happen after `plugins.set()` so
+    // `validateAndBuildActionDescriptor` sees the plugin as loaded.
+    if (manifest.contributes.commands.length > 0) {
+      await this.registerManifestCommands(manifest.name, plugin, opts.isBuiltin);
+    }
+
     return plugin;
+  }
+
+  /**
+   * Register each manifest-declared command's descriptor and probe its
+   * filesystem-convention handler path. Handler modules are NOT imported here —
+   * the dynamic `import()` is deferred to {@link dispatchHandler} so plugins
+   * with many commands don't pay the eval cost during the 5s activation
+   * budget. Collisions with built-in action ids surface via the provenance
+   * `loadError` field for non-builtins, or a console warning for builtins
+   * (which have no installed-record slot).
+   */
+  private async registerManifestCommands(
+    pluginId: string,
+    plugin: LoadedPlugin,
+    isBuiltin: boolean
+  ): Promise<void> {
+    let owners = this.pluginActionOwners.get(pluginId);
+    let registered = false;
+    for (const cmd of plugin.manifest.contributes.commands) {
+      const namespacedId = `${pluginId}.${cmd.id}`;
+      if (BUILT_IN_ACTION_ID_SET.has(namespacedId)) {
+        const message = `Plugin "${pluginId}" command id "${namespacedId}" collides with a built-in action id`;
+        console.error(`[PluginService] ${message}`);
+        if (!isBuiltin) {
+          this.upsertInstalledRecord(pluginId, {
+            loadError: { message, at: Date.now() },
+          });
+        }
+        continue;
+      }
+      let descriptor: PluginActionDescriptor;
+      try {
+        descriptor = this.validateAndBuildActionDescriptor(pluginId, {
+          ...cmd,
+          id: namespacedId,
+        });
+      } catch (err) {
+        const loadError = toPluginLoadError(err);
+        console.error(
+          `[PluginService] Failed to validate manifest command "${namespacedId}":`,
+          err
+        );
+        if (!isBuiltin) {
+          this.upsertInstalledRecord(pluginId, { loadError });
+        }
+        continue;
+      }
+      // Replace semantics mirror `host.registerAction` — a manifest-declared
+      // command silently overrides an earlier registration of the same id
+      // from a prior session's host.registerAction call (the handler map gets
+      // cleared on reload anyway).
+      this.pluginActions.set(descriptor.id, descriptor);
+      this.manifestCommandIds.add(descriptor.id);
+      if (!owners) {
+        owners = new Set();
+        this.pluginActionOwners.set(pluginId, owners);
+      }
+      owners.add(descriptor.id);
+      registered = true;
+
+      const resolvedPath = await this.resolveCommandHandlerPath(plugin.dir, cmd.id);
+      if (resolvedPath) {
+        this.commandModulePaths.set(descriptor.id, resolvedPath);
+      }
+      // Missing handler file: descriptor is still registered so the command
+      // appears in the palette; dispatch surfaces the documented
+      // `Command "{id}" has no handler` toast.
+    }
+    if (registered) {
+      this.broadcastPluginActions();
+    }
+  }
+
+  /**
+   * Probe `{pluginDir}/src/{cmdId}.{ts,tsx,js,mjs}` in precedence order,
+   * returning the first existing path or `null` when none match. The result
+   * is cached in {@link commandModulePaths} so the probe runs once per
+   * command per load — dispatch reads the cached path directly. Path
+   * traversal is guarded by {@link resolveEntryPath}: a `cmd.id` that
+   * escapes the plugin dir (e.g. `../../etc/passwd`) is rejected even if it
+   * somehow passed the manifest `SAFE_ID_PATTERN` (`.` is allowed in the
+   * pattern, so a defence-in-depth check is warranted).
+   */
+  private async resolveCommandHandlerPath(
+    pluginDir: string,
+    cmdId: string
+  ): Promise<string | null> {
+    for (const ext of COMMAND_HANDLER_EXTENSIONS) {
+      const candidate = this.resolveEntryPath(pluginDir, path.join("src", `${cmdId}${ext}`));
+      if (!candidate) continue;
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch {
+        // File doesn't exist or is unreadable — try the next extension. No
+        // ENOENT vs EACCES distinction because the missing-file case is the
+        // dominant one and a permissions issue surfaces at dispatch import.
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Lazily resolve a manifest-declared command's handler module from
+   * {@link commandModulePaths}, import it via `runImport`, and cache the
+   * default export in {@link pluginActionHandlers}. Concurrent dispatches
+   * race on the cache: the first to set wins; subsequent setters drop the
+   * (identical) handler to avoid clobbering an in-flight set. ESM's
+   * URL-keyed module cache makes the duplicate import effectively free, so
+   * a full in-flight promise map adds no value here.
+   */
+  private async loadManifestCommandHandler(channel: string): Promise<ActionHandler> {
+    const cached = this.pluginActionHandlers.get(channel);
+    if (cached) return cached;
+    const resolvedPath = this.commandModulePaths.get(channel);
+    if (!resolvedPath) {
+      throw new Error(`Command "${channel}" has no handler`);
+    }
+    const descriptor = this.pluginActions.get(channel);
+    const pluginId = descriptor?.pluginId ?? channel;
+    const mod = (await this.runImport(pluginId, resolvedPath)) as { default?: unknown };
+    if (typeof mod.default !== "function") {
+      throw new Error(
+        `Command "${channel}" handler module "${resolvedPath}" has no callable default export`
+      );
+    }
+    const handler = mod.default as ActionHandler;
+    // Race guard: a concurrent dispatch may have already cached the same
+    // handler. Keep the existing entry so the older closure is canonical and
+    // any per-call state inside it isn't shadowed by a sibling import.
+    const existing = this.pluginActionHandlers.get(channel);
+    if (existing) return existing;
+    this.pluginActionHandlers.set(channel, handler);
+    return handler;
   }
 
   /**
@@ -1853,9 +2048,25 @@ export class PluginService {
     // namespaced action id and take precedence over a channel-keyed IPC
     // handler. Only honour one the dispatching plugin owns — the namespace
     // already guarantees this, and the guard mirrors the input-schema check.
-    const actionHandler =
+    let actionHandler =
       descriptor?.pluginId === pluginId ? this.pluginActionHandlers.get(channel) : undefined;
     const handler = this.handlerMap.get(key);
+    // Manifest-declared command (#9281): descriptor registered at load time,
+    // handler module deferred until first dispatch. Lazy-load now, then fall
+    // through to the existing action-handler dispatch path. A missing handler
+    // file throws the documented `Command "{id}" has no handler` toast; a
+    // bad default export throws a separate diagnostic — both surface via the
+    // renderer's `usePluginActions` rejection wrapper. Imperative-only
+    // descriptors (from `host.registerAction` without a manifest entry)
+    // already have a handler in `pluginActionHandlers`, so they short-circuit
+    // on the first check above and never enter this branch.
+    if (
+      !actionHandler &&
+      descriptor?.pluginId === pluginId &&
+      this.manifestCommandIds.has(channel)
+    ) {
+      actionHandler = await this.loadManifestCommandHandler(channel);
+    }
     if (!actionHandler && !handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
@@ -2278,6 +2489,8 @@ export class PluginService {
     this.pluginActions.delete(actionId);
     this.actionValidators.delete(actionId);
     this.pluginActionHandlers.delete(actionId);
+    this.manifestCommandIds.delete(actionId);
+    this.commandModulePaths.delete(actionId);
     const owners = this.pluginActionOwners.get(pluginId);
     if (owners) {
       owners.delete(actionId);
@@ -2296,6 +2509,8 @@ export class PluginService {
       this.pluginActions.delete(id);
       this.actionValidators.delete(id);
       this.pluginActionHandlers.delete(id);
+      this.manifestCommandIds.delete(id);
+      this.commandModulePaths.delete(id);
     }
     this.pluginActionOwners.delete(pluginId);
 

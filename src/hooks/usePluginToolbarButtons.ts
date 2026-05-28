@@ -17,13 +17,17 @@ export interface PluginToolbarButtonState {
  * once a push arrives, a later-resolving mount-time pull is dropped to avoid
  * rolling back state (mirrors `usePluginPanelKinds`).
  *
- * Stale `plugin.` entries in the `toolbarPreferencesStore` `pinnedButtons`
- * map (renderer-local persisted state, no main-process access) are pruned
- * here off the lifecycle snapshot — but ONLY off an authoritative one. The
- * pull and load-time pushes are partial/growing (plugins load concurrently
- * and `initialize()` is deferred), so sweeping against them would wipe a
+ * Stale plugin entries in the `toolbarPreferencesStore` `pinnedButtons` map
+ * (renderer-local persisted state, no main-process access) are pruned here
+ * off the lifecycle snapshot — but ONLY off an authoritative one. The pull
+ * and load-time pushes are partial/growing (plugins load concurrently and
+ * `initialize()` is deferred), so sweeping against them would wipe a
  * not-yet-loaded plugin's hide preference. Only a `complete` push (a plugin
  * unload — i.e. uninstall, the exact case the sweep exists for) is swept.
+ *
+ * #9281 retired the `plugin.{pluginId}.{btn}` prefix in favour of canonical
+ * `{pluginId}.{btn}`. Stale entries from the old form are renamed by the v9
+ * persistence migration so user pin preferences survive the rename.
  */
 export function usePluginToolbarButtons(): PluginToolbarButtonState {
   const [configs, setConfigs] = useState<Map<string, ToolbarButtonConfig>>(new Map());
@@ -74,7 +78,10 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
   }, []);
 
   const buttonIds = Array.from(configs.keys()) as PluginToolbarButtonId[];
-  const isRegistered = (id: string) => id.startsWith("plugin.") && configs.has(id);
+  // The broadcast `configs` map only contains plugin buttons received from
+  // main, so set membership alone is the registered-plugin-button predicate —
+  // no prefix string check needed (#9281).
+  const isRegistered = (id: string) => configs.has(id);
 
   return { buttonIds, configs, isRegistered };
 }

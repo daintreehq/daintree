@@ -25,11 +25,11 @@ const makeConfig = (id: string, overrides?: Partial<ToolbarButtonConfig>): Toolb
 
 describe("toolbarButtonRegistry", () => {
   it("registers a button and retrieves it by ID", () => {
-    const config = makeConfig("plugin.acme.test-plugin.viewer");
+    const config = makeConfig("acme.test-plugin.viewer");
     registerToolbarButton(config);
 
-    expect(getToolbarButtonConfig("plugin.acme.test-plugin.viewer")).toEqual(config);
-    expect(getPluginToolbarButtonIds()).toEqual(["plugin.acme.test-plugin.viewer"]);
+    expect(getToolbarButtonConfig("acme.test-plugin.viewer")).toEqual(config);
+    expect(getPluginToolbarButtonIds()).toEqual(["acme.test-plugin.viewer"]);
   });
 
   it("returns undefined for unregistered IDs", () => {
@@ -42,24 +42,24 @@ describe("toolbarButtonRegistry", () => {
 
   it("warns and overwrites on duplicate registration", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const first = makeConfig("plugin.acme.test-plugin.btn", { label: "First" });
-    const second = makeConfig("plugin.acme.test-plugin.btn", { label: "Second" });
+    const first = makeConfig("acme.test-plugin.btn", { label: "First" });
+    const second = makeConfig("acme.test-plugin.btn", { label: "Second" });
 
     registerToolbarButton(first);
     registerToolbarButton(second);
 
     expect(spy).toHaveBeenCalledWith(
-      'Toolbar button "plugin.acme.test-plugin.btn" already registered, overwriting'
+      'Toolbar button "acme.test-plugin.btn" already registered, overwriting'
     );
-    expect(getToolbarButtonConfig("plugin.acme.test-plugin.btn")?.label).toBe("Second");
+    expect(getToolbarButtonConfig("acme.test-plugin.btn")?.label).toBe("Second");
     expect(getPluginToolbarButtonIds()).toHaveLength(1);
 
     spy.mockRestore();
   });
 
   it("isRegisteredPluginButton returns true for registered plugin buttons", () => {
-    registerToolbarButton(makeConfig("plugin.acme.my-plugin.action"));
-    expect(isRegisteredPluginButton("plugin.acme.my-plugin.action")).toBe(true);
+    registerToolbarButton(makeConfig("acme.my-plugin.action"));
+    expect(isRegisteredPluginButton("acme.my-plugin.action")).toBe(true);
   });
 
   it("isRegisteredPluginButton returns false for built-in IDs", () => {
@@ -72,8 +72,8 @@ describe("toolbarButtonRegistry", () => {
   });
 
   it("clearToolbarButtonRegistry removes all entries", () => {
-    registerToolbarButton(makeConfig("plugin.a.btn"));
-    registerToolbarButton(makeConfig("plugin.b.btn"));
+    registerToolbarButton(makeConfig("a.btn"));
+    registerToolbarButton(makeConfig("b.btn"));
     expect(getPluginToolbarButtonIds()).toHaveLength(2);
 
     clearToolbarButtonRegistry();
@@ -83,45 +83,45 @@ describe("toolbarButtonRegistry", () => {
 
 describe("unregisterPluginToolbarButtons", () => {
   it("removes only buttons owned by the target plugin", () => {
-    registerToolbarButton(makeConfig("plugin.owner-a.one", { pluginId: "owner-a" }));
-    registerToolbarButton(makeConfig("plugin.owner-a.two", { pluginId: "owner-a" }));
-    registerToolbarButton(makeConfig("plugin.owner-b.three", { pluginId: "owner-b" }));
+    registerToolbarButton(makeConfig("owner-a.one", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("owner-a.two", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("owner-b.three", { pluginId: "owner-b" }));
 
     unregisterPluginToolbarButtons("owner-a");
 
     const remaining = getPluginToolbarButtonIds();
-    expect(remaining).toEqual(["plugin.owner-b.three"]);
-    expect(getToolbarButtonConfig("plugin.owner-a.one")).toBeUndefined();
-    expect(getToolbarButtonConfig("plugin.owner-a.two")).toBeUndefined();
-    expect(getToolbarButtonConfig("plugin.owner-b.three")?.pluginId).toBe("owner-b");
+    expect(remaining).toEqual(["owner-b.three"]);
+    expect(getToolbarButtonConfig("owner-a.one")).toBeUndefined();
+    expect(getToolbarButtonConfig("owner-a.two")).toBeUndefined();
+    expect(getToolbarButtonConfig("owner-b.three")?.pluginId).toBe("owner-b");
   });
 
   it("is a no-op when unregistering an unknown pluginId", () => {
-    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
     expect(() => unregisterPluginToolbarButtons("never-loaded")).not.toThrow();
     expect(getPluginToolbarButtonIds()).toHaveLength(1);
   });
 
   it("is a no-op for empty or non-string pluginId (defensive input guard)", () => {
-    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
     expect(() => unregisterPluginToolbarButtons("")).not.toThrow();
     expect(() => unregisterPluginToolbarButtons(undefined as unknown as string)).not.toThrow();
     expect(getPluginToolbarButtonIds()).toHaveLength(1);
   });
 
   it("is a no-op when unregistering the same plugin twice", () => {
-    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a" }));
     unregisterPluginToolbarButtons("owner-a");
     expect(() => unregisterPluginToolbarButtons("owner-a")).not.toThrow();
     expect(getPluginToolbarButtonIds()).toHaveLength(0);
   });
 
   it("supports register → unregister → re-register round-trip", () => {
-    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a", label: "V1" }));
+    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a", label: "V1" }));
     unregisterPluginToolbarButtons("owner-a");
     expect(getPluginToolbarButtonIds()).toHaveLength(0);
 
-    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a", label: "V2" }));
-    expect(getToolbarButtonConfig("plugin.owner-a.btn")?.label).toBe("V2");
+    registerToolbarButton(makeConfig("owner-a.btn", { pluginId: "owner-a", label: "V2" }));
+    expect(getToolbarButtonConfig("owner-a.btn")?.label).toBe("V2");
   });
 });

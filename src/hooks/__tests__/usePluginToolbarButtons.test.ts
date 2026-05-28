@@ -43,13 +43,13 @@ beforeEach(() => {
 
 describe("usePluginToolbarButtons", () => {
   it("exposes plugin buttons from the mount-time pull without sweeping", async () => {
-    toolbarButtonsMock.mockResolvedValue([pluginButton("plugin.acme.foo")]);
+    toolbarButtonsMock.mockResolvedValue([pluginButton("acme.foo.btn")]);
     const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
 
     const { result } = renderHook(() => usePluginToolbarButtons());
 
     await waitFor(() => {
-      expect(result.current.buttonIds).toContain("plugin.acme.foo");
+      expect(result.current.buttonIds).toContain("acme.foo.btn");
     });
     // Pull is partial under deferred init — must never prune persisted prefs.
     expect(sweepMock).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ describe("usePluginToolbarButtons", () => {
     renderHook(() => usePluginToolbarButtons());
 
     await waitFor(() => expect(emit).not.toBeNull());
-    emit!({ buttons: [pluginButton("plugin.acme.foo")], complete: false });
+    emit!({ buttons: [pluginButton("acme.foo.btn")], complete: false });
 
     expect(sweepMock).not.toHaveBeenCalled();
   });
@@ -84,8 +84,8 @@ describe("usePluginToolbarButtons", () => {
     renderHook(() => usePluginToolbarButtons());
 
     await waitFor(() => expect(emit).not.toBeNull());
-    emit!({ buttons: [pluginButton("plugin.acme.foo")], complete: true });
+    emit!({ buttons: [pluginButton("acme.foo.btn")], complete: true });
 
-    expect(sweepMock).toHaveBeenCalledWith(["plugin.acme.foo"]);
+    expect(sweepMock).toHaveBeenCalledWith(["acme.foo.btn"]);
   });
 });
