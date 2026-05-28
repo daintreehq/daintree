@@ -11,6 +11,10 @@ const showSaveDialogMock = vi.hoisted(() => vi.fn());
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   dialog: { showSaveDialog: showSaveDialogMock },
+  // Stubbed to satisfy `webContentsRegistry.getWindowForWebContents`'s typeof
+  // check; the fake event below has no real WebContents, so this just returns
+  // null and `ctx.senderWindow` resolves to null in tests.
+  BrowserWindow: { fromWebContents: () => null },
 }));
 
 const writeFileMock = vi.hoisted(() => vi.fn());
@@ -143,6 +147,15 @@ describe("registerForgeAuditHandlers", () => {
     expect(auditServiceMock.setEnabled).toHaveBeenCalledWith(false);
   });
 
+  it("set-audit-enabled forwards true and returns enabled config", async () => {
+    auditServiceMock.setEnabled.mockReturnValue({ enabled: true, maxRecords: 500 });
+    await expect(getHandler("forge-audit:set-enabled")(fakeEvent(), true)).resolves.toEqual({
+      enabled: true,
+      maxRecords: 500,
+    });
+    expect(auditServiceMock.setEnabled).toHaveBeenCalledWith(true);
+  });
+
   it("set-audit-enabled rejects non-boolean input", async () => {
     await expect(getHandler("forge-audit:set-enabled")(fakeEvent(), "true")).rejects.toThrow(
       "enabled must be a boolean"
@@ -182,13 +195,35 @@ describe("registerForgeAuditHandlers", () => {
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const [path, content] = writeFileMock.mock.calls[0]!;
     expect(path).toBe("/tmp/forge-audit.ndjson");
-    expect(content).toBe(JSON.stringify(records[0]) + "\n" + JSON.stringify(records[1]) + "\n");
+    expect(typeof content).toBe("string");
+    const lines = (content as string).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const round0 = JSON.parse(lines[0]!);
+    const round1 = JSON.parse(lines[1]!);
+    expect(round0.id).toBe("a");
+    expect(round1.id).toBe("b");
+    expect(round1.errorMessage).toBe("404");
   });
 
   it("export-audit-log returns false when dialog is canceled", async () => {
     showSaveDialogMock.mockResolvedValue({ canceled: true, filePath: undefined });
     await expect(getHandler("forge-audit:export-log")(fakeEvent(), [])).resolves.toBe(false);
     expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it("export-audit-log returns false when dialog confirms but no path is chosen", async () => {
+    showSaveDialogMock.mockResolvedValue({ canceled: false, filePath: undefined });
+    await expect(getHandler("forge-audit:export-log")(fakeEvent(), [])).resolves.toBe(false);
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it("export-audit-log propagates writeFile rejections", async () => {
+    showSaveDialogMock.mockResolvedValue({
+      canceled: false,
+      filePath: "/tmp/forge-audit.ndjson",
+    });
+    writeFileMock.mockRejectedValue(new Error("EACCES"));
+    await expect(getHandler("forge-audit:export-log")(fakeEvent(), [])).rejects.toThrow("EACCES");
   });
 
   it("export-audit-log rejects non-array input", async () => {
