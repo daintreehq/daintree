@@ -8,7 +8,12 @@ import { PortalLaunchpad } from "./PortalLaunchpad";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
 import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
-import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
+import {
+  PORTAL_MIN_WIDTH,
+  PORTAL_MAX_WIDTH,
+  PORTAL_DEFAULT_WIDTH,
+  PORTAL_MIN_EDITOR_WIDTH,
+} from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -320,10 +325,16 @@ export function PortalDock() {
     }
   }, []);
 
-  const RESIZE_STEP = 10;
+  const RESIZE_STEP_FINE = 10;
+  const RESIZE_STEP_COARSE = 50;
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
+      // Skip the second mousedown of a double-click. The browser fires
+      // mousedown twice before dblclick, so a propagation/preventDefault
+      // tweak inside the dblclick handler is too late — the drag has
+      // already started. See lesson #4997.
+      if (e.detail > 1) return;
       e.preventDefault();
       setIsResizing(true);
       const startX = e.clientX;
@@ -352,20 +363,60 @@ export function PortalDock() {
     [width, setWidth]
   );
 
+  const handleResizeDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    void actionService.dispatch("portal.resetWidth", undefined, { source: "user" });
+  }, []);
+
+  // Right-anchored dock: ArrowLeft widens, ArrowRight narrows. Home/End and
+  // Shift+Arrow follow the WAI-ARIA APG window-splitter pattern (Home/End)
+  // plus the common IDE convention of a coarse step under Shift.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        const newWidth = Math.min(width + RESIZE_STEP, PORTAL_MAX_WIDTH);
-        setWidth(newWidth);
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        const newWidth = Math.max(width - RESIZE_STEP, PORTAL_MIN_WIDTH);
-        setWidth(newWidth);
+      const step = e.shiftKey ? RESIZE_STEP_COARSE : RESIZE_STEP_FINE;
+      let nextWidth: number | null = null;
+      switch (e.key) {
+        case "ArrowLeft":
+          nextWidth = width + step;
+          break;
+        case "ArrowRight":
+          nextWidth = width - step;
+          break;
+        case "Home":
+          nextWidth = PORTAL_MIN_WIDTH;
+          break;
+        case "End":
+          nextWidth = PORTAL_MAX_WIDTH;
+          break;
+        default:
+          return;
       }
+      e.preventDefault();
+      setWidth(Math.min(Math.max(nextWidth, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH));
     },
     [width, setWidth]
   );
+
+  // One-time viewport clamp on mount. The zustand persist `merge` callback
+  // can't safely read window.innerWidth — Electron's BrowserWindow boots with
+  // `show: false`, so innerWidth is 0 during synchronous hydration and every
+  // restore would fall back to the default. Running after layout in a mount
+  // effect avoids that. Only writes when the persisted width would crowd the
+  // editor below PORTAL_MIN_EDITOR_WIDTH on the current viewport.
+  const didClampRestoredWidthRef = useRef(false);
+  useEffect(() => {
+    if (didClampRestoredWidthRef.current) return;
+    didClampRestoredWidthRef.current = true;
+    const vw = window.innerWidth;
+    if (vw <= 0) return;
+    const safeMax = Math.max(
+      PORTAL_MIN_WIDTH,
+      Math.min(PORTAL_MAX_WIDTH, vw - PORTAL_MIN_EDITOR_WIDTH)
+    );
+    const currentWidth = usePortalStore.getState().width;
+    if (currentWidth <= safeMax) return;
+    setWidth(Math.min(PORTAL_DEFAULT_WIDTH, safeMax));
+  }, [setWidth]);
 
   useEffect(() => {
     return () => {
@@ -430,6 +481,7 @@ export function PortalDock() {
               isResizing && "bg-overlay-medium"
             )}
             onMouseDown={handleResizeStart}
+            onDoubleClick={handleResizeDoubleClick}
             onKeyDown={handleKeyDown}
           >
             <div
