@@ -312,8 +312,14 @@ export function DevPreviewPane({
   const [proxyPort, setProxyPort] = useState<number | null | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
-    window.electron.devPreview
-      .getProxyPort()
+    // Tolerate a bridge that predates the proxy IPC (older preload, partial test mock): degrade
+    // to null = legacy direct-localhost mode rather than crashing or hanging in the loading gate.
+    const getProxyPort = window.electron?.devPreview?.getProxyPort;
+    if (typeof getProxyPort !== "function") {
+      setProxyPort(null);
+      return;
+    }
+    getProxyPort()
       .then(({ port }) => {
         if (!cancelled) setProxyPort(port);
       })
