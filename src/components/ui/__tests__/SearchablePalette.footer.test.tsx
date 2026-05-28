@@ -137,17 +137,13 @@ describe("SearchablePalette footer", () => {
 
   it("does not render an aria-live region for the footer", () => {
     renderPalette({
-      getFooter: (item) => (
-        item ? <span data-testid="footer-content">{item.label}</span> : null
-      ),
+      getFooter: (item) => (item ? <span data-testid="footer-content">{item.label}</span> : null),
     });
 
     // Scope the assertion to the footer container — the dialog itself mounts
     // an AccessibilityAnnouncer with two aria-live sr-only divs (intentional;
     // VoiceOver suppresses aria-live outside the focused aria-modal subtree).
-    const footerContent = document.body.querySelector(
-      "[data-testid='footer-content']"
-    );
+    const footerContent = document.body.querySelector("[data-testid='footer-content']");
     const footerContainer = footerContent?.parentElement;
     expect(footerContainer).not.toBeNull();
     expect(footerContainer?.querySelector("[aria-live]")).toBeNull();

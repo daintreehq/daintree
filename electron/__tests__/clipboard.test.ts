@@ -4,17 +4,14 @@ import * as path from "node:path";
 
 // Mock electron so importing the clipboard handler module doesn't pull in the
 // real native bindings. The cleanup logic under test never touches these.
+// `app.getPath` is needed because the clipboard handler transitively imports
+// the projectStore singleton, whose constructor reads app.getPath("userData")
+// at module-eval time — without it, the test fails under any suite ordering.
 vi.mock("electron", () => ({
   app: { getPath: vi.fn((key: string) => `/mock/electron/${key}`) },
   clipboard: { readImage: vi.fn(), writeImage: vi.fn(), writeText: vi.fn(), readText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn(), createFromPath: vi.fn() },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
-  // The clipboard handler transitively imports the projectStore singleton,
-  // whose constructor reads app.getPath("userData"). Include `app` so the
-  // module graph instantiates regardless of suite ordering — keeps this suite
-  // self-sufficient and not dependent on a sibling test polluting the shared
-  // electron mock with `app` first.
-  app: { getPath: vi.fn(() => "/tmp/daintree-clipboard-test-userdata") },
 }));
 
 // clipboard.ts imports projectStore from ProjectStore.js which imports
@@ -27,12 +24,6 @@ vi.mock("../services/ProjectStore.js", () => ({
     getAllProjects: vi.fn(() => []),
     getCurrentProjectId: vi.fn(() => null),
   },
-
-// The clipboard handler imports the projectStore singleton, whose constructor
-// reaches for Electron's `app` at module-eval time. Stub it so this test stays
-// isolated from the real store (the cleanup logic only reads project paths).
-vi.mock("../services/ProjectStore.js", () => ({
-  projectStore: { getAllProjects: () => [] },
 }));
 
 // Redirect os.tmpdir() to a throwaway directory so the cleanup operates on real

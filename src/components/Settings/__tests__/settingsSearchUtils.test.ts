@@ -357,6 +357,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
 
       mcp: "MCP Server",
       plugins: "Plugins",
+      "plugin-actions": "Plugin actions",
       environment: "Environment",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
@@ -395,6 +396,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
 
       mcp: "MCP Server",
       plugins: "Plugins",
+      "plugin-actions": "Plugin actions",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",

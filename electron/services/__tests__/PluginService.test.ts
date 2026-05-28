@@ -777,7 +777,7 @@ describe("PluginService", () => {
     expect(plugins[0].archiveHash).toBe(validHash);
   });
 
-  it("listPlugins returns undefined archiveHash when not set", async () => {
+  it("listPlugins returns null archiveHash when not set", async () => {
     await writePlugin("unhashed", {
       name: "acme.unhashed",
       version: "1.0.0",
@@ -788,7 +788,7 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    expect(plugins[0].archiveHash).toBeUndefined();
+    expect(plugins[0].archiveHash).toBeNull();
   });
 
   it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
