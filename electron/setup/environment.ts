@@ -661,56 +661,45 @@ if (isSmokeTest) {
     app.exit(1);
   }
 
-  // Verify win-job-object on Windows: the .node binding loaded. The
-  // assignProcessToHelpJob(process.pid) call path is exercised too, but its
-  // false return is non-fatal — production code (HelpSessionJobService)
-  // treats it as a warning + graceful degradation, and the native source
-  // explicitly notes ERROR_ACCESS_DENIED in CI/MDM environments where the
-  // runner already wraps the process in a non-nesting-compatible job.
-  // We promote the binding-load check to a hard requirement and demote
-  // assign failure to a one-line note so the smoke isn't more strict than
-  // the running app.
+  // Surface the help-session crash-safe reaping native modules (#7526 Windows /
+  // #8769 POSIX). Neither is required for app start — a load failure only
+  // disables crash-safe PTY tree reaping — so these are WARN-level, never a
+  // fatal exit. require() (not await import) mirrors HelpSessionJobService's
+  // load path exactly and avoids a missing-type-declaration error for these
+  // untyped vendored addons.
   if (process.platform === "win32") {
     try {
-      const mod = await import("win-job-object");
-      if (!mod.isAvailable()) {
-        const loadErr = mod.getLoadError?.();
-        throw new Error(
-          `win-job-object binding not loaded${loadErr ? `: ${String(loadErr)}` : ""}`
-        );
-      }
-      const assigned = mod.assignProcessToHelpJob(process.pid);
-      if (assigned) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const winJobObject = require("win-job-object") as {
+        isAvailable: () => boolean;
+        getLoadError: () => unknown;
+      };
+      if (winJobObject.isAvailable()) {
         console.error("[SMOKE] CHECK: win-job-object native module — OK");
       } else {
-        console.error(
-          "[SMOKE] CHECK: win-job-object native module — OK (binding loaded; assign degraded — CI/MDM may already hold a non-nesting job)"
-        );
+        const loadErr = winJobObject.getLoadError();
+        const msg = loadErr instanceof Error ? loadErr.message : String(loadErr ?? "unknown error");
+        console.error(`[SMOKE] WARN — win-job-object unavailable: ${msg}`);
       }
     } catch (err) {
-      console.error("[SMOKE] FAILED — win-job-object native module:", (err as Error).message);
-      app.exit(1);
+      console.error("[SMOKE] WARN — win-job-object load failed:", (err as Error).message);
     }
-  }
-
-  // Verify posix-pty-reaper on macOS / Linux: isAvailable() resolves the
-  // supervisor path and confirms the compiled binary is present and
-  // executable (uses fs.accessSync with X_OK internally).
-  if (process.platform === "darwin" || process.platform === "linux") {
+  } else {
     try {
-      const mod = await import("posix-pty-reaper");
-      if (!mod.isAvailable()) {
-        const supervisorPath = mod.getSupervisorPath();
-        throw new Error(
-          `supervisor binary missing or not executable${
-            supervisorPath ? ` at ${supervisorPath}` : ""
-          }`
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const posixReaper = require("posix-pty-reaper") as {
+        isAvailable: () => boolean;
+        getSupervisorPath: () => string | null;
+      };
+      if (posixReaper.isAvailable()) {
+        console.error("[SMOKE] CHECK: posix-pty-reaper supervisor — OK");
+      } else {
+        console.error(
+          "[SMOKE] WARN — posix-pty-reaper supervisor binary not found or not executable"
         );
       }
-      console.error("[SMOKE] CHECK: posix-pty-reaper native module — OK");
     } catch (err) {
-      console.error("[SMOKE] FAILED — posix-pty-reaper native module:", (err as Error).message);
-      app.exit(1);
+      console.error("[SMOKE] WARN — posix-pty-reaper load failed:", (err as Error).message);
     }
   }
 }

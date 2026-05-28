@@ -6,7 +6,7 @@ const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
-const mockAccessSync = vi.fn();
+const mockSpawnSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -18,35 +18,10 @@ afterAll(() => {
   process.dlopen = originalDlopen;
 });
 
-// electron-builder Arch enum: ia32=0, x64=1, armv7l=2, arm64=3, universal=5.
-function nodeArchToEnum(nodeArch: string): number {
-  switch (nodeArch) {
-    case "ia32":
-      return 0;
-    case "x64":
-      return 1;
-    case "arm":
-      return 2;
-    case "arm64":
-      return 3;
-    default:
-      return 1; // fall back to x64 for unknown host archs in CI
-  }
-}
-
-function createContext(
-  platform: string,
-  appOutDir: string,
-  appName = "Daintree",
-  // Default to the current host arch so the win-job-object dlopen probe runs
-  // in tests (it is skipped when target ≠ host). Tests exercising cross-arch
-  // behavior pass an explicit value.
-  arch: number = nodeArchToEnum(process.arch)
-) {
+function createContext(platform: string, appOutDir: string, appName = "Daintree") {
   return {
     appOutDir,
     electronPlatformName: platform,
-    arch,
     packager: { appInfo: { productFilename: appName } },
   };
 }
@@ -58,26 +33,25 @@ describe("afterPack", () => {
     vi.clearAllMocks();
     consoleSpy.mockImplementation(() => {});
     warnSpy.mockImplementation(() => {});
-    // Default: both native modules load cleanly.
-    //   - better-sqlite3: dlopen throws NODE_MODULE_VERSION mismatch (correct Electron ABI)
-    //   - win-job-object: dlopen succeeds and populates assignProcessToHelpJob export
-    //   - posix-pty-reaper: accessSync(X_OK) passes
-    // Individual tests override these for specific scenarios.
-    mockAccessSync.mockImplementation(() => {});
 
-    let dlopenCallCount = 0;
-    process.dlopen = ((moduleObj: { exports: Record<string, unknown> }, filename: string) => {
-      dlopenCallCount += 1;
-      if (filename.includes("win_job_object")) {
-        moduleObj.exports.assignProcessToHelpJob = () => true;
-        return;
-      }
+    // Default: posix-pty-reaper supervisor execs cleanly (status 0, no error).
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      error: null,
+      stdout: Buffer.from(""),
+      stderr: Buffer.from(""),
+    });
+
+    // Default dlopen branches by binary: better-sqlite3 (NAN/V8-raw) throwing an
+    // ABI mismatch under Node means the binary is correctly built for Electron,
+    // so the better-sqlite3 probe passes. win-job-object (N-API, ABI-stable)
+    // must load successfully under Node, so its probe expects no throw.
+    process.dlopen = ((_module: unknown, filename: string) => {
+      if (filename.includes("win_job_object")) return;
       throw new Error(
         "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
       );
     }) as typeof process.dlopen;
-    // Silence the unused-variable warning while preserving the counter for future debugging.
-    void dlopenCallCount;
 
     const originalRequire = Module.prototype.require;
 
@@ -88,9 +62,10 @@ describe("afterPack", () => {
           readdirSync: mockReaddirSync,
           mkdirSync: mockMkdirSync,
           copyFileSync: mockCopyFileSync,
-          accessSync: mockAccessSync,
-          constants: { X_OK: 1 },
         };
+      }
+      if (id === "child_process" || id === "node:child_process") {
+        return { spawnSync: mockSpawnSync };
       }
       return originalRequire.apply(this, [id]);
     };
@@ -397,7 +372,7 @@ describe("afterPack", () => {
       await afterPack(createContext("linux", "/build/linux"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
       );
     });
 
@@ -410,24 +385,23 @@ describe("afterPack", () => {
       await afterPack(createContext("linux", "/build/linux"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
       );
     });
 
     it("should pass when dlopen throws not a valid Win32 application", async () => {
       mockExistsSync.mockReturnValue(true);
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        if (filename.includes("win_job_object")) {
-          mod.exports.assignProcessToHelpJob = () => true;
-          return;
-        }
+      // win-job-object (N-API) still loads; only the better-sqlite3 probe sees
+      // the cross-arch error that proves it was built for Electron.
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        if (filename.includes("win_job_object")) return;
         throw new Error("not a valid Win32 application");
       }) as typeof process.dlopen;
 
       await afterPack(createContext("win32", "/build/win"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (Electron-ABI binary confirmed)"
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
       );
     });
 
@@ -444,11 +418,9 @@ describe("afterPack", () => {
 
     it("should warn but continue on inconclusive probe (e.g. missing DLL)", async () => {
       mockExistsSync.mockReturnValue(true);
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        if (filename.includes("win_job_object")) {
-          mod.exports.assignProcessToHelpJob = () => true;
-          return;
-        }
+      // win-job-object loads fine; only the better-sqlite3 probe is inconclusive.
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        if (filename.includes("win_job_object")) return;
         throw new Error("The specified module could not be found");
       }) as typeof process.dlopen;
 
@@ -460,12 +432,9 @@ describe("afterPack", () => {
     it("should run ABI validation on all platforms", async () => {
       mockExistsSync.mockReturnValue(true);
       const dlopenCalls: string[] = [];
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) {
-          mod.exports.assignProcessToHelpJob = () => true;
-          return;
-        }
+      process.dlopen = ((_mod: any, path: string) => {
+        dlopenCalls.push(path);
+        if (path.includes("win_job_object")) return; // N-API addon loads under Node
         throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
 
@@ -479,32 +448,35 @@ describe("afterPack", () => {
               : `/build/${platform === "win32" ? "win" : "linux"}`
           )
         );
-        // better-sqlite3 ABI probe runs on every platform; win-job-object runs on win32 only.
-        const sqliteCalls = dlopenCalls.filter((p) => p.includes("better_sqlite3.node"));
-        expect(sqliteCalls.length).toBe(1);
+        // The better-sqlite3 ABI probe runs on every platform.
+        expect(dlopenCalls.some((c) => c.includes("better_sqlite3.node"))).toBe(true);
+        // The win-job-object load probe runs only on Windows.
+        if (platform === "win32") {
+          expect(dlopenCalls.some((c) => c.includes("win_job_object"))).toBe(true);
+          expect(dlopenCalls.length).toBe(2);
+        } else {
+          expect(dlopenCalls.length).toBe(1);
+        }
       }
     });
   });
 
-  describe("win-job-object ABI validation", () => {
-    it("should pass when dlopen succeeds and assignProcessToHelpJob is exported", async () => {
+  describe("win-job-object load validation", () => {
+    it("should pass on Windows when win_job_object.node dlopens successfully", async () => {
       mockExistsSync.mockReturnValue(true);
-      // beforeEach default already simulates a healthy win-job-object load.
 
       await afterPack(createContext("win32", "/build/win"));
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] win-job-object ABI check passed (N-API forward load OK)"
+        "[afterPack] win-job-object load check passed (all transitive dependencies resolved)"
       );
     });
 
-    it("should throw CRITICAL when dlopen fails (missing VCRUNTIME140.dll)", async () => {
+    it("should throw when win_job_object.node fails to load (missing transitive DLL)", async () => {
       mockExistsSync.mockReturnValue(true);
       process.dlopen = ((_mod: unknown, filename: string) => {
         if (filename.includes("win_job_object")) {
-          throw new Error(
-            "The specified module could not be found. \\?\\C:\\app\\win_job_object.node"
-          );
+          throw new Error("The specified module could not be found");
         }
         throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
@@ -514,153 +486,72 @@ describe("afterPack", () => {
       );
     });
 
-    it("should throw CRITICAL with arch-mismatch hint", async () => {
+    it("should not probe win-job-object on non-Windows platforms", async () => {
       mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
       process.dlopen = ((_mod: unknown, filename: string) => {
-        if (filename.includes("win_job_object")) {
-          throw new Error("%1 is not a valid Win32 application.");
-        }
-        throw new Error("NODE_MODULE_VERSION mismatch");
-      }) as typeof process.dlopen;
-
-      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /architecture matches the target/
-      );
-    });
-
-    it("should throw CRITICAL when dlopen succeeds but export is missing", async () => {
-      mockExistsSync.mockReturnValue(true);
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        if (filename.includes("win_job_object")) {
-          // Loaded but no assignProcessToHelpJob export wired up
-          return;
-        }
-        throw new Error("NODE_MODULE_VERSION mismatch");
-      }) as typeof process.dlopen;
-
-      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /assignProcessToHelpJob export is missing/
-      );
-    });
-
-    it("should skip dlopen probe when target arch ≠ host arch (cross-arch packaging)", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const dlopenCalls: string[] = [];
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
         dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) {
-          // Simulate the cross-arch failure mode in case the probe is wrongly invoked.
-          throw new Error("%1 is not a valid Win32 application.");
-        }
-        throw new Error("NODE_MODULE_VERSION mismatch");
-      }) as typeof process.dlopen;
-
-      const originalArch = process.arch;
-      // Lie about host arch — we want to simulate x64 host packaging arm64
-      Object.defineProperty(process, "arch", { value: "x64", configurable: true });
-      try {
-        // arch = 3 → arm64 (electron-builder Arch enum)
-        await afterPack(createContext("win32", "/build/win", "Daintree", 3));
-      } finally {
-        Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
-      }
-
-      // Probe must be skipped — no dlopen call against win_job_object
-      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("win-job-object dlopen probe skipped")
-      );
-    });
-
-    it("should run dlopen probe when target arch === host arch (same-arch packaging)", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const dlopenCalls: string[] = [];
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) {
-          mod.exports.assignProcessToHelpJob = () => true;
-          return;
-        }
-        throw new Error("NODE_MODULE_VERSION mismatch");
-      }) as typeof process.dlopen;
-
-      const originalArch = process.arch;
-      Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
-      try {
-        await afterPack(createContext("win32", "/build/win", "Daintree", 3));
-      } finally {
-        Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
-      }
-
-      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(true);
-    });
-
-    it("should only run on Windows", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const dlopenCalls: string[] = [];
-      process.dlopen = ((mod: { exports: Record<string, unknown> }, filename: string) => {
-        dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) {
-          mod.exports.assignProcessToHelpJob = () => true;
-          return;
-        }
+        if (filename.includes("win_job_object")) return;
         throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
 
       await afterPack(createContext("linux", "/build/linux"));
-      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
 
-      dlopenCalls.length = 0;
-      await afterPack(createContext("darwin", "/build/mac"));
-      expect(dlopenCalls.some((p) => p.includes("win_job_object"))).toBe(false);
+      expect(dlopenCalls.some((c) => c.includes("win_job_object"))).toBe(false);
     });
   });
 
-  describe("posix-pty-reaper executable check", () => {
-    it("should pass when accessSync(X_OK) succeeds", async () => {
+  describe("posix-pty-reaper exec validation", () => {
+    it("should exec the supervisor with empty stdin on macOS/Linux", async () => {
       mockExistsSync.mockReturnValue(true);
-      // beforeEach default already returns success from accessSync.
 
       await afterPack(createContext("linux", "/build/linux"));
 
-      expect(mockAccessSync).toHaveBeenCalledWith(
+      expect(mockSpawnSync).toHaveBeenCalledWith(
         path.join(
           "/build/linux/resources/app.asar.unpacked",
           "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor"
         ),
-        1 // X_OK from mocked fs.constants
+        [],
+        expect.objectContaining({ input: "", stdio: ["pipe", "pipe", "pipe"], timeout: 5000 })
       );
+      expect(consoleSpy).toHaveBeenCalledWith("[afterPack] posix-pty-reaper exec check passed");
     });
 
-    it("should throw CRITICAL when accessSync throws (binary not executable)", async () => {
+    it("should throw when the supervisor fails to exec (spawn error)", async () => {
       mockExistsSync.mockReturnValue(true);
-      mockAccessSync.mockImplementation(() => {
-        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      });
-
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /posix-pty-reaper supervisor exists but is not executable/
-      );
-    });
-
-    it("should throw CRITICAL on macOS when accessSync fails", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockAccessSync.mockImplementation(() => {
-        throw new Error("EACCES");
+      mockSpawnSync.mockReturnValue({
+        status: null,
+        error: new Error("spawn ENOENT"),
+        stdout: Buffer.from(""),
+        stderr: Buffer.from(""),
       });
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
-        /posix-pty-reaper supervisor exists but is not executable/
+        /posix-pty-reaper supervisor failed to exec/
       );
     });
 
-    it("should not run on Windows", async () => {
+    it("should throw when the supervisor exits with a non-zero status", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockSpawnSync.mockReturnValue({
+        status: 1,
+        error: null,
+        stdout: Buffer.from(""),
+        stderr: Buffer.from("dyld: missing symbol"),
+      });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /posix-pty-reaper supervisor exited with status 1/
+      );
+    });
+
+    it("should not exec the supervisor on Windows", async () => {
       mockExistsSync.mockReturnValue(true);
 
       await afterPack(createContext("win32", "/build/win"));
 
-      // accessSync is only called from the POSIX branch
-      expect(mockAccessSync).not.toHaveBeenCalled();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
     });
   });
 

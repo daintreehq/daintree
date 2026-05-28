@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const { spawnSync } = require("child_process");
 
 /**
  * Map electron-builder's Arch enum to the Node-style string used by process.arch.
@@ -89,6 +90,76 @@ function validateBetterSqliteAbi(nativeBinaryPath) {
     // Unknown error — warn but don't fail (e.g. missing DLL dependency on Windows)
     console.warn(`[afterPack] Warning: better-sqlite3 ABI probe inconclusive: ${msg}`);
   }
+}
+
+/**
+ * Validate that win_job_object.node loads with all transitive dependencies
+ * resolved. Unlike better-sqlite3, win-job-object is an N-API addon — N-API is
+ * ABI-stable (the binary embeds NODE_MODULE_VERSION -1, which Node skips), so a
+ * correctly built addon loads under both Node (afterPack) and Electron. A
+ * successful dlopen here therefore proves every transitive dependency resolved
+ * (e.g. VCRUNTIME140.dll on Windows); a failure means a missing dependency or a
+ * wrong-arch binary that would otherwise compile, pack, sign, ship, and
+ * silently disable help-session crash-safe reaping (#7526) at first use.
+ *
+ * The polarity is the OPPOSITE of validateBetterSqliteAbi: there, a successful
+ * dlopen under Node means the (NAN/V8-raw) binary was wrongly built for Node;
+ * here, a successful dlopen means the (N-API) binary is good. Loading is
+ * side-effect-free — the addon's module init only registers exports; the Job
+ * Object is created lazily on the first assignProcessToHelpJob call.
+ */
+function validateWinJobObjectAbi(nativeBinaryPath) {
+  const testModule = { exports: {} };
+  try {
+    process.dlopen(testModule, nativeBinaryPath);
+    console.log(
+      "[afterPack] win-job-object load check passed (all transitive dependencies resolved)"
+    );
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(
+      `[afterPack] CRITICAL: win-job-object failed to load: ${msg}. ` +
+        "A transitive dependency (e.g. VCRUNTIME140.dll) may be missing or the binary is the wrong arch. " +
+        'Run "npm run rebuild" on a Windows runner with VS 2022 Build Tools. Path: ' +
+        nativeBinaryPath
+    );
+  }
+}
+
+/**
+ * Validate that the posix-pty-reaper supervisor executable can actually exec —
+ * catching a missing shared library, wrong arch, or bad interpreter that the
+ * executable-bit check alone misses. The binary takes no flags and blocks
+ * reading its stdin until EOF, so we hand it an empty stdin (`input: ""`): it
+ * receives an immediate EOF, runs its reap pass over zero registered pids (a
+ * no-op, since none were added), and exits 0 in well under a millisecond. A
+ * spawn error or non-zero exit means the binary won't run at runtime and
+ * help-session crash-safe reaping (#8769) would silently break.
+ */
+function validatePosixReaperExec(binaryPath) {
+  const result = spawnSync(binaryPath, [], {
+    input: "",
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 5000,
+  });
+  if (result.error) {
+    throw new Error(
+      `[afterPack] CRITICAL: posix-pty-reaper supervisor failed to exec: ${result.error.message}. ` +
+        "A shared library may be missing or the binary is the wrong arch. " +
+        'Run "npm run rebuild". Path: ' +
+        binaryPath
+    );
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr ? result.stderr.toString().trim() : "";
+    throw new Error(
+      `[afterPack] CRITICAL: posix-pty-reaper supervisor exited with status ${result.status}. ` +
+        (stderr ? `stderr: ${stderr}. ` : "") +
+        'Run "npm run rebuild". Path: ' +
+        binaryPath
+    );
+  }
+  console.log("[afterPack] posix-pty-reaper exec check passed");
 }
 
 /**
@@ -230,6 +301,8 @@ exports.default = async function afterPack(context) {
       );
     }
     console.log(`[afterPack] win-job-object verified: ${winJobObjectBinary}`);
+
+    validateWinJobObjectAbi(winJobObjectBinary);
   } else {
     // macOS and Linux use pty.node
     const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
@@ -268,6 +341,8 @@ exports.default = async function afterPack(context) {
       );
     }
     console.log(`[afterPack] posix-pty-reaper verified: ${posixReaperBinary}`);
+
+    validatePosixReaperExec(posixReaperBinary);
 
     if (electronPlatformName === "darwin") {
       // Inject pre-compiled Assets.car for macOS 26+ Liquid Glass icon.
