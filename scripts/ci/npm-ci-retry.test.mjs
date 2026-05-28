@@ -1,0 +1,163 @@
+import { describe, it, expect } from "vitest";
+import { classifyFailure, DETERMINISTIC_PATTERNS, TRANSIENT_PATTERNS } from "./npm-ci-retry.mjs";
+
+describe("npm-ci-retry", () => {
+  describe("DETERMINISTIC_PATTERNS", () => {
+    it("matches gyp ERR! (uppercase, npm <10)", () => {
+      const stderr = "gyp ERR! build error\nnpm ERR! code 1\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches gyp error (lowercase, npm >=10)", () => {
+      const stderr = "gyp error: build failed\nnpm error code 1\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches node-gyp rebuild failures", () => {
+      const stderr = "node-gyp rebuild failed with exit code 1\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches MSBuild errors (Windows native compilation)", () => {
+      const stderr = "MSBuild : error MSB3428: Could not load the Visual C++ component\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches MSBuild vcxproj errors", () => {
+      const stderr =
+        "binding.vcxproj : error MSB8020: The build tools for Windows SDK cannot be found\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches EACCES / permission denied", () => {
+      const stderr = "npm ERR! code EACCES\nnpm ERR! permission denied\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches E404 package not found", () => {
+      const stderr =
+        "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/no-such-pkg\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches E404 with lowercase npm error", () => {
+      const stderr = "npm error code E404\nnpm error 404 Not Found\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches ERESOLVE dependency conflicts", () => {
+      const stderr = "npm ERR! code ERESOLVE\nnpm ERR! ERESOLVE could not resolve\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches ERESOLVE with lowercase npm error", () => {
+      const stderr =
+        "npm error code ERESOLVE\nnpm error ERESOLVE could not resolve dependency tree\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("matches EPEERINVALID", () => {
+      const stderr = "npm ERR! code EPEERINVALID\nnpm ERR! peer dependency mismatch\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+  });
+
+  describe("TRANSIENT_PATTERNS", () => {
+    it("matches ECONNRESET", () => {
+      expect(classifyFailure("ECONNRESET\n")).toBe("transient");
+    });
+
+    it("matches ETIMEDOUT", () => {
+      expect(classifyFailure("ETIMEDOUT\n")).toBe("transient");
+    });
+
+    it("matches EAI_AGAIN DNS failure", () => {
+      expect(classifyFailure("EAI_AGAIN\n")).toBe("transient");
+    });
+
+    it("matches ENOTFOUND from npm registry lookup", () => {
+      expect(classifyFailure("ENOTFOUND registry.npmjs.org\n")).toBe("transient");
+    });
+
+    it("matches EHOSTUNREACH", () => {
+      expect(classifyFailure("EHOSTUNREACH\n")).toBe("transient");
+    });
+
+    it("matches socket hang up", () => {
+      expect(classifyFailure("socket hang up\n")).toBe("transient");
+    });
+
+    it("matches HTTP 429 rate limit", () => {
+      expect(classifyFailure("HTTP 429 Too Many Requests\n")).toBe("transient");
+    });
+
+    it("matches HTTP 502 bad gateway", () => {
+      expect(classifyFailure("HTTP 502 Bad Gateway\n")).toBe("transient");
+    });
+
+    it("matches HTTP 503 service unavailable", () => {
+      expect(classifyFailure("HTTP 503 Service Unavailable\n")).toBe("transient");
+    });
+
+    it("matches HTTP 504 gateway timeout", () => {
+      expect(classifyFailure("HTTP 504 Gateway Timeout\n")).toBe("transient");
+    });
+
+    it("matches fetch failed", () => {
+      expect(classifyFailure("fetch failed\n")).toBe("transient");
+    });
+
+    it("matches npm network error", () => {
+      expect(
+        classifyFailure(
+          "npm ERR! network\nnpm ERR! network request to https://registry.npmjs.org/ failed\n"
+        )
+      ).toBe("transient");
+    });
+  });
+
+  describe("classifyFailure", () => {
+    it("returns unknown for empty stderr", () => {
+      expect(classifyFailure("")).toBe("unknown");
+    });
+
+    it("returns unknown for null/undefined", () => {
+      expect(classifyFailure(null)).toBe("unknown");
+      expect(classifyFailure(undefined)).toBe("unknown");
+    });
+
+    it("returns unknown for unrecognized text", () => {
+      expect(classifyFailure("some random output\n")).toBe("unknown");
+    });
+
+    it("deterministic beats transient when both patterns appear", () => {
+      const stderr = "gyp ERR! build error\nECONNRESET\nnpm ERR! code 1\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
+
+    it("handles case-insensitive matching", () => {
+      expect(classifyFailure("Gyp Err! build failed\neconnreset\n")).toBe("deterministic");
+    });
+  });
+
+  describe("pattern coverage", () => {
+    const allDeterministic = DETERMINISTIC_PATTERNS.map((p) => p.source);
+    const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
+
+    it("covers every deterministic pattern", () => {
+      expect(DETERMINISTIC_PATTERNS).toHaveLength(9);
+    });
+
+    it("covers every transient pattern", () => {
+      expect(TRANSIENT_PATTERNS).toHaveLength(12);
+    });
+
+    it("has no overlap between deterministic and transient patterns", () => {
+      for (const dp of allDeterministic) {
+        for (const tp of allTransient) {
+          expect(dp).not.toBe(tp);
+        }
+      }
+    });
+  });
+});
