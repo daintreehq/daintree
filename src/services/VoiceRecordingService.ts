@@ -1079,12 +1079,24 @@ class VoiceRecordingService {
     await this.startOrToggle(assistantTarget);
   }
 
-  // In push-to-talk mode the keyboard shortcut only ever starts recording; the
-  // keyup listener stops it. In toggle mode the shortcut behaves as before.
-  // Toolbar callers should keep using `toggle()` directly — they have no keyup
-  // analog and must not be affected by the recording-mode setting.
+  // In push-to-talk mode the keyboard shortcut starts recording; the keyup
+  // listener stops it. But the same action is also reachable from the command
+  // palette, the menu, and agent automation — none of which produce a keyup.
+  // Falling back to stop-on-second-invoke for an active session of the same
+  // target keeps those entry points usable without affecting the held-key
+  // flow (a held-key second press is suppressed by the e.repeat guard, and a
+  // release-then-press cycle has already cleared the active session).
+  // In toggle mode the shortcut behaves as before. Toolbar callers should
+  // keep using `toggle()` directly — they have no keyup analog and must not
+  // be affected by the recording-mode setting.
   private async startOrToggle(target: VoiceRecordingTarget): Promise<void> {
     if (this.recordingMode === "push-to-talk") {
+      const state = useVoiceRecordingStore.getState();
+      const isActiveTarget = state.activeTarget?.panelId === target.panelId;
+      if (isActiveTarget && isActiveVoiceSession(state.status)) {
+        await this.stop("Dictation stopped.", { preserveLiveText: true });
+        return;
+      }
       await this.start(target);
       return;
     }
